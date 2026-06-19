@@ -1,0 +1,38 @@
+# Device registry — example / template
+# Copy to instance/devices.yaml and fill in real MAC addresses.
+# instance/ is git-ignored; MACs reveal your specific hardware to observers.
+#
+# Schema:
+#   mac:           BLE MAC address (colon-separated, uppercase)
+#   device_id:     stable slug used in MQTT topics and DB rows
+#   device_type:   switchbot_meter | switchbot_meter_plus | switchbot_meter_pro |
+#                  aranet4 | aranet_radon_plus
+#   area:          room / zone label, used in MQTT topic home/<area>/<device_id>/state
+#   capabilities:  list of metrics this device emits (informational; drives future UI)
+#   notes:         optional free text
+
+devices:
+  "AA:BB:CC:DD:EE:01":
+    device_id: "meter_living_room"
+    device_type: "switchbot_meter_pro"
+    area: "living_room"
+    capabilities: [temperature, humidity, battery]
+
+  "AA:BB:CC:DD:EE:02":
+    device_id: "meter_kitchen"
+    device_type: "switchbot_meter_pro"
+    area: "kitchen"
+    capabilities: [temperature, humidity, battery]
+
+  "AA:BB:CC:DD:EE:03":
+    device_id: "meter_outdoor_front"
+    device_type: "switchbot_meter_pro"
+    area: "outdoor_front"
+    capabilities: [temperature, humidity, battery]
+
+  "AA:BB:CC:DD:EE:10":
+    device_id: "aranet_crawlspace"
+    device_type: "aranet_radon_plus"
+    area: "crawlspace"
+    capabilities: [co2, temperature, humidity, pressure, radon, battery]
+    notes: "Near server; enable Smart Home Integration on device"

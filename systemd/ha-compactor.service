@@ -1,0 +1,24 @@
+[Unit]
+Description=Home Automation — Daily Parquet Compactor (one-shot)
+Documentation=file:///home/visko/home_automation/home-automation-architecture-plan.md
+
+[Service]
+Type=oneshot
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+ExecStart=/home/visko/home_automation/venv/bin/python3 \
+    server/storage/compactor.py \
+    --db instance/db/hot.db \
+    --parquet-dir instance/db/parquet \
+    --log-level INFO
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/visko/home_automation/instance
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-compactor

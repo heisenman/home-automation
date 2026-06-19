@@ -1,0 +1,34 @@
+[Unit]
+Description=Home Automation — Query API
+Documentation=file:///home/visko/home_automation/home-automation-architecture-plan.md
+After=ha-writer.service network.target
+
+[Service]
+Type=simple
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+Environment=HA_DB=instance/db/hot.db
+Environment=HA_PARQUET_DIR=instance/db/parquet
+Environment=HA_MAX_DEEP_ROWS=50000
+ExecStart=/home/visko/home_automation/venv/bin/python3 \
+    -m uvicorn server.api.main:app \
+    --host 127.0.0.1 \
+    --port 8123 \
+    --workers 1 \
+    --no-access-log
+Restart=on-failure
+RestartSec=10
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/visko/home_automation/instance
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-api
+
+[Install]
+WantedBy=multi-user.target

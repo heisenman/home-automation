@@ -1,0 +1,33 @@
+[Unit]
+Description=Home Automation — SQLite Writer
+Documentation=file:///home/visko/home_automation/home-automation-architecture-plan.md
+After=mosquitto.service network.target
+Wants=mosquitto.service
+
+[Service]
+Type=simple
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+Environment=HA_BROKER=localhost
+Environment=HA_BROKER_PORT=1883
+ExecStart=/home/visko/home_automation/venv/bin/python3 \
+    server/storage/writer.py \
+    --db instance/db/hot.db \
+    --log-level INFO
+Restart=on-failure
+RestartSec=10
+WatchdogSec=120
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/visko/home_automation/instance
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-writer
+
+[Install]
+WantedBy=multi-user.target

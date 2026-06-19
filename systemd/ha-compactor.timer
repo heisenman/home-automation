@@ -1,0 +1,12 @@
+[Unit]
+Description=Home Automation — Daily Parquet Compactor Timer
+After=ha-writer.service
+
+[Timer]
+# Run at 02:00 UTC daily (server time; low-traffic window)
+OnCalendar=*-*-* 02:00:00 UTC
+Persistent=true
+Unit=ha-compactor.service
+
+[Install]
+WantedBy=timers.target

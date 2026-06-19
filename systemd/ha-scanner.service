@@ -1,0 +1,40 @@
+[Unit]
+Description=Home Automation — BLE Scanner
+Documentation=file:///home/visko/home_automation/home-automation-architecture-plan.md
+After=bluetooth.target network.target ha-writer.service
+Requires=bluetooth.target
+
+[Service]
+Type=simple
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+Environment=HA_BROKER=localhost
+Environment=HA_BROKER_PORT=1883
+Environment=HA_REPUBLISH_S=60
+Environment=HA_SCAN_MODE=passive
+ExecStart=/home/visko/home_automation/venv/bin/python3 \
+    server/ingest/scanner.py \
+    --registry instance/devices.yaml \
+    --log-level INFO
+Restart=on-failure
+RestartSec=10
+WatchdogSec=120
+
+# BLE needs raw socket access (BlueZ D-Bus) without full root
+AmbientCapabilities=CAP_NET_RAW CAP_NET_ADMIN
+CapabilityBoundingSet=CAP_NET_RAW CAP_NET_ADMIN
+
+# Harden the service (sensor-only — no authority, ADR-0005)
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/visko/home_automation/instance
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-scanner
+
+[Install]
+WantedBy=multi-user.target

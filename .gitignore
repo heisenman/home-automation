@@ -1,0 +1,30 @@
+# Instance data — never committed (real MACs, policies, secrets, runtime data)
+instance/
+venv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+
+# Editor
+.vscode/
+.idea/
+*.swp
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Secrets / certs
+*.pem
+*.key
+*.crt
+*.p12
+ca/
+
+# Logs
+*.log

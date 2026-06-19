@@ -1,0 +1,10 @@
+[Unit]
+Description=Home Automation — Weekly Parquet Hash Verification Timer
+
+[Timer]
+OnCalendar=Sun *-*-* 03:00:00 UTC
+Persistent=true
+Unit=ha-verify-hashes.service
+
+[Install]
+WantedBy=timers.target

@@ -1,0 +1,20 @@
+[Unit]
+Description=Home Automation — Parquet Hash Verification (ADR-0004)
+
+[Service]
+Type=oneshot
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+ExecStart=/home/visko/home_automation/venv/bin/python3 \
+    tools/verify_hashes.py \
+    --parquet-dir instance/db/parquet
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/visko/home_automation/instance
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-verify-hashes
