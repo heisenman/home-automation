@@ -67,7 +67,11 @@ for unit in ha-scanner.service ha-writer.service ha-api.service \
             ha-compactor.service ha-compactor.timer \
             ha-verify-hashes.service ha-verify-hashes.timer \
             ha-weather.service ha-weather.timer; do
-    sudo cp "$REPO_DIR/systemd/$unit" "$SYSTEMD_DEST/$unit"
+    # Template the real repo path into each unit so the install isn't tied to a fixed
+    # location. The committed units use /home/visko/home_automation as the default; this
+    # rewrites them to wherever the repo actually lives (no-op at the default path).
+    sudo sed "s#/home/visko/home_automation#${REPO_DIR}#g" "$REPO_DIR/systemd/$unit" \
+        | sudo tee "$SYSTEMD_DEST/$unit" >/dev/null
 done
 
 sudo systemctl daemon-reload
