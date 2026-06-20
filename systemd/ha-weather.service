@@ -1,0 +1,31 @@
+[Unit]
+Description=Home Automation — Internet Weather Recorder (oneshot)
+Documentation=file:///home/visko/home_automation/home-automation-architecture-plan.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+Environment=HA_WEATHER_DB=instance/db/weather.db
+# Location is PII — keep it out of git. Put it in instance/weather.env (gitignored):
+#   HA_WEATHER_LAT=0.0
+#   HA_WEATHER_LON=0.0
+# (or HA_WEATHER_ZIP=<YOUR_ZIP>). See config-examples/weather.env.example.
+EnvironmentFile=-/home/visko/home_automation/instance/weather.env
+ExecStart=/home/visko/home_automation/venv/bin/python3 -m server.weather --once
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/visko/home_automation/instance
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-weather
+
+[Install]
+WantedBy=multi-user.target

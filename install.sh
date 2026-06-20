@@ -65,7 +65,8 @@ echo
 echo "--- Installing systemd units ---"
 for unit in ha-scanner.service ha-writer.service ha-api.service \
             ha-compactor.service ha-compactor.timer \
-            ha-verify-hashes.service ha-verify-hashes.timer; do
+            ha-verify-hashes.service ha-verify-hashes.timer \
+            ha-weather.service ha-weather.timer; do
     sudo cp "$REPO_DIR/systemd/$unit" "$SYSTEMD_DEST/$unit"
 done
 
@@ -98,3 +99,8 @@ echo "To backfill from a SwitchBot app CSV export, run:"
 echo "  venv/bin/python3 tools/import_switchbot_csv.py --help"
 echo "(Direct BLE history sync — pulling each meter's 36-68 day on-device log —"
 echo " is planned; see docs/adr/ADR-0007.)"
+echo
+echo "Internet weather recorder (outdoor comparison data):"
+echo "  cp config-examples/weather.env.example instance/weather.env  # then set your lat/lon"
+echo "  sudo systemctl enable --now ha-weather.timer                 # records every 15 min"
+echo "  venv/bin/python3 -m server.weather --once --lat <LAT> --lon <LON>   # one-off test"
