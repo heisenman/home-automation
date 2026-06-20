@@ -195,14 +195,24 @@ def assign_timestamps(samples: list[tuple[float, int]], meta: dict) -> list[tupl
     """Map decoded samples (oldest→newest, one per address unit starting at meta['start_addr'])
     to (unix_ts, temp, hum). Timestamp is linear between the device's two metadata anchors:
     ts(addr) = oldest_ts + (addr - oldest_ptr) * (newest_ts - oldest_ts)/(newest_ptr - oldest_ptr).
-    Validated: newest sample lands on the device's 'now' (== the live reading)."""
+    Validated: newest sample lands on the device's 'now' (== the live reading).
+
+    Quantized to the device's interval grid so a given physical sample maps to the SAME
+    timestamp on every pull — otherwise tiny per-pull drift makes INSERT OR IGNORE see every
+    sample as new (the buffer anchor shifts between pulls). The grid spacing is the rounded
+    interval, which is stable across pulls (linear device clock)."""
     nt, np_, ot, op, st = (meta.get(k) for k in
                            ("newest_ts", "newest_ptr", "oldest_ts", "oldest_ptr", "start_addr"))
     if None in (nt, np_, ot, op, st) or np_ == op:
         return []
     interval = (nt - ot) / (np_ - op)
-    return [(int(round(ot + (st + k - op) * interval)), temp, hum)
-            for k, (temp, hum) in enumerate(samples)]
+    grid = max(1, round(interval))
+    out = []
+    for k, (temp, hum) in enumerate(samples):
+        ts = ot + (st + k - op) * interval
+        ts = round(ts / grid) * grid          # snap to the stable interval grid
+        out.append((int(ts), temp, hum))
+    return out
 
 
 async def fetch_live(mac: str, profile: str = "meter_pro",
