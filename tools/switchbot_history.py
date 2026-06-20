@@ -146,16 +146,33 @@ def insert_samples(db: Path, device_id: str, device_type: str, area: str,
 import struct as _struct
 import time as _time
 
-# Command sequence, byte-for-byte from the btsnoop capture (see protocol doc).
+# Command sequences, byte-for-byte from btsnoop captures (see protocol doc). Handshake and the
+# metadata/record format are shared across models; only setup + read-prefix differ. The decoder
+# (decode_meter_pro) handles both — the name is historical; it's the shared [t,h,frac,t,h] format.
 _HANDSHAKE_PREFIX = bytes.fromhex("570005030400000000")   # + current unix time (BE u32)
-_SETUP_CMDS = [
-    bytes.fromhex("570f68050401030802000b0102000e10"),
-    bytes.fromhex("570f690801"),
-    bytes.fromhex("570f69080202"),
-    bytes.fromhex("570f69080201"),
-]
-_READ_PREFIX = bytes.fromhex("570f690803020000")          # + addr (BE u16) + 0x06
 _REC_STRIDE = 6                                           # read address increments by 6
+
+_PROFILES = {
+    # Meter / Meter Pro (indoor)
+    "meter_pro": {
+        "setup": [bytes.fromhex("570f68050401030802000b0102000e10"),
+                  bytes.fromhex("570f690801"),
+                  bytes.fromhex("570f69080202"),
+                  bytes.fromhex("570f69080201")],
+        "read_prefix": bytes.fromhex("570f690803020000"),  # + addr(BE u16) + 0x06
+    },
+    # Outdoor Meter (WoIOSensorTH)
+    "outdoor": {
+        "setup": [bytes.fromhex("570f3a"),
+                  bytes.fromhex("570f3b01"),
+                  bytes.fromhex("570f3b00")],
+        "read_prefix": bytes.fromhex("570f3c010000"),      # + addr(BE u16) + 0x06
+    },
+}
+
+
+def _profile_for(device_type: str) -> str:
+    return "outdoor" if device_type and "outdoor" in device_type else "meter_pro"
 
 
 def _parse_metadata(notifs: list[bytes]):
@@ -188,14 +205,17 @@ def assign_timestamps(samples: list[tuple[float, int]], meta: dict) -> list[tupl
             for k, (temp, hum) in enumerate(samples)]
 
 
-async def fetch_live(mac: str, window_records: int | None = None, settle: float = 1.5):
+async def fetch_live(mac: str, profile: str = "meter_pro",
+                     window_records: int | None = None, settle: float = 1.5):
     """Connect, run the handshake/setup, discover the live buffer pointers, then page the
-    history backward from the newest pointer. Returns (notifications, meta) where meta has
-    base_ts / newest_ptr / oldest_ptr. window_records=None reads the whole stored range.
+    history backward from the newest pointer. Returns (notifications, meta). profile selects
+    the model's command set ('meter_pro' or 'outdoor'). window_records=None reads everything.
 
     Connects by address (no scan) so it won't disturb a running scanner's discovery."""
     import asyncio
     from bleak import BleakClient
+    prof = _PROFILES[profile]
+    read_prefix = prof["read_prefix"]
     notifs: list[bytes] = []
 
     def on_notify(_char, data: bytearray):
@@ -207,7 +227,7 @@ async def fetch_live(mac: str, window_records: int | None = None, settle: float 
         await client.start_notify(NOTIFY_CHAR, on_notify)
         now = int(_time.time())
         await client.write_gatt_char(CMD_CHAR, _HANDSHAKE_PREFIX + _struct.pack(">I", now), response=True)
-        for cmd in _SETUP_CMDS:
+        for cmd in prof["setup"]:
             await client.write_gatt_char(CMD_CHAR, cmd, response=True)
             await asyncio.sleep(0.2)
         await asyncio.sleep(settle)
@@ -223,7 +243,7 @@ async def fetch_live(mac: str, window_records: int | None = None, settle: float 
         meta["start_addr"] = start
         addr = start
         while addr < newest:
-            await client.write_gatt_char(CMD_CHAR, _READ_PREFIX + _struct.pack(">H", addr) + b"\x06", response=True)
+            await client.write_gatt_char(CMD_CHAR, read_prefix + _struct.pack(">H", addr) + b"\x06", response=True)
             addr += _REC_STRIDE
             await asyncio.sleep(0.03)
         await asyncio.sleep(settle)
@@ -266,7 +286,9 @@ def main() -> None:
         import asyncio
         import datetime as _dt
         window = args.window if args.window > 0 else None
-        notifs, meta = asyncio.run(fetch_live(args.device, window_records=window))
+        profile = _profile_for(args.device_type)
+        log.info("profile=%s for device_type=%s", profile, args.device_type)
+        notifs, meta = asyncio.run(fetch_live(args.device, profile=profile, window_records=window))
         samples = decode_meter_pro(notifs)
         tsamples = assign_timestamps(samples, meta)
         log.info("live notifications=%d  decoded=%d  meta=%s", len(notifs), len(samples), meta)

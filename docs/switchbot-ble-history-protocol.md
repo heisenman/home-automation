@@ -51,3 +51,18 @@ on-device and stream it over BLE. This is our own RE of that undocumented protoc
    safe — pull the full 68-day window every run; only new rows land).
 6. Per-model validation (Meter Pro vs Outdoor Meter may differ — capture each).
 7. Needs the dedicated BT dongle (connection-based; heavier on the radio than passive scan).
+
+## Per-model command profiles (2026-06-20)
+
+The handshake (`5700…`+unix time), metadata format, and record format `[t,h,frac,t,h]` are
+**shared** across models — only the setup + read commands differ. Both confirmed against
+captures (Meter Pro = `meter_pro_master_bed`; Outdoor = `meter_living_room`).
+
+| | Meter Pro (`meter_pro`) | Outdoor Meter (`outdoor`) |
+|---|---|---|
+| setup | `570f68…`, `570f690801`, `570f690802 02/01` | `570f3a`, `570f3b01`, `570f3b00` |
+| read  | `570f6908 0302 0000 <addr:2BE> 06` | `570f3c 01 0000 <addr:2BE> 06` |
+| interval (metadata-derived) | ~354 s | ~142 s |
+
+`tools/switchbot_history.py` picks the profile from device_type (`*outdoor*` → outdoor).
+Same `decode_meter_pro()` + `assign_timestamps()` for both.
