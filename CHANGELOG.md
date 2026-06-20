@@ -3,6 +3,32 @@
 All notable changes are documented here.
 Format: [ISO date] — description (ADR reference if applicable)
 
+## 2026-06-20 — Server migration, weather lane, SwitchBot history RE
+
+**Migrated to the server (`superbuddynas`, 192.168.0.245, Ubuntu 24.04):**
+- Code via git clone (private GitHub backup `heisenman/home-automation`); data (`instance/`)
+  via rsync. mosquitto/writer/api running on the server; dashboard on the LAN at :8123.
+- Interim: desktop ran as a remote scanner node bridging to the server's broker (mosquitto
+  opened to LAN, ADR-0001) until the server got Bluetooth.
+- Bluetooth: MediaTek MT7921U dongle exposes no BT on Linux (WiFi-only) — dead end; replaced
+  with a TP-Link UB500 (Realtek RTL8761B) → `hci0` works. Server now scans on its own dongle
+  with full device coverage; desktop retired (its AX210 is shared with the BT mouse).
+
+**Weather lane (ADR-0008):** standalone `server/weather/` — Open-Meteo (keyless) by lat/lon or
+zip → separate `weather.db`, idempotent. oneshot service + 15-min timer. Source is abstracted
+so the air-gapped future is a source swap, not a rewrite.
+
+**SwitchBot on-device history (ADR-0007):** reverse-engineered the undocumented BLE history
+protocol from an Android btsnoop capture (Meter Pro: 36–68 day on-device log, paginated
+`570f690803020000<addr>06`, advertisement-style temp/hum encoding, big-endian Unix base ts).
+`docs/switchbot-ble-history-protocol.md` + `tools/switchbot_history.py` (decoder verified
+offline: 546 smooth samples). Cloud API has no history (dead cloud stub removed). Live fetch
+implemented; pending on-hardware verification + timestamp anchoring before it inserts.
+
+**Dashboard:** custom numeric range (N min/hours/days) + full raw-point view for spans ≤7d.
+**install.sh:** templates the repo path into systemd units (relocatable install).
+**Data integrity:** idempotent ingestion everywhere — `UNIQUE(device_id,ts,metric)` + INSERT OR IGNORE.
+
 ## 2026-06-19 — Device confirmation, battery fix, passive scan, LAN API, dashboard
 
 **Device registry — all 10 SwitchBots positively identified:**
