@@ -38,37 +38,49 @@ timing.
   a missed window backfills on the next history sync.
 - Eventually removes the dependency on the vendor phone app for history.
 
-## Finding (2026-06-20): SwitchBot has NO device-side BLE history
+## Finding (2026-06-20): SwitchBot DOES have device-side BLE history (undocumented)
 
-Investigated whether meters can be queried directly over BLE for their stored log.
-**They cannot.** Confirmed three ways:
-- SwitchBot's own BLE spec (`SwitchBotAPI-BLE/devicetypes/meter.md`) documents only one
-  read command, `0x31` = *current* temperature/humidity. There is no historical-log command.
-- `pyswitchbot` (the mature reference lib, used by Home Assistant) exposes **no** history/
-  log/fetch methods for meters — only current-reading classes.
-- No community tool implements it; the consistent advice is "log readings yourself."
+First investigation wrongly concluded SwitchBot meters have no BLE history, reasoning from
+"undocumented + no library implements it." That inference was wrong. Corrected by:
+- **SwitchBot's own support docs:** meters store the recent **36 days** (Meter, Meter Pro CO2)
+  or **68 days** (Meter Plus, Outdoor Meter, Meter Pro) of temp/humidity *on the device*,
+  "transferred via Bluetooth" when the app opens the history graph.
+- **Empirical:** pulling old data in the app fails on *Bluetooth connectivity* and is
+  interrupted by household *EMI* (shop-vac) — the signature of a BLE bulk transfer, not a
+  cloud fetch (which would use WiFi and ignore RF noise).
 
-Implication: the meters do not retain a long log on-device. The phone app's multi-month
-graphs (and the original 5-month CSV) come from the **SwitchBot cloud**, which the app
-continuously syncs to — not from a device-side log. So:
-- **SwitchBot "history sync" over BLE is not possible.** Our continuous scanner IS the
-  historian for SwitchBot devices; gap-minimization (scanner liveness watchdog + the MQTT
-  bridge) is the mitigation, not a device backfill.
-- Pre-existing SwitchBot history can only come from the **cloud** one-time
-  (`tools/import_switchbot_history.py`, the "walled cloud lane"), if the v1.1 cloud API
-  exposes meter time-series (unverified). Not part of runtime.
+So the on-device log is real and BLE-pullable (our devices: 68 days each). The catch is only
+that the history command is **not in SwitchBot's public BLE spec** (`meter.md` lists just
+`0x31` = current readings) and **no library has reverse-engineered it** — "undocumented",
+not "nonexistent."
 
-## History-sync implementation notes — Aranet only (the case that works)
+Backfill value: up to **68 days** of gap recovery per device, fully offline, no cloud. This
+makes a SwitchBot history fetcher worth building after all.
 
-- **Aranet** genuinely stores a long on-device log and exposes it over BLE. The open-source
-  `aranet4` library (Anrijs/aranet4) pulls the full log (temp/humidity/CO₂/pressure/radon
-  with timestamps, weeks–months) over a GATT connection. For the Radon Plus this also
-  sidesteps the foil-subfloor advertisement problem — a periodic connection from the
-  crawlspace ESP32 can dump the whole log regardless of advertisement range.
-- **Shape:** connect → read records newer than `MAX(ts)` we hold → decode → `INSERT OR
-  IGNORE` → disconnect. Bounded retry; never block the live scanner. Needs the dedicated
-  dongle (connection-based, heavier on the radio than passive scanning).
-- **Cadence:** run inside the device's retention window (Aranet weeks-to-months by interval).
+## Build path — reverse-engineer the undocumented history command
+
+1. **Capture** the SwitchBot Android app's BLE traffic while it pulls a meter's history
+   (Android "Bluetooth HCI snoop log" → `btsnoop_hci.log`, via a bug report or `adb`).
+2. **Decode** the GATT exchange on the SwitchBot custom service (`cba20d00-…`): the write to
+   the command char (`cba20002-…`) that requests the log, and the notification stream on
+   (`cba20003-…`) that returns it. Identify the request opcode + the record framing/epoch.
+3. **Implement** `tools/switchbot_history.py`: connect → request records newer than `MAX(ts)`
+   we hold → decode → `INSERT OR IGNORE` → disconnect. Per-model validation against real bytes
+   like the live decoder. Needs the dedicated dongle (connection-based, heavier on the radio).
+
+## Aranet history — the easy case (library exists)
+
+- **Aranet** also stores a long on-device log and exposes it over BLE, but unlike SwitchBot
+  it's documented and implemented: the `aranet4` library (Anrijs/aranet4) pulls the full log
+  (temp/humidity/CO₂/pressure/radon, weeks–months) over GATT. For the Radon Plus this also
+  sidesteps the foil-subfloor advertisement problem — a periodic connection dumps the whole
+  log regardless of advertisement range. Lower effort than SwitchBot (no RE needed).
+
+## Shared shape & cadence (both device families)
+
+- connect → read records newer than `MAX(ts)` → decode → `INSERT OR IGNORE` → disconnect;
+  bounded retry; never block the live scanner.
+- Run inside each device's retention window (SwitchBot 36–68 days; Aranet weeks–months).
 
 ## Rejected alternatives
 
