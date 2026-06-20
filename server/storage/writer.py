@@ -18,12 +18,26 @@ import json
 import logging
 import os
 import signal
+import socket
 import sqlite3
 import sys
 import time
 from pathlib import Path
 
 import paho.mqtt.client as mqtt
+
+
+def _sd_notify(msg: bytes) -> None:
+    """Send a message to the systemd notify socket (no-op if not under systemd)."""
+    path = os.environ.get("NOTIFY_SOCKET", "")
+    if not path:
+        return
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.connect(path)
+            s.send(msg)
+    except OSError:
+        pass
 
 # ── Configuration ─────────────────────────────────────────────────────────────
 
@@ -181,15 +195,24 @@ class Writer:
         def _stop(*_):
             log.info("Shutting down writer")
             self._running = False
-            self._client.disconnect()
 
         signal.signal(signal.SIGTERM, _stop)
         signal.signal(signal.SIGINT, _stop)
 
         self._connect_with_retry(host, port)
-        self._client.loop_forever(retry_first_connection=True)
-        self._conn.close()
-        log.info("Writer stopped")
+        # Background network thread handles messages + auto-reconnect; the main
+        # thread pings the systemd watchdog so we aren't SIGABRT'd every WatchdogSec.
+        self._client.loop_start()
+        _sd_notify(b"READY=1")
+        try:
+            while self._running:
+                _sd_notify(b"WATCHDOG=1")
+                time.sleep(30)
+        finally:
+            self._client.loop_stop()
+            self._client.disconnect()
+            self._conn.close()
+            log.info("Writer stopped")
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────

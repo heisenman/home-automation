@@ -5,7 +5,7 @@ After=mosquitto.service network.target
 Wants=mosquitto.service
 
 [Service]
-Type=simple
+Type=notify
 User=visko
 Group=visko
 WorkingDirectory=/home/visko/home_automation
