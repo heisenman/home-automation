@@ -159,6 +159,7 @@ class Scanner:
         self._mqtt = mqtt_client
         self._state: dict[str, _DeviceState] = {}
         self._raw_last_ts: dict[str, float] = {}
+        self._last_adv: float = time.monotonic()  # liveness: last advertisement received
 
     def _device_state(self, mac: str) -> _DeviceState:
         if mac not in self._state:
@@ -166,6 +167,7 @@ class Scanner:
         return self._state[mac]
 
     def _advertisement_callback(self, device: BLEDevice, adv: AdvertisementData) -> None:
+        self._last_adv = time.monotonic()  # any BLE advert proves discovery is alive
         mac = device.address.upper()
         mfr = adv.manufacturer_data or {}
         svc = adv.service_data or {}
@@ -278,8 +280,9 @@ class Scanner:
                 raise
 
         log.info("BLE scanner active")
+        self._last_adv = time.monotonic()  # reset liveness clock at start
         _sd_notify(b"READY=1")
-        watchdog_task = asyncio.create_task(_watchdog_loop())
+        watchdog_task = asyncio.create_task(self._watchdog_loop())
         try:
             await stop_event.wait()
         finally:
@@ -287,6 +290,28 @@ class Scanner:
             await scanner.stop()
 
         log.info("Scanner stopped")
+
+    async def _watchdog_loop(self) -> None:
+        """
+        Pet the systemd watchdog only while BLE advertisements are actually flowing.
+
+        Active scanning on some adapters silently stops delivering advertisements while
+        the process stays alive — an unconditional ping would mask that. If no advert
+        has arrived for STALE_S, we stop petting so WatchdogSec restarts the service,
+        which re-issues BlueZ discovery. STALE_S < WatchdogSec(120) so a real restart
+        still fires before a false one.
+        """
+        STALE_S = 90
+        while True:
+            await asyncio.sleep(20)
+            age = time.monotonic() - self._last_adv
+            if age < STALE_S:
+                _sd_notify(b"WATCHDOG=1")
+            else:
+                log.error(
+                    "No BLE advertisements for %.0fs — BLE discovery appears dead; "
+                    "withholding watchdog ping to force a restart.", age,
+                )
 
     def _make_scanner(self, mode: str) -> BleakScanner:
         kwargs = dict(detection_callback=self._advertisement_callback, scanning_mode=mode)
@@ -308,13 +333,6 @@ def _sd_notify(msg: bytes) -> None:
             s.send(msg)
     except OSError:
         pass
-
-
-async def _watchdog_loop() -> None:
-    """Ping systemd watchdog every 30 s (WatchdogSec=120 → notify at <half interval)."""
-    while True:
-        _sd_notify(b"WATCHDOG=1")
-        await asyncio.sleep(30)
 
 
 def _utc_now() -> str:
