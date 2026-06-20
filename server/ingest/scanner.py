@@ -32,6 +32,7 @@ from pathlib import Path
 import paho.mqtt.client as mqtt
 import yaml
 from bleak import BleakScanner
+from bleak.exc import BleakError
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
 from bleak.assigned_numbers import AdvertisementDataType
@@ -259,22 +260,40 @@ class Scanner:
         signal.signal(signal.SIGTERM, _sigterm)
         signal.signal(signal.SIGINT, _sigterm)
 
-        scanner_kwargs = dict(
-            detection_callback=self._advertisement_callback,
-            scanning_mode=SCANNING_MODE,
-        )
-        if SCANNING_MODE == "passive":
-            scanner_kwargs["bluez"] = BlueZScannerArgs(or_patterns=_OR_PATTERNS)
-            log.info("Passive scan with %d or_patterns (low radio load)", len(_OR_PATTERNS))
+        scanner = self._make_scanner(SCANNING_MODE)
+        try:
+            await scanner.start()
+        except BleakError as exc:
+            # Passive scanning needs BlueZ --experimental; if unavailable, degrade to
+            # active rather than crash-loop. (Active uses more radio — may contend with
+            # a Bluetooth mouse/keyboard on the same adapter.)
+            if SCANNING_MODE == "passive":
+                log.warning(
+                    "Passive scan unavailable (%s) — falling back to active. "
+                    "Enable BlueZ --experimental for passive (low-radio) mode.", exc,
+                )
+                scanner = self._make_scanner("active")
+                await scanner.start()
+            else:
+                raise
 
-        async with BleakScanner(**scanner_kwargs):
-            log.info("BLE scanner active")
-            _sd_notify(b"READY=1")
-            watchdog_task = asyncio.create_task(_watchdog_loop())
+        log.info("BLE scanner active")
+        _sd_notify(b"READY=1")
+        watchdog_task = asyncio.create_task(_watchdog_loop())
+        try:
             await stop_event.wait()
+        finally:
             watchdog_task.cancel()
+            await scanner.stop()
 
         log.info("Scanner stopped")
+
+    def _make_scanner(self, mode: str) -> BleakScanner:
+        kwargs = dict(detection_callback=self._advertisement_callback, scanning_mode=mode)
+        if mode == "passive":
+            kwargs["bluez"] = BlueZScannerArgs(or_patterns=_OR_PATTERNS)
+            log.info("Passive scan with %d or_patterns (low radio load)", len(_OR_PATTERNS))
+        return BleakScanner(**kwargs)
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
