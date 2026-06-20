@@ -143,25 +143,81 @@ def insert_samples(db: Path, device_id: str, device_type: str, area: str,
 
 # ── Live fetch (needs a BT radio) ───────────────────────────────────────────────
 
-async def fetch_live(mac: str) -> list[bytes]:
-    """Connect, enable notifications, replay the history-read command sequence, collect.
-    NOTE: command sequence is modeled on the capture; needs on-hardware iteration to
-    generalize the buffer-range discovery. Returns raw notification payloads."""
+import struct as _struct
+import time as _time
+
+# Command sequence, byte-for-byte from the btsnoop capture (see protocol doc).
+_HANDSHAKE_PREFIX = bytes.fromhex("570005030400000000")   # + current unix time (BE u32)
+_SETUP_CMDS = [
+    bytes.fromhex("570f68050401030802000b0102000e10"),
+    bytes.fromhex("570f690801"),
+    bytes.fromhex("570f69080202"),
+    bytes.fromhex("570f69080201"),
+]
+_READ_PREFIX = bytes.fromhex("570f690803020000")          # + addr (BE u16) + 0x06
+_REC_STRIDE = 6                                           # read address increments by 6
+
+
+def _parse_metadata(notifs: list[bytes]):
+    """From setup-phase notifications, return (base_ts, newest_ptr, oldest_ptr).
+    Metadata notif (len 15): 01 69 .. .. .. <ts:4 BE> 00 00 <ptr:2 BE> 00 78"""
+    ptrs = []
+    for v in notifs:
+        if len(v) == 15 and v[1] == 0x69:
+            ts = _struct.unpack(">I", v[5:9])[0]
+            ptr = _struct.unpack(">H", v[11:13])[0]
+            ptrs.append((ts, ptr))
+    if not ptrs:
+        return None, None, None
+    newest = max(ptrs, key=lambda p: p[1])
+    oldest = min(ptrs, key=lambda p: p[1])
+    return newest[0], newest[1], oldest[1]
+
+
+async def fetch_live(mac: str, window_records: int | None = None, settle: float = 1.5):
+    """Connect, run the handshake/setup, discover the live buffer pointers, then page the
+    history backward from the newest pointer. Returns (notifications, meta) where meta has
+    base_ts / newest_ptr / oldest_ptr. window_records=None reads the whole stored range.
+
+    Connects by address (no scan) so it won't disturb a running scanner's discovery."""
+    import asyncio
     from bleak import BleakClient
     notifs: list[bytes] = []
 
     def on_notify(_char, data: bytearray):
         notifs.append(bytes(data))
 
-    async with BleakClient(mac, timeout=20.0) as client:
+    client = BleakClient(mac, timeout=25.0)
+    await client.connect()
+    try:
         await client.start_notify(NOTIFY_CHAR, on_notify)
-        # TODO(live): handshake (0x5700 + current unix time), range query (0x570f68...),
-        # then paginated reads (0x570f690803020000 <addr> 06) from oldest→newest pointer
-        # discovered in the metadata notification. Captured exact bytes are in the protocol doc.
-        import asyncio
-        await asyncio.sleep(8.0)  # collect the stream
-        await client.stop_notify(NOTIFY_CHAR)
-    return notifs
+        now = int(_time.time())
+        await client.write_gatt_char(CMD_CHAR, _HANDSHAKE_PREFIX + _struct.pack(">I", now), response=True)
+        for cmd in _SETUP_CMDS:
+            await client.write_gatt_char(CMD_CHAR, cmd, response=True)
+            await asyncio.sleep(0.2)
+        await asyncio.sleep(settle)
+
+        base_ts, newest, oldest = _parse_metadata(notifs)
+        meta = {"base_ts": base_ts, "newest_ptr": newest, "oldest_ptr": oldest}
+        if newest is None:
+            log.warning("no metadata pointer parsed; returning setup notifications only")
+            return notifs, meta
+
+        start = oldest if window_records is None else max(oldest or 0, newest - window_records * _REC_STRIDE)
+        addr = start
+        while addr < newest:
+            await client.write_gatt_char(CMD_CHAR, _READ_PREFIX + _struct.pack(">H", addr) + b"\x06", response=True)
+            addr += _REC_STRIDE
+            await asyncio.sleep(0.03)
+        await asyncio.sleep(settle)
+        return notifs, meta
+    finally:
+        try:
+            await client.stop_notify(NOTIFY_CHAR)
+        except Exception:
+            pass
+        await client.disconnect()
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────────
@@ -175,6 +231,8 @@ def main() -> None:
     ap.add_argument("--device-type", default="switchbot_meter_pro")
     ap.add_argument("--db", type=Path, help="hot.db for INSERT OR IGNORE")
     ap.add_argument("--dry-run", action="store_true", help="decode but don't insert")
+    ap.add_argument("--window", type=int, default=0,
+                    help="live: records to read back from newest (0 = whole stored range)")
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level), format="%(levelname)s %(message)s")
@@ -190,17 +248,19 @@ def main() -> None:
 
     if args.device:
         import asyncio
-        notifs = asyncio.run(fetch_live(args.device))
+        window = args.window if args.window > 0 else None
+        notifs, meta = asyncio.run(fetch_live(args.device, window_records=window))
         samples = decode_meter_pro(notifs)
-        log.info("live notifications=%d  decoded samples=%d", len(notifs), len(samples))
-        # TODO(live): assign timestamps from metadata base + interval, anchored so the
-        # newest sample == current live reading, THEN insert. Not inserting until that's
-        # verified on hardware (wrong timestamps would corrupt the series).
-        if args.dry_run or not args.db:
-            log.info("dry-run: %s", samples[:20])
-            return
-        log.warning("timestamp anchoring not yet verified on hardware — refusing to insert. "
-                    "Run with --dry-run for now.")
+        log.info("live notifications=%d  decoded samples=%d  meta=%s", len(notifs), len(samples), meta)
+        if samples:
+            temps = [s[0] for s in samples]
+            log.info("temp %.1f–%.1f°C  newest 12: %s", min(temps), max(temps), samples[-12:])
+        # Timestamp anchoring (newest sample == current live reading) is NOT verified yet, so
+        # we never insert from a live pull until that's confirmed — wrong timestamps would
+        # corrupt the series. --dry-run is the only supported live mode for now.
+        if not args.dry_run and args.db:
+            log.warning("refusing to insert: per-sample timestamps not yet anchored on hardware. "
+                        "Use --dry-run until anchoring is verified.")
         return
 
     ap.error("need --offline FILE or --device MAC")
