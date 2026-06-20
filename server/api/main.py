@@ -141,7 +141,8 @@ svg .band{opacity:.18}
 const REFRESH=30000;
 const toF=c=>(c*9/5+32).toFixed(1);
 const fToScale=c=>c*9/5+32;
-let DEVICES=[], CURRENT=null, RANGE=1;  // RANGE in days
+let DEVICES=[], CURRENT=null, RANGE=86400;  // RANGE = span in seconds (default 24h)
+const RAW_MAX_S=7*86400;  // span <= this -> full raw points; beyond -> daily min/avg/max
 
 function ago(ts){
   if(!ts)return'—';
@@ -207,7 +208,7 @@ async function refresh(){
 
 // ── Deep-dive detail view ─────────────────────────────────────────────────
 function openDetail(id){
-  CURRENT=id; RANGE=1;
+  CURRENT=id; RANGE=86400;
   document.getElementById('grid').classList.add('hide');
   document.getElementById('detail').classList.add('show');
   document.getElementById('ts').textContent='';
@@ -221,55 +222,76 @@ function closeDetail(){
   document.getElementById('hdr').textContent='Home Sensors';
   refresh();
 }
-function setRange(d){RANGE=d; renderDetail();}
+function setRange(s){RANGE=s; renderDetail();}
+function applyCustomRange(){
+  const n=parseFloat(document.getElementById('cr-n').value);
+  const u=document.getElementById('cr-u').value;
+  if(!(n>0)) return;
+  RANGE=Math.round(n*({min:60,hour:3600,day:86400}[u]));
+  renderDetail();
+}
+function fmtSpan(s){
+  if(s<3600) return (s%60?(s/60).toFixed(1):s/60)+'m';
+  if(s<86400) return (s%3600?(s/3600).toFixed(1):s/3600)+'h';
+  return (s%86400?(s/86400).toFixed(1):s/86400)+'d';
+}
 
 function renderDetail(){
   const dev=DEVICES.find(d=>d.device_id===CURRENT)||{device_id:CURRENT,area:''};
   document.getElementById('hdr').textContent=titleCase(dev.area||CURRENT);
-  const ranges=[[1,'24h'],[7,'7d'],[30,'30d'],[90,'90d']];
+  const presets=[[3600,'1h'],[21600,'6h'],[86400,'24h'],[259200,'3d'],[604800,'7d'],[2592000,'30d'],[7776000,'90d']];
+  const inp="background:#1a1f2e;border:1px solid #252d3d;color:#e2e8f0;border-radius:8px;padding:.35rem .5rem;font-size:.78rem";
   document.getElementById('detail').innerHTML=`
     <button class="back" onclick="closeDetail()">← all sensors</button>
     <div class="dtitle">${titleCase(dev.area||CURRENT)}</div>
     <div class="dsub">${CURRENT}</div>
-    <div class="ranges">${ranges.map(([d,l])=>
-      `<button class="rbtn${RANGE===d?' active':''}" onclick="setRange(${d})">${l}</button>`).join('')}</div>
-    <div id="charts"><div class="loading">Loading history…</div></div>`;
+    <div class="ranges">${presets.map(([s,l])=>
+      `<button class="rbtn${RANGE===s?' active':''}" onclick="setRange(${s})">${l}</button>`).join('')}</div>
+    <div class="ranges" style="margin-top:-.4rem">
+      <span style="font-size:.75rem;color:#64748b;align-self:center">custom:</span>
+      <input id="cr-n" type="number" min="1" step="1" placeholder="#" style="width:5rem;${inp}"
+        onkeydown="if(event.key==='Enter')applyCustomRange()">
+      <select id="cr-u" style="${inp}">
+        <option value="min">minutes</option><option value="hour">hours</option><option value="day" selected>days</option>
+      </select>
+      <button class="rbtn" onclick="applyCustomRange()">Apply</button>
+      <span style="font-size:.72rem;color:#475569;align-self:center">showing ${fmtSpan(RANGE)}</span>
+    </div>
+    <div id="charts"><div class="loading">Loading…</div></div>`;
   loadCharts();
 }
 
 async function loadCharts(){
-  const id=CURRENT, days=RANGE;
+  const id=CURRENT, span=RANGE;
   const box=document.getElementById('charts');
+  const end=new Date(), start=new Date(Date.now()-span*1000);
   try{
-    if(days<=1){
-      // Intraday: raw readings
-      const end=new Date(), start=new Date(Date.now()-days*864e5);
+    if(span<=RAW_MAX_S){
+      // Full-resolution raw points (hot SQLite + Parquet)
       const url=`/devices/${id}/readings?start=${start.toISOString().slice(0,19)}Z`
-               +`&end=${end.toISOString().slice(0,19)}Z&limit=20000`;
+               +`&end=${end.toISOString().slice(0,19)}Z&limit=50000`;
       const data=await(await fetch(url)).json();
       if(CURRENT!==id)return;
       const rs=data.readings||[];
-      const tSeries=rs.filter(r=>r.metric==='temperature_c').map(r=>({t:+new Date(r.ts),v:fToScale(r.value)}));
-      const hSeries=rs.filter(r=>r.metric==='humidity_pct').map(r=>({t:+new Date(r.ts),v:r.value}));
+      const tS=rs.filter(r=>r.metric==='temperature_c').map(r=>({t:+new Date(r.ts),v:fToScale(r.value)}));
+      const hS=rs.filter(r=>r.metric==='humidity_pct').map(r=>({t:+new Date(r.ts),v:r.value}));
+      const note=`${tS.length} raw pts · ${fmtSpan(span)}`+(data.truncated?' · capped 50k':'');
       box.innerHTML='';
-      box.appendChild(chartCard('Temperature (°F)',[{pts:tSeries,color:'#fb923c'}],'°F'));
-      box.appendChild(chartCard('Humidity (%)',[{pts:hSeries,color:'#38bdf8'}],'%'));
-      if(!tSeries.length&&!hSeries.length)box.innerHTML='<div class="loading">No data in this range.</div>';
+      box.appendChild(chartCard(`Temperature (°F) — ${note}`,[{pts:tS,color:'#fb923c',dots:true}],'°F'));
+      box.appendChild(chartCard(`Humidity (%) — ${note}`,[{pts:hS,color:'#38bdf8',dots:true}],'%'));
+      if(!tS.length&&!hS.length)box.innerHTML='<div class="loading">No data in this range.</div>';
     }else{
-      // Multi-day: daily summary with min/max band + mean line
+      // Daily summary (min/avg/max band) for long spans
+      const days=Math.ceil(span/86400);
       const data=await(await fetch(`/devices/${id}/summary?days=${days}`)).json();
       if(CURRENT!==id)return;
       const sm=(data.summary||[]).filter(s=>!s.live);
-      const tDay=sm.filter(s=>s.metric==='temperature_c').map(s=>({
-        t:+new Date(s.date),lo:fToScale(s.min_val),hi:fToScale(s.max_val),v:fToScale(s.mean_val)}));
-      const hDay=sm.filter(s=>s.metric==='humidity_pct').map(s=>({
-        t:+new Date(s.date),lo:s.min_val,hi:s.max_val,v:s.mean_val}));
+      const tD=sm.filter(s=>s.metric==='temperature_c').map(s=>({t:+new Date(s.date),lo:fToScale(s.min_val),hi:fToScale(s.max_val),v:fToScale(s.mean_val)}));
+      const hD=sm.filter(s=>s.metric==='humidity_pct').map(s=>({t:+new Date(s.date),lo:s.min_val,hi:s.max_val,v:s.mean_val}));
       box.innerHTML='';
-      box.appendChild(chartCard('Temperature (°F) — daily min/avg/max',
-        [{pts:tDay,color:'#fb923c',band:true}],'°F'));
-      box.appendChild(chartCard('Humidity (%) — daily min/avg/max',
-        [{pts:hDay,color:'#38bdf8',band:true}],'%'));
-      if(!tDay.length&&!hDay.length)box.innerHTML='<div class="loading">No summary data yet for this range.</div>';
+      box.appendChild(chartCard(`Temperature (°F) — daily min/avg/max · ${days}d`,[{pts:tD,color:'#fb923c',band:true}],'°F'));
+      box.appendChild(chartCard(`Humidity (%) — daily min/avg/max · ${days}d`,[{pts:hD,color:'#38bdf8',band:true}],'%'));
+      if(!tD.length&&!hD.length)box.innerHTML='<div class="loading">No summary data yet for this range.</div>';
     }
   }catch(e){
     if(CURRENT===id)box.innerHTML='<div class="loading">Error loading history: '+e.message+'</div>';
@@ -303,7 +325,7 @@ function chartCard(title,series,unit){
     labels+=`<text class="lbl" x="${P.l-6}" y="${(y+3).toFixed(1)}" text-anchor="end">${v.toFixed(0)}</text>`;
   }
   // x labels (start, mid, end)
-  const fmt=t=>{const d=new Date(t);return RANGE<=1
+  const fmt=t=>{const d=new Date(t);return RANGE<=172800
     ?d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
     :(d.getMonth()+1)+'/'+d.getDate();};
   let xlab='';
@@ -320,6 +342,9 @@ function chartCard(title,series,unit){
     }
     const line=s.pts.map((p,i)=>`${i?'L':'M'}${sx(p.t).toFixed(1)} ${sy(p.v).toFixed(1)}`).join(' ');
     paths+=`<path d="${line}" fill="none" stroke="${s.color}" stroke-width="1.6"/>`;
+    // full-point markers for raw mode when not too dense to read
+    if(s.dots && s.pts.length<=800)
+      for(const p of s.pts) paths+=`<circle cx="${sx(p.t).toFixed(1)}" cy="${sy(p.v).toFixed(1)}" r="1.7" fill="${s.color}"/>`;
   }
 
   card.innerHTML=`<div class="chart-title"><span>${title}</span>
