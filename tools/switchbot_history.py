@@ -168,10 +168,24 @@ def _parse_metadata(notifs: list[bytes]):
             ptr = _struct.unpack(">H", v[11:13])[0]
             ptrs.append((ts, ptr))
     if not ptrs:
-        return None, None, None
+        return None, None, None, None
     newest = max(ptrs, key=lambda p: p[1])
     oldest = min(ptrs, key=lambda p: p[1])
-    return newest[0], newest[1], oldest[1]
+    return newest[0], newest[1], oldest[0], oldest[1]  # newest_ts, newest_ptr, oldest_ts, oldest_ptr
+
+
+def assign_timestamps(samples: list[tuple[float, int]], meta: dict) -> list[tuple[int, float, int]]:
+    """Map decoded samples (oldest→newest, one per address unit starting at meta['start_addr'])
+    to (unix_ts, temp, hum). Timestamp is linear between the device's two metadata anchors:
+    ts(addr) = oldest_ts + (addr - oldest_ptr) * (newest_ts - oldest_ts)/(newest_ptr - oldest_ptr).
+    Validated: newest sample lands on the device's 'now' (== the live reading)."""
+    nt, np_, ot, op, st = (meta.get(k) for k in
+                           ("newest_ts", "newest_ptr", "oldest_ts", "oldest_ptr", "start_addr"))
+    if None in (nt, np_, ot, op, st) or np_ == op:
+        return []
+    interval = (nt - ot) / (np_ - op)
+    return [(int(round(ot + (st + k - op) * interval)), temp, hum)
+            for k, (temp, hum) in enumerate(samples)]
 
 
 async def fetch_live(mac: str, window_records: int | None = None, settle: float = 1.5):
@@ -198,13 +212,15 @@ async def fetch_live(mac: str, window_records: int | None = None, settle: float 
             await asyncio.sleep(0.2)
         await asyncio.sleep(settle)
 
-        base_ts, newest, oldest = _parse_metadata(notifs)
-        meta = {"base_ts": base_ts, "newest_ptr": newest, "oldest_ptr": oldest}
+        newest_ts, newest, oldest_ts, oldest = _parse_metadata(notifs)
+        meta = {"newest_ts": newest_ts, "newest_ptr": newest,
+                "oldest_ts": oldest_ts, "oldest_ptr": oldest, "start_addr": None}
         if newest is None:
             log.warning("no metadata pointer parsed; returning setup notifications only")
             return notifs, meta
 
         start = oldest if window_records is None else max(oldest or 0, newest - window_records * _REC_STRIDE)
+        meta["start_addr"] = start
         addr = start
         while addr < newest:
             await client.write_gatt_char(CMD_CHAR, _READ_PREFIX + _struct.pack(">H", addr) + b"\x06", response=True)
@@ -248,19 +264,33 @@ def main() -> None:
 
     if args.device:
         import asyncio
+        import datetime as _dt
         window = args.window if args.window > 0 else None
         notifs, meta = asyncio.run(fetch_live(args.device, window_records=window))
         samples = decode_meter_pro(notifs)
-        log.info("live notifications=%d  decoded samples=%d  meta=%s", len(notifs), len(samples), meta)
-        if samples:
-            temps = [s[0] for s in samples]
-            log.info("temp %.1f–%.1f°C  newest 12: %s", min(temps), max(temps), samples[-12:])
-        # Timestamp anchoring (newest sample == current live reading) is NOT verified yet, so
-        # we never insert from a live pull until that's confirmed — wrong timestamps would
-        # corrupt the series. --dry-run is the only supported live mode for now.
-        if not args.dry_run and args.db:
-            log.warning("refusing to insert: per-sample timestamps not yet anchored on hardware. "
-                        "Use --dry-run until anchoring is verified.")
+        tsamples = assign_timestamps(samples, meta)
+        log.info("live notifications=%d  decoded=%d  meta=%s", len(notifs), len(samples), meta)
+        if not tsamples:
+            log.warning("no timestamped samples (metadata not parsed?) — nothing to do")
+            return
+        newest = tsamples[-1]
+        log.info("range %s .. %s  (newest %.1f°C/%d%%)",
+                 _dt.datetime.fromtimestamp(tsamples[0][0], _dt.timezone.utc).isoformat(),
+                 _dt.datetime.fromtimestamp(newest[0], _dt.timezone.utc).isoformat(),
+                 newest[1], newest[2])
+        # Sanity: the newest sample must be ~now (it's the device's live reading). If the anchor
+        # is wrong it would be far off — refuse rather than write bad timestamps.
+        skew = abs(_time.time() - newest[0])
+        if skew > 3600:
+            log.error("newest sample is %.0fs from now — anchor looks wrong; refusing to insert.", skew)
+            return
+        if args.dry_run or not args.db:
+            log.info("dry-run: %d samples; newest 6: %s", len(tsamples), tsamples[-6:])
+            return
+        dev_id = args.device_id or f"sb_{args.device.replace(':', '').lower()}"
+        n = insert_samples(args.db, dev_id, args.device_type, args.area, tsamples)
+        log.info("inserted %d new rows into %s (%d samples; idempotent re-runs add 0)",
+                 n, args.db, len(tsamples))
         return
 
     ap.error("need --offline FILE or --device MAC")
