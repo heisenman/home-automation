@@ -74,7 +74,10 @@ CREATE TABLE IF NOT EXISTS readings (
     unit        TEXT    NOT NULL,
     schema_v    INTEGER NOT NULL DEFAULT 1
 );
-CREATE INDEX IF NOT EXISTS idx_readings_device_ts ON readings (device_id, ts);
+-- Idempotency: one row per (device_id, ts, metric). Lets the live writer and any
+-- history backfill/re-import use INSERT OR IGNORE so overlapping data never dupes.
+-- Same key the compactor dedups on. Also serves (device_id, ts) prefix lookups.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_unique ON readings (device_id, ts, metric);
 CREATE INDEX IF NOT EXISTS idx_readings_ts        ON readings (ts);
 CREATE INDEX IF NOT EXISTS idx_readings_metric    ON readings (metric, device_id);
 
@@ -124,7 +127,7 @@ def _insert_readings(conn: sqlite3.Connection, payload: dict) -> int:
 
     if rows:
         conn.executemany(
-            """INSERT INTO readings (ts, device_id, device_type, area, transport,
+            """INSERT OR IGNORE INTO readings (ts, device_id, device_type, area, transport,
                metric, value, unit, schema_v) VALUES (?,?,?,?,?,?,?,?,?)""",
             rows,
         )

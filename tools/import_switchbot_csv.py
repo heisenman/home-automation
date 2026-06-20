@@ -76,7 +76,7 @@ def _open_db(path: Path) -> sqlite3.Connection:
             area TEXT NOT NULL, transport TEXT NOT NULL, metric TEXT NOT NULL,
             value REAL NOT NULL, unit TEXT NOT NULL, schema_v INTEGER NOT NULL DEFAULT 1
         );
-        CREATE INDEX IF NOT EXISTS idx_readings_device_ts ON readings (device_id, ts);
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_readings_unique ON readings (device_id, ts, metric);
         CREATE INDEX IF NOT EXISTS idx_readings_ts ON readings (ts);
         CREATE TABLE IF NOT EXISTS device_last_seen (
             device_id TEXT PRIMARY KEY, device_type TEXT NOT NULL, area TEXT NOT NULL,

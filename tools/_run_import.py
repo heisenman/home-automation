@@ -120,7 +120,7 @@ def import_file(conn, csv_path: Path, device_id: str, area: str, device_type: st
 
             if len(batch) >= BATCH_SIZE:
                 conn.executemany(
-                    "INSERT INTO readings (ts,device_id,device_type,area,transport,metric,value,unit,schema_v) "
+                    "INSERT OR IGNORE INTO readings (ts,device_id,device_type,area,transport,metric,value,unit,schema_v) "
                     "VALUES (?,?,?,?,?,?,?,?,?)", batch
                 )
                 conn.commit()
@@ -130,7 +130,7 @@ def import_file(conn, csv_path: Path, device_id: str, area: str, device_type: st
 
         if batch:
             conn.executemany(
-                "INSERT INTO readings (ts,device_id,device_type,area,transport,metric,value,unit,schema_v) "
+                "INSERT OR IGNORE INTO readings (ts,device_id,device_type,area,transport,metric,value,unit,schema_v) "
                 "VALUES (?,?,?,?,?,?,?,?,?)", batch
             )
             conn.commit()
