@@ -11,6 +11,9 @@ WorkingDirectory=/home/visko/home_automation
 Environment=HA_DB=instance/db/hot.db
 Environment=HA_PARQUET_DIR=instance/db/parquet
 Environment=HA_MAX_DEEP_ROWS=50000
+# DuckDB scratch needs a writable home; service home is read-only (ProtectHome).
+# instance/ is in ReadWritePaths.
+Environment=HOME=/home/visko/home_automation/instance
 # Bind address: 0.0.0.0 = reachable on the LAN; 127.0.0.1 = localhost only.
 # API is read-only and unauthenticated — only expose on a trusted home LAN.
 Environment=HA_BIND_HOST=0.0.0.0
