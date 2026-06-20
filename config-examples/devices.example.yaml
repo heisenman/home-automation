@@ -2,37 +2,76 @@
 # Copy to instance/devices.yaml and fill in real MAC addresses.
 # instance/ is git-ignored; MACs reveal your specific hardware to observers.
 #
-# Schema:
-#   mac:           BLE MAC address (colon-separated, uppercase)
-#   device_id:     stable slug used in MQTT topics and DB rows
-#   device_type:   switchbot_meter | switchbot_meter_plus | switchbot_meter_pro |
-#                  aranet4 | aranet_radon_plus
-#   area:          room / zone label, used in MQTT topic home/<area>/<device_id>/state
-#   capabilities:  list of metrics this device emits (informational; drives future UI)
-#   notes:         optional free text
+# device_id values here match the imported historical data.
+# Area slugs for C/H prefixes: correct to match your actual room names.
 
 devices:
+  # ── Meter Pro (indoor) ──────────────────────────────────────────────────────
   "AA:BB:CC:DD:EE:01":
-    device_id: "meter_living_room"
+    device_id: "meter_pro_living_room"
     device_type: "switchbot_meter_pro"
     area: "living_room"
     capabilities: [temperature, humidity, battery]
 
   "AA:BB:CC:DD:EE:02":
-    device_id: "meter_kitchen"
+    device_id: "meter_pro_c_office"
     device_type: "switchbot_meter_pro"
-    area: "kitchen"
+    area: "c_office"            # rename: central_office / computer_office / etc.
     capabilities: [temperature, humidity, battery]
 
   "AA:BB:CC:DD:EE:03":
-    device_id: "meter_outdoor_front"
+    device_id: "meter_pro_master_bed"
     device_type: "switchbot_meter_pro"
-    area: "outdoor_front"
+    area: "master_bedroom"
     capabilities: [temperature, humidity, battery]
 
+  # ── Outdoor Meters (used indoors) ───────────────────────────────────────────
   "AA:BB:CC:DD:EE:10":
+    device_id: "meter_living_room"
+    device_type: "switchbot_meter"
+    area: "living_room"
+    capabilities: [temperature, humidity, battery]
+
+  "AA:BB:CC:DD:EE:11":
+    device_id: "meter_c_bed"
+    device_type: "switchbot_meter"
+    area: "c_bedroom"           # rename: child_bedroom / corner_bedroom / etc.
+    capabilities: [temperature, humidity, battery]
+
+  "AA:BB:CC:DD:EE:12":
+    device_id: "meter_h_bath"
+    device_type: "switchbot_meter"
+    area: "h_bathroom"          # rename: hall_bathroom / etc.
+    capabilities: [temperature, humidity, battery]
+
+  "AA:BB:CC:DD:EE:13":
+    device_id: "meter_h_bed"
+    device_type: "switchbot_meter"
+    area: "h_bedroom"           # rename: hall_bedroom / etc.
+    capabilities: [temperature, humidity, battery]
+
+  "AA:BB:CC:DD:EE:14":
+    device_id: "meter_kitchen"
+    device_type: "switchbot_meter"
+    area: "kitchen"
+    capabilities: [temperature, humidity, battery]
+
+  "AA:BB:CC:DD:EE:15":
+    device_id: "meter_master_bath"
+    device_type: "switchbot_meter"
+    area: "master_bathroom"
+    capabilities: [temperature, humidity, battery]
+
+  "AA:BB:CC:DD:EE:16":
+    device_id: "meter_attic_south_wall"
+    device_type: "switchbot_meter"
+    area: "attic"
+    capabilities: [temperature, humidity, battery]
+
+  # ── Aranet ──────────────────────────────────────────────────────────────────
+  "AA:BB:CC:DD:EE:20":
     device_id: "aranet_crawlspace"
     device_type: "aranet_radon_plus"
     area: "crawlspace"
     capabilities: [co2, temperature, humidity, pressure, radon, battery]
-    notes: "Near server; enable Smart Home Integration on device"
+    notes: "Enable Smart Home Integration on device; lives near server"
