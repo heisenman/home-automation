@@ -5,14 +5,14 @@ After=bluetooth.target network.target ha-writer.service
 Requires=bluetooth.target
 
 [Service]
-Type=simple
+Type=notify
 User=visko
 Group=visko
 WorkingDirectory=/home/visko/home_automation
 Environment=HA_BROKER=localhost
 Environment=HA_BROKER_PORT=1883
 Environment=HA_REPUBLISH_S=60
-Environment=HA_SCAN_MODE=active
+Environment=HA_SCAN_MODE=passive
 ExecStart=/home/visko/home_automation/venv/bin/python3 \
     server/ingest/scanner.py \
     --registry instance/devices.yaml \

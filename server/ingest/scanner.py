@@ -24,6 +24,7 @@ import json
 import logging
 import os
 import signal
+import socket
 import sys
 import time
 from pathlib import Path
@@ -33,6 +34,9 @@ import yaml
 from bleak import BleakScanner
 from bleak.backends.device import BLEDevice
 from bleak.backends.scanner import AdvertisementData
+from bleak.assigned_numbers import AdvertisementDataType
+from bleak.backends.bluezdbus.advertisement_monitor import OrPattern
+from bleak.backends.bluezdbus.scanner import BlueZScannerArgs
 
 from decoders import aranet, switchbot
 
@@ -41,8 +45,23 @@ from decoders import aranet, switchbot
 REPUBLISH_INTERVAL_S: int = int(os.environ.get("HA_REPUBLISH_S", "60"))
 BROKER_HOST: str = os.environ.get("HA_BROKER", "localhost")
 BROKER_PORT: int = int(os.environ.get("HA_BROKER_PORT", "1883"))
-SCANNING_MODE: str = os.environ.get("HA_SCAN_MODE", "active")  # active | passive (passive needs bluez or_patterns)
+SCANNING_MODE: str = os.environ.get("HA_SCAN_MODE", "passive")  # passive | active
 MESSAGE_SCHEMA: int = 1
+
+RAW_DEBOUNCE_S: int = 60  # minimum seconds between raw/decode-fail publishes per device
+
+# Passive-scan filters (BlueZ or_patterns): only wake the host for our devices'
+# advertisements. This keeps radio load low on the shared AX210 controller so a
+# Bluetooth mouse/keyboard on the same adapter doesn't get starved and drop.
+# Patterns match at offset 0 of the AD structure's data:
+#   - Manufacturer data (0xFF) starting with company ID 0x0969 (LE: 69 09) → SwitchBot
+#   - 16-bit service data (0x16) for UUID 0xfd3d (LE: 3d fd) → SwitchBot
+#   - 16-bit service data (0x16) for UUID 0xfce0 (LE: e0 fc) → Aranet
+_OR_PATTERNS = [
+    OrPattern(0, AdvertisementDataType.MANUFACTURER_SPECIFIC_DATA, b"\x69\x09"),
+    OrPattern(0, AdvertisementDataType.SERVICE_DATA_UUID16, b"\x3d\xfd"),
+    OrPattern(0, AdvertisementDataType.SERVICE_DATA_UUID16, b"\xe0\xfc"),
+]
 
 log = logging.getLogger("ha.scanner")
 
@@ -138,6 +157,7 @@ class Scanner:
         self._registry = registry
         self._mqtt = mqtt_client
         self._state: dict[str, _DeviceState] = {}
+        self._raw_last_ts: dict[str, float] = {}
 
     def _device_state(self, mac: str) -> _DeviceState:
         if mac not in self._state:
@@ -205,6 +225,11 @@ class Scanner:
         svc: dict,
         rssi: int,
     ) -> None:
+        now = time.monotonic()
+        if now - self._raw_last_ts.get(mac, 0) < RAW_DEBOUNCE_S:
+            return
+        self._raw_last_ts[mac] = now
+
         topic = f"home/unknown/{mac.replace(':', '').lower()}/raw"
         payload = {
             "brand": brand,
@@ -234,17 +259,44 @@ class Scanner:
         signal.signal(signal.SIGTERM, _sigterm)
         signal.signal(signal.SIGINT, _sigterm)
 
-        async with BleakScanner(
+        scanner_kwargs = dict(
             detection_callback=self._advertisement_callback,
             scanning_mode=SCANNING_MODE,
-        ):
+        )
+        if SCANNING_MODE == "passive":
+            scanner_kwargs["bluez"] = BlueZScannerArgs(or_patterns=_OR_PATTERNS)
+            log.info("Passive scan with %d or_patterns (low radio load)", len(_OR_PATTERNS))
+
+        async with BleakScanner(**scanner_kwargs):
             log.info("BLE scanner active")
+            _sd_notify(b"READY=1")
+            watchdog_task = asyncio.create_task(_watchdog_loop())
             await stop_event.wait()
+            watchdog_task.cancel()
 
         log.info("Scanner stopped")
 
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _sd_notify(msg: bytes) -> None:
+    path = os.environ.get("NOTIFY_SOCKET", "")
+    if not path:
+        return
+    try:
+        with socket.socket(socket.AF_UNIX, socket.SOCK_DGRAM) as s:
+            s.connect(path)
+            s.send(msg)
+    except OSError:
+        pass
+
+
+async def _watchdog_loop() -> None:
+    """Ping systemd watchdog every 30 s (WatchdogSec=120 → notify at <half interval)."""
+    while True:
+        _sd_notify(b"WATCHDOG=1")
+        await asyncio.sleep(30)
+
 
 def _utc_now() -> str:
     from datetime import datetime, timezone

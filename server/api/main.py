@@ -28,7 +28,7 @@ from typing import Optional
 import duckdb
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -75,6 +75,114 @@ def _parquet_glob() -> str:
 
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def dashboard():
+    return _DASHBOARD_HTML
+
+
+_DASHBOARD_HTML = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Home Sensors</title>
+<style>
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:system-ui,sans-serif;background:#0f1117;color:#e2e8f0;padding:1.25rem}
+header{display:flex;justify-content:space-between;align-items:baseline;margin-bottom:1.25rem}
+h1{font-size:1.1rem;font-weight:600;color:#94a3b8;letter-spacing:.03em}
+#ts{font-size:.72rem;color:#475569}
+.grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(190px,1fr));gap:.875rem}
+.card{background:#1a1f2e;border-radius:12px;padding:1rem;border:1px solid #252d3d;transition:border-color .2s}
+.card:hover{border-color:#3b4a6b}
+.card.stale{border-color:#3d2b1f;opacity:.65}
+.area{font-size:.7rem;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.07em;margin-bottom:.2rem}
+.did{font-size:.65rem;color:#374151;margin-bottom:.7rem;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.temp{font-size:2.4rem;font-weight:700;line-height:1;color:#f1f5f9;margin-bottom:.5rem}
+.temp sup{font-size:1rem;color:#64748b;font-weight:400}
+.metrics{display:flex;flex-wrap:wrap;gap:.6rem .9rem;margin-bottom:.7rem}
+.m{font-size:.85rem}
+.ml{font-size:.6rem;color:#4b5563;margin-bottom:.1rem}
+.bat-ok{color:#4ade80}.bat-warn{color:#facc15}.bat-low{color:#f87171}.bat-raw{color:#6b7280}
+.foot{display:flex;justify-content:space-between;font-size:.65rem;color:#374151;padding-top:.6rem;border-top:1px solid #1e2433}
+.stale-pill{background:#3d1f1f;color:#f87171;border-radius:4px;padding:.1rem .35rem;font-size:.6rem}
+.no-data{color:#374151;font-size:2rem;margin-bottom:.5rem}
+</style>
+</head>
+<body>
+<header>
+  <h1>Home Sensors</h1>
+  <span id="ts"></span>
+</header>
+<div class="grid" id="grid"><div style="color:#475569;padding:2rem">Loading…</div></div>
+<script>
+const REFRESH=30000;
+const toF=c=>(c*9/5+32).toFixed(1);
+function ago(ts){
+  if(!ts)return'—';
+  const s=(Date.now()-new Date(ts).getTime())/1000;
+  if(s<60)return Math.round(s)+'s ago';
+  if(s<3600)return Math.round(s/60)+'m ago';
+  return Math.round(s/3600)+'h ago';
+}
+function batClass(v){
+  if(v===null||v===undefined)return'';
+  if(v>100)return'bat-raw';
+  if(v>50)return'bat-ok';
+  if(v>20)return'bat-warn';
+  return'bat-low';
+}
+function getM(rs,name){const r=rs&&rs.find(r=>r.metric===name);return r?r.value:null}
+function lastTs(rs){if(!rs||!rs.length)return null;return rs.reduce((a,b)=>a.ts>b.ts?a:b).ts}
+
+function card(dev,last){
+  const rs=last?last.readings:[];
+  const tc=getM(rs,'temperature_c');
+  const hum=getM(rs,'humidity_pct');
+  const bat=getM(rs,'battery_pct');
+  const ts=lastTs(rs)||dev.last_ts;
+  const ageS=ts?(Date.now()-new Date(ts).getTime())/1000:Infinity;
+  const stale=ageS>300;
+  const area=dev.area.replace(/_/g,' ').replace(/\\b\\w/g,c=>c.toUpperCase());
+  const batLabel=bat!==null&&bat!==undefined?(bat>100?bat+'%*':bat+'%'):'';
+
+  return`<div class="card${stale?' stale':''}">
+    <div class="area">${area}</div>
+    <div class="did">${dev.device_id}</div>
+    ${tc!==null
+      ?`<div class="temp">${toF(tc)}<sup>°F</sup></div>`
+      :`<div class="no-data">—</div>`}
+    <div class="metrics">
+      ${hum!==null?`<div class="m"><div class="ml">RH</div>${Math.round(hum)}%</div>`:''}
+      ${bat!==null?`<div class="m"><div class="ml">BAT</div><span class="${batClass(bat)}">${batLabel}</span></div>`:''}
+      ${dev.last_rssi?`<div class="m"><div class="ml">RSSI</div>${dev.last_rssi}</div>`:''}
+    </div>
+    <div class="foot">
+      <span>${ago(ts)}</span>
+      ${stale?'<span class="stale-pill">stale</span>':''}
+    </div>
+  </div>`;
+}
+
+async function refresh(){
+  try{
+    const devs=await(await fetch('/devices')).json();
+    devs.sort((a,b)=>a.area.localeCompare(b.area));
+    const lasts=await Promise.all(devs.map(async d=>{
+      try{const r=await fetch('/devices/'+d.device_id+'/last');return r.ok?r.json():null}
+      catch{return null}
+    }));
+    document.getElementById('grid').innerHTML=devs.map((d,i)=>card(d,lasts[i])).join('');
+    document.getElementById('ts').textContent='updated '+new Date().toLocaleTimeString();
+  }catch(e){console.error(e)}
+}
+refresh();
+setInterval(refresh,REFRESH);
+</script>
+</body>
+</html>"""
+
 
 @app.get("/health")
 def health():

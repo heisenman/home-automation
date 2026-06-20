@@ -156,15 +156,26 @@ def compact(
 
         # Merge with existing partition if present (handles late arrivals)
         if out_path.exists() and not dry_run:
-            existing = pq.read_table(str(out_path))
-            import pyarrow.compute as pc
-            table = pa.concat_tables([existing, table])
-            # Dedup by (ts, device_id, metric)
-            df = table.to_pandas().drop_duplicates(
-                subset=["ts", "device_id", "metric"]
-            ).sort_values("ts")
-            import pyarrow as pa2
-            table = pa2.Table.from_pandas(df, schema=_SCHEMA, preserve_index=False)
+            existing = pq.read_table(str(out_path), schema=_SCHEMA)
+            combined = pa.concat_tables([existing, table])
+            # Dedup by (ts, device_id, metric) using DuckDB window function
+            _con = duckdb.connect()
+            _con.register("_combined", combined)
+            table = _con.execute("""
+                SELECT ts, device_id, device_type, area, transport,
+                       metric, value, unit, schema_v
+                FROM (
+                    SELECT *,
+                           ROW_NUMBER() OVER (
+                               PARTITION BY ts, device_id, metric
+                               ORDER BY ts
+                           ) AS _rn
+                    FROM _combined
+                )
+                WHERE _rn = 1
+                ORDER BY ts
+            """).arrow()
+            _con.close()
 
         log.info(
             "Partition year=%d month=%02d → %s (%d rows)",
@@ -206,16 +217,10 @@ def compact(
         # Compute and upsert summaries
         _write_summaries(conn, rows)
 
-        # Prune compacted rows from hot tier
-        ids_to_delete = conn.execute(
-            "SELECT id FROM readings WHERE ts < ?", (cutoff,)
-        ).fetchall()
-        if ids_to_delete:
-            placeholders = ",".join("?" * len(ids_to_delete))
-            flat_ids = [r[0] for r in ids_to_delete]
-            conn.execute(f"DELETE FROM readings WHERE id IN ({placeholders})", flat_ids)
-            conn.commit()
-            log.info("Pruned %d rows from hot tier", len(flat_ids))
+        # Prune compacted rows from hot tier (use timestamp range, not ID list)
+        cur = conn.execute("DELETE FROM readings WHERE ts < ?", (cutoff,))
+        conn.commit()
+        log.info("Pruned %d rows from hot tier", cur.rowcount)
 
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         conn.commit()

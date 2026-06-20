@@ -11,9 +11,12 @@ WorkingDirectory=/home/visko/home_automation
 Environment=HA_DB=instance/db/hot.db
 Environment=HA_PARQUET_DIR=instance/db/parquet
 Environment=HA_MAX_DEEP_ROWS=50000
+# Bind address: 0.0.0.0 = reachable on the LAN; 127.0.0.1 = localhost only.
+# API is read-only and unauthenticated — only expose on a trusted home LAN.
+Environment=HA_BIND_HOST=0.0.0.0
 ExecStart=/home/visko/home_automation/venv/bin/python3 \
     -m uvicorn server.api.main:app \
-    --host 127.0.0.1 \
+    --host ${HA_BIND_HOST} \
     --port 8123 \
     --workers 1 \
     --no-access-log

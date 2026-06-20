@@ -42,6 +42,7 @@ SERVICE_UUID: str = "0000fd3d-0000-1000-8000-00805f9b34fb"
 _MODEL_NAMES: dict[int, str] = {
     0x54: "switchbot_meter",           # 'T' WoSensorTH
     0x69: "switchbot_meter_plus",      # 'i' WoSensorTHPlus
+    0x34: "switchbot_meter_pro",       # '4' WoSensorTHPro (newer firmware / Gen 2)
     0x4F: "switchbot_meter_pro",       # 'O' WoSensorTHPro
     0x50: "switchbot_meter_pro",       # 'P' WoSensorTHPro alt
     0x77: "switchbot_meter_outdoor",   # 'w' WoSensorTHO
@@ -91,23 +92,35 @@ def _infer_device_type(raw_mfr: bytes, raw_svc: bytes) -> str:
 
 
 def _decode_meter(svc: bytes, mfr: bytes) -> dict | None:
-    # Format A: service data ≥6 bytes (Meter, Meter Plus, Meter Pro)
+    # Battery is carried in service-data byte 2 for ALL SwitchBot meters
+    # (the documented fd3d layout). The manufacturer-data byte after the MAC is a
+    # status/flags field, NOT battery — reading it there produced impossible >100%
+    # values. svc[2] reads a sane 99–100% and matches the device displays.
+    battery = (svc[2] & 0x7F) if (svc and len(svc) >= 3) else None
+
+    # Temperature/humidity:
     if svc and len(svc) >= 6:
-        return _parse_svc_bytes(svc)
+        # Format A: full service data (Meter, Meter Plus, older Meter Pro)
+        result = _parse_svc_bytes(svc)
+    elif mfr and len(mfr) >= 11:
+        # Format B: manufacturer data with 6-byte MAC prefix (Outdoor Meter,
+        # newer Meter Pro firmware) — service data here is only 3 bytes.
+        result = _parse_mfr_bytes(mfr[6:])
+    else:
+        return None
 
-    # Format B: manufacturer data with 6-byte MAC prefix (Outdoor Meter, newer firmware)
-    if mfr and len(mfr) >= 11:
-        return _parse_mfr_bytes(mfr[6:])
-
-    return None
+    if result is None:
+        return None
+    if battery is not None:
+        result["battery_pct"] = int(battery)
+    return result
 
 
 def _parse_svc_bytes(data: bytes) -> dict | None:
-    """Parse Format A service data (model/flags/battery/temp/humidity)."""
+    """Parse Format A service data → temperature/humidity (battery added by caller)."""
     if len(data) < 6:
         return None
     try:
-        battery    = data[2] & 0x7F
         temp_frac  = (data[3] & 0x0F) * 0.1
         temp_int   = data[4] & 0x7F
         positive   = bool(data[4] & 0x80)
@@ -115,19 +128,19 @@ def _parse_svc_bytes(data: bytes) -> dict | None:
         if not positive:
             temperature = -temperature
         humidity = data[5] & 0x7F
-        return _validated(temperature, humidity, battery, data.hex())
+        return _validated(temperature, humidity, data.hex())
     except (IndexError, struct.error) as exc:
         log.warning("switchbot svc parse error %s — raw %s", exc, data.hex())
         return None
 
 
 def _parse_mfr_bytes(data: bytes) -> dict | None:
-    """Parse Format B payload after stripping the 6-byte MAC prefix."""
+    """Parse Format B payload (after MAC) → temperature/humidity (battery added by caller)."""
     if len(data) < 5:
         return None
     try:
-        battery    = data[0] & 0x7F   # mfr[6]
-        # data[1] = sequence/unknown   # mfr[7]
+        # data[0] = status/flags (NOT battery)  # mfr[6]
+        # data[1] = sequence/unknown            # mfr[7]
         temp_frac  = (data[2] & 0x0F) * 0.1  # mfr[8]
         temp_int   = data[3] & 0x7F           # mfr[9]
         positive   = bool(data[3] & 0x80)
@@ -135,13 +148,13 @@ def _parse_mfr_bytes(data: bytes) -> dict | None:
         if not positive:
             temperature = -temperature
         humidity = data[4] & 0x7F             # mfr[10]
-        return _validated(temperature, humidity, battery, data.hex())
+        return _validated(temperature, humidity, data.hex())
     except (IndexError, struct.error) as exc:
         log.warning("switchbot mfr parse error %s — raw %s", exc, data.hex())
         return None
 
 
-def _validated(temperature: float, humidity: int, battery: int, raw_hex: str) -> dict | None:
+def _validated(temperature: float, humidity: int, raw_hex: str) -> dict | None:
     if not (-40.0 <= temperature <= 60.0):
         log.warning("switchbot temperature %s out of range — raw %s", temperature, raw_hex)
         return None
@@ -151,5 +164,4 @@ def _validated(temperature: float, humidity: int, battery: int, raw_hex: str) ->
     return {
         "temperature_c": round(temperature, 1),
         "humidity_pct": int(humidity),
-        "battery_pct": int(battery),
     }

@@ -3,6 +3,41 @@
 All notable changes are documented here.
 Format: [ISO date] — description (ADR reference if applicable)
 
+## 2026-06-19 — Device confirmation, battery fix, passive scan, LAN API, dashboard
+
+**Device registry — all 10 SwitchBots positively identified:**
+- Confirmed by app readings, Meter Pro paired display, and breathe-test (warm/humidify a
+  sensor, observe which MAC spikes). master_bath nailed via breathe test (AA:BB:CC:00:00:04).
+- h_bed/h_bath and master_bath/c_bed/living_room corrected from initial RSSI guesses.
+
+**Battery decode fixed (was producing 2% / 118% / 122% garbage):**
+- Battery is in service-data byte 2 (documented fd3d layout), NOT the manufacturer-data
+  byte after the MAC (that's a status/flags field). All devices now read a sane 99–100%,
+  matching the hardware displays. Verified by replaying captured advertisement bytes.
+- Added Meter Pro model byte 0x34 (newer firmware) to the model map.
+
+**Passive BLE scanning (fixes wireless-mouse drops):**
+- Active scanning on the shared AX210 controller starved the Bluetooth mouse (Razer
+  Basilisk) on the same radio. Switched to passive scanning with BlueZ or_patterns
+  (SwitchBot 0x0969 / fd3d, Aranet fce0) — listen-only, low radio load. Default HA_SCAN_MODE=passive.
+
+**Scanner watchdog (fixes 2-minute crash loop):**
+- Service was Type=simple with WatchdogSec=120 but never pinged systemd → killed every 2 min,
+  which also reset the BLE radio and dropped the mouse. Added sd_notify READY/WATCHDOG loop,
+  Type=notify. Stable since.
+
+**Raw-publish debounce:** decode-fail raw messages now rate-limited to 1/60s per device (was flooding).
+
+**Compactor fixes (8.3M rows → 22 MB Parquet, hot.db 1.9 GB → 1.5 MB):**
+- DELETE by timestamp range instead of an 8.3M-element IN() list (SQLite var limit).
+- read_parquet with explicit schema to avoid partition-column schema conflict on re-run.
+- Dedup via DuckDB window function instead of pandas (pandas not in venv).
+
+**Web dashboard + LAN access:**
+- Added GET / dashboard (auto-refresh, °F, humidity, battery, stale flag) to the API.
+- API bind address configurable via HA_BIND_HOST, default 0.0.0.0 (LAN-reachable at :8123).
+  Read-only, unauthenticated — trusted-LAN only.
+
 ## 2026-06-19 — BLE decoder fixes + historical import
 
 **Bugs fixed:**
