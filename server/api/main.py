@@ -34,6 +34,8 @@ from fastapi.responses import HTMLResponse, JSONResponse
 
 DB_PATH = Path(os.environ.get("HA_DB", "instance/db/hot.db"))
 PARQUET_GLOB = Path(os.environ.get("HA_PARQUET_DIR", "instance/db/parquet"))
+WEATHER_DB = Path(os.environ.get("HA_WEATHER_DB", "instance/db/weather.db"))
+WEATHER_TABLE = os.environ.get("HA_WEATHER_TABLE", "weather")
 MAX_DEEP_ROWS: int = int(os.environ.get("HA_MAX_DEEP_ROWS", "50000"))
 
 log = logging.getLogger("ha.api")
@@ -586,6 +588,59 @@ def list_areas():
             "SELECT DISTINCT area FROM device_last_seen ORDER BY area"
         ).fetchall()
         return [r["area"] for r in rows]
+    finally:
+        conn.close()
+
+
+# ── Weather lane (separate weather.db) ──────────────────────────────────────────
+
+def _weather_conn() -> Optional[sqlite3.Connection]:
+    if not WEATHER_DB.exists():
+        return None
+    conn = sqlite3.connect(str(WEATHER_DB), check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    return conn
+
+
+@app.get("/weather/meta")
+def weather_meta():
+    """Locations + metrics available in the weather lane (for the dashboard series picker)."""
+    conn = _weather_conn()
+    if conn is None:
+        return {"available": False, "locations": [], "metrics": []}
+    try:
+        locs = [r[0] for r in conn.execute(
+            f"SELECT DISTINCT location FROM {WEATHER_TABLE} ORDER BY location")]
+        mets = [r[0] for r in conn.execute(
+            f"SELECT DISTINCT metric FROM {WEATHER_TABLE} ORDER BY metric")]
+        return {"available": True, "locations": locs, "metrics": mets}
+    finally:
+        conn.close()
+
+
+@app.get("/weather/readings")
+def weather_readings(
+    metric: str = Query(..., description="e.g. temperature_c, humidity_pct, pressure_hpa"),
+    start: str = Query(..., description="ISO 8601 UTC"),
+    end: str = Query(..., description="ISO 8601 UTC"),
+    location: Optional[str] = Query(default=None),
+    limit: int = Query(default=20000, ge=1, le=MAX_DEEP_ROWS),
+):
+    """Weather time-series for a metric/range — for graphing alongside sensor data."""
+    conn = _weather_conn()
+    if conn is None:
+        return {"metric": metric, "rows": 0, "readings": []}
+    try:
+        q = (f"SELECT ts, value, unit, location FROM {WEATHER_TABLE} "
+             "WHERE metric=? AND ts>=? AND ts<=?")
+        params: list = [metric, start, end]
+        if location:
+            q += " AND location=?"
+            params.append(location)
+        q += " ORDER BY ts LIMIT ?"
+        params.append(limit)
+        rows = [dict(r) for r in conn.execute(q, params).fetchall()]
+        return {"metric": metric, "rows": len(rows), "readings": rows}
     finally:
         conn.close()
 
