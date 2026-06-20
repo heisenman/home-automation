@@ -41,7 +41,7 @@ from decoders import aranet, switchbot
 REPUBLISH_INTERVAL_S: int = int(os.environ.get("HA_REPUBLISH_S", "60"))
 BROKER_HOST: str = os.environ.get("HA_BROKER", "localhost")
 BROKER_PORT: int = int(os.environ.get("HA_BROKER_PORT", "1883"))
-SCANNING_MODE: str = os.environ.get("HA_SCAN_MODE", "passive")  # passive | active
+SCANNING_MODE: str = os.environ.get("HA_SCAN_MODE", "active")  # active | passive (passive needs bluez or_patterns)
 MESSAGE_SCHEMA: int = 1
 
 log = logging.getLogger("ha.scanner")
