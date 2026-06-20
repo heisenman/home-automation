@@ -222,7 +222,17 @@ async def fetch_live(mac: str, profile: str = "meter_pro",
         notifs.append(bytes(data))
 
     client = BleakClient(mac, timeout=25.0)
-    await client.connect()
+    last_err = None
+    for attempt in range(3):
+        try:
+            await client.connect()
+            break
+        except Exception as exc:          # noqa: BLE stacks raise various errors
+            last_err = exc
+            log.warning("connect attempt %d/3 failed (%s); retrying…", attempt + 1, exc)
+            await asyncio.sleep(4)
+    else:
+        raise last_err
     try:
         await client.start_notify(NOTIFY_CHAR, on_notify)
         now = int(_time.time())
