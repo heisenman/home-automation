@@ -18,12 +18,14 @@ main/ble_scan.[ch]       NimBLE passive scan, AD parse, per-MAC debounce
 main/switchbot_decode.[ch]  C port of server/ingest/decoders/switchbot.py
 ```
 
-## Prerequisites (one-time, needs sudo)
+## Prerequisites
+ESP-IDF **v5.4** is installed at `~/esp/esp-idf` (toolchain in `~/.espressif`); `ninja` ships with its
+tools. **The firmware builds as-is** on this setup — no extra apt packages were needed. If a future
+component complains, the full official prereq set is:
 ```bash
 sudo apt install -y git wget flex bison gperf python3 python3-pip python3-venv \
   cmake ninja-build ccache libffi-dev libssl-dev dfu-util libusb-1.0-0
 ```
-ESP-IDF **v5.4** is already installed at `~/esp/esp-idf` (toolchain in `~/.espressif`).
 
 ## Build & flash
 ```bash
