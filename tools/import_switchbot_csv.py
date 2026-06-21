@@ -52,6 +52,7 @@ import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 log = logging.getLogger("ha.import.csv")
 
@@ -87,25 +88,31 @@ def _open_db(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def _parse_ts(raw: str) -> str | None:
-    """Try multiple date formats, return ISO 8601 UTC string or None."""
-    formats = [
-        "%Y-%m-%d %H:%M",          # 2026-01-15 14:30
-        "%Y-%m-%dT%H:%M:%S",       # 2026-01-15T14:30:00
-        "%Y-%m-%dT%H:%M",          # 2026-01-15T14:30
-        "%Y/%m/%d %H:%M",          # 2026/01/15 14:30
-        "%m/%d/%Y %H:%M",          # 01/15/2026 14:30
-        "%d/%m/%Y %H:%M",          # 15/01/2026 14:30
-        "%Y-%m-%d %H:%M:%S",       # 2026-01-15 14:30:00
-    ]
+_TS_FORMATS = [
+    "%b %d, %Y %I:%M:%S %p",    # Jan 21, 2026 3:49:00 PM
+    "%b %d, %Y %I:%M %p",       # Jan 21, 2026 3:49 PM   (SwitchBot app export)
+    "%Y-%m-%d %H:%M",           # 2026-01-15 14:30
+    "%Y-%m-%dT%H:%M:%S",        # 2026-01-15T14:30:00
+    "%Y-%m-%dT%H:%M",           # 2026-01-15T14:30
+    "%Y/%m/%d %H:%M",           # 2026/01/15 14:30
+    "%m/%d/%Y %H:%M",           # 01/15/2026 14:30
+    "%d/%m/%Y %H:%M",           # 15/01/2026 14:30
+    "%Y-%m-%d %H:%M:%S",        # 2026-01-15 14:30:00
+]
+
+
+def _parse_ts(raw: str, tz) -> str | None:
+    """Parse a CSV timestamp (naive, in local `tz`) → ISO 8601 UTC 'Z' string, or None.
+    The SwitchBot app exports timestamps in the phone's LOCAL timezone, so we localize and
+    convert to UTC (DST-aware) to align with the rest of the system, which stores UTC."""
     raw = raw.strip()
-    for fmt in formats:
+    for fmt in _TS_FORMATS:
         try:
-            # Treat as local time and convert to UTC marker (device records local time)
             dt = datetime.strptime(raw, fmt)
-            return dt.strftime("%Y-%m-%dT%H:%M:%SZ")
         except ValueError:
             continue
+        dt = dt.replace(tzinfo=tz if tz is not None else timezone.utc)
+        return dt.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
     return None
 
 
@@ -123,11 +130,13 @@ def _detect_columns(headers: list[str]) -> dict[str, str]:
         lower = col.lower().strip()
         if re.search(r"date|time|stamp", lower):
             mapping["ts"] = col
-        elif re.search(r"temp.*f\b|\(°f\)|\(f\)", lower):
-            mapping["temperature_f"] = col
-        elif re.search(r"temp", lower):
-            mapping["temperature_c"] = col
-        elif re.search(r"humid", lower):
+        elif "temp" in lower:
+            if "fahrenheit" in lower or "℉" in lower or re.search(r"\(°?f\)", lower):
+                mapping["temperature_f"] = col
+            elif "temperature_c" not in mapping:
+                mapping["temperature_c"] = col
+        elif "humid" in lower and "abs" not in lower and "g/m" not in lower:
+            # relative humidity %, NOT absolute humidity (g/m³)
             mapping["humidity_pct"] = col
         elif re.search(r"batter", lower):
             mapping["battery_pct"] = col
@@ -145,6 +154,7 @@ def import_csv(
     area: str,
     conn: sqlite3.Connection,
     dry_run: bool = False,
+    tz=None,
 ) -> tuple[int, int]:
     """Returns (rows_inserted, rows_skipped)."""
     inserted = 0
@@ -166,7 +176,7 @@ def import_csv(
 
         for row in reader:
             raw_ts = row.get(col_map["ts"], "").strip()
-            ts = _parse_ts(raw_ts)
+            ts = _parse_ts(raw_ts, tz)
             if not ts:
                 log.debug("Skipping unparseable timestamp: %s", raw_ts)
                 skipped += 1
@@ -236,6 +246,8 @@ def main() -> None:
     p.add_argument("--device-id", default=None, help="device_id slug (--csv mode only)")
     p.add_argument("--device-type", default="switchbot_meter_pro")
     p.add_argument("--area", default="unknown")
+    p.add_argument("--tz", default="America/Los_Angeles",
+                   help="timezone the CSV timestamps are in (app exports phone-local); converted to UTC")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = p.parse_args()
@@ -247,12 +259,14 @@ def main() -> None:
     )
 
     conn = None if args.dry_run else _open_db(args.db)
+    tz = ZoneInfo(args.tz) if args.tz else None
+    log.info("CSV timestamps interpreted as %s → converted to UTC", args.tz or "UTC")
 
     if args.csv:
         device_id = args.device_id or slug(args.csv.name)
         log.info("Importing %s → device_id=%s area=%s", args.csv, device_id, args.area)
         inserted, skipped = import_csv(
-            args.csv, device_id, args.device_type, args.area, conn, args.dry_run
+            args.csv, device_id, args.device_type, args.area, conn, args.dry_run, tz
         )
         log.info("Done: %d inserted, %d skipped", inserted, skipped)
     else:
@@ -263,7 +277,7 @@ def main() -> None:
             device_id = slug(f.name)
             log.info("Importing %s → device_id=%s", f.name, device_id)
             inserted, skipped = import_csv(
-                f, device_id, args.device_type, args.area, conn, args.dry_run
+                f, device_id, args.device_type, args.area, conn, args.dry_run, tz
             )
             log.info("  %d inserted, %d skipped", inserted, skipped)
             total_inserted += inserted
