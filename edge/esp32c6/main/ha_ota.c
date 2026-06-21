@@ -8,6 +8,8 @@
 #include "esp_ota_ops.h"
 #include "esp_https_ota.h"
 #include "esp_http_client.h"
+#include "esp_partition.h"
+#include "mbedtls/sha256.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -44,39 +46,69 @@ void ha_ota_confirm_if_pending(void) {
 }
 
 static char s_url[256];
+static char s_sha256[65];        // expected image hash (hex), from the SIGNED directive ("" = skip)
+
+// Read the just-written update partition back and compare its SHA-256 to the signed expected value.
+// This is what turns rollback (anti-brick) into authenticity (anti-malice): only an image whose bytes
+// match the directive's signed hash is allowed to boot. img_len = bytes esp_https_ota actually wrote.
+static bool image_hash_ok(esp_https_ota_handle_t h) {
+    if (!s_sha256[0]) return true;               // no expected hash supplied → skip (legacy)
+    const esp_partition_t *part = esp_ota_get_next_update_partition(NULL);
+    int img_len = esp_https_ota_get_image_len_read(h);
+    if (!part || img_len <= 0) return false;
+    mbedtls_sha256_context sc; mbedtls_sha256_init(&sc); mbedtls_sha256_starts(&sc, 0);
+    uint8_t buf[1024];
+    for (int off = 0; off < img_len; ) {
+        int n = img_len - off; if (n > (int)sizeof(buf)) n = sizeof(buf);
+        if (esp_partition_read(part, off, buf, n) != ESP_OK) { mbedtls_sha256_free(&sc); return false; }
+        mbedtls_sha256_update(&sc, buf, n); off += n;
+    }
+    uint8_t dig[32]; mbedtls_sha256_finish(&sc, dig); mbedtls_sha256_free(&sc);
+    char hex[65]; for (int i = 0; i < 32; i++) snprintf(hex + i * 2, 3, "%02x", dig[i]);
+    return strcmp(hex, s_sha256) == 0;
+}
 
 static void ota_task(void *arg) {
     const esp_partition_t *next = esp_ota_get_next_update_partition(NULL);
-    ha_mqtt_log("OTA start: url=%s -> slot %s", s_url, next ? next->label : "?");
+    ha_mqtt_log("OTA start: url=%s -> slot %s (hash %s)", s_url, next ? next->label : "?",
+                s_sha256[0] ? "required" : "none");
+    ha_ble_scan_pause();                          // single radio: don't fight Wi-Fi during the download
 
-    ha_ble_scan_pause();                         // single radio: don't fight Wi-Fi during the download
-
-    esp_http_client_config_t http = {
-        .url = s_url,
-        .timeout_ms = 20000,
-        .keep_alive_enable = true,
-    };
+    esp_http_client_config_t http = { .url = s_url, .timeout_ms = 20000, .keep_alive_enable = true };
     esp_https_ota_config_t cfg = { .http_config = &http };
+    esp_https_ota_handle_t h = NULL;
+    esp_err_t err = esp_https_ota_begin(&cfg, &h);
+    if (err != ESP_OK || !h) { ha_mqtt_log("OTA begin failed: %s", esp_err_to_name(err)); goto fail_noh; }
 
-    esp_err_t err = esp_https_ota(&cfg);
-    if (err == ESP_OK) {
-        ha_mqtt_log("OTA write OK — rebooting into %s (pending verify)", next ? next->label : "?");
-        vTaskDelay(pdMS_TO_TICKS(800));          // flush MQTT
-        esp_restart();                           // boots new slot; self-test confirms or rolls back
-    } else {
-        ha_mqtt_log("OTA FAILED: %s — staying on current image", esp_err_to_name(err));
-        ha_ble_scan_resume();
+    do { err = esp_https_ota_perform(h); } while (err == ESP_ERR_HTTPS_OTA_IN_PROGRESS);
+    if (err != ESP_OK || !esp_https_ota_is_complete_data_received(h)) {
+        ha_mqtt_log("OTA download failed: %s", esp_err_to_name(err)); goto fail;
     }
+    if (!image_hash_ok(h)) {                       // authenticity gate — abort BEFORE setting boot
+        ha_mqtt_log("OTA REJECTED: image hash != signed value — not flashing"); goto fail;
+    }
+    if (s_sha256[0]) ha_mqtt_log("OTA image hash verified");
+    err = esp_https_ota_finish(h);                 // validates image + sets boot partition
+    if (err != ESP_OK) { ha_mqtt_log("OTA finish failed: %s", esp_err_to_name(err)); h = NULL; goto fail; }
+
+    ha_mqtt_log("OTA write OK — rebooting into %s (pending verify)", next ? next->label : "?");
+    vTaskDelay(pdMS_TO_TICKS(800));
+    esp_restart();                                 // boots new slot; self-test confirms or rolls back
+
+fail:
+    if (h) esp_https_ota_abort(h);
+fail_noh:
+    ha_ble_scan_resume();
     s_busy = false;
     vTaskDelete(NULL);
 }
 
-bool ha_ota_start(const char *url) {
+bool ha_ota_start(const char *url, const char *expected_sha256) {
     if (s_busy) { ESP_LOGW(TAG, "OTA already running"); return false; }
     if (!url || !url[0]) return false;
     snprintf(s_url, sizeof(s_url), "%s", url);
+    snprintf(s_sha256, sizeof(s_sha256), "%s", expected_sha256 ? expected_sha256 : "");
     s_busy = true;
-    // generous stack: TLS/http buffers live here
     if (xTaskCreate(ota_task, "ha_ota", 8192, NULL, 5, NULL) != pdPASS) { s_busy = false; return false; }
     return true;
 }

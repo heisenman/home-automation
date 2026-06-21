@@ -26,7 +26,7 @@
 #endif
 
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v2-sec"  // bump to prove an OTA swapped the running image
+#define HA_FW_VERSION "v3-otahash"  // bump to prove an OTA swapped the running image
 #endif
 
 static const char *TAG = "ha_mqtt";
@@ -34,7 +34,7 @@ static esp_mqtt_client_handle_t s_client;
 static char s_node[32];
 static char s_status_topic[64];
 static char s_cmd_topic[64];
-static char s_online_msg[32];     // "online <slot>" — shows which OTA slot is running
+static char s_online_msg[64];     // "online <slot> <fwver>" — shows which OTA slot/version is running
 static volatile bool s_connected;
 
 // lower-case, colon-stripped MAC into dst (>=13 bytes)
@@ -89,8 +89,11 @@ static void dispatch_cmd(const cJSON *cmd) {
     } else if (cJSON_IsString(op) && strcmp(op->valuestring, "ota") == 0) {
         // Firmware OTA: {"op":"ota","url":"http://<server>:<port>/ha-edge-c6.bin"}
         const cJSON *url = cJSON_GetObjectItem(cmd, "url");
-        if (cJSON_IsString(url)) { ESP_LOGI(TAG, "cmd: ota url=%s", url->valuestring); ha_ota_start(url->valuestring); }
-        else ESP_LOGW(TAG, "ota cmd: missing url");
+        const cJSON *sha = cJSON_GetObjectItem(cmd, "sha256");
+        if (cJSON_IsString(url)) {
+            ESP_LOGI(TAG, "cmd: ota url=%s", url->valuestring);
+            ha_ota_start(url->valuestring, cJSON_IsString(sha) ? sha->valuestring : NULL);
+        } else ESP_LOGW(TAG, "ota cmd: missing url");
     } else {
         ESP_LOGW(TAG, "unknown/!malformed cmd");
     }

@@ -33,6 +33,7 @@ import paho.mqtt.client as mqtt
 
 def _serve(directory, port):
     handler = functools.partial(http.server.SimpleHTTPRequestHandler, directory=directory)
+    socketserver.TCPServer.allow_reuse_address = True   # avoid TIME_WAIT clashes on back-to-back runs
     httpd = socketserver.TCPServer(("0.0.0.0", port), handler)
     httpd.daemon_threads = True
     t = threading.Thread(target=httpd.serve_forever, daemon=True)

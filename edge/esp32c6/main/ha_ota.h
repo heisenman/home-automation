@@ -15,6 +15,6 @@ void ha_ota_confirm_if_pending(void);
 // Start an OTA download from `url` (http or https) into the inactive slot. On success the node
 // reboots into the new slot pending verification. On failure it stays on the current image.
 // Returns false if an OTA is already running or the task can't start.
-bool ha_ota_start(const char *url);
+bool ha_ota_start(const char *url, const char *expected_sha256);
 
 bool ha_ota_busy(void);
