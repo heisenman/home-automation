@@ -1,0 +1,26 @@
+# Example actuator control registry. Copy to instance/control.yaml (gitignored) and edit.
+# Actuators are described by TRAITS (ADR-0002), not products. The dictator (PEP) commands them via
+# the owning edge node. Per-device secrets go in instance/control_secrets.yaml.
+version: 1
+devices:
+  # a dimmable lamp = switchable + ranged, driven through edge node c6-bench
+  lamp_office:
+    node: c6-bench
+    area: c_office
+    traits:
+      switchable: {}
+      ranged: {min: 0, max: 100}
+
+  # a smart lock = lockable; unlock is sensitive (needs confirm + nonce)
+  lock_front:
+    node: c6-bench
+    area: entry
+    traits:
+      lockable: {}
+
+  # a thermostat setpoint with bounds + a safe value for standing orders
+  thermostat_main:
+    node: c6-bench
+    area: living_room
+    traits:
+      setpoint: {min: 10, max: 30, unit: degC, safe_value: 18}
