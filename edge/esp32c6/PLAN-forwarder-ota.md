@@ -1,6 +1,26 @@
 # Edge Node — Generic GATT Forwarder + OTA (build plan)
 
-**Status:** planned (2026-06-21). Build requires the C6 back at the desk (USB flash).
+**Status:** ✅ BUILT & BENCH-VALIDATED (2026-06-21). All 5 steps done; C6 redeployed to the
+end of the house and now receives updates over the air (no cable). Commits: OTA partitions
+`bf5ac47`, forwarder `cea493e`, OTA op + tool `896df06`.
+
+## Results (2026-06-21)
+1. **OTA-ready partitions** — 4MB C6FH4, two 1.75MB slots (`ota_0`/`ota_1`) + otadata; rollback on.
+2. **Generic GATT step-interpreter** (`gatt_exec.c`) — connect → discover-all-chars → run
+   server steps (sub/write/writeseq/read/collect/delay) → stream replies on
+   `home/edge/<node>/<reqid>/reply`. Validated live: probe (7 chars), read, and
+   sub+write-handshake+collect drawing the meter's `0x01` ack notif back.
+3. **Server driver** `tools/edge_gatt.py` — composes steps, correlates replies by reqid; empty
+   step list = a GATT probe.
+4. **Test** — read/write/notif all proven; the SwitchBot history handshake re-expressed on the
+   primitive (the `0x01` ack is what `gatt_history.c` elicits, so setup→metadata→paging is just
+   server-supplied data on top of `gatt_exec`).
+5. **OTA op** `tools/edge_ota.py` + `ha_ota.c` — HTTP-pull into the inactive slot, self-test,
+   confirm-or-rollback. Both paths bench-tested (see below).
+
+> Follow-up: `edge_ota.py`'s wrapper had one inconclusive run at the desk (node rebooted, stayed
+> on `ota_0`, no logs) — the underlying OTA *mechanism* is proven via manual push (both paths).
+> Re-validate the tool with a clean OTA to the now-deployed node next session (safe: rollback-protected).
 
 ## Goal
 A **generic BLE-GATT proxy** on the edge node so new device interactions need NO new firmware —
@@ -27,9 +47,17 @@ partition layout, `esp_ota` write/verify/reboot, and signed images (ADR-0005).
 5. **OTA op (stretch)** — `{"op":"ota"}` + MQTT-chunked (or HTTP) firmware delivery + `esp_ota`; test
    an update on the bench node.
 
-## ⚠️ Brick-safety — open consideration (user, 2026-06-21)
-**Question to answer before ANY deployed-node OTA: are the post-OTA-provisioning code updates unlikely
-to remotely brick a node?** Required safeguards (design in *before* shipping OTA):
+## ✅ Brick-safety — ANSWERED (2026-06-21)
+**Question: are post-OTA-provisioning code updates unlikely to remotely brick a node?** Answer: **yes,
+within full-image OTA's limits — a connectivity-breaking update cannot brick a deployed node.**
+Demonstrated live on the bench: an image built with an unreachable broker was OTA'd; it booted in the
+inactive slot, failed its self-test (no MQTT in 15s), and the bootloader **auto-reverted to the
+last-good slot** — the bad image never took over and the node never published an online status from it.
+The node recovered with zero intervention. (A real mid-OTA power interruption during the move likewise
+left the node safely on its good slot — the validate-before-commit guarantee in practice.)
+Residual risk that full-image OTA can't cover: a bug that breaks the *self-test logic itself* or the
+OTA path while still connecting MQTT — bounded later by the ADR-0003 Wasm split (OTA sandboxed modules,
+not the cable-flashed foundation). Safeguards in place:
 - **A/B OTA with rollback.** `esp_ota` writes the *inactive* slot; bootloader boots it pending
   validation; the new app calls `esp_ota_mark_app_valid_cancel_rollback()` ONLY after a self-test passes
   (Wi-Fi + MQTT + BLE scan all up). If it doesn't, the bootloader **auto-rolls back** to the prior slot
