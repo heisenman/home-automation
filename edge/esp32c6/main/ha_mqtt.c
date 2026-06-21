@@ -1,15 +1,45 @@
 #include "ha_mqtt.h"
 #include "ha_sntp.h"
+#include "gatt_history.h"
 #include <stdio.h>
 #include <string.h>
 #include "mqtt_client.h"
 #include "esp_log.h"
+#include "cJSON.h"
 
 static const char *TAG = "ha_mqtt";
 static esp_mqtt_client_handle_t s_client;
 static char s_node[32];
 static char s_status_topic[64];
+static char s_cmd_topic[64];
 static volatile bool s_connected;
+
+// lower-case, colon-stripped MAC into dst (>=13 bytes)
+static void macflat(const char *mac_str, char *dst) {
+    int j = 0;
+    for (const char *p = mac_str; *p && j < 12; ++p) {
+        if (*p == ':') continue;
+        char c = *p;
+        dst[j++] = (c >= 'A' && c <= 'Z') ? (c + 32) : c;
+    }
+    dst[j] = '\0';
+}
+
+static void handle_cmd(const char *data, int len) {
+    cJSON *root = cJSON_ParseWithLength(data, len);
+    if (!root) { ESP_LOGW(TAG, "bad cmd json"); return; }
+    const cJSON *op = cJSON_GetObjectItem(root, "op");
+    const cJSON *mac = cJSON_GetObjectItem(root, "mac");
+    const cJSON *prof = cJSON_GetObjectItem(root, "profile");
+    if (cJSON_IsString(op) && strcmp(op->valuestring, "history") == 0 && cJSON_IsString(mac)) {
+        const char *profile = cJSON_IsString(prof) ? prof->valuestring : "outdoor";
+        ESP_LOGI(TAG, "cmd: history pull mac=%s profile=%s", mac->valuestring, profile);
+        gatt_history_pull(mac->valuestring, profile);
+    } else {
+        ESP_LOGW(TAG, "unknown/!malformed cmd");
+    }
+    cJSON_Delete(root);
+}
 
 static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     esp_mqtt_event_handle_t e = event_data;
@@ -18,13 +48,17 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
             s_connected = true;
             ESP_LOGI(TAG, "connected");
             esp_mqtt_client_publish(s_client, s_status_topic, "online", 0, 1, true);
+            esp_mqtt_client_subscribe(s_client, s_cmd_topic, 1);
             break;
         case MQTT_EVENT_DISCONNECTED:
             s_connected = false;
             ESP_LOGW(TAG, "disconnected");
             break;
+        case MQTT_EVENT_DATA:
+            if (e->topic_len == (int)strlen(s_cmd_topic) && strncmp(e->topic, s_cmd_topic, e->topic_len) == 0)
+                handle_cmd(e->data, e->data_len);
+            break;
         default:
-            (void)e;
             break;
     }
 }
@@ -32,16 +66,11 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
 void ha_mqtt_start(const char *broker_uri, const char *node_id) {
     snprintf(s_node, sizeof(s_node), "%s", node_id);
     snprintf(s_status_topic, sizeof(s_status_topic), "home/edge/%s/status", s_node);
+    snprintf(s_cmd_topic, sizeof(s_cmd_topic), "home/edge/%s/cmd", s_node);
 
     esp_mqtt_client_config_t cfg = {
         .broker.address.uri = broker_uri,
-        .session.last_will = {
-            .topic = s_status_topic,
-            .msg = "offline",
-            .msg_len = 0,
-            .qos = 1,
-            .retain = true,
-        },
+        .session.last_will = { .topic = s_status_topic, .msg = "offline", .msg_len = 0, .qos = 1, .retain = true },
         .session.keepalive = 30,
         .network.reconnect_timeout_ms = 5000,
     };
@@ -54,32 +83,19 @@ bool ha_mqtt_is_connected(void) { return s_connected; }
 
 void ha_mqtt_publish_reading(const char *mac_str, const sb_reading_t *r, int rssi) {
     if (!s_connected) return;
-
-    // topic: home/edge/<node>/<mac-lower-no-colons>/adv
-    char macflat[13]; int j = 0;
-    for (const char *p = mac_str; *p && j < 12; ++p) {
-        if (*p == ':') continue;
-        char c = *p;
-        macflat[j++] = (c >= 'A' && c <= 'Z') ? (c + 32) : c;
-    }
-    macflat[j] = '\0';
+    char mf[13]; macflat(mac_str, mf);
     char topic[80];
-    snprintf(topic, sizeof(topic), "home/edge/%s/%s/adv", s_node, macflat);
+    snprintf(topic, sizeof(topic), "home/edge/%s/%s/adv", s_node, mf);
 
     char ts[24];
-    if (!ha_sntp_iso_utc(ts, sizeof(ts))) ts[0] = '\0';   // mapper stamps if empty
-
-    // metrics object — battery optional
+    if (!ha_sntp_iso_utc(ts, sizeof(ts))) ts[0] = '\0';
     char metrics[96];
-    if (r->battery_pct >= 0) {
-        snprintf(metrics, sizeof(metrics),
-                 "{\"temperature_c\":%.1f,\"humidity_pct\":%d,\"battery_pct\":%d}",
+    if (r->battery_pct >= 0)
+        snprintf(metrics, sizeof(metrics), "{\"temperature_c\":%.1f,\"humidity_pct\":%d,\"battery_pct\":%d}",
                  r->temperature_c, r->humidity_pct, r->battery_pct);
-    } else {
-        snprintf(metrics, sizeof(metrics),
-                 "{\"temperature_c\":%.1f,\"humidity_pct\":%d}",
+    else
+        snprintf(metrics, sizeof(metrics), "{\"temperature_c\":%.1f,\"humidity_pct\":%d}",
                  r->temperature_c, r->humidity_pct);
-    }
 
     char payload[320];
     int n = snprintf(payload, sizeof(payload),
@@ -87,7 +103,13 @@ void ha_mqtt_publish_reading(const char *mac_str, const sb_reading_t *r, int rss
         "\"ts\":\"%s\",\"transport\":\"ble-adv\",\"metrics\":%s,\"meta\":{\"rssi\":%d}}",
         s_node, mac_str, r->device_type, ts, metrics, rssi);
     if (n <= 0 || n >= (int)sizeof(payload)) return;
-
     esp_mqtt_client_publish(s_client, topic, payload, n, 1, false);
-    ESP_LOGD(TAG, "pub %s %s", topic, payload);
+}
+
+void ha_mqtt_publish_history(const char *mac_str, const char *payload) {
+    if (!s_connected) return;
+    char mf[13]; macflat(mac_str, mf);
+    char topic[80];
+    snprintf(topic, sizeof(topic), "home/edge/%s/%s/history", s_node, mf);
+    esp_mqtt_client_publish(s_client, topic, payload, 0, 1, false);
 }
