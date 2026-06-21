@@ -40,10 +40,17 @@ def _serve(directory, port):
     return httpd
 
 
-def push_ota(node, bin_path, serve_ip, broker, serve_port=8090, broker_port=1883, timeout=180.0):
+def push_ota(node, bin_path, serve_ip, broker, serve_port=8090, broker_port=1883, timeout=180.0,
+             version=1):
+    import hashlib
+    from edge_sign import wrap
     bin_path = os.path.abspath(bin_path)
     directory, fname = os.path.split(bin_path)
     url = f"http://{serve_ip}:{serve_port}/{fname}"
+    sha256 = hashlib.sha256(open(bin_path, "rb").read()).hexdigest()
+    # SIGNED ota directive (ADR-0010). sha256+version are carried for the firmware hash-verify
+    # follow-up; today's firmware authenticates the directive via the {p,s} signature.
+    ota_cmd = wrap({"op": "ota", "url": url, "sha256": sha256, "version": version})
     httpd = _serve(directory, serve_port)
 
     start_slot = {"val": None}     # slot/version the node was on before the push
@@ -86,7 +93,7 @@ def push_ota(node, bin_path, serve_ip, broker, serve_port=8090, broker_port=1883
     time.sleep(2.0)                # learn the baseline slot before pushing
     print(f"-> pushing OTA to {node}: {url} (was on '{start_slot['val']}')")
     pushed["val"] = True
-    c.publish(f"home/edge/{node}/cmd", json.dumps({"op": "ota", "url": url}), qos=1)
+    c.publish(f"home/edge/{node}/cmd", json.dumps(ota_cmd), qos=1)
 
     done.wait(timeout)
     c.loop_stop(); c.disconnect()

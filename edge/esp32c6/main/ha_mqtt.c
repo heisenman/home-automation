@@ -18,9 +18,15 @@
 #ifndef HA_CMD_SECRET
 #define HA_CMD_SECRET ""        // empty → all signed commands rejected (must provision a secret)
 #endif
+#ifndef HA_MQTT_USER
+#define HA_MQTT_USER ""         // empty → anonymous (latent until broker auth cutover)
+#endif
+#ifndef HA_MQTT_PASS
+#define HA_MQTT_PASS ""
+#endif
 
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v1"      // bump to prove an OTA swapped the running image
+#define HA_FW_VERSION "v2-sec"  // bump to prove an OTA swapped the running image
 #endif
 
 static const char *TAG = "ha_mqtt";
@@ -113,12 +119,9 @@ static void handle_cmd(const char *data, int len) {
         }
         cmd = inner;
     } else {
-        // Unsigned message: ONLY the ota recovery op is allowed; gatt/history must be signed.
-        const cJSON *op = cJSON_GetObjectItem(root, "op");
-        if (!(cJSON_IsString(op) && strcmp(op->valuestring, "ota") == 0)) {
-            ESP_LOGW(TAG, "unsigned cmd rejected (only ota allowed unsigned)");
-            cJSON_Delete(root); return;
-        }
+        // Signature now REQUIRED for every op, including ota (the unsigned recovery exception is gone).
+        ha_mqtt_log("cmd rejected: unsigned (signature required)");
+        cJSON_Delete(root); return;
     }
 
     dispatch_cmd(cmd);
@@ -157,6 +160,9 @@ void ha_mqtt_start(const char *broker_uri, const char *node_id) {
 
     esp_mqtt_client_config_t cfg = {
         .broker.address.uri = broker_uri,
+        // Latent broker creds: NULL when empty (anonymous today); used after the auth cutover.
+        .credentials.username = HA_MQTT_USER[0] ? HA_MQTT_USER : NULL,
+        .credentials.authentication.password = HA_MQTT_PASS[0] ? HA_MQTT_PASS : NULL,
         .session.last_will = { .topic = s_status_topic, .msg = "offline", .msg_len = 0, .qos = 1, .retain = true },
         .session.keepalive = 30,
         .network.reconnect_timeout_ms = 5000,
