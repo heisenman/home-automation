@@ -1,6 +1,7 @@
 #include "ha_mqtt.h"
 #include "ha_sntp.h"
 #include "gatt_history.h"
+#include "gatt_exec.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -35,7 +36,19 @@ static void handle_cmd(const char *data, int len) {
     if (cJSON_IsString(op) && strcmp(op->valuestring, "history") == 0 && cJSON_IsString(mac)) {
         const char *profile = cJSON_IsString(prof) ? prof->valuestring : "outdoor";
         ESP_LOGI(TAG, "cmd: history pull mac=%s profile=%s", mac->valuestring, profile);
-        gatt_history_pull(mac->valuestring, profile);
+        if (gatt_exec_busy()) ESP_LOGW(TAG, "central busy; dropping history pull");
+        else gatt_history_pull(mac->valuestring, profile);
+    } else if (cJSON_IsString(op) && strcmp(op->valuestring, "gatt") == 0 && cJSON_IsString(mac)) {
+        // Generic GATT forwarder: {"op":"gatt","reqid":"..","mac":"..","steps":[...]}
+        const cJSON *reqid = cJSON_GetObjectItem(root, "reqid");
+        const cJSON *steps = cJSON_GetObjectItem(root, "steps");
+        if (!cJSON_IsArray(steps)) { ESP_LOGW(TAG, "gatt cmd: missing steps[]"); cJSON_Delete(root); return; }
+        char *steps_json = cJSON_PrintUnformatted(steps);   // re-serialise just the steps array
+        const char *rid = cJSON_IsString(reqid) ? reqid->valuestring : "0";
+        ESP_LOGI(TAG, "cmd: gatt exec mac=%s reqid=%s", mac->valuestring, rid);
+        if (gatt_history_busy() || gatt_exec_busy()) ESP_LOGW(TAG, "central busy; dropping gatt exec");
+        else if (steps_json) gatt_exec_run(rid, mac->valuestring, steps_json);
+        if (steps_json) cJSON_free(steps_json);
     } else {
         ESP_LOGW(TAG, "unknown/!malformed cmd");
     }
@@ -112,6 +125,13 @@ void ha_mqtt_publish_history(const char *mac_str, const char *payload) {
     char mf[13]; macflat(mac_str, mf);
     char topic[80];
     snprintf(topic, sizeof(topic), "home/edge/%s/%s/history", s_node, mf);
+    esp_mqtt_client_publish(s_client, topic, payload, 0, 1, false);
+}
+
+void ha_mqtt_publish_reply(const char *reqid, const char *payload) {
+    if (!s_connected) return;
+    char topic[80];
+    snprintf(topic, sizeof(topic), "home/edge/%s/%s/reply", s_node, reqid);
     esp_mqtt_client_publish(s_client, topic, payload, 0, 1, false);
 }
 
