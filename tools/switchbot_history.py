@@ -215,6 +215,38 @@ def assign_timestamps(samples: list[tuple[float, int]], meta: dict) -> list[tupl
     return out
 
 
+def reanchor_to_now(meta: dict, enabled: bool = True) -> None:
+    """Re-anchor the device's history timestamps to the connection time.
+
+    Screenless meters (the Outdoor units) have no clock sync and drift — observed up to several
+    days. Their advertised live reading is always current, but their internal buffer timestamps
+    use the drifted on-device clock, so the newest record reads as hours/days in the past. Since
+    the device is advertising live, the newest buffer record is physically ~now: trust the
+    connection time, not the device clock. Shift both metadata anchors by (now - newest_ts) so the
+    newest sample maps to now; the interval (inter-sample spacing) is unchanged.
+
+    Idempotent: for a fixed physical sample the re-anchored time is ~now - (newest_ptr - addr)*interval,
+    which is stable across pulls (both `now` and newest_ptr advance together), so re-runs still
+    snap to the same global interval grid in assign_timestamps().
+
+    Guarded by internal-consistency checks (plausible interval, bounded offset). On implausible
+    metadata it leaves `meta` unchanged, so the caller's skew check still refuses a bad anchor."""
+    nt, ot, np_, op = (meta.get(k) for k in ("newest_ts", "oldest_ts", "newest_ptr", "oldest_ptr"))
+    pull_now = meta.get("pull_now")
+    if not enabled or None in (nt, ot, np_, op, pull_now) or np_ <= op:
+        return
+    interval = (nt - ot) / (np_ - op)
+    offset = pull_now - nt
+    if not (20 <= interval <= 3600) or not (-3600 <= offset <= 90 * 86400):
+        log.warning("metadata implausible (interval=%.1fs, offset=%.0fs) — not re-anchoring", interval, offset)
+        return
+    if abs(offset) > 120:
+        log.info("device clock drift %+.2f h — re-anchoring newest sample to connection time",
+                 offset / 3600.0)
+    meta["newest_ts"] = nt + offset
+    meta["oldest_ts"] = ot + offset
+
+
 async def fetch_live(mac: str, profile: str = "meter_pro",
                      window_records: int | None = None, settle: float = 1.5):
     """Connect, run the handshake/setup, discover the live buffer pointers, then page the
@@ -254,7 +286,8 @@ async def fetch_live(mac: str, profile: str = "meter_pro",
 
         newest_ts, newest, oldest_ts, oldest = _parse_metadata(notifs)
         meta = {"newest_ts": newest_ts, "newest_ptr": newest,
-                "oldest_ts": oldest_ts, "oldest_ptr": oldest, "start_addr": None}
+                "oldest_ts": oldest_ts, "oldest_ptr": oldest, "start_addr": None,
+                "pull_now": now}   # connection time — used to re-anchor drifted device clocks
         if newest is None:
             log.warning("no metadata pointer parsed; returning setup notifications only")
             return notifs, meta
@@ -289,6 +322,8 @@ def main() -> None:
     ap.add_argument("--dry-run", action="store_true", help="decode but don't insert")
     ap.add_argument("--window", type=int, default=0,
                     help="live: records to read back from newest (0 = whole stored range)")
+    ap.add_argument("--no-reanchor", action="store_true",
+                    help="trust the device clock instead of re-anchoring the newest sample to now")
     ap.add_argument("--log-level", default="INFO")
     args = ap.parse_args()
     logging.basicConfig(level=getattr(logging, args.log_level), format="%(levelname)s %(message)s")
@@ -310,6 +345,7 @@ def main() -> None:
         log.info("profile=%s for device_type=%s", profile, args.device_type)
         notifs, meta = asyncio.run(fetch_live(args.device, profile=profile, window_records=window))
         samples = decode_meter_pro(notifs)
+        reanchor_to_now(meta, enabled=not args.no_reanchor)
         tsamples = assign_timestamps(samples, meta)
         log.info("live notifications=%d  decoded=%d  meta=%s", len(notifs), len(samples), meta)
         if not tsamples:

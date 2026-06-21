@@ -1,0 +1,40 @@
+# Home Automation server — pinned runtime dependencies.
+# Captured from the live production venv on superbuddynas (.245), Ubuntu 24.04 / Python 3.12.3.
+#
+#   ONLINE  :  python3 -m venv venv && venv/bin/pip install -r requirements.txt
+#   OFFLINE :  venv/bin/pip install --no-index --find-links wheelhouse/ -r requirements.txt
+#
+# Build the offline wheelhouse on a CONNECTED machine of matching arch+pyver (amd64 / cp312):
+#   pip download -r requirements.txt -d wheelhouse/
+# then sneakernet the wheelhouse/ directory. See provisioning/03-sneakernet-updates.md.
+#
+# All packages below ship manylinux/abi3 wheels for cp312/x86_64 (no source build needed),
+# EXCEPT where the platform lacks a wheel — then the matching apt build-deps must be present.
+
+annotated-types==0.7.0
+anyio==4.14.0
+bleak==0.22.3
+certifi==2026.6.17
+click==8.4.1
+dbus-fast==2.46.4
+duckdb==1.1.3
+fastapi==0.115.5
+h11==0.16.0
+httpcore==1.0.9
+httptools==0.8.0
+httpx==0.28.1
+idna==3.18
+numpy==2.4.6
+paho-mqtt==2.1.0
+pyarrow==17.0.0
+pydantic==2.13.4
+pydantic_core==2.46.4
+python-dotenv==1.2.2
+PyYAML==6.0.2
+starlette==0.41.3
+typing-inspection==0.4.2
+typing_extensions==4.15.0
+uvicorn==0.32.1
+uvloop==0.22.1
+watchfiles==1.2.0
+websockets==16.0
