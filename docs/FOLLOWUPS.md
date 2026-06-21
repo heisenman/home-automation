@@ -20,10 +20,22 @@ dictator / failover / edge nodes / endpoints.
 6. **Confirm-PIN storage** — where the software confirm PIN(s) live (per-device? one admin PIN?) and how the
    admin UI collects it. Currently the verifier is a pluggable callable; needs a real store + API auth.
 
-## Supervised steps queued (need you present)
-- **Sign the OTA op** firmware flash (code + tests done/staged) — removes the unsigned-OTA exception.
-- **C6 broker-creds** firmware flash → then the **broker auth/ACL cutover** (`provisioning/broker-auth-cutover.md`).
-- **Control API** goes live only AFTER broker auth (else unauthenticated control on the API).
+## Done live this session (2026-06-21)
+- ✅ **Signed-only commands incl OTA** — deployed C6 (now `ota_1 v2-sec`) requires a valid HMAC
+  signature for every directive; unsigned OTA rejected. OTA directive authenticated.
+- ✅ **Latent broker creds** compiled into the C6 (`HA_MQTT_USER/PASS`, ignored on anon broker) —
+  the cutover prerequisite is now in firmware.
+
+## Queued (need you / coordination)
+- **OTA image-hash verify** (the remaining OTA-security gap): firmware should verify the downloaded
+  image's SHA-256 against the signed value before flashing (defends a compromised image-server/URL).
+  Needs the chunked `esp_https_ota` path (hash-before-commit). `edge_ota.py` already sends the signed
+  sha256; only the firmware check is missing. Best done as the next supervised flash. (Endgame per
+  ADR-0011: firmware via cable-from-G11; OTA = break-glass.)
+- **Broker auth/ACL cutover** (`provisioning/broker-auth-cutover.md`) — now just: create passwd
+  (dictator + c6-bench=the latent pass in secrets.h), give services dictator creds, flip. Supervised.
+- **Control API** goes live only AFTER broker auth + API auth (else unauthenticated control).
+- **Confirm-PIN store + admin API auth** (decision #6 above).
 
 ## Open / deferred (lower priority)
 - Outdoor history read (`02` reject on attic/h_bed) — needs an app HCI-btsnoop of an attic/h_bed pull. LOW (ADR-0009).
