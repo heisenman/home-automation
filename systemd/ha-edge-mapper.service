@@ -1,0 +1,32 @@
+[Unit]
+Description=Home Automation — Edge Mapper (MAC→device, ADR-0001)
+Documentation=file:///home/visko/home_automation/edge/esp32c6/SCOPE.md
+After=mosquitto.service network.target
+Wants=mosquitto.service
+
+[Service]
+Type=simple
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+Environment=HA_BROKER=localhost
+Environment=HA_BROKER_PORT=1883
+ExecStart=/home/visko/home_automation/venv/bin/python3 \
+    -m server.ingest.edge_mapper \
+    --registry instance/devices.yaml \
+    --broker ${HA_BROKER} \
+    --broker-port ${HA_BROKER_PORT}
+Restart=on-failure
+RestartSec=10
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-edge-mapper
+
+[Install]
+WantedBy=multi-user.target

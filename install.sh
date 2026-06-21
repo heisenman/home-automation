@@ -66,7 +66,8 @@ echo "--- Installing systemd units ---"
 for unit in ha-scanner.service ha-writer.service ha-api.service \
             ha-compactor.service ha-compactor.timer \
             ha-verify-hashes.service ha-verify-hashes.timer \
-            ha-weather.service ha-weather.timer; do
+            ha-weather.service ha-weather.timer \
+            ha-edge-mapper.service; do
     # Template the real repo path into each unit so the install isn't tied to a fixed
     # location. The committed units use /home/visko/home_automation as the default; this
     # rewrites them to wherever the repo actually lives (no-op at the default path).
@@ -81,6 +82,10 @@ sudo systemctl enable ha-writer.service ha-api.service
 sudo systemctl enable ha-compactor.timer ha-verify-hashes.timer
 sudo systemctl start ha-writer.service ha-api.service
 sudo systemctl start ha-compactor.timer ha-verify-hashes.timer
+
+# Edge mapper — resolves edge-node BLE readings (home/edge/+/+/adv) to canonical topics
+sudo systemctl enable ha-edge-mapper.service
+sudo systemctl start ha-edge-mapper.service
 
 # Scanner needs bluetooth group — start it last
 sudo systemctl enable ha-scanner.service

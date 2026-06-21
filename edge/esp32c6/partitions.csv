@@ -1,0 +1,5 @@
+# Name,     Type, SubType, Offset,  Size,    Flags
+# Single-app layout for the bench MVP. OTA (factory→ota_0/ota_1 + otadata) comes with Phase-3 hardening.
+nvs,        data, nvs,     ,        0x6000,
+phy_init,   data, phy,     ,        0x1000,
+factory,    app,  factory, ,        0x180000,
