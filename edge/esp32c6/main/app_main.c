@@ -10,6 +10,7 @@
 #include "ha_wifi.h"
 #include "ha_sntp.h"
 #include "ha_mqtt.h"
+#include "ha_ota.h"
 #include "ble_scan.h"
 
 static const char *TAG = "ha_edge";
@@ -37,4 +38,7 @@ void app_main(void) {
     ha_mqtt_start(cfg.broker_uri, cfg.node_id);
     ha_ble_scan_start();
     ESP_LOGI(TAG, "edge node up: node=%s broker=%s", cfg.node_id, cfg.broker_uri);
+
+    // If we just booted a freshly-OTA'd image, self-test now and confirm-or-rollback.
+    ha_ota_confirm_if_pending();
 }

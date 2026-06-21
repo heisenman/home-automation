@@ -2,18 +2,25 @@
 #include "ha_sntp.h"
 #include "gatt_history.h"
 #include "gatt_exec.h"
+#include "ha_ota.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
 #include "mqtt_client.h"
 #include "esp_log.h"
+#include "esp_ota_ops.h"
 #include "cJSON.h"
+
+#ifndef HA_FW_VERSION
+#define HA_FW_VERSION "v1"      // bump to prove an OTA swapped the running image
+#endif
 
 static const char *TAG = "ha_mqtt";
 static esp_mqtt_client_handle_t s_client;
 static char s_node[32];
 static char s_status_topic[64];
 static char s_cmd_topic[64];
+static char s_online_msg[32];     // "online <slot>" — shows which OTA slot is running
 static volatile bool s_connected;
 
 // lower-case, colon-stripped MAC into dst (>=13 bytes)
@@ -49,6 +56,11 @@ static void handle_cmd(const char *data, int len) {
         if (gatt_history_busy() || gatt_exec_busy()) ESP_LOGW(TAG, "central busy; dropping gatt exec");
         else if (steps_json) gatt_exec_run(rid, mac->valuestring, steps_json);
         if (steps_json) cJSON_free(steps_json);
+    } else if (cJSON_IsString(op) && strcmp(op->valuestring, "ota") == 0) {
+        // Firmware OTA: {"op":"ota","url":"http://<server>:<port>/ha-edge-c6.bin"}
+        const cJSON *url = cJSON_GetObjectItem(root, "url");
+        if (cJSON_IsString(url)) { ESP_LOGI(TAG, "cmd: ota url=%s", url->valuestring); ha_ota_start(url->valuestring); }
+        else ESP_LOGW(TAG, "ota cmd: missing url");
     } else {
         ESP_LOGW(TAG, "unknown/!malformed cmd");
     }
@@ -61,7 +73,7 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
         case MQTT_EVENT_CONNECTED:
             s_connected = true;
             ESP_LOGI(TAG, "connected");
-            esp_mqtt_client_publish(s_client, s_status_topic, "online", 0, 1, true);
+            esp_mqtt_client_publish(s_client, s_status_topic, s_online_msg, 0, 1, true);
             esp_mqtt_client_subscribe(s_client, s_cmd_topic, 1);
             break;
         case MQTT_EVENT_DISCONNECTED:
@@ -81,6 +93,8 @@ void ha_mqtt_start(const char *broker_uri, const char *node_id) {
     snprintf(s_node, sizeof(s_node), "%s", node_id);
     snprintf(s_status_topic, sizeof(s_status_topic), "home/edge/%s/status", s_node);
     snprintf(s_cmd_topic, sizeof(s_cmd_topic), "home/edge/%s/cmd", s_node);
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    snprintf(s_online_msg, sizeof(s_online_msg), "online %s %s", run ? run->label : "?", HA_FW_VERSION);
 
     esp_mqtt_client_config_t cfg = {
         .broker.address.uri = broker_uri,

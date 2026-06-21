@@ -26,6 +26,8 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
 # app fails its self-test (it must call esp_ota_mark_app_valid_cancel_rollback()). Cable-
 # flashed images are never in pending-verify state, so this is harmless for bench dev.
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# OTA delivery is HTTP pull from the local server (cleartext on the LAN; air-gapped, no TLS).
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 
 # ── Misc ────────────────────────────────────────────────────────────────────────
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
