@@ -72,6 +72,57 @@ class OpenMeteoSource(WeatherSource):
         return WeatherReading(ts=ts, source=self.name, location=self.location, metrics=m)
 
 
+_HOURLY_VARS = "temperature_2m,relative_humidity_2m,surface_pressure,pressure_msl"
+
+
+def _hourly_to_readings(j: dict, source: str, location: str) -> list[WeatherReading]:
+    """Convert an Open-Meteo hourly response (parallel arrays) into per-hour readings."""
+    h = j.get("hourly", {})
+    times = h.get("time", []) or []
+    out: list[WeatherReading] = []
+    for i, t in enumerate(times):
+        ts = t + ":00Z" if len(t) == 16 else t
+        m: dict = {}
+        def put(key, arr, cast, unit_round=1):
+            v = (h.get(arr) or [None] * len(times))[i]
+            if v is not None:
+                m[key] = cast(v)
+        put("temperature_c", "temperature_2m", lambda v: round(float(v), 1))
+        put("humidity_pct", "relative_humidity_2m", lambda v: int(round(float(v))))
+        put("pressure_hpa", "surface_pressure", lambda v: round(float(v), 1))
+        put("pressure_msl_hpa", "pressure_msl", lambda v: round(float(v), 1))
+        if m:
+            out.append(WeatherReading(ts=ts, source=source, location=location, metrics=m))
+    return out
+
+
+def fetch_archive(lat: float, lon: float, start_date: str, end_date: str,
+                  location_label: str | None = None) -> list[WeatherReading]:
+    """Historical hourly weather from Open-Meteo's archive (ERA5; free, no key). Dates YYYY-MM-DD."""
+    import httpx
+    loc = location_label or f"{lat:.4f},{lon:.4f}"
+    params = {"latitude": lat, "longitude": lon, "start_date": start_date, "end_date": end_date,
+              "hourly": _HOURLY_VARS, "timezone": "UTC"}
+    with httpx.Client(timeout=60) as c:
+        r = c.get("https://archive-api.open-meteo.com/v1/archive", params=params)
+        r.raise_for_status()
+        return _hourly_to_readings(r.json(), "openmeteo", loc)
+
+
+def fetch_recent(lat: float, lon: float, past_days: int = 16,
+                 location_label: str | None = None) -> list[WeatherReading]:
+    """Recent hourly weather (past_days up to 92) from the forecast API — fills the gap between
+    the archive's ~5-day lag and now."""
+    import httpx
+    loc = location_label or f"{lat:.4f},{lon:.4f}"
+    params = {"latitude": lat, "longitude": lon, "hourly": _HOURLY_VARS,
+              "past_days": min(max(past_days, 1), 92), "forecast_days": 1, "timezone": "UTC"}
+    with httpx.Client(timeout=60) as c:
+        r = c.get("https://api.open-meteo.com/v1/forecast", params=params)
+        r.raise_for_status()
+        return _hourly_to_readings(r.json(), "openmeteo", loc)
+
+
 def geocode_zip(zip_code: str, country: str = "us") -> tuple[float, float, str]:
     """Resolve a postal code to (lat, lon, label) via zippopotam.us (free, no key).
     Prefer passing lat/lon directly for 'better geolocation'; this is the zip convenience path."""

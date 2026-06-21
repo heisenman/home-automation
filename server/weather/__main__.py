@@ -22,7 +22,7 @@ import sys
 import time
 from pathlib import Path
 
-from .sources import OpenMeteoSource, geocode_zip
+from .sources import OpenMeteoSource, geocode_zip, fetch_archive, fetch_recent
 from .store import WeatherStore
 
 log = logging.getLogger("ha.weather")
@@ -56,6 +56,10 @@ def main() -> None:
     ap.add_argument("--interval", type=int,
                     default=int(os.environ.get("HA_WEATHER_INTERVAL", "900")))
     ap.add_argument("--once", action="store_true", help="fetch once and exit (for a timer)")
+    ap.add_argument("--backfill", action="store_true",
+                    help="historical backfill (archive + recent) instead of live poll")
+    ap.add_argument("--start", help="backfill start date YYYY-MM-DD")
+    ap.add_argument("--end", help="backfill end date YYYY-MM-DD (default: today)")
     ap.add_argument("--log-level", default="INFO")
     a = ap.parse_args()
 
@@ -63,8 +67,24 @@ def main() -> None:
                         format="%(asctime)s %(levelname)s %(name)s — %(message)s",
                         stream=sys.stdout)
 
-    source = build_source(a)
+    source = build_source(a)   # resolves lat/lon/label (also for backfill)
     store = WeatherStore(a.db, a.table)
+
+    if a.backfill:
+        import datetime
+        end = a.end or datetime.date.today().isoformat()
+        lat, lon, label = source.lat, source.lon, source.location
+        readings = []
+        if a.start:
+            log.info("archive %s..%s @ %s", a.start, end, label)
+            readings += fetch_archive(lat, lon, a.start, end, label)
+        log.info("recent (past 92d) @ %s", label)
+        readings += fetch_recent(lat, lon, 92, label)
+        new = 0
+        for rd in readings:
+            new += store.store(rd)
+        log.info("backfill done: %d hourly readings fetched, %d new rows", len(readings), new)
+        return
     log.info("weather source=%s location=%s -> %s/%s interval=%ds",
              source.name, source.location, a.db, a.table, a.interval)
 
