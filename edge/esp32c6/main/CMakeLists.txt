@@ -12,5 +12,5 @@ idf_component_register(
         "switchbot_decode.c"
     INCLUDE_DIRS "."
     REQUIRES nvs_flash esp_wifi esp_event esp_netif mqtt bt json
-             app_update esp_https_ota esp_http_client
+             app_update esp_https_ota esp_http_client mbedtls
 )

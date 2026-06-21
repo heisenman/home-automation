@@ -27,7 +27,8 @@ def main() -> None:
     p.add_argument("--broker-port", type=int, default=int(os.environ.get("HA_BROKER_PORT", "1883")))
     a = p.parse_args()
 
-    cmd = {"op": "history", "mac": a.mac.upper(), "profile": a.profile}
+    from edge_sign import wrap
+    cmd = wrap({"op": "history", "mac": a.mac.upper(), "profile": a.profile})
     topic = f"home/edge/{a.node}/cmd"
     c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     c.connect(a.broker, a.broker_port, 30)

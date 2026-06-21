@@ -10,6 +10,14 @@
 #include "esp_log.h"
 #include "esp_ota_ops.h"
 #include "cJSON.h"
+#include <time.h>
+#include "mbedtls/md.h"
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+#ifndef HA_CMD_SECRET
+#define HA_CMD_SECRET ""        // empty → all signed commands rejected (must provision a secret)
+#endif
 
 #ifndef HA_FW_VERSION
 #define HA_FW_VERSION "v1"      // bump to prove an OTA swapped the running image
@@ -34,12 +42,28 @@ static void macflat(const char *mac_str, char *dst) {
     dst[j] = '\0';
 }
 
-static void handle_cmd(const char *data, int len) {
-    cJSON *root = cJSON_ParseWithLength(data, len);
-    if (!root) { ESP_LOGW(TAG, "bad cmd json"); return; }
-    const cJSON *op = cJSON_GetObjectItem(root, "op");
-    const cJSON *mac = cJSON_GetObjectItem(root, "mac");
-    const cJSON *prof = cJSON_GetObjectItem(root, "profile");
+// HMAC-SHA256(secret, p) == sig_hex ?  Verifies a signed-envelope command (ADR-0010). We hash the
+// LITERAL p string the server signed (cJSON returns it un-escaped, a faithful round-trip), so there
+// is no canonicalisation mismatch between the Python signer and this verifier.
+static bool cmd_sig_ok(const char *p, const char *sig_hex) {
+    if (!HA_CMD_SECRET[0] || strlen(sig_hex) != 64) return false;
+    const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    if (!info) return false;
+    unsigned char mac[32];
+    if (mbedtls_md_hmac(info, (const unsigned char *)HA_CMD_SECRET, strlen(HA_CMD_SECRET),
+                        (const unsigned char *)p, strlen(p), mac) != 0) return false;
+    char hex[65];
+    for (int i = 0; i < 32; i++) snprintf(hex + i * 2, 3, "%02x", mac[i]);
+    unsigned char diff = 0;                       // constant-time compare
+    for (int i = 0; i < 64; i++) diff |= (unsigned char)(hex[i] ^ sig_hex[i]);
+    return diff == 0;
+}
+
+// Dispatch a verified command object (op/mac/steps/url). Caller owns the cJSON.
+static void dispatch_cmd(const cJSON *cmd) {
+    const cJSON *op = cJSON_GetObjectItem(cmd, "op");
+    const cJSON *mac = cJSON_GetObjectItem(cmd, "mac");
+    const cJSON *prof = cJSON_GetObjectItem(cmd, "profile");
     if (cJSON_IsString(op) && strcmp(op->valuestring, "history") == 0 && cJSON_IsString(mac)) {
         const char *profile = cJSON_IsString(prof) ? prof->valuestring : "outdoor";
         ESP_LOGI(TAG, "cmd: history pull mac=%s profile=%s", mac->valuestring, profile);
@@ -47,9 +71,9 @@ static void handle_cmd(const char *data, int len) {
         else gatt_history_pull(mac->valuestring, profile);
     } else if (cJSON_IsString(op) && strcmp(op->valuestring, "gatt") == 0 && cJSON_IsString(mac)) {
         // Generic GATT forwarder: {"op":"gatt","reqid":"..","mac":"..","steps":[...]}
-        const cJSON *reqid = cJSON_GetObjectItem(root, "reqid");
-        const cJSON *steps = cJSON_GetObjectItem(root, "steps");
-        if (!cJSON_IsArray(steps)) { ESP_LOGW(TAG, "gatt cmd: missing steps[]"); cJSON_Delete(root); return; }
+        const cJSON *reqid = cJSON_GetObjectItem(cmd, "reqid");
+        const cJSON *steps = cJSON_GetObjectItem(cmd, "steps");
+        if (!cJSON_IsArray(steps)) { ESP_LOGW(TAG, "gatt cmd: missing steps[]"); return; }
         char *steps_json = cJSON_PrintUnformatted(steps);   // re-serialise just the steps array
         const char *rid = cJSON_IsString(reqid) ? reqid->valuestring : "0";
         ESP_LOGI(TAG, "cmd: gatt exec mac=%s reqid=%s", mac->valuestring, rid);
@@ -58,12 +82,47 @@ static void handle_cmd(const char *data, int len) {
         if (steps_json) cJSON_free(steps_json);
     } else if (cJSON_IsString(op) && strcmp(op->valuestring, "ota") == 0) {
         // Firmware OTA: {"op":"ota","url":"http://<server>:<port>/ha-edge-c6.bin"}
-        const cJSON *url = cJSON_GetObjectItem(root, "url");
+        const cJSON *url = cJSON_GetObjectItem(cmd, "url");
         if (cJSON_IsString(url)) { ESP_LOGI(TAG, "cmd: ota url=%s", url->valuestring); ha_ota_start(url->valuestring); }
         else ESP_LOGW(TAG, "ota cmd: missing url");
     } else {
         ESP_LOGW(TAG, "unknown/!malformed cmd");
     }
+}
+
+static void handle_cmd(const char *data, int len) {
+    cJSON *root = cJSON_ParseWithLength(data, len);
+    if (!root) { ESP_LOGW(TAG, "bad cmd json"); return; }
+
+    cJSON *inner = NULL;
+    const cJSON *cmd = root;
+    const cJSON *p = cJSON_GetObjectItem(root, "p");
+    const cJSON *s = cJSON_GetObjectItem(root, "s");
+    if (cJSON_IsString(p) && cJSON_IsString(s)) {
+        // Signed envelope {p,s}: verify HMAC over the literal p string, then act on the inner cmd.
+        if (!cmd_sig_ok(p->valuestring, s->valuestring)) {
+            ha_mqtt_log("cmd rejected: bad-sig"); cJSON_Delete(root); return;
+        }
+        inner = cJSON_Parse(p->valuestring);
+        if (!inner) { ESP_LOGW(TAG, "cmd: bad inner json"); cJSON_Delete(root); return; }
+        const cJSON *ts = cJSON_GetObjectItem(inner, "ts");      // freshness (clock is SNTP-synced)
+        if (cJSON_IsNumber(ts)) {
+            long dt = (long)time(NULL) - (long)ts->valuedouble;
+            if (dt < -60 || dt > 60) { ha_mqtt_log("cmd rejected: stale (dt=%lds)", dt);
+                                       cJSON_Delete(inner); cJSON_Delete(root); return; }
+        }
+        cmd = inner;
+    } else {
+        // Unsigned message: ONLY the ota recovery op is allowed; gatt/history must be signed.
+        const cJSON *op = cJSON_GetObjectItem(root, "op");
+        if (!(cJSON_IsString(op) && strcmp(op->valuestring, "ota") == 0)) {
+            ESP_LOGW(TAG, "unsigned cmd rejected (only ota allowed unsigned)");
+            cJSON_Delete(root); return;
+        }
+    }
+
+    dispatch_cmd(cmd);
+    if (inner) cJSON_Delete(inner);
     cJSON_Delete(root);
 }
 

@@ -61,7 +61,8 @@ def edge_gatt(node, mac, steps, broker="localhost", port=1883, timeout=60.0,
         reqid = f"{int(time.time()) % 100000:05d}{os.getpid() % 1000:03d}"
     reply_topic = f"home/edge/{node}/{reqid}/reply"
     cmd_topic = f"home/edge/{node}/cmd"
-    cmd = {"op": "gatt", "reqid": reqid, "mac": mac.upper(), "steps": steps}
+    from edge_sign import wrap
+    cmd = wrap({"op": "gatt", "reqid": reqid, "mac": mac.upper(), "steps": steps})
 
     events = []
     done = threading.Event()
