@@ -694,8 +694,14 @@ def _deep_query(
             raise HTTPException(status_code=500, detail=f"Query error: {exc}")
 
     rows.sort(key=lambda r: r["ts"])
-    truncated = len(rows) > limit
-    rows = rows[:limit]
+    n = len(rows)
+    truncated = n > limit
+    if truncated:
+        # Decimate evenly across the WHOLE range (keep first & last) rather than
+        # slicing off the tail — otherwise dense long-range series lose their most
+        # recent data and render only partway across the time axis.
+        idx = sorted({round(i * (n - 1) / (limit - 1)) for i in range(limit)})
+        rows = [rows[i] for i in idx]
 
     return {
         "device_id": device_id,
