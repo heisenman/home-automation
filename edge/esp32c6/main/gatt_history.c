@@ -74,6 +74,8 @@ static struct {
     const profile_t *prof;
     // metadata (parsed from notifications)
     volatile bool meta_seen;
+    volatile int meta_count;
+    volatile bool diag;            // log every notification during the metadata phase
     volatile uint32_t newest_ts, oldest_ts;
     volatile uint16_t newest_ptr, oldest_ptr;
     uint32_t pull_now;
@@ -123,6 +125,7 @@ static void parse_meta(const uint8_t *d, int len) {
     if (len != 15 || d[1] != 0x69) return;
     uint32_t ts = ((uint32_t)d[5]<<24)|((uint32_t)d[6]<<16)|((uint32_t)d[7]<<8)|d[8];
     uint16_t ptr = ((uint16_t)d[11]<<8)|d[12];
+    g.meta_count++;
     if (!g.meta_seen || ptr > g.newest_ptr) { g.newest_ptr = ptr; g.newest_ts = ts; }
     if (!g.meta_seen || ptr < g.oldest_ptr) { g.oldest_ptr = ptr; g.oldest_ts = ts; }
     g.meta_seen = true;
@@ -192,6 +195,11 @@ static int conn_event(struct ble_gap_event *event, void *arg) {
         int len = OS_MBUF_PKTLEN(event->notify_rx.om);
         if (len > (int)sizeof(buf)) len = sizeof(buf);
         ble_hs_mbuf_to_flat(event->notify_rx.om, buf, len, NULL);
+        if (g.diag && len <= 16) {
+            char h[40]; int j = 0;
+            for (int i = 0; i < len; i++) j += snprintf(h + j, sizeof(h) - j, "%02x", buf[i]);
+            ha_mqtt_log("notif[%d]=%s", len, h);
+        }
         if (len == 15) parse_meta(buf, len);
         else if (len == 16 && buf[0] == 0x01) relay_record(buf, len);
         return 0;
@@ -257,15 +265,20 @@ static void pull_task(void *arg) {
     memcpy(hs, HANDSHAKE_PREFIX, sizeof(HANDSHAKE_PREFIX));
     hs[9]=(g.pull_now>>24)&0xff; hs[10]=(g.pull_now>>16)&0xff; hs[11]=(g.pull_now>>8)&0xff; hs[12]=g.pull_now&0xff;
     write_blocking(g.cmd_handle, hs, sizeof(hs));
-    vTaskDelay(pdMS_TO_TICKS(200));
+    vTaskDelay(pdMS_TO_TICKS(300));
 
-    for (int i = 0; i < g.prof->n_setup; i++) {
-        write_blocking(g.cmd_handle, g.prof->setup[i].bytes, g.prof->setup[i].len);
-        vTaskDelay(pdMS_TO_TICKS(200));
+    // setup + metadata, retried: the oldest-pointer notification can be slow or missed on the
+    // first pass (esp. on Outdoor meters), so re-issue the setup until both pointers appear.
+    for (int attempt = 0; attempt < 4; attempt++) {
+        for (int i = 0; i < g.prof->n_setup; i++) {
+            write_blocking(g.cmd_handle, g.prof->setup[i].bytes, g.prof->setup[i].len);
+            vTaskDelay(pdMS_TO_TICKS(300));
+        }
+        vTaskDelay(pdMS_TO_TICKS(2000));
+        ha_mqtt_log("meta try %d: count=%d newest=%u oldest=%u", attempt, g.meta_count, g.newest_ptr, g.oldest_ptr);
+        if (g.meta_seen && g.newest_ptr > g.oldest_ptr) break;
     }
-    vTaskDelay(pdMS_TO_TICKS(1500));   // settle: metadata notifications arrive here
-
-    ha_mqtt_log("meta: seen=%d newest_ptr=%u oldest_ptr=%u", g.meta_seen, g.newest_ptr, g.oldest_ptr);
+    g.diag = false;   // stop per-notification logging before the (high-volume) paging phase
     if (!g.meta_seen || g.newest_ptr <= g.oldest_ptr) { finish("no/!bad metadata"); vTaskDelete(NULL); return; }
     publish_meta();
     ESP_LOGI(TAG, "paging %u..%u (%u recs)", g.oldest_ptr, g.newest_ptr, (g.newest_ptr-g.oldest_ptr)/REC_STRIDE);
@@ -295,6 +308,7 @@ bool gatt_history_pull(const char *mac_str, const char *profile) {
     if (!s_evt) { s_evt = xEventGroupCreate(); s_write_sem = xSemaphoreCreateBinary(); s_batch_mutex = xSemaphoreCreateMutex(); }
 
     memset(&g, 0, sizeof(g));
+    g.diag = true;   // log each notification through the metadata phase
     snprintf(g.mac_str, sizeof(g.mac_str), "%s", mac_str);
     g.prof = (profile && strcmp(profile, "meter_pro") == 0) ? &PROF_METER_PRO : &PROF_OUTDOOR;
 
