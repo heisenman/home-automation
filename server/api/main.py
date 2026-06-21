@@ -130,15 +130,35 @@ svg .grid-l{stroke:#1e2433;stroke-width:1}
 svg .lbl{fill:#475569;font-size:10px}
 svg .band{opacity:.18}
 .loading{color:#475569;padding:1.5rem;font-size:.85rem}
+/* graphs workspace */
+#graphs{display:none}
+#graphs.show{display:block}
+header .right{display:flex;align-items:center;gap:.6rem}
+.navbtn{background:#1a1f2e;border:1px solid #252d3d;color:#94a3b8;border-radius:8px;padding:.35rem .8rem;font-size:.78rem;cursor:pointer}
+.navbtn:hover{border-color:#3b4a6b}
+.gcard{background:#141925;border:1px solid #252d3d;border-radius:12px;padding:1rem;margin-bottom:1.25rem}
+.ghead{display:flex;justify-content:space-between;align-items:center;gap:.5rem;margin-bottom:.6rem}
+.gtitle{font-size:1rem;font-weight:600;color:#e2e8f0;background:transparent;border:none;outline:none;border-bottom:1px dashed #2a3344}
+.gtitle:focus{border-bottom-color:#3b82f6}
+.legend{display:flex;flex-wrap:wrap;gap:.5rem;margin:.5rem 0}
+.chip{display:flex;align-items:center;gap:.35rem;background:#1a1f2e;border:1px solid #252d3d;border-radius:20px;padding:.2rem .6rem;font-size:.72rem;color:#cbd5e1}
+.chip .sw{width:10px;height:10px;border-radius:50%}
+.chip .x{cursor:pointer;color:#64748b}
+.chip .x:hover{color:#f87171}
+.addrow{display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;margin:.5rem 0}
+.sel{background:#1a1f2e;border:1px solid #252d3d;color:#e2e8f0;border-radius:8px;padding:.3rem .45rem;font-size:.75rem}
+.del{color:#64748b;cursor:pointer;font-size:.72rem}
+.del:hover{color:#f87171}
 </style>
 </head>
 <body>
 <header>
   <h1 id="hdr">Home Sensors</h1>
-  <span id="ts"></span>
+  <div class="right"><span id="ts"></span><button class="navbtn" id="navbtn" onclick="toggleView()">📊 Graphs</button></div>
 </header>
 <div class="grid" id="grid"><div style="color:#475569;padding:2rem">Loading…</div></div>
 <div id="detail"></div>
+<div id="graphs"></div>
 <script>
 const REFRESH=30000;
 const toF=c=>(c*9/5+32).toFixed(1);
@@ -195,6 +215,7 @@ function card(dev,last){
 
 async function refresh(){
   if(CURRENT)return;  // pause grid refresh while in detail view
+  if(document.getElementById('graphs').classList.contains('show'))return;  // …or graphs view
   try{
     const devs=await(await fetch('/devices')).json();
     DEVICES=devs;
@@ -301,7 +322,8 @@ async function loadCharts(){
 }
 
 // ── Self-contained SVG line/band chart (no external libs, offline-first) ──
-function chartCard(title,series,unit){
+function chartCard(title,series,unit,spanSec){
+  spanSec=spanSec||RANGE;
   const W=920,H=210,P={l:42,r:14,t:14,b:24};
   const all=series.flatMap(s=>s.pts);
   const card=document.createElement('div');
@@ -327,7 +349,7 @@ function chartCard(title,series,unit){
     labels+=`<text class="lbl" x="${P.l-6}" y="${(y+3).toFixed(1)}" text-anchor="end">${v.toFixed(0)}</text>`;
   }
   // x labels (start, mid, end)
-  const fmt=t=>{const d=new Date(t);return RANGE<=172800
+  const fmt=t=>{const d=new Date(t);return spanSec<=172800
     ?d.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})
     :(d.getMonth()+1)+'/'+d.getDate();};
   let xlab='';
@@ -358,6 +380,113 @@ function chartCard(title,series,unit){
       ${paths}${labels}${xlab}
     </svg>`;
   return card;
+}
+
+// ── Composable graphs workspace ───────────────────────────────────────────
+const PALETTE=['#fb923c','#38bdf8','#4ade80','#f472b6','#a78bfa','#facc15','#fb7185','#2dd4bf'];
+const MLABEL={temperature_c:'temp',humidity_pct:'humidity',dew_point_c:'dew pt',pressure_hpa:'pressure',pressure_msl_hpa:'pressure msl'};
+let GRAPHS=loadGraphs(), WX_METRICS=[];
+
+function loadGraphs(){try{return JSON.parse(localStorage.getItem('ha_graphs')||'[]')}catch{return[]}}
+function saveGraphs(){localStorage.setItem('ha_graphs',JSON.stringify(GRAPHS))}
+function gid(){return 'g'+Math.random().toString(36).slice(2,8)}
+function graphsActive(){return document.getElementById('graphs').classList.contains('show')}
+
+function toggleView(){
+  if(graphsActive()){
+    document.getElementById('graphs').classList.remove('show');
+    document.getElementById('grid').classList.remove('hide');
+    document.getElementById('hdr').textContent='Home Sensors';
+    document.getElementById('navbtn').textContent='📊 Graphs';
+    refresh();
+  }else{
+    CURRENT=null;
+    document.getElementById('detail').classList.remove('show');
+    document.getElementById('detail').innerHTML='';
+    document.getElementById('grid').classList.add('hide');
+    document.getElementById('graphs').classList.add('show');
+    document.getElementById('hdr').textContent='Graphs';
+    document.getElementById('navbtn').textContent='← Sensors';
+    renderGraphs();
+  }
+}
+
+async function ensureMeta(){
+  if(!DEVICES.length){try{DEVICES=await(await fetch('/devices')).json();}catch{}}
+  if(!WX_METRICS.length){try{const m=await(await fetch('/weather/meta')).json();if(m.available)WX_METRICS=m.metrics;}catch{}}
+}
+function metricsFor(src){return src==='weather'?(WX_METRICS.length?WX_METRICS:['temperature_c','humidity_pct','pressure_hpa']):['temperature_c','humidity_pct','dew_point_c'];}
+
+function addGraph(){GRAPHS.push({id:gid(),title:'New graph',range:86400,series:[]});saveGraphs();renderGraphs();}
+function removeGraph(id){GRAPHS=GRAPHS.filter(g=>g.id!==id);saveGraphs();renderGraphs();}
+function setGraphTitle(id,t){const g=GRAPHS.find(x=>x.id===id);if(g){g.title=t;saveGraphs();}}
+function setGraphRange(id,s){const g=GRAPHS.find(x=>x.id===id);if(g){g.range=s;saveGraphs();renderGraphs();}}
+function removeSeries(id,i){const g=GRAPHS.find(x=>x.id===id);if(g){g.series.splice(i,1);saveGraphs();renderGraphs();}}
+function onSrcChange(id){const src=document.getElementById('src-'+id).value;
+  document.getElementById('met-'+id).innerHTML=src?metricsFor(src).map(m=>`<option value="${m}">${MLABEL[m]||m}</option>`).join(''):'';}
+function addSeriesFrom(id){const src=document.getElementById('src-'+id).value,met=document.getElementById('met-'+id).value;
+  if(!src||!met)return;const g=GRAPHS.find(x=>x.id===id);
+  g.series.push({source:src,metric:met,color:PALETTE[g.series.length%PALETTE.length]});saveGraphs();renderGraphs();}
+
+function srcOptions(){return `<option value="">+ series…</option>`+
+  DEVICES.map(d=>`<option value="${d.device_id}">${titleCase(d.area)} · ${d.device_id}</option>`).join('')+
+  `<option value="weather">Weather (home)</option>`;}
+function presets(g){return [[3600,'1h'],[21600,'6h'],[86400,'24h'],[604800,'7d'],[2592000,'30d'],[7776000,'90d']]
+  .map(([s,l])=>`<button class="rbtn${g.range===s?' active':''}" onclick="setGraphRange('${g.id}',${s})">${l}</button>`).join('');}
+function graphCardHTML(g){
+  const chips=g.series.map((s,i)=>{const lbl=(s.source==='weather'?'weather':s.source)+' '+(MLABEL[s.metric]||s.metric);
+    return `<span class="chip"><span class="sw" style="background:${s.color}"></span>${lbl}<span class="x" onclick="removeSeries('${g.id}',${i})">✕</span></span>`;}).join('');
+  return `<div class="gcard">
+    <div class="ghead"><input class="gtitle" value="${(g.title||'').replace(/"/g,'&quot;')}" onchange="setGraphTitle('${g.id}',this.value)">
+      <span class="del" onclick="removeGraph('${g.id}')">remove ✕</span></div>
+    <div class="ranges">${presets(g)}</div>
+    <div class="legend">${chips||'<span style="color:#475569;font-size:.75rem">no series yet</span>'}</div>
+    <div class="addrow">
+      <select class="sel" id="src-${g.id}" onchange="onSrcChange('${g.id}')">${srcOptions()}</select>
+      <select class="sel" id="met-${g.id}"></select>
+      <button class="rbtn" onclick="addSeriesFrom('${g.id}')">add</button></div>
+    <div id="chart-${g.id}"><div class="loading">${g.series.length?'Loading…':'Add a series to plot.'}</div></div>
+  </div>`;
+}
+async function renderGraphs(){
+  await ensureMeta();
+  const box=document.getElementById('graphs');
+  box.innerHTML=(GRAPHS.map(graphCardHTML).join('')||'<div class="loading">No graphs yet.</div>')
+    +`<button class="navbtn" onclick="addGraph()">+ Add graph</button>`;
+  GRAPHS.forEach(loadGraphData);
+}
+
+function dewpoint(tC,rh){const a=17.625,b=243.04,al=Math.log(Math.max(rh,1)/100)+a*tC/(b+tC);return (b*al)/(a-al);}
+async function fetchSeries(source,metric,sISO,eISO){
+  const toV=(m,v)=>m==='temperature_c'||m==='dew_point_c'?fToScale(v):v;
+  if(source==='weather'){
+    const d=await(await fetch(`/weather/readings?metric=${metric}&start=${sISO}&end=${eISO}&limit=50000`)).json();
+    return (d.readings||[]).map(r=>({t:+new Date(r.ts),v:toV(metric,r.value)}));
+  }
+  if(metric==='dew_point_c'){
+    const [td,hd]=await Promise.all([
+      fetch(`/devices/${source}/readings?metric=temperature_c&start=${sISO}&end=${eISO}&limit=50000`).then(r=>r.json()),
+      fetch(`/devices/${source}/readings?metric=humidity_pct&start=${sISO}&end=${eISO}&limit=50000`).then(r=>r.json())]);
+    const hm=new Map((hd.readings||[]).map(r=>[r.ts,r.value])),pts=[];
+    for(const r of (td.readings||[])){const h=hm.get(r.ts);if(h!=null)pts.push({t:+new Date(r.ts),v:fToScale(dewpoint(r.value,h))});}
+    return pts;
+  }
+  const d=await(await fetch(`/devices/${source}/readings?metric=${metric}&start=${sISO}&end=${eISO}&limit=50000`)).json();
+  return (d.readings||[]).map(r=>({t:+new Date(r.ts),v:toV(metric,r.value)}));
+}
+async function loadGraphData(g){
+  const el=document.getElementById('chart-'+g.id);
+  if(!el)return;
+  if(!g.series.length){el.innerHTML='<div class="loading">Add a series to plot.</div>';return;}
+  const end=new Date(),start=new Date(Date.now()-g.range*1000);
+  const sISO=start.toISOString().slice(0,19)+'Z',eISO=end.toISOString().slice(0,19)+'Z';
+  try{
+    const series=await Promise.all(g.series.map(async s=>({pts:await fetchSeries(s.source,s.metric,sISO,eISO),color:s.color})));
+    const has=series.some(s=>s.pts.length);
+    el.innerHTML='';
+    if(!has){el.innerHTML='<div class="loading">No data in this range.</div>';return;}
+    el.appendChild(chartCard('',series.filter(s=>s.pts.length),'',g.range));
+  }catch(e){el.innerHTML='<div class="loading">Error: '+(e.message||e)+'</div>';}
 }
 
 document.addEventListener('keydown',e=>{if(e.key==='Escape'&&CURRENT)closeDetail()});
