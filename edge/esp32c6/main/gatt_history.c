@@ -57,6 +57,7 @@ static const profile_t PROF_OUTDOOR = {
 #define BIT_DISCOVERED  BIT0
 #define BIT_FAIL        BIT1
 #define BIT_DISCONNECT  BIT2
+#define BIT_CONNECTED   BIT3
 #define BATCH_N 20
 
 static volatile bool s_busy;
@@ -80,34 +81,42 @@ static struct {
     char batch[1024];
     int batch_count, total_count, seq;
 } g;
-static portMUX_TYPE s_batch_mux = portMUX_INITIALIZER_UNLOCKED;
+static SemaphoreHandle_t s_batch_mutex;
 
 bool gatt_history_busy(void) { return s_busy; }
 
 // ── Relay ───────────────────────────────────────────────────────────────────────
-static void flush_batch_locked(void) {
-    if (g.batch_count == 0) return;
-    char payload[1200];
-    int n = snprintf(payload, sizeof(payload),
-        "{\"t\":\"data\",\"mac\":\"%s\",\"seq\":%d,\"notifs\":[%s]}",
-        g.mac_str, g.seq++, g.batch);
-    if (n > 0 && n < (int)sizeof(payload)) ha_mqtt_publish_history(g.mac_str, payload);
+// Serialise the current batch into out[] and reset it. Caller MUST hold s_batch_mutex,
+// and MUST publish out[] only AFTER releasing the lock (MQTT publish allocates/locks).
+static bool take_batch(char *out, int out_sz) {
+    if (g.batch_count == 0) return false;
+    int n = snprintf(out, out_sz, "{\"t\":\"data\",\"mac\":\"%s\",\"seq\":%d,\"notifs\":[%s]}",
+                     g.mac_str, g.seq++, g.batch);
     g.batch[0] = '\0'; g.batch_count = 0;
+    return n > 0 && n < out_sz;
 }
 
 static void relay_record(const uint8_t *data, int len) {
-    char hex[2*20+1];
-    int j = 0;
-    for (int i = 0; i < len && i < 20; i++) j += snprintf(hex+j, sizeof(hex)-j, "%02x", data[i]);
-    taskENTER_CRITICAL(&s_batch_mux);
+    char hex[2 * 20 + 1]; int j = 0;
+    for (int i = 0; i < len && i < 20; i++) j += snprintf(hex + j, sizeof(hex) - j, "%02x", data[i]);
+    char payload[1024]; bool send = false;
+    xSemaphoreTake(s_batch_mutex, portMAX_DELAY);
     if (g.batch_count) strlcat(g.batch, ",", sizeof(g.batch));
     strlcat(g.batch, "\"", sizeof(g.batch));
     strlcat(g.batch, hex, sizeof(g.batch));
     strlcat(g.batch, "\"", sizeof(g.batch));
     g.batch_count++; g.total_count++;
-    bool full = g.batch_count >= BATCH_N;
-    if (full) flush_batch_locked();
-    taskEXIT_CRITICAL(&s_batch_mux);
+    if (g.batch_count >= BATCH_N) send = take_batch(payload, sizeof(payload));
+    xSemaphoreGive(s_batch_mutex);
+    if (send) ha_mqtt_publish_history(g.mac_str, payload);   // outside the lock
+}
+
+static void flush_remaining(void) {
+    char payload[1024]; bool send;
+    xSemaphoreTake(s_batch_mutex, portMAX_DELAY);
+    send = take_batch(payload, sizeof(payload));
+    xSemaphoreGive(s_batch_mutex);
+    if (send) ha_mqtt_publish_history(g.mac_str, payload);
 }
 
 static void parse_meta(const uint8_t *d, int len) {
@@ -134,36 +143,47 @@ static int write_blocking(uint16_t handle, const void *data, uint16_t len) {
 }
 
 static int on_chr(uint16_t conn, const struct ble_gatt_error *err, const struct ble_gatt_chr *chr, void *arg) {
-    if (err && err->status == BLE_HS_EDONE) { xEventGroupSetBits(s_evt, BIT_DISCOVERED); return 0; }
-    if (err && err->status != 0) { xEventGroupSetBits(s_evt, BIT_FAIL); return 0; }
     if (chr) {
+        char u[BLE_UUID_STR_LEN]; ble_uuid_to_str(&chr->uuid.u, u);
+        ha_mqtt_log("  chr val=%u %s", chr->val_handle, u);
         if (ble_uuid_cmp(&chr->uuid.u, &CMD_UUID.u) == 0) g.cmd_handle = chr->val_handle;
         else if (ble_uuid_cmp(&chr->uuid.u, &NOTIFY_UUID.u) == 0) g.notify_handle = chr->val_handle;
+        return 0;
     }
+    if (err && err->status == BLE_HS_EDONE) { xEventGroupSetBits(s_evt, BIT_DISCOVERED); return 0; }
+    xEventGroupSetBits(s_evt, BIT_FAIL);
     return 0;
 }
 static int on_svc(uint16_t conn, const struct ble_gatt_error *err, const struct ble_gatt_svc *svc, void *arg) {
-    if (err && err->status == BLE_HS_EDONE) {
-        if (g.svc_start) ble_gattc_disc_all_chrs(g.conn, g.svc_start, g.svc_end, on_chr, NULL);
-        else xEventGroupSetBits(s_evt, BIT_FAIL);
+    if (svc) {
+        char u[BLE_UUID_STR_LEN]; ble_uuid_to_str(&svc->uuid.u, u);
+        ha_mqtt_log("svc %u-%u %s", svc->start_handle, svc->end_handle, u);
+        if (ble_uuid_cmp(&svc->uuid.u, &SVC_UUID.u) == 0) { g.svc_start = svc->start_handle; g.svc_end = svc->end_handle; }
         return 0;
     }
-    if (err && err->status != 0) { xEventGroupSetBits(s_evt, BIT_FAIL); return 0; }
-    if (svc) { g.svc_start = svc->start_handle; g.svc_end = svc->end_handle; }
+    if (err && err->status == BLE_HS_EDONE) {
+        if (g.svc_start) ble_gattc_disc_all_chrs(g.conn, g.svc_start, g.svc_end, on_chr, NULL);
+        else { ha_mqtt_log("target service NOT found"); xEventGroupSetBits(s_evt, BIT_FAIL); }
+        return 0;
+    }
+    ha_mqtt_log("svc disc err=%d", err ? err->status : -1);
+    xEventGroupSetBits(s_evt, BIT_FAIL);
     return 0;
 }
 
 static int conn_event(struct ble_gap_event *event, void *arg) {
     switch (event->type) {
     case BLE_GAP_EVENT_CONNECT:
+        ha_mqtt_log("connect status=%d", event->connect.status);
         if (event->connect.status == 0) {
             g.conn = event->connect.conn_handle;
-            ble_gattc_disc_svc_by_uuid(g.conn, &SVC_UUID.u, on_svc, NULL);
+            xEventGroupSetBits(s_evt, BIT_CONNECTED);   // discovery is driven by pull_task (after settle)
         } else {
             xEventGroupSetBits(s_evt, BIT_FAIL);
         }
         return 0;
     case BLE_GAP_EVENT_DISCONNECT:
+        ha_mqtt_log("disconnect reason=%d", event->disconnect.reason);
         xEventGroupSetBits(s_evt, BIT_DISCONNECT);
         return 0;
     case BLE_GAP_EVENT_NOTIFY_RX: {
@@ -197,7 +217,7 @@ static void publish_done(void) {
 }
 
 static void finish(const char *why) {
-    ESP_LOGW(TAG, "pull end: %s", why);
+    ha_mqtt_log("pull end: %s (relayed %d notifs)", why, g.total_count);
     ble_gap_terminate(g.conn, BLE_ERR_REM_USER_CONN_TERM);
     xEventGroupWaitBits(s_evt, BIT_DISCONNECT, pdTRUE, pdFALSE, pdMS_TO_TICKS(3000));
     ha_ble_scan_resume();
@@ -205,9 +225,27 @@ static void finish(const char *why) {
 }
 
 static void pull_task(void *arg) {
-    EventBits_t bits = xEventGroupWaitBits(s_evt, BIT_DISCOVERED | BIT_FAIL | BIT_DISCONNECT,
-                                           pdTRUE, pdFALSE, pdMS_TO_TICKS(20000));
-    if (!(bits & BIT_DISCOVERED) || !g.cmd_handle || !g.notify_handle) { finish("discovery failed"); vTaskDelete(NULL); return; }
+    // 1) wait for the link, then settle before discovery (avoids ENOTCONN race)
+    EventBits_t bits = xEventGroupWaitBits(s_evt, BIT_CONNECTED | BIT_FAIL | BIT_DISCONNECT,
+                                           pdTRUE, pdFALSE, pdMS_TO_TICKS(12000));
+    if (!(bits & BIT_CONNECTED)) { finish("connect failed"); vTaskDelete(NULL); return; }
+    vTaskDelay(pdMS_TO_TICKS(400));
+
+    // 2) discover services/characteristics (retry once on the transient ENOTCONN)
+    for (int attempt = 0; attempt < 2; attempt++) {
+        g.svc_start = 0; g.cmd_handle = 0; g.notify_handle = 0;
+        ble_gattc_disc_all_svcs(g.conn, on_svc, NULL);
+        bits = xEventGroupWaitBits(s_evt, BIT_DISCOVERED | BIT_FAIL | BIT_DISCONNECT,
+                                   pdTRUE, pdFALSE, pdMS_TO_TICKS(8000));
+        if (bits & BIT_DISCONNECT) { finish("disconnected during discovery"); vTaskDelete(NULL); return; }
+        if ((bits & BIT_DISCOVERED) && g.cmd_handle && g.notify_handle) break;
+        vTaskDelay(pdMS_TO_TICKS(400));
+    }
+    if (!g.cmd_handle || !g.notify_handle) {
+        ha_mqtt_log("discovery fail: cmd=%u notify=%u", g.cmd_handle, g.notify_handle);
+        finish("discovery failed"); vTaskDelete(NULL); return;
+    }
+    ha_mqtt_log("discovered: cmd=%u notify=%u", g.cmd_handle, g.notify_handle);
 
     // subscribe to notifications (CCCD = notify value handle + 1)
     uint8_t cccd[2] = {0x01, 0x00};
@@ -227,6 +265,7 @@ static void pull_task(void *arg) {
     }
     vTaskDelay(pdMS_TO_TICKS(1500));   // settle: metadata notifications arrive here
 
+    ha_mqtt_log("meta: seen=%d newest_ptr=%u oldest_ptr=%u", g.meta_seen, g.newest_ptr, g.oldest_ptr);
     if (!g.meta_seen || g.newest_ptr <= g.oldest_ptr) { finish("no/!bad metadata"); vTaskDelete(NULL); return; }
     publish_meta();
     ESP_LOGI(TAG, "paging %u..%u (%u recs)", g.oldest_ptr, g.newest_ptr, (g.newest_ptr-g.oldest_ptr)/REC_STRIDE);
@@ -244,7 +283,7 @@ static void pull_task(void *arg) {
     }
     vTaskDelay(pdMS_TO_TICKS(1500));    // flush tail notifications
 
-    taskENTER_CRITICAL(&s_batch_mux); flush_batch_locked(); taskEXIT_CRITICAL(&s_batch_mux);
+    flush_remaining();
     publish_done();
     ESP_LOGI(TAG, "pull complete: %d record notifications relayed", g.total_count);
     finish("done");
@@ -253,26 +292,27 @@ static void pull_task(void *arg) {
 
 bool gatt_history_pull(const char *mac_str, const char *profile) {
     if (s_busy) { ESP_LOGW(TAG, "busy; ignoring pull for %s", mac_str); return false; }
-    if (!s_evt) { s_evt = xEventGroupCreate(); s_write_sem = xSemaphoreCreateBinary(); }
+    if (!s_evt) { s_evt = xEventGroupCreate(); s_write_sem = xSemaphoreCreateBinary(); s_batch_mutex = xSemaphoreCreateMutex(); }
 
     memset(&g, 0, sizeof(g));
     snprintf(g.mac_str, sizeof(g.mac_str), "%s", mac_str);
     g.prof = (profile && strcmp(profile, "meter_pro") == 0) ? &PROF_METER_PRO : &PROF_OUTDOOR;
 
     if (!ha_ble_lookup_addr(mac_str, &g.addr)) {
-        ESP_LOGW(TAG, "addr for %s not seen by scanner yet — can't connect", mac_str);
+        ha_mqtt_log("pull %s: addr not cached by scanner — can't connect", mac_str);
         return false;
     }
     s_busy = true;
     xEventGroupClearBits(s_evt, 0xFF);
     ha_ble_scan_pause();
 
+    ha_mqtt_log("pull %s: connecting (addr_type=%d, profile=%s)", mac_str, g.addr.type,
+                g.prof == &PROF_METER_PRO ? "meter_pro" : "outdoor");
     int rc = ble_gap_connect(ha_ble_own_addr_type(), &g.addr, 10000, NULL, conn_event, NULL);
     if (rc != 0) {
-        ESP_LOGE(TAG, "ble_gap_connect failed rc=%d", rc);
+        ha_mqtt_log("pull %s: ble_gap_connect rc=%d", mac_str, rc);
         ha_ble_scan_resume(); s_busy = false; return false;
     }
-    xTaskCreate(pull_task, "sb_pull", 5120, NULL, 5, NULL);
-    ESP_LOGI(TAG, "history pull started: mac=%s profile=%s", mac_str, g.prof == &PROF_METER_PRO ? "meter_pro" : "outdoor");
+    xTaskCreate(pull_task, "sb_pull", 6144, NULL, 5, NULL);
     return true;
 }

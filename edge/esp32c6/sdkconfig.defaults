@@ -8,6 +8,8 @@ CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 # (peripheral/broadcaster left off — we only scan and connect-out)
+# Host task builds history-relay JSON payloads on its stack during a pull:
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=6144
 
 # ── Wi-Fi + BT share the single 2.4 GHz radio: enable SW coexistence ───────────
 CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y

@@ -12,3 +12,6 @@ void ha_mqtt_publish_reading(const char *mac_str, const sb_reading_t *r, int rss
 
 // Publish a raw history-relay message to home/edge/<node>/<mac>/history (qos 1).
 void ha_mqtt_publish_history(const char *mac_str, const char *payload);
+
+// Remote log line to home/edge/<node>/log (qos 0) — debug a headless node over MQTT.
+void ha_mqtt_log(const char *fmt, ...);

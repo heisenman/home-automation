@@ -2,6 +2,7 @@
 #include "ha_sntp.h"
 #include "gatt_history.h"
 #include <stdio.h>
+#include <stdarg.h>
 #include <string.h>
 #include "mqtt_client.h"
 #include "esp_log.h"
@@ -112,4 +113,16 @@ void ha_mqtt_publish_history(const char *mac_str, const char *payload) {
     char topic[80];
     snprintf(topic, sizeof(topic), "home/edge/%s/%s/history", s_node, mf);
     esp_mqtt_client_publish(s_client, topic, payload, 0, 1, false);
+}
+
+void ha_mqtt_log(const char *fmt, ...) {
+    char msg[200];
+    va_list ap; va_start(ap, fmt);
+    vsnprintf(msg, sizeof(msg), fmt, ap);
+    va_end(ap);
+    ESP_LOGI("ha_edge", "%s", msg);          // also goes to serial when attached
+    if (!s_connected) return;
+    char topic[64];
+    snprintf(topic, sizeof(topic), "home/edge/%s/log", s_node);
+    esp_mqtt_client_publish(s_client, topic, msg, 0, 0, false);
 }
