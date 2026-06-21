@@ -1,0 +1,23 @@
+# Mosquitto topic ACL — STAGED for the auth cutover (NOT yet active; see provisioning/broker-auth-cutover.md).
+# Enforces ADR-0001/ADR-0010: only the dictator may publish any command topic; a node may publish only
+# its own telemetry and subscribe only its own command topic. Load via acl_file in mosquitto-auth.conf.
+
+# ── dictator: the server (PEP issuer + ingestion services + admin tools) ──
+user dictator
+topic readwrite #
+
+# ── edge node c6-bench: telemetry up, only its own cmd down ──
+# May NOT publish to any …/cmd (cannot command itself or any device).
+user c6-bench
+topic write home/edge/c6-bench/status
+topic write home/edge/c6-bench/log
+topic write home/edge/c6-bench/+/adv
+topic write home/edge/c6-bench/+/history
+topic write home/edge/c6-bench/+/reply
+topic read  home/edge/c6-bench/cmd
+
+# ── template for future actuator nodes (state up + ack up, only own cmd down) ──
+# user <node-id>
+# topic write home/<area>/<device_id>/state
+# topic write home/<area>/<device_id>/cmd/ack
+# topic read  home/<area>/<device_id>/cmd
