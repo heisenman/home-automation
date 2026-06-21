@@ -4,18 +4,21 @@ Running list maintained during autonomous work sessions. Newest section on top. 
 (stated 2026-06-21): **security over the air** + **flexible modular infrastructure** between
 dictator / failover / edge nodes / endpoints.
 
-## Decisions I'd like your call on (proceeding with the noted defaults meanwhile)
-1. **Unsupervised flashing** — DEFAULT: I do **not** flash the live C6 while you're away (failure could
-   need a recable). All firmware is built + tested + staged; flashes wait for you. OK?
-2. **Actuator config layout** — DEFAULT: separate `instance/control.yaml` (actuator devices + traits) and
-   gitignored `instance/control_secrets.yaml` (per-device HMAC secrets); sensor `devices.yaml` untouched.
-3. **"Confirm" second factor** for sensitive actions (unlock) — what is it concretely? PIN entered at the
-   API? A physical button at an endpoint? Currently a boolean `confirmed` gate + a pluggable stub.
-4. **Whole-house mode inputs** — the mechanism (authenticated set + hysteresis + pluggable input iface) is
-   built; the real drivers (mains-present, UPS state, whole-house power) are TBD hardware. Which first?
-5. **Per-device secret distribution** — secrets currently live in the node's gitignored `secrets.h` and a
-   server-side gitignored store. Enrollment is meant to be physical-presence at the console (plan §13).
-   Confirm that model (vs. e.g. a provisioning USB) before we scale past one node.
+## Decisions — ANSWERED 2026-06-21
+1. **Unsupervised flashing** — ✅ Cleared to OTA without you, IF all edge-node (server-side) work is done
+   first, then firmware batched. (For OTA-security I still use a safe 2-step: prove signed-OTA verify
+   additively, then remove the unsigned fallback — no lockout even unsupervised.)
+2. **Actuator config layout** — ✅ separate files (`instance/control.yaml` + `instance/control_secrets.yaml`). Done.
+3. **Second factor = SOFTWARE only** — ✅ not all endpoints have buttons → confirm is a software PIN/token
+   at the API (built: `confirm_pin` + verifier). The only *physical* path is firmware flashing, which
+   should EVENTUALLY be cable-from-the-G11 (the "scary" op). OTA = dev/break-glass. (Captured in ADR-0011/0005.)
+4. **Mode mechanism** — ✅ built (deadband + dwell). Real power/UPS input drivers still TBD hardware.
+
+## Still open for you
+5. **Per-device secret distribution / enrollment** — model is physical-presence/console (plan §13). Confirm
+   before scaling past one node (vs. a provisioning USB from the G11).
+6. **Confirm-PIN storage** — where the software confirm PIN(s) live (per-device? one admin PIN?) and how the
+   admin UI collects it. Currently the verifier is a pluggable callable; needs a real store + API auth.
 
 ## Supervised steps queued (need you present)
 - **Sign the OTA op** firmware flash (code + tests done/staged) — removes the unsigned-OTA exception.
