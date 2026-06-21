@@ -1,5 +1,10 @@
-# Name,     Type, SubType, Offset,  Size,    Flags
-# Single-app layout for the bench MVP. OTA (factory→ota_0/ota_1 + otadata) comes with Phase-3 hardening.
-nvs,        data, nvs,     ,        0x6000,
-phy_init,   data, phy,     ,        0x1000,
-factory,    app,  factory, ,        0x180000,
+# Name,     Type, SubType, Offset,   Size,     Flags
+# A/B OTA layout (4MB ESP32-C6FH4). Two app slots so updates write the INACTIVE slot and the
+# bootloader can roll back to the last-good one (see PLAN-forwarder-ota.md brick-safety).
+# App slots are 0x10000-aligned; ota_0 lands exactly on 0x10000 by sizing the data partitions to fill.
+nvs,        data, nvs,     0x9000,   0x4000,
+otadata,    data, ota,     0xd000,   0x2000,
+phy_init,   data, phy,     0xf000,   0x1000,
+ota_0,      app,  ota_0,   0x10000,  0x1c0000,
+ota_1,      app,  ota_1,   0x1d0000, 0x1c0000,
+# 0x390000..0x400000 (448K) reserved — future coredump/storage partition.

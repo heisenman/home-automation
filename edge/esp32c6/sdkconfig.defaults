@@ -14,9 +14,18 @@ CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=6144
 # ── Wi-Fi + BT share the single 2.4 GHz radio: enable SW coexistence ───────────
 CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
 
-# ── Partition table ─────────────────────────────────────────────────────────────
+# ── Flash: ESP32-C6FH4 has 4MB embedded flash (needed for two 1.75MB OTA slots) ──
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# ── Partition table: custom A/B OTA layout ───────────────────────────────────────
 CONFIG_PARTITION_TABLE_CUSTOM=y
 CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ── OTA rollback: bootloader auto-reverts to the last-good slot if a freshly-OTA'd ──
+# app fails its self-test (it must call esp_ota_mark_app_valid_cancel_rollback()). Cable-
+# flashed images are never in pending-verify state, so this is harmless for bench dev.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
 
 # ── Misc ────────────────────────────────────────────────────────────────────────
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
