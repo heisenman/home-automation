@@ -233,6 +233,8 @@ static void publish_meta(void) {
     ha_mqtt_publish_history(g.mac_str, p);
 }
 
+static void publish_done(void);   // defined below; outdoor_pull() uses it
+
 // Outdoor multi-bank pull (ADR-0009, 2026-06-22). Probe 570f3b00..03, pick the bank whose 0x69
 // metadata carries the largest non-zero newest pointer, then page reads 570f3c<bank>00<addr:3 BE>06
 // over a recent window ending at that pointer (gap-fill). Returns the finish() reason.
