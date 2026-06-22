@@ -52,8 +52,15 @@ echo "--- Configuring Mosquitto ---"
 sudo systemctl stop mosquitto 2>/dev/null || true
 sudo systemctl disable mosquitto 2>/dev/null || true
 
-# Install our config as a drop-in
-sudo cp "$REPO_DIR/server/config/mosquitto.conf" /etc/mosquitto/conf.d/homeauto.conf
+# Install the baseline (anonymous) drop-in ONLY on a fresh box. Do NOT clobber an existing
+# homeauto.conf — once the broker auth/ACL cutover (provisioning/broker-auth-cutover.md) has installed
+# the AUTHENTICATED config there, re-running install.sh must not silently revert it to anonymous.
+if [[ ! -f /etc/mosquitto/conf.d/homeauto.conf ]]; then
+    sudo cp "$REPO_DIR/server/config/mosquitto.conf" /etc/mosquitto/conf.d/homeauto.conf
+    echo "Installed baseline mosquitto config (anonymous — run the auth cutover to harden)"
+else
+    echo "homeauto.conf already present — leaving it as-is (preserves broker auth if configured)"
+fi
 
 # Restart with our config
 sudo systemctl enable mosquitto
@@ -67,7 +74,7 @@ for unit in ha-scanner.service ha-writer.service ha-api.service \
             ha-compactor.service ha-compactor.timer \
             ha-verify-hashes.service ha-verify-hashes.timer \
             ha-weather.service ha-weather.timer \
-            ha-edge-mapper.service; do
+            ha-edge-mapper.service ha-edge-history.service; do
     # Template the real repo path into each unit so the install isn't tied to a fixed
     # location. The committed units use /home/visko/home_automation as the default; this
     # rewrites them to wherever the repo actually lives (no-op at the default path).
@@ -86,6 +93,11 @@ sudo systemctl start ha-compactor.timer ha-verify-hashes.timer
 # Edge mapper — resolves edge-node BLE readings (home/edge/+/+/adv) to canonical topics
 sudo systemctl enable ha-edge-mapper.service
 sudo systemctl start ha-edge-mapper.service
+
+# Edge history ingest — reassembles on-device GATT-pull history (home/edge/+/+/history) into hot.db.
+# Idle (just a subscriber) until a pull runs; always-on so autonomous pulls Just Work.
+sudo systemctl enable ha-edge-history.service
+sudo systemctl start ha-edge-history.service
 
 # Scanner needs bluetooth group — start it last
 sudo systemctl enable ha-scanner.service

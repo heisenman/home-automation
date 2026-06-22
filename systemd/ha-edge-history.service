@@ -1,0 +1,38 @@
+[Unit]
+Description=Home Automation — Edge History Ingest (on-device GATT-pull reassembly → hot.db)
+Documentation=file:///home/visko/home_automation/edge/esp32c6/SCOPE.md
+After=mosquitto.service network.target ha-writer.service
+Wants=mosquitto.service
+
+[Service]
+Type=simple
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+Environment=HA_BROKER=localhost
+Environment=HA_BROKER_PORT=1883
+Environment=HA_DB=instance/db/hot.db
+# Broker auth cutover: dictator MQTT creds (gitignored, optional via '-'; latent on anon broker)
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+ExecStart=/home/visko/home_automation/venv/bin/python3 \
+    -m server.ingest.edge_history \
+    --registry instance/devices.yaml \
+    --db instance/db/hot.db \
+    --broker ${HA_BROKER} \
+    --broker-port ${HA_BROKER_PORT}
+Restart=on-failure
+RestartSec=10
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+# writes reassembled history rows into the shared hot.db (WAL — coexists with ha-writer)
+ReadWritePaths=/home/visko/home_automation/instance
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-edge-history
+
+[Install]
+WantedBy=multi-user.target
