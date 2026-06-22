@@ -109,7 +109,12 @@ body {
 .sensors-wrap { margin-top: 4px; }
 .area { margin-bottom: 14px; }
 .area-label { color: var(--accent); font-size: 13px; font-weight: 600; margin: 0 2px 6px; text-transform: capitalize; }
-.sensor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.sensor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
+.sensor-area { font-size: 11px; color: var(--accent); text-transform: capitalize; margin: 1px 0 5px; }
+.sensor-head { display: flex; justify-content: space-between; align-items: baseline; cursor: pointer; }
+.sensor-head .sensor-area { margin: 0; }
+.expanded-list { margin-top: 14px; }
+.expanded-list .sensor { margin-bottom: 12px; }
 .sensor {
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
 }
@@ -131,9 +136,21 @@ body {
 .charts-head { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 6px; }
 .chart-block { margin-bottom: 12px; }
 .chart-label { font-size: 13px; color: var(--txt); margin-bottom: 2px; }
-.chart { width: 100%; height: 110px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; display: block; }
+.chart { width: 100%; height: 140px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; display: block; }
 .chart-ax { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 3px; }
 .chart-ax b { color: var(--txt); }
+
+/* charts with axes (graph builder) */
+.chart2 { margin-top: 2px; }
+.chart2-row { display: flex; align-items: stretch; }
+.yax {
+  display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end;
+  width: 46px; height: 140px; padding-right: 6px; font-size: 10px; color: var(--muted);
+}
+.xax { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); margin: 3px 0 0 52px; }
+.grid { stroke: var(--line); stroke-width: 1; opacity: .55; }
+.ax-note { margin-top: 4px; }
+.sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
 
 /* graph explorer */
 .explore { margin-top: 8px; }

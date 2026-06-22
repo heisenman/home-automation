@@ -51,6 +51,11 @@ function fmtAge(s) {
   return `${(s / 3600).toFixed(1)}h ago`;
 }
 const round1 = (v) => (v == null ? "—" : (Math.round(v * 10) / 10));
+// axis time label: clock for ≤2 days, else M/D
+function fmtClock(ms, spanH) {
+  const d = new Date(ms), p = (n) => String(n).padStart(2, "0");
+  return spanH <= 48 ? `${p(d.getHours())}:${p(d.getMinutes())}` : `${d.getMonth() + 1}/${d.getDate()}`;
+}
 const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
 const steps = (a, b, step) => { const o = []; for (let v = a; v <= b; v += step) o.push(v); return o; };
 const isoNoMs = (d) => d.toISOString().replace(/\.\d+Z$/, "Z");
@@ -61,18 +66,12 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
   const d = await getJSON(`/devices/${encodeURIComponent(deviceId)}/readings?${q}`);
   return (d.readings || []).map((r) => ({ t: Date.parse(r.ts), v: r.value })).filter((p) => !isNaN(p.t));
 }
-// convenience: last `hoursBack` hours.
-function fetchReadings(deviceId, metric, hoursBack = 24) {
-  const end = new Date();
-  const start = new Date(end.getTime() - hoursBack * 3600 * 1000);
-  return fetchReadingsRange(deviceId, metric, isoNoMs(start), isoNoMs(end), 400);
-}
 
 // distinct line colors for overlaying multiple sources on one chart
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v9 (2026-06-22)";
+const BUILD = "v13 (2026-06-22)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -115,30 +114,6 @@ function prepSeries(s, unit) {
   return s;
 }
 
-// ── tiny SVG line chart (no dependency) ──────────────────────────────────────
-function LineChart({ series, color = "#4aa3ff", unit = "" }) {
-  if (!series || series.length < 2) return html`<div class="note">not enough data yet</div>`;
-  const W = 320, H = 110, pad = 6;
-  const ts = series.map((p) => p.t), vs = series.map((p) => p.v);
-  const tMin = Math.min(...ts), tMax = Math.max(...ts);
-  let vMin = Math.min(...vs), vMax = Math.max(...vs);
-  if (vMin === vMax) { vMin -= 1; vMax += 1; }
-  const x = (t) => pad + ((t - tMin) / (tMax - tMin || 1)) * (W - 2 * pad);
-  const y = (v) => pad + (1 - (v - vMin) / (vMax - vMin)) * (H - 2 * pad);
-  const d = series.map((p, i) => `${i ? "L" : "M"}${x(p.t).toFixed(1)} ${y(p.v).toFixed(1)}`).join(" ");
-  const last = series[series.length - 1].v;
-  return html`
-    <svg viewBox="0 0 ${W} ${H}" class="chart" preserveAspectRatio="none">
-      <path d=${d} fill="none" stroke=${color} stroke-width="2" stroke-linejoin="round" />
-    </svg>
-    <div class="chart-ax">
-      <span>min ${round1(vMin)}${unit}</span>
-      <span>now <b>${round1(last)}${unit}</b></span>
-      <span>max ${round1(vMax)}${unit}</span>
-    </div>`;
-}
-
-// overlay several named series (same unit) on one chart + a legend — the multi-source grapher.
 // ── override controls ────────────────────────────────────────────────────────
 function OverrideControls({ id, override, isAdmin, onChange, onNeedAdmin }) {
   const [busy, setBusy] = useState(false);
@@ -347,80 +322,92 @@ const GRAPHABLE = [
   { key: "pressure_hpa", unit: "hPa", color: "#34d399", label: "Pressure" },
 ];
 
-function SensorChip({ s }) {
+// shared value row (temp respects the °F/°C pref)
+function SensorVals({ m, unit }) {
+  return html`<div class="sensor-vals">
+    ${m.temperature_c != null && html`<span class="sv"><b>${round1(convT(m.temperature_c, unit))}°</b>${unit}</span>`}
+    ${m.humidity_pct != null && html`<span class="sv"><b>${round1(m.humidity_pct)}</b>%RH</span>`}
+    ${m.co2_ppm != null && html`<span class="sv"><b>${Math.round(m.co2_ppm)}</b>ppm</span>`}
+    ${m.radon_bqm3 != null && html`<span class="sv"><b>${Math.round(m.radon_bqm3)}</b>Bq</span>`}
+    ${m.pressure_hpa != null && html`<span class="sv"><b>${Math.round(m.pressure_hpa)}</b>hPa</span>`}
+  </div>`;
+}
+
+// minimized preview — one compact grid cell. Click to expand (handled by the parent).
+function SensorChip({ s, onOpen }) {
   const m = s.metrics || {};
   const unit = useTemp();
   const stale = s.age_s != null && s.age_s > 1800;             // 30m: meters report often
-  const [open, setOpen] = useState(false);
-  const [series, setSeries] = useState(null);                  // {metricKey: [{t,v}]}
-  const [err, setErr] = useState("");
-
-  useEffect(() => {
-    if (!open) return;
-    let alive = true;
-    setSeries(null); setErr("");
-    (async () => {
-      try {
-        const keys = GRAPHABLE.filter((g) => m[g.key] != null).map((g) => g.key);
-        const out = {};
-        for (const k of keys) out[k] = await fetchReadings(s.device_id, k, 24);
-        if (alive) setSeries(out);
-      } catch (e) { if (alive) setErr(String(e.message)); }
-    })();
-    return () => { alive = false; };
-  }, [open]);
-
   return html`
-    <div class="sensor ${open ? "open" : ""}" onClick=${() => setOpen(!open)}>
-      <div class="sensor-name">${prettyName(s.device_id)} <span class="chev">${open ? "▾" : "▸"}</span></div>
-      <div class="sensor-vals">
-        ${m.temperature_c != null && html`<span class="sv"><b>${round1(convT(m.temperature_c, unit))}°</b>${unit}</span>`}
-        ${m.humidity_pct != null && html`<span class="sv"><b>${round1(m.humidity_pct)}</b>%RH</span>`}
-        ${m.co2_ppm != null && html`<span class="sv"><b>${Math.round(m.co2_ppm)}</b>ppm</span>`}
-        ${m.radon_bqm3 != null && html`<span class="sv"><b>${Math.round(m.radon_bqm3)}</b>Bq</span>`}
-        ${m.pressure_hpa != null && html`<span class="sv"><b>${Math.round(m.pressure_hpa)}</b>hPa</span>`}
-      </div>
+    <div class="sensor" onClick=${onOpen}>
+      <div class="sensor-name">${prettyName(s.device_id)} <span class="chev">▸</span></div>
+      <div class="sensor-area">${prettyArea(s.area)}</div>
+      <${SensorVals} m=${m} unit=${unit} />
       <div class="sensor-meta">
         <span class=${stale ? "age-stale" : "age-fresh"}>${fmtAge(s.age_s)}</span>
         ${m.battery_pct != null && html` · 🔋 ${Math.round(m.battery_pct)}%`}
       </div>
-      ${open && html`
-        <div class="charts" onClick=${(e) => e.stopPropagation()}>
-          <div class="charts-head">last 24h</div>
-          ${err && html`<div class="err">${err}</div>`}
-          ${series == null && !err && html`<div class="note">loading…</div>`}
-          ${series && GRAPHABLE.filter((g) => series[g.key]).map((g) => {
-            const conv = prepSeries({ metric: g.key, unit: g.unit, points: series[g.key] }, unit);
-            return html`
-            <div class="chart-block" key=${g.key}>
-              <div class="chart-label">${g.label}</div>
-              <${LineChart} series=${conv.points} color=${g.color} unit=${conv.unit} />
-            </div>`;
-          })}
-        </div>`}
+    </div>`;
+}
+
+// expanded — full width, below the grid, charts over the shared range. Click the header to collapse.
+function ExpandedSensor({ s, range, onClose }) {
+  const m = s.metrics || {};
+  const unit = useTemp();
+  const [series, setSeries] = useState(null);
+  const [err, setErr] = useState("");
+  useEffect(() => {
+    let alive = true; setSeries(null); setErr("");
+    (async () => {
+      try {
+        const keys = GRAPHABLE.filter((g) => m[g.key] != null).map((g) => g.key);
+        const out = {};
+        for (const k of keys) out[k] = await fetchReadingsRange(s.device_id, k, range.start, range.end);
+        if (alive) setSeries(out);
+      } catch (e) { if (alive) setErr(String(e.message)); }
+    })();
+    return () => { alive = false; };
+  }, [s.device_id, range.start, range.end]);
+  return html`
+    <div class="sensor open">
+      <div class="sensor-head" onClick=${onClose}>
+        <span class="sensor-name">${prettyName(s.device_id)} <span class="chev">▾</span></span>
+        <span class="sensor-area">${prettyArea(s.area)}</span>
+      </div>
+      <${SensorVals} m=${m} unit=${unit} />
+      <div class="charts">
+        ${err && html`<div class="err">${err}</div>`}
+        ${series == null && !err && html`<div class="note">loading…</div>`}
+        ${series && GRAPHABLE.filter((g) => series[g.key]).map((g) => html`
+          <div class="chart-block" key=${g.key}>
+            <div class="chart-label">${g.label}</div>
+            <${AdaptiveChart} traces=${[{ label: g.label, color: g.color, unit: g.unit, metric: g.key, points: series[g.key] }]} />
+          </div>`)}
+      </div>
     </div>`;
 }
 
 function Sensors({ sensors }) {
+  const [expanded, setExpanded] = useState(new Set());        // device_ids currently expanded
+  const [range, setRange] = useState(() => computeRange(24, { start: "", end: "" }));
   if (sensors == null) return null;
   if (sensors.length === 0) return html`<p class="note">No sensor readings yet.</p>`;
-  // group by area, preserving the server's area-sorted order
-  const areas = [];
-  const byArea = {};
-  for (const s of sensors) {
-    if (!byArea[s.area]) { byArea[s.area] = []; areas.push(s.area); }
-    byArea[s.area].push(s);
-  }
+  const open = (id) => setExpanded((p) => new Set(p).add(id));
+  const close = (id) => setExpanded((p) => { const n = new Set(p); n.delete(id); return n; });
+  const mins = sensors.filter((s) => !expanded.has(s.device_id));
+  const exps = sensors.filter((s) => expanded.has(s.device_id));
   return html`
     <div class="sensors-wrap">
       <h2 class="section">Sensors</h2>
-      ${areas.map((a) => html`
-        <div class="area" key=${a}>
-          <div class="area-label">${prettyArea(a)}</div>
-          <div class="sensor-grid">
-            ${byArea[a].map((s) => html`<${SensorChip} key=${s.device_id} s=${s} />`)}
-          </div>
-        </div>`)}
+      <div class="sensor-grid">
+        ${mins.map((s) => html`<${SensorChip} key=${s.device_id} s=${s} onOpen=${() => open(s.device_id)} />`)}
+      </div>
+      ${exps.length > 0 && html`
+        <div class="expanded-list">
+          <${RangeControl} onRange=${setRange} />
+          ${exps.map((s) => html`<${ExpandedSensor} key=${s.device_id} s=${s} range=${range}
+            onClose=${() => close(s.device_id)} />`)}
+        </div>`}
     </div>`;
 }
 
@@ -429,6 +416,26 @@ const RANGES = [{ label: "6h", h: 6 }, { label: "24h", h: 24 }, { label: "7d", h
 const computeRange = (hours, custom) => (custom.start && custom.end)
   ? { start: isoNoMs(new Date(custom.start)), end: isoNoMs(new Date(custom.end)) }
   : { start: isoNoMs(new Date(Date.now() - hours * 3600 * 1000)), end: isoNoMs(new Date()) };
+
+// shared time-range picker (presets + custom datetimes). Owns its state; reports the chosen window via
+// onRange(range). Used by both the graph builder and the expanded sensor readouts.
+function RangeControl({ onRange }) {
+  const [hours, setHours] = useState(24);
+  const [custom, setCustom] = useState({ start: "", end: "" });
+  const preset = (h) => { setHours(h); setCustom({ start: "", end: "" }); onRange(computeRange(h, { start: "", end: "" })); };
+  const cust = (c) => { setCustom(c); if (c.start && c.end) onRange(computeRange(null, c)); };
+  const refresh = () => onRange(computeRange(hours, custom));
+  return html`
+    <div class="range-sel">
+      ${RANGES.map((r) => html`<button class="btn sm ${!custom.start && hours === r.h ? "primary" : ""}"
+        onClick=${() => preset(r.h)}>${r.label}</button>`)}
+      <span class="range-custom">
+        <input type="datetime-local" value=${custom.start} onInput=${(e) => cust({ ...custom, start: e.target.value })} />
+        <input type="datetime-local" value=${custom.end} onInput=${(e) => cust({ ...custom, end: e.target.value })} />
+      </span>
+      <button class="btn sm ghost" onClick=${refresh} title="refresh">↻</button>
+    </div>`;
+}
 
 // overlay traces on one chart. Same unit → shared scale (real values); mixed units → per-trace
 // normalized (trend comparison), each trace's real range shown in the legend. Temp converted to pref.
@@ -439,15 +446,18 @@ function AdaptiveChart({ traces }) {
   const W = 320, H = 150, pad = 8;
   const allT = series.flatMap((t) => t.points.map((p) => p.t));
   const tMin = Math.min(...allT), tMax = Math.max(...allT);
+  const spanH = (tMax - tMin) / 3600000;
   const x = (t) => pad + ((t - tMin) / (tMax - tMin || 1)) * (W - 2 * pad);
   const units = [...new Set(series.map((t) => t.unit))];
   const shared = units.length === 1;
-  let axis, yOf;
+
+  let yOf, yLabels;
   if (shared) {
     const allV = series.flatMap((t) => t.points.map((p) => p.v));
     let mn = Math.min(...allV), mx = Math.max(...allV); if (mn === mx) { mn -= 1; mx += 1; }
     yOf = series.map(() => (v) => pad + (1 - (v - mn) / (mx - mn)) * (H - 2 * pad));
-    axis = `${round1(mn)}–${round1(mx)} ${units[0]}`;
+    const u = units[0];
+    yLabels = [`${round1(mx)}${u}`, `${round1((mn + mx) / 2)}${u}`, `${round1(mn)}${u}`];
   } else {
     yOf = series.map((t) => {
       let mn = Math.min(...t.points.map((p) => p.v)), mx = Math.max(...t.points.map((p) => p.v));
@@ -455,17 +465,31 @@ function AdaptiveChart({ traces }) {
       t._mn = mn; t._mx = mx;
       return (v) => pad + (1 - (v - mn) / (mx - mn)) * (H - 2 * pad);
     });
-    axis = "normalized · mixed units (range per trace below)";
+    yLabels = ["100%", "50%", "0%"];                   // mixed units → each trace normalized to its range
   }
+  const gridY = [pad, H / 2, H - pad];
   return html`
-    <svg viewBox="0 0 ${W} ${H}" class="chart" preserveAspectRatio="none">
-      ${series.map((t, i) => html`<path fill="none" stroke=${t.color} stroke-width="1.5"
-        d=${t.points.map((p, j) => `${j ? "L" : "M"}${x(p.t).toFixed(1)} ${yOf[i](p.v).toFixed(1)}`).join(" ")} />`)}
-    </svg>
-    <div class="chart-ax"><span>${axis}</span></div>
-    <div class="legend">
-      ${series.map((t) => html`<span class="leg"><i style=${`background:${t.color}`}></i>${t.label}${
-        shared ? "" : ` (${round1(t._mn)}–${round1(t._mx)}${t.unit})`}</span>`)}
+    <div class="chart2">
+      <div class="chart2-row">
+        <div class="yax">${yLabels.map((l) => html`<span>${l}</span>`)}</div>
+        <svg viewBox="0 0 ${W} ${H}" class="chart" preserveAspectRatio="none">
+          ${gridY.map((yy) => html`<line x1="0" y1=${yy} x2=${W} y2=${yy} class="grid" />`)}
+          ${series.map((t, i) => html`<path fill="none" stroke=${t.color} stroke-width="1.5"
+            d=${t.points.map((p, j) => `${j ? "L" : "M"}${x(p.t).toFixed(1)} ${yOf[i](p.v).toFixed(1)}`).join(" ")} />`)}
+        </svg>
+      </div>
+      <div class="xax">
+        <span>${fmtClock(tMin, spanH)}</span>
+        <span>${fmtClock((tMin + tMax) / 2, spanH)}</span>
+        <span>${fmtClock(tMax, spanH)}</span>
+      </div>
+      ${!shared && html`<div class="note ax-note">normalized · mixed units (each trace's real range below)</div>`}
+      <div class="legend">
+        ${series.map((t) => html`<span class="leg">
+          <svg class="sw" viewBox="0 0 12 12" width="12" height="12"><rect width="12" height="12" rx="2" fill=${t.color} /></svg>
+          <span style=${{ color: t.color }}>${t.label}</span>${
+          shared ? "" : ` (${round1(t._mn)}–${round1(t._mx)}${t.unit})`}</span>`)}
+      </div>
     </div>`;
 }
 
@@ -521,14 +545,8 @@ function Panel({ catalog, panel, range, onToggleTrace, onRemove }) {
 function GraphBuilder({ sensors, weather }) {
   const catalog = traceCatalog(sensors, weather);
   const [panels, setPanels] = useState([{ id: 1, keys: [] }]);
-  const [hours, setHours] = useState(24);
-  const [custom, setCustom] = useState({ start: "", end: "" });
   const [range, setRange] = useState(() => computeRange(24, { start: "", end: "" }));
   const nextId = useRef(2);
-
-  const applyPreset = (h) => { setHours(h); setCustom({ start: "", end: "" }); setRange(computeRange(h, { start: "", end: "" })); };
-  const applyCustom = (c) => { setCustom(c); if (c.start && c.end) setRange(computeRange(null, c)); };
-  const refresh = () => setRange(computeRange(hours, custom));
   const addPanel = () => setPanels((p) => [...p, { id: nextId.current++, keys: [] }]);
   const removePanel = (id) => setPanels((p) => p.filter((x) => x.id !== id));
   const toggleTrace = (id, key) => setPanels((p) => p.map((x) => x.id !== id ? x
@@ -538,17 +556,7 @@ function GraphBuilder({ sensors, weather }) {
   return html`
     <div class="explore">
       <h2 class="section">Graphs</h2>
-      <div class="range-sel">
-        ${RANGES.map((r) => html`<button class="btn sm ${!custom.start && hours === r.h ? "primary" : ""}"
-          onClick=${() => applyPreset(r.h)}>${r.label}</button>`)}
-        <span class="range-custom">
-          <input type="datetime-local" value=${custom.start}
-            onInput=${(e) => applyCustom({ ...custom, start: e.target.value })} />
-          <input type="datetime-local" value=${custom.end}
-            onInput=${(e) => applyCustom({ ...custom, end: e.target.value })} />
-        </span>
-        <button class="btn sm ghost" onClick=${refresh} title="refresh">↻</button>
-      </div>
+      <${RangeControl} onRange=${setRange} />
       ${panels.map((pn) => html`
         <${Panel} key=${pn.id} catalog=${catalog} panel=${pn} range=${range}
           onToggleTrace=${(k) => toggleTrace(pn.id, k)} onRemove=${() => removePanel(pn.id)} />`)}
