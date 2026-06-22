@@ -78,6 +78,12 @@ static struct {
     volatile bool diag;            // log every notification during the metadata phase
     volatile uint32_t newest_ts, oldest_ts;
     volatile uint16_t newest_ptr, oldest_ptr;
+    // outdoor multi-bank history (ADR-0009): read = 570f3c<bank>00<addr:3 BE>06; bank discovered by
+    // probing 570f3b00..03 and taking the one whose 0x69 metadata carries a non-zero newest pointer.
+    volatile uint8_t  best_bank;
+    volatile uint32_t newest_addr;     // full (3-byte) newest pointer of the chosen bank
+    volatile uint32_t probe_ptr;       // newest pointer parsed during the current bank probe
+    volatile bool     probe_got;       // a 0x69 metadata arrived since the probe flag was cleared
     uint32_t pull_now;
     // relay batch (guarded by s_batch_mux)
     char batch[1024];
@@ -124,8 +130,16 @@ static void flush_remaining(void) {
 static void parse_meta(const uint8_t *d, int len) {
     if (len != 15 || d[1] != 0x69) return;
     uint32_t ts = ((uint32_t)d[5]<<24)|((uint32_t)d[6]<<16)|((uint32_t)d[7]<<8)|d[8];
-    uint16_t ptr = ((uint16_t)d[11]<<8)|d[12];
     g.meta_count++;
+    if (g.prof == &PROF_OUTDOOR) {
+        // newest pointer is the 4-byte BE field at d[9:13] (e.g. 00 01 60 d4 -> 0x000160d4); the read
+        // address IS this value. (The old code read only d[11:13], truncating the high bytes -> wrong
+        // address -> the meter NAK'd.) Attribute to whichever bank we are currently probing.
+        uint32_t ptr = ((uint32_t)d[9]<<24)|((uint32_t)d[10]<<16)|((uint32_t)d[11]<<8)|d[12];
+        g.probe_ptr = ptr; g.newest_ts = ts; g.probe_got = true; g.meta_seen = true;
+        return;
+    }
+    uint16_t ptr = ((uint16_t)d[11]<<8)|d[12];     // meter_pro: unchanged 2-byte pointer
     if (!g.meta_seen || ptr > g.newest_ptr) { g.newest_ptr = ptr; g.newest_ts = ts; }
     if (!g.meta_seen || ptr < g.oldest_ptr) { g.oldest_ptr = ptr; g.oldest_ts = ts; }
     g.meta_seen = true;
@@ -213,10 +227,48 @@ static void publish_meta(void) {
     char p[256];
     snprintf(p, sizeof(p),
         "{\"t\":\"meta\",\"mac\":\"%s\",\"newest_ts\":%u,\"newest_ptr\":%u,\"oldest_ts\":%u,"
-        "\"oldest_ptr\":%u,\"start_addr\":%u,\"pull_now\":%u}",
+        "\"oldest_ptr\":%u,\"bank\":%u,\"newest_addr\":%u,\"pull_now\":%u}",
         g.mac_str, (unsigned)g.newest_ts, g.newest_ptr, (unsigned)g.oldest_ts,
-        g.oldest_ptr, g.oldest_ptr, (unsigned)g.pull_now);
+        g.oldest_ptr, g.best_bank, (unsigned)g.newest_addr, (unsigned)g.pull_now);
     ha_mqtt_publish_history(g.mac_str, p);
+}
+
+// Outdoor multi-bank pull (ADR-0009, 2026-06-22). Probe 570f3b00..03, pick the bank whose 0x69
+// metadata carries the largest non-zero newest pointer, then page reads 570f3c<bank>00<addr:3 BE>06
+// over a recent window ending at that pointer (gap-fill). Returns the finish() reason.
+static const char *outdoor_pull(void) {
+    write_blocking(g.cmd_handle, od_s0, sizeof od_s0);          // 570f3a primer
+    vTaskDelay(pdMS_TO_TICKS(300));
+
+    int best_bank = -1; uint32_t best = 0;
+    for (int bank = 0; bank <= 3; bank++) {
+        g.probe_got = false; g.probe_ptr = 0;
+        uint8_t pb[4] = {0x57, 0x0f, 0x3b, (uint8_t)bank};
+        write_blocking(g.cmd_handle, pb, sizeof pb);
+        vTaskDelay(pdMS_TO_TICKS(900));                        // let the 0x69 metadata land
+        ha_mqtt_log("bank %d: meta=%d ptr=%u", bank, (int)g.probe_got, (unsigned)g.probe_ptr);
+        if (g.probe_got && g.probe_ptr > best) { best = g.probe_ptr; best_bank = bank; }
+    }
+    g.diag = false;
+    if (best_bank < 0 || best == 0) return "no populated history bank";
+    g.best_bank = (uint8_t)best_bank; g.newest_addr = best;
+    ha_mqtt_log("outdoor bank=%d newest_addr=%u", best_bank, (unsigned)best);
+    publish_meta();
+
+    const uint32_t WINDOW = 4096u * REC_STRIDE;                 // cap recent-window depth (~4096 records)
+    uint32_t start = (g.newest_addr > WINDOW) ? (g.newest_addr - WINDOW) : 0;
+    start -= start % REC_STRIDE;
+    ESP_LOGI(TAG, "paging bank %d %u..%u", best_bank, (unsigned)start, (unsigned)g.newest_addr);
+    uint8_t cmd[9] = {0x57, 0x0f, 0x3c, (uint8_t)best_bank, 0x00, 0, 0, 0, 0x06};
+    for (uint32_t addr = start; addr <= g.newest_addr; addr += REC_STRIDE) {
+        cmd[5] = (addr >> 16) & 0xff; cmd[6] = (addr >> 8) & 0xff; cmd[7] = addr & 0xff;
+        if (write_blocking(g.cmd_handle, cmd, sizeof cmd) != 0) ESP_LOGW(TAG, "read fail @%u", (unsigned)addr);
+        vTaskDelay(pdMS_TO_TICKS(8));
+    }
+    vTaskDelay(pdMS_TO_TICKS(1500));                            // flush tail notifications
+    flush_remaining();
+    publish_done();
+    return "done";
 }
 static void publish_done(void) {
     char p[96];
@@ -266,6 +318,15 @@ static void pull_task(void *arg) {
     hs[9]=(g.pull_now>>24)&0xff; hs[10]=(g.pull_now>>16)&0xff; hs[11]=(g.pull_now>>8)&0xff; hs[12]=g.pull_now&0xff;
     write_blocking(g.cmd_handle, hs, sizeof(hs));
     vTaskDelay(pdMS_TO_TICKS(300));
+
+    // Outdoor meters use a multi-bank store with a different read format — bank-discovery path.
+    if (g.prof == &PROF_OUTDOOR) {
+        const char *r = outdoor_pull();
+        ESP_LOGI(TAG, "outdoor pull: %s (%d notifs)", r, g.total_count);
+        finish(r);
+        vTaskDelete(NULL);
+        return;
+    }
 
     // setup + metadata, retried: the oldest-pointer notification can be slow or missed on the
     // first pass (esp. on Outdoor meters), so re-issue the setup until both pointers appear.
