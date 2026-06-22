@@ -191,6 +191,17 @@ def _parse_metadata(notifs: list[bytes]):
     return newest[0], newest[1], oldest[0], oldest[1]  # newest_ts, newest_ptr, oldest_ts, oldest_ptr
 
 
+def _empty_buffer(notifs: list[bytes]) -> bool:
+    """True if the meter answered the history setup with an EMPTY-buffer marker: a 15-byte notif whose
+    type byte is 0x6a (it echoes the connection time we just sent) with a zero buffer pointer. This is
+    the device saying 'I have no stored records' — distinct from 'we failed to parse'. Observed on a
+    freshly re-added Meter Pro (A8:02, 2026-06-22), whose on-device log was cleared on re-pair."""
+    for v in notifs:
+        if len(v) == 15 and v[1] == 0x6a and _struct.unpack(">H", v[11:13])[0] == 0:
+            return True
+    return False
+
+
 def assign_timestamps(samples: list[tuple[float, int]], meta: dict) -> list[tuple[int, float, int]]:
     """Map decoded samples (oldest→newest, one per address unit starting at meta['start_addr'])
     to (unix_ts, temp, hum). Timestamp is linear between the device's two metadata anchors:
@@ -266,6 +277,11 @@ async def fetch_live(mac: str, profile: str = "meter_pro",
     def on_notify(_char, data: bytearray):
         notifs.append(bytes(data))
 
+    # NB (2026-06-22): connect-by-address relies on BlueZ's object cache (populated by a running scan).
+    # On this NAS's shared hci1 it is unreliable — it races ha-scanner's scan churn (hangs / "device not
+    # found"). Self-discovery via BleakScanner was tried and was worse here (couldn't find advertising
+    # devices once the adapter was contended). The dependable pull path on this deployment is the EDGE
+    # node, not the host adapter; the mesh router learns this from pull_log and routes accordingly.
     client = BleakClient(mac, timeout=25.0)
     last_err = None
     for attempt in range(3):
@@ -282,17 +298,29 @@ async def fetch_live(mac: str, profile: str = "meter_pro",
         await client.start_notify(NOTIFY_CHAR, on_notify)
         now = int(_time.time())
         await client.write_gatt_char(CMD_CHAR, _HANDSHAKE_PREFIX + _struct.pack(">I", now), response=True)
-        for cmd in prof["setup"]:
-            await client.write_gatt_char(CMD_CHAR, cmd, response=True)
-            await asyncio.sleep(0.2)
-        await asyncio.sleep(settle)
-
-        newest_ts, newest, oldest_ts, oldest = _parse_metadata(notifs)
-        meta = {"newest_ts": newest_ts, "newest_ptr": newest,
-                "oldest_ts": oldest_ts, "oldest_ptr": oldest, "start_addr": None,
-                "pull_now": now}   # connection time — used to re-anchor drifted device clocks
+        meta = {"newest_ts": None, "newest_ptr": None, "oldest_ts": None, "oldest_ptr": None,
+                "start_addr": None, "pull_now": now}   # pull_now = connection time (re-anchor drift)
+        # The pointer/metadata notification can be slow or dropped on the first pass, so re-issue the
+        # setup sequence a few times (the C firmware's pull_task does the same) until it parses with a
+        # real range — and bail early if the device reports an empty buffer.
+        newest_ts = newest = oldest_ts = oldest = None
+        for setup_try in range(4):
+            for cmd in prof["setup"]:
+                await client.write_gatt_char(CMD_CHAR, cmd, response=True)
+                await asyncio.sleep(0.2)
+            await asyncio.sleep(settle)
+            newest_ts, newest, oldest_ts, oldest = _parse_metadata(notifs)
+            if newest is not None and newest != oldest:
+                break
+            if _empty_buffer(notifs):
+                log.warning("device reports an EMPTY history buffer (0x6a + zero pointer) — "
+                            "nothing stored to pull")
+                meta["empty_buffer"] = True
+                return notifs, meta
+            log.info("metadata not ready (setup attempt %d/4) — re-issuing", setup_try + 1)
+        meta.update(newest_ts=newest_ts, newest_ptr=newest, oldest_ts=oldest_ts, oldest_ptr=oldest)
         if newest is None:
-            log.warning("no metadata pointer parsed; returning setup notifications only")
+            log.warning("no metadata pointer parsed after 4 attempts; returning setup notifications only")
             return notifs, meta
 
         start = oldest if window_records is None else max(oldest or 0, newest - window_records * _REC_STRIDE)
@@ -310,6 +338,29 @@ async def fetch_live(mac: str, profile: str = "meter_pro",
         except Exception:
             pass
         await client.disconnect()
+
+
+# ── pull-outcome logging (feeds the mesh router's path learning) ─────────────────
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+try:
+    from server.mesh import store as _mesh_store
+    _MESH_OK = True
+except Exception:                                       # pragma: no cover
+    _MESH_OK = False
+
+
+def _record_pull(db, device_id, ok: bool, n: int, reason: str) -> None:
+    """Append this server-side pull's outcome to pull_log (terminal receiver = 'server') so the mesh
+    router learns which path actually works. Best-effort — never breaks the pull."""
+    if not (_MESH_OK and db and device_id):
+        return
+    try:
+        c = sqlite3.connect(str(db))
+        _mesh_store.ensure_schema(c)
+        _mesh_store.record_pull(c, device_id, f"server:server>{device_id}", ok=ok, n_samples=n, reason=reason)
+        c.close()
+    except Exception as exc:
+        log.debug("pull_log record failed: %s", exc)
 
 
 # ── Entry point ─────────────────────────────────────────────────────────────────
@@ -346,13 +397,23 @@ def main() -> None:
         window = args.window if args.window > 0 else None
         profile = _profile_for(args.device_type)
         log.info("profile=%s for device_type=%s", profile, args.device_type)
-        notifs, meta = asyncio.run(fetch_live(args.device, profile=profile, window_records=window))
+        try:
+            notifs, meta = asyncio.run(fetch_live(args.device, profile=profile, window_records=window))
+        except Exception as exc:                       # connect/transport failure (e.g. device too weak)
+            log.error("pull failed to connect/complete: %s", exc)
+            if bool(args.db) and not args.dry_run:
+                _record_pull(args.db, args.device_id, ok=False, n=0, reason=f"connect_fail:{type(exc).__name__}")
+            return
         samples = decode_meter_pro(notifs)
         reanchor_to_now(meta, enabled=not args.no_reanchor)
         tsamples = assign_timestamps(samples, meta)
         log.info("live notifications=%d  decoded=%d  meta=%s", len(notifs), len(samples), meta)
+        live_real = bool(args.db) and not args.dry_run    # only record outcomes for real pulls
         if not tsamples:
-            log.warning("no timestamped samples (metadata not parsed?) — nothing to do")
+            reason = "empty_buffer" if meta.get("empty_buffer") else "no_metadata"
+            log.warning("no timestamped samples (%s) — nothing to do", reason)
+            if live_real:
+                _record_pull(args.db, args.device_id, ok=False, n=0, reason=reason)
             return
         newest = tsamples[-1]
         log.info("range %s .. %s  (newest %.1f°C/%d%%)",
@@ -364,6 +425,8 @@ def main() -> None:
         skew = abs(_time.time() - newest[0])
         if skew > 3600:
             log.error("newest sample is %.0fs from now — anchor looks wrong; refusing to insert.", skew)
+            if live_real:
+                _record_pull(args.db, args.device_id, ok=False, n=0, reason="skew")
             return
         if args.dry_run or not args.db:
             log.info("dry-run: %d samples; newest 6: %s", len(tsamples), tsamples[-6:])
@@ -372,6 +435,7 @@ def main() -> None:
         n = insert_samples(args.db, dev_id, args.device_type, args.area, tsamples)
         log.info("inserted %d new rows into %s (%d samples; idempotent re-runs add 0)",
                  n, args.db, len(tsamples))
+        _record_pull(args.db, dev_id, ok=True, n=n, reason="")
         return
 
     ap.error("need --offline FILE or --device MAC")

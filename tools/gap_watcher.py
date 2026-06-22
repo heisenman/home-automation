@@ -36,6 +36,14 @@ BROKER = os.environ.get("HA_BROKER", "localhost")
 EDGE_NODE = os.environ.get("HA_EDGE_NODE", "c6-bench")
 log = logging.getLogger("ha.gap_watcher")
 
+sys.path.insert(0, str(REPO))
+try:                                         # mesh-aware routing is optional (gated by --graph-routing)
+    from server.mesh import store as mesh_store
+    from server.mesh.topology import build_graph, best_path, hops, serialize
+    _MESH = True
+except Exception:                            # pragma: no cover
+    _MESH = False
+
 
 # ── gap detection (pure, unit-tested) ───────────────────────────────────────────
 def find_gaps(times_sorted: list[float], min_gap_s: float) -> list[tuple[float, float, float]]:
@@ -77,6 +85,40 @@ def backfill_plan(info: dict, routes: dict | None = None) -> dict | None:
     return None
 
 
+def choose_plan(info: dict, routes: dict | None, conn=None) -> dict | None:
+    """Mesh-aware route when the topology graph has been observed (mesh_links populated by mesh_probe),
+    else the static backfill_plan. The graph picks the lowest-cost server→endpoint path, folding in each
+    hop's rssi/reliability AND the terminal node's pull history (a proven puller beats a louder one that
+    has only failed — the A8:02 lesson). Multi-hop paths (≥2 relays) are reported but fall back to static
+    until the relay transport exists. Falls back safely whenever the graph is empty/unknown."""
+    static = backfill_plan(info, routes)
+    did = info.get("device_id")
+    if conn is None or not _MESH or not did:
+        return static
+    try:
+        links = mesh_store.load_links(conn)
+        stats = mesh_store.pull_stats(conn)
+    except Exception:
+        return static                        # mesh tables not populated yet
+    if not links:
+        return static
+    path, cost = best_path(build_graph(links), ("endpoint", did), pull_stats=stats)
+    if not path:
+        return static                        # graph knows nothing about this endpoint
+    h = hops(path)
+    if h == 0:
+        plan = {"via": "server"}
+    elif h == 1:
+        plan = {"via": "edge", "node": path[1][1], "profile": (static or {}).get("profile", "meter_pro")}
+    else:
+        log.warning("%s: best path %s is %d-hop — multi-hop relay not built yet; using static route",
+                    did, serialize(path), h)
+        return static
+    plan["graph_path"] = serialize(path)
+    plan["graph_cost"] = round(cost, 2)
+    return plan
+
+
 def dispatch(mac: str, info: dict, plan: dict, dry: bool) -> None:
     via, did = plan["via"], info.get("device_id")
     if via == "edge":
@@ -113,6 +155,10 @@ def main() -> None:
     p.add_argument("--settle-s", type=int, default=int(os.environ.get("HA_GAP_SETTLE_S", "180")),
                    help="wait between pulls — one BLE central op at a time")
     p.add_argument("--dry-run", action="store_true", help="report what would be backfilled; pull nothing")
+    p.add_argument("--graph-routing", action="store_true",
+                   default=os.environ.get("HA_GRAPH_ROUTING", "") not in ("", "0", "false"),
+                   help="use the observed mesh topology (mesh_links) to choose the pull path; "
+                        "default off → static routing (unchanged behavior)")
     a = p.parse_args()
     logging.basicConfig(level=logging.INFO, stream=sys.stdout,
                         format="%(asctime)s %(levelname)s %(name)s — %(message)s")
@@ -130,11 +176,12 @@ def main() -> None:
         if not gaps:
             continue
         biggest = max(g[2] for g in gaps) / 60.0
-        plan = backfill_plan(info, routes)
+        plan = choose_plan(info, routes, conn if a.graph_routing else None)
         if not plan:
             log.info("%s: %d gap(s) (biggest %.0f min) but no backfill route — skipping", did, len(gaps), biggest)
             continue
-        log.info("%s: %d gap(s), biggest %.0f min → backfill via %s", did, len(gaps), biggest, plan["via"])
+        via_note = f" [graph {plan['graph_path']} cost={plan.get('graph_cost')}]" if plan.get("graph_path") else ""
+        log.info("%s: %d gap(s), biggest %.0f min → backfill via %s%s", did, len(gaps), biggest, plan["via"], via_note)
         todo.append((mac, info, plan))
 
     log.info("gap watcher: %d device(s) with gaps to backfill (lookback %dd, min-gap %.0f min%s)",

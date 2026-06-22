@@ -1,0 +1,30 @@
+[Unit]
+Description=Home Automation — Mesh Topology Probe (reachability census, one-shot)
+Documentation=file:///home/visko/home_automation/docs/adr/ADR-0010-mesh-topology-routing.md
+After=ha-scanner.service ha-edge-mapper.service mosquitto.service network.target
+Wants=mosquitto.service
+
+[Service]
+Type=oneshot
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+Environment=HA_BROKER=localhost
+Environment=HA_DB=instance/db/hot.db
+# broker creds for the adv sniff (node->endpoint links). Read-only to readings; writes only mesh_links.
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+ExecStart=/home/visko/home_automation/venv/bin/python3 \
+    tools/mesh_probe.py \
+    --db instance/db/hot.db \
+    --registry instance/devices.yaml \
+    --seconds 30
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/visko/home_automation/instance
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-mesh-probe

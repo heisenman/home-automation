@@ -1,0 +1,13 @@
+[Unit]
+Description=Home Automation — Mesh Topology Probe Timer
+After=ha-scanner.service
+
+[Timer]
+# every 30 min — keep the reachability/pull graph fresh. Cheap: a ~30s passive adv sniff + a
+# device_last_seen read; writes only the additive mesh_links table.
+OnCalendar=*-*-* *:00,30:00 America/Los_Angeles
+Persistent=true
+Unit=ha-mesh-probe.service
+
+[Install]
+WantedBy=timers.target

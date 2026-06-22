@@ -32,6 +32,11 @@ import switchbot_history as sbh   # noqa: E402
 
 from server.ingest.edge_mapper import load_registry, _utc_now  # noqa: E402
 from server.util.mqtt_creds import apply_credentials  # noqa: E402
+try:
+    from server.mesh import store as mesh_store  # noqa: E402
+    _MESH_OK = True
+except Exception:                                 # pragma: no cover
+    _MESH_OK = False
 
 log = logging.getLogger("ha.edge_history")
 
@@ -126,16 +131,34 @@ class HistoryIngest:
             tsamples = sbh.assign_timestamps(samples, meta)
         if not tsamples:
             log.warning("[%s] decoded %d notifs -> 0 timestamped samples (bad meta?)", key, len(s.notifs))
+            self._record_pull(reg["device_id"], node, ok=False, n=0, reason="no_metadata")
             return
         # safety: newest sample must be ~now (same guard as the server-side puller)
         skew = abs(time.time() - tsamples[-1][0])
         if skew > 3600:
             log.error("[%s] newest sample %.0fs from now — refusing insert", key, skew)
+            self._record_pull(reg["device_id"], node, ok=False, n=0, reason="skew")
             return
         n = sbh.insert_samples(self._db, reg["device_id"],
                                reg.get("device_type", "unknown"), reg.get("area", "unknown"), tsamples)
         log.info("[%s] %d notifs -> %d samples -> inserted %d new rows (%s)",
                  key, len(s.notifs), len(tsamples), n, reg["device_id"])
+        self._record_pull(reg["device_id"], node, ok=True, n=n, reason="")
+
+    def _record_pull(self, device_id, node, ok: bool, n: int, reason: str) -> None:
+        """Append this edge pull's outcome to pull_log so the mesh router learns which node can pull
+        which endpoint (terminal receiver = the relaying node). Best-effort — never breaks ingest."""
+        if not _MESH_OK:
+            return
+        try:
+            import sqlite3
+            c = sqlite3.connect(str(self._db))
+            mesh_store.ensure_schema(c)
+            mesh_store.record_pull(c, device_id, f"server:server>node:{node}>{device_id}",
+                                   ok=ok, n_samples=n, reason=reason)
+            c.close()
+        except Exception as exc:
+            log.debug("pull_log record failed: %s", exc)
 
 
 def main() -> None:
