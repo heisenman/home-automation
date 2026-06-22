@@ -74,7 +74,8 @@ for unit in ha-scanner.service ha-writer.service ha-api.service \
             ha-compactor.service ha-compactor.timer \
             ha-verify-hashes.service ha-verify-hashes.timer \
             ha-weather.service ha-weather.timer \
-            ha-edge-mapper.service ha-edge-history.service; do
+            ha-edge-mapper.service ha-edge-history.service \
+            ha-gap-watcher.service ha-gap-watcher.timer; do
     # Template the real repo path into each unit so the install isn't tied to a fixed
     # location. The committed units use /home/visko/home_automation as the default; this
     # rewrites them to wherever the repo actually lives (no-op at the default path).
@@ -86,9 +87,9 @@ sudo systemctl daemon-reload
 
 # Enable and start services
 sudo systemctl enable ha-writer.service ha-api.service
-sudo systemctl enable ha-compactor.timer ha-verify-hashes.timer
+sudo systemctl enable ha-compactor.timer ha-verify-hashes.timer ha-gap-watcher.timer
 sudo systemctl start ha-writer.service ha-api.service
-sudo systemctl start ha-compactor.timer ha-verify-hashes.timer
+sudo systemctl start ha-compactor.timer ha-verify-hashes.timer ha-gap-watcher.timer
 
 # Edge mapper — resolves edge-node BLE readings (home/edge/+/+/adv) to canonical topics
 sudo systemctl enable ha-edge-mapper.service

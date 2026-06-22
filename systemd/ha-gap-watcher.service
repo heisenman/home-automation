@@ -1,0 +1,31 @@
+[Unit]
+Description=Home Automation — Daily Gap Watcher (history backfill, one-shot)
+Documentation=file:///home/visko/home_automation/docs/adr/ADR-0009-history-continuity.md
+After=ha-writer.service mosquitto.service network.target
+Wants=mosquitto.service
+
+[Service]
+Type=oneshot
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+Environment=HA_BROKER=localhost
+Environment=HA_DB=instance/db/hot.db
+# dictator broker creds (publish edge op:history) + HA_CMD_SECRET (signs those commands).
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+EnvironmentFile=-/home/visko/home_automation/instance/gap-watcher.env
+ExecStart=/home/visko/home_automation/venv/bin/python3 \
+    tools/gap_watcher.py \
+    --registry instance/devices.yaml \
+    --lookback-days 3 \
+    --min-gap-min 20
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/visko/home_automation/instance
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-gap-watcher

@@ -1,0 +1,12 @@
+[Unit]
+Description=Home Automation — Daily Gap Watcher Timer
+After=ha-writer.service
+
+[Timer]
+# 03:30 local (DST-aware) — low-activity, well clear of the 19:00 PDT compactor.
+OnCalendar=*-*-* 03:30:00 America/Los_Angeles
+Persistent=true
+Unit=ha-gap-watcher.service
+
+[Install]
+WantedBy=timers.target
