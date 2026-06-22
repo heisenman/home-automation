@@ -114,11 +114,18 @@ static void handle_cmd(const char *data, int len) {
         }
         inner = cJSON_Parse(p->valuestring);
         if (!inner) { ESP_LOGW(TAG, "cmd: bad inner json"); cJSON_Delete(root); return; }
+        // Freshness window: tight for actuation/gatt (replay defense), but WIDE for ota so a node whose
+        // clock has drifted (the C6 RTC does) can still be OTA-recovered — the OTA directive is signed +
+        // image-hash-verified + version anti-downgrade, so a replay just re-flashes the same image.
+        const cJSON *op = cJSON_GetObjectItem(inner, "op");
+        long window = (cJSON_IsString(op) && strcmp(op->valuestring, "ota") == 0) ? 86400 : 300;
         const cJSON *ts = cJSON_GetObjectItem(inner, "ts");      // freshness (clock is SNTP-synced)
         if (cJSON_IsNumber(ts)) {
             long dt = (long)time(NULL) - (long)ts->valuedouble;
-            if (dt < -60 || dt > 60) { ha_mqtt_log("cmd rejected: stale (dt=%lds)", dt);
-                                       cJSON_Delete(inner); cJSON_Delete(root); return; }
+            if (dt < -window || dt > window) {
+                ha_mqtt_log("cmd rejected: stale (dt=%lds win=%lds)", dt, window);
+                cJSON_Delete(inner); cJSON_Delete(root); return;
+            }
         }
         cmd = inner;
     } else {

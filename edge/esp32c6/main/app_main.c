@@ -34,6 +34,7 @@ void app_main(void) {
     if (!ha_sntp_sync(cfg.ntp_server, 15000)) {
         ESP_LOGW(TAG, "SNTP not synced — readings ship without ts; mapper stamps on ingest");
     }
+    ha_sntp_start_periodic(30 * 60 * 1000);   // re-sync every 30 min (the C6 RTC drifts fast)
 
     ha_mqtt_start(cfg.broker_uri, cfg.node_id);
     ha_ble_scan_start();
