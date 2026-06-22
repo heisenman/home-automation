@@ -15,10 +15,20 @@
   re-import) matches the **live ble-adv sensor to ~0.2 °C** (verified 6/21). So hot is correct.
 - **Fix (`005d031`):** the API now dedups hot/parquet by `(ts,metric)` — **hot wins**. Stops the band
   wherever the corrected re-import overlaps (the last ~7d).
-- **⚠️ Deeper remediation still needed:** dates present ONLY in parquet (before the re-import range,
-  ~Apr20→6/14) still hold the **time-shifted** values — they'll look single-line but be ~hours off on
-  30d/90d views. Proper fix: purge the wrong attic rows from parquet + one clean full re-import (you may
-  need to re-export a fresh FULL CSV from the app). Let's do this together — it's a careful data op.
+- **Deeper remediation — TOOL READY (`tools/fix_meter_reimport.py`, validated on synthetic data).**
+  Backs up first, purges the device's csv-import rows from BOTH hot.db + parquet, then re-imports a
+  fresh CSV correctly. Your fresh full dump is on `.245` at `~/home_automation/attic s wall_data.csv`
+  (Apr20→now, 89,700 rows, format matches the importer). **Run on `.245`** (autonomous prod writes are
+  classifier-blocked, so this is yours to run — or say "run it" and approve):
+  ```
+  git -C ~/home_automation pull            # get the tool
+  cd ~/home_automation
+  venv/bin/python tools/fix_meter_reimport.py --device-id meter_attic_south_wall \
+      --csv "$HOME/home_automation/attic s wall_data.csv" --area attic \
+      --device-type switchbot_meter_outdoor --dry-run      # preview, then drop --dry-run for real
+  ```
+  No API restart needed (it reads the DB live; the hot-wins dedup is already deployed). Next 02:00 UTC
+  compaction folds the corrected hot rows into parquet cleanly.
 
 ## Decision — confirm-PIN = SHA(master) ✅ (your idea, 2026-06-21)
 Accepted and actually elegant: set `confirm = SHA256("ha-confirm:" + master_passphrase)`. SHA is
