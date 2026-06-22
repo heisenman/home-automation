@@ -221,7 +221,10 @@ async function refresh(){
   if(CURRENT)return;  // pause grid refresh while in detail view
   if(document.getElementById('graphs').classList.contains('show'))return;  // …or graphs view
   try{
-    const devs=await(await fetch('/devices')).json();
+    // hide unregistered/stray devices (e.g. a neighbour's SwitchBot, or a rotating-MAC unit) — they
+    // publish to the /raw discovery topic, not the grid. Registered devices have a real area/device_id.
+    const devs=(await(await fetch('/devices')).json())
+                 .filter(d=>d.area!=='unknown'&&!String(d.device_id).startsWith('unknown_'));
     DEVICES=devs;
     devs.sort((a,b)=>a.area.localeCompare(b.area));
     const lasts=await Promise.all(devs.map(async d=>{
@@ -288,37 +291,49 @@ function renderDetail(){
   loadCharts();
 }
 
+// metric → (unit, color); convert temps to the °F scale, leave others raw. Charts render in this order
+// for whichever metrics the device actually has (so an Aranet shows radon/pressure, not just temp/hum).
+const MUNIT={temperature_c:'°F',humidity_pct:'%',pressure_hpa:'hPa',radon_bqm3:'Bq/m³',co2_ppm:'ppm',dew_point_c:'°F'};
+const MCOL={temperature_c:'#fb923c',humidity_pct:'#38bdf8',pressure_hpa:'#a78bfa',radon_bqm3:'#4ade80',co2_ppm:'#facc15',dew_point_c:'#f472b6'};
+const MORDER=['radon_bqm3','temperature_c','humidity_pct','pressure_hpa','co2_ppm','dew_point_c'];
+const mConv=(m,v)=>(m==='temperature_c'||m==='dew_point_c')?fToScale(v):v;
+const mLabel=m=>titleCase(MLABEL[m]||m.replace(/_/g,' '));
+
 async function loadCharts(){
   const id=CURRENT, span=RANGE;
   const box=document.getElementById('charts');
   const end=new Date(), start=new Date(Date.now()-span*1000);
   try{
     if(span<=RAW_MAX_S){
-      // Full-resolution raw points (hot SQLite + Parquet)
+      // Full-resolution raw points (hot SQLite + Parquet) — all of the device's metrics
       const url=`/devices/${id}/readings?start=${start.toISOString().slice(0,19)}Z`
                +`&end=${end.toISOString().slice(0,19)}Z&limit=50000`;
       const data=await(await fetch(url)).json();
       if(CURRENT!==id)return;
       const rs=data.readings||[];
-      const tS=rs.filter(r=>r.metric==='temperature_c').map(r=>({t:+new Date(r.ts),v:fToScale(r.value)}));
-      const hS=rs.filter(r=>r.metric==='humidity_pct').map(r=>({t:+new Date(r.ts),v:r.value}));
-      const note=`${tS.length} raw pts · ${fmtSpan(span)}`+(data.truncated?' · capped 50k':'');
+      const present=new Set(rs.map(r=>r.metric).filter(m=>MUNIT[m]));
+      const mets=MORDER.filter(m=>present.has(m));
       box.innerHTML='';
-      box.appendChild(chartCard(`Temperature (°F) — ${note}`,[{pts:tS,color:'#fb923c',dots:true}],'°F'));
-      box.appendChild(chartCard(`Humidity (%) — ${note}`,[{pts:hS,color:'#38bdf8',dots:true}],'%'));
-      if(!tS.length&&!hS.length)box.innerHTML='<div class="loading">No data in this range.</div>';
+      for(const m of mets){
+        const pts=rs.filter(r=>r.metric===m).map(r=>({t:+new Date(r.ts),v:mConv(m,r.value)}));
+        const note=`${pts.length} raw pts · ${fmtSpan(span)}`+(data.truncated?' · capped 50k':'');
+        box.appendChild(chartCard(`${mLabel(m)} (${MUNIT[m]}) — ${note}`,[{pts,color:MCOL[m]||'#fb923c',dots:true}],MUNIT[m]));
+      }
+      if(!mets.length)box.innerHTML='<div class="loading">No data in this range.</div>';
     }else{
-      // Daily summary (min/avg/max band) for long spans
+      // Daily summary (min/avg/max band) for long spans — all of the device's metrics
       const days=Math.ceil(span/86400);
       const data=await(await fetch(`/devices/${id}/summary?days=${days}`)).json();
       if(CURRENT!==id)return;
       const sm=(data.summary||[]).filter(s=>!s.live);
-      const tD=sm.filter(s=>s.metric==='temperature_c').map(s=>({t:+new Date(s.date),lo:fToScale(s.min_val),hi:fToScale(s.max_val),v:fToScale(s.mean_val)}));
-      const hD=sm.filter(s=>s.metric==='humidity_pct').map(s=>({t:+new Date(s.date),lo:s.min_val,hi:s.max_val,v:s.mean_val}));
+      const present=new Set(sm.map(s=>s.metric).filter(m=>MUNIT[m]));
+      const mets=MORDER.filter(m=>present.has(m));
       box.innerHTML='';
-      box.appendChild(chartCard(`Temperature (°F) — daily min/avg/max · ${days}d`,[{pts:tD,color:'#fb923c',band:true}],'°F'));
-      box.appendChild(chartCard(`Humidity (%) — daily min/avg/max · ${days}d`,[{pts:hD,color:'#38bdf8',band:true}],'%'));
-      if(!tD.length&&!hD.length)box.innerHTML='<div class="loading">No summary data yet for this range.</div>';
+      for(const m of mets){
+        const pts=sm.filter(s=>s.metric===m).map(s=>({t:+new Date(s.date),lo:mConv(m,s.min_val),hi:mConv(m,s.max_val),v:mConv(m,s.mean_val)}));
+        box.appendChild(chartCard(`${mLabel(m)} (${MUNIT[m]}) — daily min/avg/max · ${days}d`,[{pts,color:MCOL[m]||'#fb923c',band:true}],MUNIT[m]));
+      }
+      if(!mets.length)box.innerHTML='<div class="loading">No summary data yet for this range.</div>';
     }
   }catch(e){
     if(CURRENT===id)box.innerHTML='<div class="loading">Error loading history: '+e.message+'</div>';

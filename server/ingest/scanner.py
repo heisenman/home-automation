@@ -173,9 +173,13 @@ class Scanner:
         svc = adv.service_data or {}
         rssi = adv.rssi if adv.rssi is not None else 0
 
+        # Only REGISTERED devices publish to the canonical /state topic (→ DB/dashboard). A decoded
+        # device that isn't in the registry — e.g. a neighbour's SwitchBot, or one using a rotating BLE
+        # address — goes to the /raw discovery topic instead, so it's inspectable for onboarding without
+        # spawning junk "unknown_<mac>" tiles (a rotating MAC would otherwise create one per rotation).
         if switchbot.is_switchbot(mfr, svc):
             result = switchbot.decode(mac, mfr, svc, rssi)
-            if result:
+            if result and mac in self._registry:
                 self._publish(mac, result["device_type"], result["metrics"], rssi, "ble-adv")
             else:
                 self._publish_raw(mac, "switchbot", mfr, svc, rssi)
@@ -184,7 +188,7 @@ class Scanner:
             # Aranet broadcasts in manufacturer data 0x0702 via BLE5 extended advertising (received by
             # BlueZ on a BT5 adapter). should_publish() rate-limits the ~1 Hz adv to real changes.
             result = aranet.decode_manufacturer(mac, mfr, rssi)
-            if result:
+            if result and mac in self._registry:
                 self._publish(mac, result["device_type"], result["metrics"], rssi, "ble-adv")
             else:
                 self._publish_raw(mac, "aranet", mfr, svc, rssi)
