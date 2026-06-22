@@ -16,6 +16,17 @@
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
 #include "cJSON.h"
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+
+// Node-side lockdown (least privilege): arbitrary GATT writes are an ACTUATION primitive — a validly-
+// signed command could otherwise drive any BLE device's characteristics. A telemetry-only relay never
+// needs them (sub/read/collect suffice; the CCCD write in GE_SUB is a fixed notify-enable, not arbitrary
+// actuation). So writes are OFF by default; a per-actuator firmware build sets HA_ALLOW_GATT_WRITE=1.
+#ifndef HA_ALLOW_GATT_WRITE
+#define HA_ALLOW_GATT_WRITE 0
+#endif
 
 static const char *TAG = "gatt_exec";
 
@@ -211,6 +222,11 @@ static void run_step(const ge_step_t *st, int idx) {
     }
     case GE_WRITE:
     case GE_WRITESEQ: {
+#if !HA_ALLOW_GATT_WRITE
+        // Telemetry-only node: refuse actuation writes even when the command is validly signed.
+        step_err("write disabled: telemetry-only node (HA_ALLOW_GATT_WRITE=0)");
+        break;
+#else
         uint16_t h = handle_for(&st->chr.u);
         if (!h) { step_err("write: unknown char"); break; }
         int rc = 0;
@@ -221,6 +237,7 @@ static void run_step(const ge_step_t *st, int idx) {
         char p[112]; snprintf(p, sizeof(p), "{\"t\":\"step\",\"i\":%d,\"op\":\"write\",\"h\":%u,\"n\":%d,\"rc\":%d}",
                               idx, h, st->nseq, rc); reply(p);
         break;
+#endif
     }
     case GE_READ: {
         uint16_t h = handle_for(&st->chr.u);

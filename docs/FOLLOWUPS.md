@@ -1,7 +1,24 @@
 # Follow-ups & clarifications for Hugh
 
-## 🟡 CONTROL PLANE GO-LIVE — code DONE, awaiting .245 deploy (2026-06-21)
-Authenticated control API wired + tested (68 tests green); built in the **server folder**
+## 🟡 NODE-SIDE RAW-GATT/OTA LOCKDOWN — firmware coded, needs build+flash (2026-06-21)
+Two cheap least-privilege guards (defense-in-depth on top of the existing HMAC signature). Code in
+`edge/esp32c6/main/`, `HA_FW_VERSION` → `v4-lockdown`. **Not yet built/flashed** (ESP-IDF + C6 live on
+.112 — build there after `git pull`):
+- **GATT writes OFF by default** (`gatt_exec.c`, `HA_ALLOW_GATT_WRITE=0`): `write`/`writeseq` steps refuse
+  ("telemetry-only node"); `sub`/`read`/`collect` unaffected. Removes the arbitrary-BLE-write authority a
+  validly-signed cmd could otherwise wield. An actuator firmware sets `HA_ALLOW_GATT_WRITE=1`.
+- **OTA host pin** (`ha_ota.c`, `HA_OTA_HOST="192.168.0.245"`): rejects OTA URLs whose host ≠ the dictator.
+  Image-hash gate still applies on top. **Decision (Hugh): pin to .245 now; the G11 supersedes it once
+  configured** (then change the define + serve from G11).
+- **⚠️ Post-v4 OTA workflow change:** once v4 runs, OTAs must be SERVED FROM .245. Build on .112 → `scp`
+  the `.bin` to .245 → run `edge_ota.py --serve-ip 192.168.0.245` there. (The v4 flash itself works from
+  .112 — the current v3 node has no pin yet.) Dev alt: build with `-DHA_OTA_HOST=\"192.168.0.112\"`.
+- Still-open cheap item (deferred): per-node nonce/counter to close the 60 s ts replay window on authority
+  ops. Heavy items (Secure Boot v2 + flash-enc + anti-rollback eFuse) → G11 provisioning phase.
+
+## ✅ CONTROL PLANE GO-LIVE — DEPLOYED & VERIFIED on .245 (2026-06-21)
+Live: `dashboard=200`, `no-bearer=401`, `bearer+unknown-device=404` (cryptography installed; control
+router mounted). Authenticated control API wired + tested (68 tests green); built in the **server folder**
 (`/home/visko/Desktop/Profile/home_automation` = the CIFS-mounted `.245:~/home_automation`, per your
 "new work → server folder" instruction). What's live in code:
 - `/devices/{id}/command` mounts into the live API **only when the master passphrase is present** (else

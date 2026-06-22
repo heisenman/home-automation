@@ -12,9 +12,31 @@
 #include "mbedtls/sha256.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#if __has_include("secrets.h")
+#include "secrets.h"
+#endif
+
+// Node-side lockdown: pin OTA downloads to the dictator's host so a (validly-signed) directive cannot
+// point the node at an arbitrary image server. Default = the dictator; override in secrets.h for a dev
+// box that serves images itself, or set "" to disable the pin (logged). The image-hash gate still
+// applies on top; this just bounds WHERE images may come from.
+#ifndef HA_OTA_HOST
+#define HA_OTA_HOST "192.168.0.245"
+#endif
 
 static const char *TAG = "ha_ota";
 static volatile bool s_busy;
+
+// Compare the host in "scheme://host[:port][/path]" against the pinned HA_OTA_HOST.
+static bool ota_host_pinned_ok(const char *url) {
+    if (!HA_OTA_HOST[0]) { ha_mqtt_log("OTA host pin DISABLED (HA_OTA_HOST empty)"); return true; }
+    const char *p = strstr(url, "://");
+    p = p ? p + 3 : url;
+    size_t n = strcspn(p, ":/");                  // host = up to ':' (port) or '/' (path)
+    bool ok = (n == strlen(HA_OTA_HOST)) && (strncmp(p, HA_OTA_HOST, n) == 0);
+    if (!ok) ha_mqtt_log("OTA REJECTED: host not pinned (allowed: %s)", HA_OTA_HOST);
+    return ok;
+}
 
 bool ha_ota_busy(void) { return s_busy; }
 
@@ -106,6 +128,7 @@ fail_noh:
 bool ha_ota_start(const char *url, const char *expected_sha256) {
     if (s_busy) { ESP_LOGW(TAG, "OTA already running"); return false; }
     if (!url || !url[0]) return false;
+    if (!ota_host_pinned_ok(url)) return false;   // node-side lockdown: only the pinned host may serve images
     snprintf(s_url, sizeof(s_url), "%s", url);
     snprintf(s_sha256, sizeof(s_sha256), "%s", expected_sha256 ? expected_sha256 : "");
     s_busy = true;
