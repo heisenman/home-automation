@@ -1,5 +1,17 @@
 # Follow-ups & clarifications for Hugh
 
+## ✅ BROKER AUTH/ACL CUTOVER — COMPLETE (2026-06-21)
+Broker flipped from anonymous to authenticated + topic-ACL'd on `.245`, live and verified. Identities:
+**dictator** (all server services — writer/scanner/edge-mapper all authenticated + connected) and
+**c6-bench** (the edge node — reconnected, `online ota_1 v3-otahash`). Anonymous pubs now refused;
+ACL enforced. Code prerequisite (`server/util/mqtt_creds.py` wired into every client + `EnvironmentFile`
+on the units) shipped in `db2db25`. Two gotchas hit + documented in `provisioning/broker-auth-cutover.md`:
+(1) `mosquitto_passwd -c` writes the passwd file `root:root 0600` → broker (runs as `mosquitto`) can't
+read it → rejects everyone even with correct creds; fix `chown mosquitto:root` + `chmod 0640`. (2) the
+`instance/mqtt.env` `CHANGE_ME` placeholder connects fine on the anon broker (false positive) then fails
+the instant auth flips — set the real pass before flipping. **Next gate for control go-live: API auth +
+mount the control router (issuer sources node secret from the LUT; confirm = SHA(master)).**
+
 ## ✅ Attic "duplicate data" — FULLY RESOLVED (2026-06-21)
 API hot-wins dedup deployed (you ran it) + deeper remediation run (`fix_meter_reimport.py`): backed up,
 purged **438,068** tangled attic `csv-import` rows from parquet (~2.4× overlap), re-imported the clean
@@ -70,14 +82,9 @@ dictator / failover / edge nodes / endpoints.
   Needs the chunked `esp_https_ota` path (hash-before-commit). `edge_ota.py` already sends the signed
   sha256; only the firmware check is missing. Best done as the next supervised flash. (Endgame per
   ADR-0011: firmware via cable-from-G11; OTA = break-glass.)
-- **Broker auth/ACL cutover** (`provisioning/broker-auth-cutover.md`) — **CODE PREREQUISITE DONE
-  (2026-06-21):** every server MQTT client (scanner/writer/edge-mapper/edge-history/issuer) now reads
-  `$HA_MQTT_USER`/`$HA_MQTT_PASS` via `server/util/mqtt_creds.py` (latent/anonymous when unset);
-  ha-{scanner,writer,edge-mapper}.service carry `EnvironmentFile=-instance/mqtt.env`; template
-  `server/config/mqtt.env.example`; +4 tests (61 total green). **Remaining = SUPERVISED on .245:**
-  `mosquitto_passwd` dictator + c6-bench(=the latent secrets.h pass), `cp server/config/acl
-  /etc/mosquitto/acl`, drop `instance/mqtt.env` (dictator pass, 0600) + restart ha-* services, then
-  flip `mosquitto-auth.conf` + reload. Each step reversible until the flip.
+- **Broker auth/ACL cutover** — ✅ **DONE & verified 2026-06-21** (see resolved section at top). Broker
+  is authenticated + ACL'd; dictator + c6-bench live. New nodes: enroll → set their broker pass with
+  `mosquitto_passwd -b /etc/mosquitto/passwd <node> '<secrets.h pass>'` + add an ACL stanza.
 - **Control API** goes live only AFTER broker auth + API auth (else unauthenticated control).
 - **Confirm-PIN store + admin API auth** (decision #6 above).
 
