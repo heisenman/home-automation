@@ -660,6 +660,11 @@ def _deep_query(
     rows: list[dict] = []
 
     # ── Hot tier (today's live data) via plain sqlite3 — no DuckDB extension ──
+    # hot_keys lets the hot tier WIN on any (ts, metric) collision with parquet. Re-imports (e.g. a
+    # timezone-corrected CSV) land in hot for already-compacted dates; without this the API returned
+    # both the stale parquet row AND the corrected hot row at the same timestamp → a duplicate
+    # "band" on the graph. Hot = most-recent write = authoritative.
+    hot_keys: set = set()
     if DB_PATH.exists():
         conn = sqlite3.connect(str(DB_PATH))
         try:
@@ -668,7 +673,10 @@ def _deep_query(
             if metric:
                 q += " AND metric=?"
                 params.append(metric)
-            rows.extend(dict(zip(_COLS, r)) for r in conn.execute(q, params).fetchall())
+            for r in conn.execute(q, params).fetchall():
+                d = dict(zip(_COLS, r))
+                rows.append(d)
+                hot_keys.add((d["ts"], d["metric"]))
         finally:
             conn.close()
 
@@ -687,7 +695,11 @@ def _deep_query(
             if metric:
                 q += " AND metric=?"
                 params.append(metric)
-            rows.extend(dict(zip(_COLS, r)) for r in duck.execute(q, params).fetchall())
+            for r in duck.execute(q, params).fetchall():
+                d = dict(zip(_COLS, r))
+                if (d["ts"], d["metric"]) in hot_keys:
+                    continue                       # hot wins — drop the stale parquet duplicate
+                rows.append(d)
             duck.close()
         except Exception as exc:
             log.error("DuckDB parquet query failed: %s", exc)
