@@ -87,8 +87,9 @@ dictator / failover / edge nodes / endpoints.
   `.245` dongle couldn't reach it). Best full solution = a **Pi-class node** near the crawlspace (does
   BOTH live relay AND history pull, both Python). A C6 with ext-adv firmware could do live relay only.
   For now I can run the relay from `.112` on demand.
-  - **History pull**: `aranet4` lib does it over GATT (`get_all_records`) — no RE. I can build
-    `tools/aranet_history.py` (pull-all + idempotent ingest); needs a Python BLE central in range.
+  - **History pull DONE** (`tools/aranet_history.py`): 30 days / 4320 records backfilled from the desk
+    via the `aranet4` lib (GATT), idempotent. `aranet_radon` now on the dashboard. Re-run anytime in
+    range to top up. ONGOING live data needs the relay running somewhere in range (placement decision).
   - **Deploy note:** `.245`'s registry also needs the real Aranet MAC if a scanner runs there.
 - Retire `.112` duplicate services (`sudo systemctl disable --now ha-api ha-writer mosquitto`) — your sudo.
 - G11 provisioning bring-up (arrives ~2026-06-23) — your hardware step + on-device LLM.
