@@ -11,6 +11,8 @@ Group=visko
 WorkingDirectory=/home/visko/home_automation
 Environment=HA_BROKER=localhost
 Environment=HA_BROKER_PORT=1883
+# Broker auth cutover: dictator MQTT creds (gitignored, optional via '-'; latent on anon broker)
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
 ExecStart=/home/visko/home_automation/venv/bin/python3 \
     -m server.ingest.edge_mapper \
     --registry instance/devices.yaml \

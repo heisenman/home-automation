@@ -31,6 +31,7 @@ sys.path.insert(0, str(_REPO / "tools"))
 import switchbot_history as sbh   # noqa: E402
 
 from server.ingest.edge_mapper import load_registry, _utc_now  # noqa: E402
+from server.util.mqtt_creds import apply_credentials  # noqa: E402
 
 log = logging.getLogger("ha.edge_history")
 
@@ -137,6 +138,7 @@ def main() -> None:
     registry = load_registry(a.registry)
     log.info("registry loaded: %d devices; db=%s", len(registry), a.db)
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    apply_credentials(client)
     ing = HistoryIngest(registry, a.db)
     client.on_connect = ing.on_connect
     client.on_message = ing.on_message

@@ -87,7 +87,9 @@ class MqttTransport:
             if a.get("id") == cmd["id"]:
                 result.update(a); got.set()
 
+        from ..util.mqtt_creds import apply_credentials  # lazy, mirrors the paho import
         c = self._mqtt.Client(self._mqtt.CallbackAPIVersion.VERSION2)
+        apply_credentials(c)
         c.on_message = on_msg
         c.connect(self.broker, self.port, 30)
         c.loop_start()

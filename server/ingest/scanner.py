@@ -29,6 +29,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root (run as a script)
+from server.util.mqtt_creds import apply_credentials  # noqa: E402
+
 import paho.mqtt.client as mqtt
 import yaml
 from bleak import BleakScanner
@@ -95,6 +98,7 @@ def load_registry(path: Path) -> dict[str, dict]:
 
 def _build_mqtt_client() -> mqtt.Client:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    apply_credentials(client)
     client.on_connect = _on_connect
     client.on_disconnect = _on_disconnect
     return client

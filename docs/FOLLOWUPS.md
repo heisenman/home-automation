@@ -70,8 +70,14 @@ dictator / failover / edge nodes / endpoints.
   Needs the chunked `esp_https_ota` path (hash-before-commit). `edge_ota.py` already sends the signed
   sha256; only the firmware check is missing. Best done as the next supervised flash. (Endgame per
   ADR-0011: firmware via cable-from-G11; OTA = break-glass.)
-- **Broker auth/ACL cutover** (`provisioning/broker-auth-cutover.md`) — now just: create passwd
-  (dictator + c6-bench=the latent pass in secrets.h), give services dictator creds, flip. Supervised.
+- **Broker auth/ACL cutover** (`provisioning/broker-auth-cutover.md`) — **CODE PREREQUISITE DONE
+  (2026-06-21):** every server MQTT client (scanner/writer/edge-mapper/edge-history/issuer) now reads
+  `$HA_MQTT_USER`/`$HA_MQTT_PASS` via `server/util/mqtt_creds.py` (latent/anonymous when unset);
+  ha-{scanner,writer,edge-mapper}.service carry `EnvironmentFile=-instance/mqtt.env`; template
+  `server/config/mqtt.env.example`; +4 tests (61 total green). **Remaining = SUPERVISED on .245:**
+  `mosquitto_passwd` dictator + c6-bench(=the latent secrets.h pass), `cp server/config/acl
+  /etc/mosquitto/acl`, drop `instance/mqtt.env` (dictator pass, 0600) + restart ha-* services, then
+  flip `mosquitto-auth.conf` + reload. Each step reversible until the flip.
 - **Control API** goes live only AFTER broker auth + API auth (else unauthenticated control).
 - **Confirm-PIN store + admin API auth** (decision #6 above).
 

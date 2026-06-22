@@ -32,6 +32,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root (run as a script)
+from server.util.mqtt_creds import apply_credentials  # noqa: E402
+
 import paho.mqtt.client as mqtt
 import yaml
 
@@ -133,6 +136,7 @@ def main() -> None:
     log.info("registry loaded: %d known devices", len(registry))
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    apply_credentials(client)
     mapper = EdgeMapper(registry, client)
     client.on_connect = mapper.on_connect
     client.on_message = mapper.on_message

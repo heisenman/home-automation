@@ -24,6 +24,9 @@ import sys
 import time
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root (run as a script)
+from server.util.mqtt_creds import apply_credentials  # noqa: E402
+
 import paho.mqtt.client as mqtt
 
 
@@ -152,6 +155,7 @@ class Writer:
     def __init__(self, db_path: Path):
         self._conn = _open_db(db_path)
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        apply_credentials(self._client)
         self._client.on_connect = self._on_connect
         self._client.on_message = self._on_message
         self._client.on_disconnect = self._on_disconnect

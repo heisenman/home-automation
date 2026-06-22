@@ -13,6 +13,8 @@ Environment=HA_BROKER=localhost
 Environment=HA_BROKER_PORT=1883
 Environment=HA_REPUBLISH_S=60
 Environment=HA_SCAN_MODE=passive
+# Broker auth cutover: dictator MQTT creds (gitignored, optional via '-'; latent on anon broker)
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
 ExecStart=/home/visko/home_automation/venv/bin/python3 \
     server/ingest/scanner.py \
     --registry instance/devices.yaml \
