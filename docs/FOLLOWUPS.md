@@ -1,5 +1,34 @@
 # Follow-ups & clarifications for Hugh
 
+## 🔴 ACTION NEEDED FROM YOU (2026-06-21, late)
+1. **Deploy the attic duplicate-data fix** — committed + pushed (`005d031`) but the live deploy to
+   `.245` was blocked by the safety classifier (needs your explicit OK). Run on/against `.245`:
+   ```
+   git -C ~/home_automation pull && sudo systemctl restart ha-api
+   ```
+   (or tell me "deploy it" and I'll do it). After restart, the attic 7d graph band disappears.
+
+## Attic "duplicate data / one set wrong" — ROOT-CAUSED + fixed (deploy pending)
+- **Cause:** a timezone-corrected CSV **re-import** landed in `hot.db` for dates already compacted to
+  **parquet**, so the readings API returned BOTH rows at each timestamp → the duplicate band.
+- **Which was wrong:** parquet (the pre-fix import) held **time-shifted** values; hot (the corrected
+  re-import) matches the **live ble-adv sensor to ~0.2 °C** (verified 6/21). So hot is correct.
+- **Fix (`005d031`):** the API now dedups hot/parquet by `(ts,metric)` — **hot wins**. Stops the band
+  wherever the corrected re-import overlaps (the last ~7d).
+- **⚠️ Deeper remediation still needed:** dates present ONLY in parquet (before the re-import range,
+  ~Apr20→6/14) still hold the **time-shifted** values — they'll look single-line but be ~hours off on
+  30d/90d views. Proper fix: purge the wrong attic rows from parquet + one clean full re-import (you may
+  need to re-export a fresh FULL CSV from the app). Let's do this together — it's a careful data op.
+
+## Decision — confirm-PIN = SHA(master) ✅ (your idea, 2026-06-21)
+Accepted and actually elegant: set `confirm = SHA256("ha-confirm:" + master_passphrase)`. SHA is
+one-way, so the **hot** confirm value (typed/transmitted often) never reveals the **cold** master
+(which encrypts the secrets LUT) — that resolves my blast-radius concern while keeping ONE secret to
+manage. Master passphrase = `CHANGE_ME_master_passphrase` (stored gitignored / via env, never committed). TODO: wire the
+SHA-derived confirm into the verifier + bake per-device secrets via the enrollment tool.
+
+
+
 Running list maintained during autonomous work sessions. Newest section on top. Guiding philosophies
 (stated 2026-06-21): **security over the air** + **flexible modular infrastructure** between
 dictator / failover / edge nodes / endpoints.
