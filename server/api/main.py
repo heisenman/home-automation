@@ -98,36 +98,23 @@ def _mount_control(app: FastAPI) -> None:
                      "instance/.master_pass to enable /devices command API)")
             return
         import yaml
-        from server.control.issuer import CommandIssuer, MqttTransport, RoutingTransport
-        from server.control.policy import PolicyStore
-        from server.control.registry import (check_secrets_present, load_control_registry,
-                                             load_secrets, secrets_from_lut)
-        from server.control.midea_driver import MideaTransport, load_drivers_from_env
+        from server.control.bootstrap import build_issuer
+        from server.control.registry import check_secrets_present
         from server.api.control import make_router
 
-        registry = load_control_registry(CONTROL_REGISTRY)
-        lut = load_lut(NODE_SECRETS_LUT, master)
-        # secrets: per-NODE cmd_secret from the encrypted LUT, PLUS per-device secrets for local-driver
-        # appliances (the Midea dehumidifier's node isn't an enrolled firmware node).
-        secrets = {**secrets_from_lut(registry, lut), **load_secrets(CONTROL_SECRETS)}
-        policy_data = yaml.safe_load(CONTROL_POLICY.read_text()) if CONTROL_POLICY.exists() else None
-        policy = PolicyStore(policy_data or {"version": 1})
         broker = os.environ.get("HA_BROKER", "localhost")
         port = int(os.environ.get("HA_BROKER_PORT", "1883"))
-        # transport: MQTT to BLE nodes (default) + per-device overrides for LAN appliances (Midea).
-        default_tr = MqttTransport(broker=broker, port=port)
-        midea_drivers = load_drivers_from_env(_parse_env_file(MIDEA_DEVICE_ENV), "dehumidifier_office")
-        if midea_drivers:
-            mt = MideaTransport(midea_drivers)
-            transport = RoutingTransport(default_tr, {d: mt for d in midea_drivers})
-        else:
-            transport = default_tr
-        issuer = CommandIssuer(registry=registry, secrets=secrets, policy=policy, transport=transport)
+        # shared construction (server/control/bootstrap) — one source of truth for the issuer wiring,
+        # used identically by the controller, so the security plumbing can't drift between them.
+        issuer, registry, _drivers = build_issuer(
+            master, control_registry=CONTROL_REGISTRY, node_secrets_lut=NODE_SECRETS_LUT,
+            control_policy=CONTROL_POLICY, control_secrets=CONTROL_SECRETS,
+            midea_device_env=MIDEA_DEVICE_ENV, broker=broker, port=port)
         app.include_router(make_router(issuer, make_confirm_verifier(master),
                                        make_api_token_verifier(master)))
-        missing = check_secrets_present(registry, secrets)
+        missing = check_secrets_present(registry, issuer.secrets)
         log.info("control plane MOUNTED — %d device(s), %d controllable; broker %s:%s%s",
-                 len(registry), len(secrets), broker, port,
+                 len(registry), len(issuer.secrets), broker, port,
                  f"; NO secret for {missing}" if missing else "")
     except Exception:
         log.exception("control plane mount FAILED — read API stays up, control disabled")
