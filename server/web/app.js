@@ -1,8 +1,17 @@
 // Home Automation — web app (Preact + HTM, no build step). The vendored runtime IS the dependency;
 // this file is plain readable JS you can edit on the box and reload. Talks to the API/BFF we serve.
 import {
-  html, render, useState, useEffect, useRef, useCallback,
+  html, render, useState, useEffect, useRef, useCallback, useMemo, createContext, useContext,
 } from "/app/vendor/preact-htm.standalone.module.js";
+
+// ── units (°C/°F) ────────────────────────────────────────────────────────────
+// Temperatures are STORED in Celsius (SI). The UI converts for display only. Preference persisted.
+const UnitsCtx = createContext("F");
+const useTemp = () => useContext(UnitsCtx);
+const tempPref = () => localStorage.getItem("ha.tempUnit") || "F";
+const isTempMetric = (m) => m === "temperature_c";
+const convT = (c, unit) => (unit === "F" ? c * 9 / 5 + 32 : c);
+const tUnit = (unit) => (unit === "F" ? "°F" : "°C");
 
 // ── admin token ──────────────────────────────────────────────────────────────
 // The control endpoints want Authorization: Bearer SHA256("ha-api:"+master). We derive that hash in the
@@ -46,13 +55,64 @@ const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
 const steps = (a, b, step) => { const o = []; for (let v = a; v <= b; v += step) o.push(v); return o; };
 const isoNoMs = (d) => d.toISOString().replace(/\.\d+Z$/, "Z");
 
-// pull a metric's time-series for a device over the last `hoursBack` hours (bounded server-side).
-async function fetchReadings(deviceId, metric, hoursBack = 24) {
-  const end = new Date();
-  const start = new Date(end.getTime() - hoursBack * 3600 * 1000);
-  const q = `start=${isoNoMs(start)}&end=${isoNoMs(end)}&metric=${metric}&limit=400`;
+// pull a metric's time-series for a device over an explicit ISO window (bounded/downsampled server-side).
+async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 500) {
+  const q = `start=${startISO}&end=${endISO}&metric=${metric}&limit=${limit}`;
   const d = await getJSON(`/devices/${encodeURIComponent(deviceId)}/readings?${q}`);
   return (d.readings || []).map((r) => ({ t: Date.parse(r.ts), v: r.value })).filter((p) => !isNaN(p.t));
+}
+// convenience: last `hoursBack` hours.
+function fetchReadings(deviceId, metric, hoursBack = 24) {
+  const end = new Date();
+  const start = new Date(end.getTime() - hoursBack * 3600 * 1000);
+  return fetchReadingsRange(deviceId, metric, isoNoMs(start), isoNoMs(end), 400);
+}
+
+// distinct line colors for overlaying multiple sources on one chart
+const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
+
+// bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
+const BUILD = "v9 (2026-06-22)";
+
+// fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
+async function fetchTrace(tr, startISO, endISO) {
+  if (tr.kind === "weather") {
+    const q = `metric=${tr.metric}&start=${startISO}&end=${endISO}&location=${encodeURIComponent(tr.source)}`;
+    const d = await getJSON(`/weather/readings?${q}`);
+    return (d.readings || []).map((r) => ({ t: Date.parse(r.ts), v: r.value })).filter((p) => !isNaN(p.t));
+  }
+  return fetchReadingsRange(tr.source, tr.metric, startISO, endISO);
+}
+
+// the catalog of selectable traces = every sensor metric + every weather metric.
+function traceCatalog(sensors, weather) {
+  const out = [];
+  for (const s of (sensors || [])) {
+    for (const g of GRAPHABLE) {
+      if (s.metrics[g.key] != null) {
+        out.push({ key: `s:${s.device_id}:${g.key}`, kind: "sensor", source: s.device_id,
+                   metric: g.key, label: `${prettyName(s.device_id)} · ${g.label}`, unit: g.unit });
+      }
+    }
+  }
+  if (weather && weather.available) {
+    for (const loc of (weather.locations || [])) {
+      for (const m of (weather.metrics || [])) {
+        const g = GRAPHABLE.find((x) => x.key === m) || { label: m, unit: "" };
+        out.push({ key: `w:${loc}:${m}`, kind: "weather", source: loc, metric: m,
+                   label: `weather ${loc} · ${g.label}`, unit: g.unit });
+      }
+    }
+  }
+  return out;
+}
+
+// apply the temperature unit to a series for display (storage is always °C).
+function prepSeries(s, unit) {
+  if (isTempMetric(s.metric) && unit === "F") {
+    return { ...s, points: s.points.map((p) => ({ t: p.t, v: convT(p.v, "F") })), unit: "°F" };
+  }
+  return s;
 }
 
 // ── tiny SVG line chart (no dependency) ──────────────────────────────────────
@@ -78,6 +138,7 @@ function LineChart({ series, color = "#4aa3ff", unit = "" }) {
     </div>`;
 }
 
+// overlay several named series (same unit) on one chart + a legend — the multi-source grapher.
 // ── override controls ────────────────────────────────────────────────────────
 function OverrideControls({ id, override, isAdmin, onChange, onNeedAdmin }) {
   const [busy, setBusy] = useState(false);
@@ -158,9 +219,9 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
           ${opts.length === 0 && html`<option value="">(no humidity sensors)</option>`}
           ${opts.map((o) => html`<option value=${o.id}>${o.label}</option>`)}
         </select></div>
-      <div class="field"><label>Turn ON ≥ (%RH)</label>
+      <div class="field"><label>Turn ON at/above (%RH)</label>
         <input type="number" value=${onAbove} onInput=${(e) => setOnAbove(e.target.value)} /></div>
-      <div class="field"><label>Turn OFF < (%RH)</label>
+      <div class="field"><label>Turn OFF below (%RH)</label>
         <input type="number" value=${offBelow} onInput=${(e) => setOffBelow(e.target.value)} /></div>
       <div class="field"><label>Quiet window</label>
         <input type="text" placeholder="22:00-07:00 (optional)" value=${quiet}
@@ -288,6 +349,7 @@ const GRAPHABLE = [
 
 function SensorChip({ s }) {
   const m = s.metrics || {};
+  const unit = useTemp();
   const stale = s.age_s != null && s.age_s > 1800;             // 30m: meters report often
   const [open, setOpen] = useState(false);
   const [series, setSeries] = useState(null);                  // {metricKey: [{t,v}]}
@@ -312,7 +374,7 @@ function SensorChip({ s }) {
     <div class="sensor ${open ? "open" : ""}" onClick=${() => setOpen(!open)}>
       <div class="sensor-name">${prettyName(s.device_id)} <span class="chev">${open ? "▾" : "▸"}</span></div>
       <div class="sensor-vals">
-        ${m.temperature_c != null && html`<span class="sv"><b>${round1(m.temperature_c)}°</b>C</span>`}
+        ${m.temperature_c != null && html`<span class="sv"><b>${round1(convT(m.temperature_c, unit))}°</b>${unit}</span>`}
         ${m.humidity_pct != null && html`<span class="sv"><b>${round1(m.humidity_pct)}</b>%RH</span>`}
         ${m.co2_ppm != null && html`<span class="sv"><b>${Math.round(m.co2_ppm)}</b>ppm</span>`}
         ${m.radon_bqm3 != null && html`<span class="sv"><b>${Math.round(m.radon_bqm3)}</b>Bq</span>`}
@@ -327,11 +389,14 @@ function SensorChip({ s }) {
           <div class="charts-head">last 24h</div>
           ${err && html`<div class="err">${err}</div>`}
           ${series == null && !err && html`<div class="note">loading…</div>`}
-          ${series && GRAPHABLE.filter((g) => series[g.key]).map((g) => html`
+          ${series && GRAPHABLE.filter((g) => series[g.key]).map((g) => {
+            const conv = prepSeries({ metric: g.key, unit: g.unit, points: series[g.key] }, unit);
+            return html`
             <div class="chart-block" key=${g.key}>
               <div class="chart-label">${g.label}</div>
-              <${LineChart} series=${series[g.key]} color=${g.color} unit=${g.unit} />
-            </div>`)}
+              <${LineChart} series=${conv.points} color=${g.color} unit=${conv.unit} />
+            </div>`;
+          })}
         </div>`}
     </div>`;
 }
@@ -356,6 +421,138 @@ function Sensors({ sensors }) {
             ${byArea[a].map((s) => html`<${SensorChip} key=${s.device_id} s=${s} />`)}
           </div>
         </div>`)}
+    </div>`;
+}
+
+// ── graph builder (multiple panels, each with arbitrary traces; sensors + weather) ───────────
+const RANGES = [{ label: "6h", h: 6 }, { label: "24h", h: 24 }, { label: "7d", h: 168 }, { label: "30d", h: 720 }];
+const computeRange = (hours, custom) => (custom.start && custom.end)
+  ? { start: isoNoMs(new Date(custom.start)), end: isoNoMs(new Date(custom.end)) }
+  : { start: isoNoMs(new Date(Date.now() - hours * 3600 * 1000)), end: isoNoMs(new Date()) };
+
+// overlay traces on one chart. Same unit → shared scale (real values); mixed units → per-trace
+// normalized (trend comparison), each trace's real range shown in the legend. Temp converted to pref.
+function AdaptiveChart({ traces }) {
+  const unit = useTemp();
+  const series = traces.map((t) => prepSeries(t, unit)).filter((t) => t.points.length >= 2);
+  if (!series.length) return html`<div class="note">no data in range</div>`;
+  const W = 320, H = 150, pad = 8;
+  const allT = series.flatMap((t) => t.points.map((p) => p.t));
+  const tMin = Math.min(...allT), tMax = Math.max(...allT);
+  const x = (t) => pad + ((t - tMin) / (tMax - tMin || 1)) * (W - 2 * pad);
+  const units = [...new Set(series.map((t) => t.unit))];
+  const shared = units.length === 1;
+  let axis, yOf;
+  if (shared) {
+    const allV = series.flatMap((t) => t.points.map((p) => p.v));
+    let mn = Math.min(...allV), mx = Math.max(...allV); if (mn === mx) { mn -= 1; mx += 1; }
+    yOf = series.map(() => (v) => pad + (1 - (v - mn) / (mx - mn)) * (H - 2 * pad));
+    axis = `${round1(mn)}–${round1(mx)} ${units[0]}`;
+  } else {
+    yOf = series.map((t) => {
+      let mn = Math.min(...t.points.map((p) => p.v)), mx = Math.max(...t.points.map((p) => p.v));
+      if (mn === mx) { mn -= 1; mx += 1; }
+      t._mn = mn; t._mx = mx;
+      return (v) => pad + (1 - (v - mn) / (mx - mn)) * (H - 2 * pad);
+    });
+    axis = "normalized · mixed units (range per trace below)";
+  }
+  return html`
+    <svg viewBox="0 0 ${W} ${H}" class="chart" preserveAspectRatio="none">
+      ${series.map((t, i) => html`<path fill="none" stroke=${t.color} stroke-width="1.5"
+        d=${t.points.map((p, j) => `${j ? "L" : "M"}${x(p.t).toFixed(1)} ${yOf[i](p.v).toFixed(1)}`).join(" ")} />`)}
+    </svg>
+    <div class="chart-ax"><span>${axis}</span></div>
+    <div class="legend">
+      ${series.map((t) => html`<span class="leg"><i style=${`background:${t.color}`}></i>${t.label}${
+        shared ? "" : ` (${round1(t._mn)}–${round1(t._mx)}${t.unit})`}</span>`)}
+    </div>`;
+}
+
+// one graph panel: a user-chosen set of traces + their plot. Fetches when its traces or the range change.
+function Panel({ catalog, panel, range, onToggleTrace, onRemove }) {
+  const [series, setSeries] = useState(null);
+  const [loading, setLoading] = useState(false);
+  const [err, setErr] = useState("");
+  const catRef = useRef(catalog); catRef.current = catalog;
+  const keysStr = panel.keys.join(",");
+  useEffect(() => {
+    let alive = true;
+    if (!panel.keys.length) { setSeries([]); return; }
+    setLoading(true); setErr("");
+    (async () => {
+      try {
+        const out = []; let ci = 0;
+        for (const k of panel.keys) {
+          const tr = catRef.current.find((c) => c.key === k); if (!tr) continue;
+          const pts = await fetchTrace(tr, range.start, range.end);
+          out.push({ ...tr, color: PALETTE[ci++ % PALETTE.length], points: pts });
+        }
+        if (alive) setSeries(out);
+      } catch (e) { if (alive) setErr(String(e.message)); }
+      if (alive) setLoading(false);
+    })();
+    return () => { alive = false; };
+  }, [keysStr, range.start, range.end]);
+
+  const chosen = new Set(panel.keys);
+  return html`
+    <div class="panel">
+      <div class="panel-traces">
+        ${panel.keys.map((k) => {
+          const tr = catalog.find((c) => c.key === k);
+          return html`<span class="trace-chip" onClick=${() => onToggleTrace(k)}>${tr ? tr.label : k} ✕</span>`;
+        })}
+        <select class="trace-add" value=""
+          onChange=${(e) => { if (e.target.value) { onToggleTrace(e.target.value); e.target.value = ""; } }}>
+          <option value="">+ add trace…</option>
+          ${catalog.filter((c) => !chosen.has(c.key)).map((c) => html`<option value=${c.key}>${c.label}</option>`)}
+        </select>
+        <button class="btn sm ghost panel-x" onClick=${onRemove}>remove</button>
+      </div>
+      ${loading && html`<div class="note">loading…</div>`}
+      ${err && html`<div class="err">${err}</div>`}
+      ${series && !loading && (panel.keys.length === 0
+        ? html`<div class="note">add a trace to plot.</div>`
+        : html`<${AdaptiveChart} traces=${series} />`)}
+    </div>`;
+}
+
+function GraphBuilder({ sensors, weather }) {
+  const catalog = traceCatalog(sensors, weather);
+  const [panels, setPanels] = useState([{ id: 1, keys: [] }]);
+  const [hours, setHours] = useState(24);
+  const [custom, setCustom] = useState({ start: "", end: "" });
+  const [range, setRange] = useState(() => computeRange(24, { start: "", end: "" }));
+  const nextId = useRef(2);
+
+  const applyPreset = (h) => { setHours(h); setCustom({ start: "", end: "" }); setRange(computeRange(h, { start: "", end: "" })); };
+  const applyCustom = (c) => { setCustom(c); if (c.start && c.end) setRange(computeRange(null, c)); };
+  const refresh = () => setRange(computeRange(hours, custom));
+  const addPanel = () => setPanels((p) => [...p, { id: nextId.current++, keys: [] }]);
+  const removePanel = (id) => setPanels((p) => p.filter((x) => x.id !== id));
+  const toggleTrace = (id, key) => setPanels((p) => p.map((x) => x.id !== id ? x
+    : { ...x, keys: x.keys.includes(key) ? x.keys.filter((k) => k !== key) : [...x.keys, key] }));
+
+  if (!catalog.length) return null;
+  return html`
+    <div class="explore">
+      <h2 class="section">Graphs</h2>
+      <div class="range-sel">
+        ${RANGES.map((r) => html`<button class="btn sm ${!custom.start && hours === r.h ? "primary" : ""}"
+          onClick=${() => applyPreset(r.h)}>${r.label}</button>`)}
+        <span class="range-custom">
+          <input type="datetime-local" value=${custom.start}
+            onInput=${(e) => applyCustom({ ...custom, start: e.target.value })} />
+          <input type="datetime-local" value=${custom.end}
+            onInput=${(e) => applyCustom({ ...custom, end: e.target.value })} />
+        </span>
+        <button class="btn sm ghost" onClick=${refresh} title="refresh">↻</button>
+      </div>
+      ${panels.map((pn) => html`
+        <${Panel} key=${pn.id} catalog=${catalog} panel=${pn} range=${range}
+          onToggleTrace=${(k) => toggleTrace(pn.id, k)} onRemove=${() => removePanel(pn.id)} />`)}
+      <button class="btn sm" onClick=${addPanel}>+ Add graph</button>
     </div>`;
 }
 
@@ -401,9 +598,17 @@ function AdminModal({ onClose, onUnlock }) {
 function App() {
   const [devices, setDevices] = useState(null);
   const [sensors, setSensors] = useState(null);
+  const [weather, setWeather] = useState(null);
   const [status, setStatus] = useState("init");      // init | live | down
   const [isAdmin, setIsAdmin] = useState(!!getToken());
   const [showAdmin, setShowAdmin] = useState(false);
+  const [tempUnit, setTempUnit] = useState(tempPref());
+
+  // weather lane catalog (locations + metrics) — fetched once for the graph builder
+  useEffect(() => { getJSON("/weather/meta").then(setWeather).catch(() => {}); }, []);
+  const toggleUnit = () => setTempUnit((u) => {
+    const n = u === "F" ? "C" : "F"; localStorage.setItem("ha.tempUnit", n); return n;
+  });
 
   const refresh = useCallback(async () => {
     try {
@@ -428,11 +633,14 @@ function App() {
   const lock = () => { setToken(""); setIsAdmin(false); };
 
   return html`
+    <${UnitsCtx.Provider} value=${tempUnit}>
     <div class="wrap">
       <div class="topbar">
         <div class="dot ${status === "live" ? "live" : status === "down" ? "down" : ""}"></div>
         <h1>Home Automation</h1>
+        <span class="build">${BUILD}</span>
         <div class="spacer"></div>
+        <button class="btn sm ghost" onClick=${toggleUnit} title="temperature unit">°${tempUnit}</button>
         ${isAdmin
           ? html`<span class="admin-on" title="Admin unlocked">🔓 Admin</span>
                  <button class="btn sm ghost" onClick=${lock}>Lock</button>`
@@ -446,12 +654,14 @@ function App() {
           onChange=${refresh} onNeedAdmin=${() => setShowAdmin(true)} />`)}
 
       <${Sensors} sensors=${sensors} />
+      <${GraphBuilder} sensors=${sensors} weather=${weather} />
 
       ${status === "down" && html`<p class="note">⚠ Can't reach the server — showing last known state.</p>`}
 
       ${showAdmin && html`<${AdminModal} onClose=${() => setShowAdmin(false)}
         onUnlock=${() => setIsAdmin(true)} />`}
-    </div>`;
+    </div>
+    </${UnitsCtx.Provider}>`;
 }
 
 render(html`<${App} />`, document.getElementById("root"));

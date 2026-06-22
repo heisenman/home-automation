@@ -133,6 +133,17 @@ if WEB_DIR.exists():
     app.mount("/app", StaticFiles(directory=str(WEB_DIR), html=True), name="webapp")
 
 
+@app.middleware("http")
+async def _no_cache_shell(request, call_next):
+    # The app shell must always revalidate so a code push is never masked by a stale HTTP cache. The SW is
+    # network-first too; together a deploy is visible on the next load. API/data responses are untouched.
+    resp = await call_next(request)
+    p = request.url.path
+    if p == "/" or p.startswith("/app"):
+        resp.headers["Cache-Control"] = "no-cache, must-revalidate"
+    return resp
+
+
 # ── DB helpers ────────────────────────────────────────────────────────────────
 
 def _hot_conn() -> sqlite3.Connection:

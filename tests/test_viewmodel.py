@@ -141,6 +141,17 @@ def test_display_includes_traits_and_actuator():
         assert V.build_display(cc, hc, DEV, now + 5)["traits"] is None
 
 
+def test_sensor_list_hides_unknown_devices():
+    now, iso = _now_and_iso()
+    with tempfile.TemporaryDirectory() as tmp:
+        hc = _hot(tmp, iso, iso)
+        W._insert_readings(hc, {"schema": 1, "device_id": "unknown_f2b204065a61",
+                                "device_type": "switchbot_meter", "area": "unknown", "transport": "ble-adv",
+                                "ts": iso, "metrics": {"humidity_pct": 50.0}})
+        ids = [s["device_id"] for s in V.build_sensor_list(hc, now + 5)]
+        assert SRC in ids and not any(i.startswith("unknown") for i in ids)
+
+
 def test_sensor_list_empty_without_hot():
     now, _ = _now_and_iso()
     assert V.build_sensor_list(None, now) == []

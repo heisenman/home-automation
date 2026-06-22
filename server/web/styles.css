@@ -17,6 +17,7 @@ body {
 .topbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
 .topbar h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: .2px; }
 .topbar .spacer { flex: 1; }
+.build { font-size: 11px; color: var(--muted); opacity: .7; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--disabled); }
 .dot.live { background: var(--ok); box-shadow: 0 0 0 3px rgba(52,211,153,.18); }
 .dot.down { background: var(--bad); }
@@ -133,3 +134,35 @@ body {
 .chart { width: 100%; height: 110px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; display: block; }
 .chart-ax { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 3px; }
 .chart-ax b { color: var(--txt); }
+
+/* graph explorer */
+.explore { margin-top: 8px; }
+.chips-sel { display: flex; flex-wrap: wrap; gap: 6px; margin-bottom: 10px; }
+.chip-btn {
+  background: var(--panel); border: 1px solid var(--line); color: var(--muted);
+  border-radius: 999px; padding: 5px 11px; font-size: 13px; cursor: pointer; text-transform: capitalize;
+}
+.chip-btn.on { background: rgba(74,163,255,.16); border-color: var(--accent); color: var(--txt); }
+.range-sel { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 12px; }
+.range-custom { display: inline-flex; gap: 4px; }
+.range-custom input {
+  background: var(--bg); border: 1px solid var(--line); color: var(--txt);
+  border-radius: 8px; padding: 5px 7px; font-size: 12px; color-scheme: dark;
+}
+.legend { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 6px; }
+.leg { font-size: 12px; color: var(--muted); display: inline-flex; align-items: center; gap: 5px; text-transform: capitalize; }
+.leg i { width: 11px; height: 3px; border-radius: 2px; display: inline-block; }
+
+/* graph panels */
+.panel { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 12px; margin-bottom: 12px; }
+.panel-traces { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; margin-bottom: 10px; }
+.trace-chip {
+  background: rgba(74,163,255,.16); border: 1px solid var(--accent); color: var(--txt);
+  border-radius: 999px; padding: 4px 9px; font-size: 12px; cursor: pointer; text-transform: capitalize;
+}
+.trace-chip:hover { background: rgba(248,113,113,.18); border-color: var(--bad); }
+.trace-add {
+  background: var(--bg); border: 1px solid var(--line); color: var(--txt);
+  border-radius: 8px; padding: 5px 8px; font-size: 13px; cursor: pointer;
+}
+.panel-x { margin-left: auto; }

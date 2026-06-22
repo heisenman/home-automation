@@ -1,6 +1,6 @@
 // Service worker — caches the app SHELL only (so the UI loads offline), never the API.
 // Live device state always goes to the network; if the box is unreachable the app shows last-known.
-const CACHE = "ha-shell-v6";   // bump on any shell (html/js/css) change to evict the old cache
+const CACHE = "ha-shell-v9";   // bump on any shell (html/js/css) change to evict the old cache
 const SHELL = [
   "/app/", "/app/index.html", "/app/app.js", "/app/styles.css",
   "/app/vendor/preact-htm.standalone.module.js", "/app/manifest.webmanifest", "/app/icon.svg",
@@ -25,14 +25,16 @@ self.addEventListener("fetch", (e) => {
       url.pathname.startsWith("/devices") || url.pathname.startsWith("/health")) {
     return;
   }
-  // App shell: cache-first, fall back to network (and refresh the cache opportunistically).
+  // App shell: NETWORK-FIRST (always serve the freshest code when the box is reachable; fall back to the
+  // cached shell only when offline). Cache-first was wrong for an actively-developed app — it stranded
+  // users on stale JS until a cache-version bump + double reload. On a LAN the extra round-trip is nil.
   e.respondWith(
-    caches.match(e.request).then((hit) => hit || fetch(e.request).then((res) => {
+    fetch(e.request).then((res) => {
       if (res.ok && e.request.method === "GET") {
         const copy = res.clone();
         caches.open(CACHE).then((c) => c.put(e.request, copy)).catch(() => {});
       }
       return res;
-    })),
+    }).catch(() => caches.match(e.request)),
   );
 });
