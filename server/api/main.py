@@ -117,6 +117,7 @@ def _mount_control(app: FastAPI) -> None:
         app.include_router(make_router(issuer, make_confirm_verifier(master), api_authz))
         # the manual-override + control-state router (writes control.db, read by the controller each tick)
         app.include_router(make_override_router(api_authz, CONTROL_DB, device_ids=set(registry)))
+        app.state.control_registry = registry      # device_id -> DeviceCtl (traits for manual-control UI)
         missing = check_secrets_present(registry, issuer.secrets)
         log.info("control plane MOUNTED — %d device(s), %d controllable; broker %s:%s%s",
                  len(registry), len(issuer.secrets), broker, port,
@@ -629,6 +630,21 @@ def _control_conn() -> Optional[sqlite3.Connection]:
     return conn
 
 
+@app.get("/api/v1/sensors", include_in_schema=True)
+def sensor_list():
+    """All trusted sensors with latest values per metric (one call for the dashboard). Read-only."""
+    import time
+
+    from server.api.viewmodel import build_sensor_list
+    hc = _hot_conn() if DB_PATH.exists() else None
+    try:
+        sensors = build_sensor_list(hc, time.time())
+    finally:
+        if hc is not None:
+            hc.close()
+    return {"sensors": sensors}
+
+
 @app.get("/api/v1/displays", include_in_schema=True)
 def display_list():
     """All controllable devices as render-ready view-models (one call for the dashboard). Read-only."""
@@ -640,10 +656,11 @@ def display_list():
     if cc is None:
         return {"devices": []}
     hc = _hot_conn() if DB_PATH.exists() else None
+    reg = getattr(app.state, "control_registry", None)
     now = time.time()
     try:
         ids = sorted(store.all_policies(cc).keys())
-        out = [vm for did in ids if (vm := build_display(cc, hc, did, now)) is not None]
+        out = [vm for did in ids if (vm := build_display(cc, hc, did, now, registry=reg)) is not None]
     finally:
         cc.close()
         if hc is not None:
@@ -663,8 +680,9 @@ def display_viewmodel(device_id: str):
     if cc is None:
         raise HTTPException(status_code=503, detail="control state not available")
     hc = _hot_conn() if DB_PATH.exists() else None
+    reg = getattr(app.state, "control_registry", None)
     try:
-        vm = build_display(cc, hc, device_id, time.time())
+        vm = build_display(cc, hc, device_id, time.time(), registry=reg)
     finally:
         cc.close()
         if hc is not None:

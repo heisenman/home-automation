@@ -97,6 +97,15 @@ def test_policy_enable_toggle_and_schedule():
     assert pol["enabled"] is False and pol["schedule"][0]["when"] == "22:00-07:00"
 
 
+def test_policy_set_source_sensor():
+    c = _conn()
+    code, _ = C.handle_policy_update(c, DEV, {"source_sensor": "meter_pro_c_office"}, {DEV})
+    assert code == 200
+    assert store.get_policy(c, DEV)["source_sensor"] == "meter_pro_c_office"
+    # empty/blank source rejected (would strand the loop with no input)
+    assert C.handle_policy_update(c, DEV, {"source_sensor": ""}, {DEV})[0] == 400
+
+
 def test_policy_rejects_inverted_deadband():
     c = _conn()
     code, body = C.handle_policy_update(c, DEV, {"control": {"on_above": 40, "off_below": 44}}, {DEV})

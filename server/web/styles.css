@@ -74,6 +74,11 @@ body {
   flex: 1; background: var(--bg); border: 1px solid var(--line); color: var(--txt);
   border-radius: 8px; padding: 7px 9px; font-size: 14px;
 }
+.field select {
+  flex: 1; background: var(--bg); border: 1px solid var(--line); color: var(--txt);
+  border-radius: 8px; padding: 7px 9px; font-size: 14px; appearance: none; cursor: pointer;
+}
+.field select:focus { border-color: var(--accent); outline: none; }
 .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 .note { color: var(--muted); font-size: 12px; }
 .err { color: var(--bad); font-size: 13px; margin-top: 8px; }
@@ -94,3 +99,37 @@ body {
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
 .empty { color: var(--muted); text-align: center; padding: 40px 0; }
 .age-fresh { color: var(--ok); } .age-stale { color: var(--stale); }
+
+/* ── sections + sensors ──────────────────────────────────── */
+.section {
+  font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted);
+  margin: 22px 2px 10px; font-weight: 700;
+}
+.sensors-wrap { margin-top: 4px; }
+.area { margin-bottom: 14px; }
+.area-label { color: var(--accent); font-size: 13px; font-weight: 600; margin: 0 2px 6px; text-transform: capitalize; }
+.sensor-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+.sensor {
+  background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+}
+.sensor-name { font-weight: 600; font-size: 14px; text-transform: capitalize; margin-bottom: 6px; }
+.sensor-vals { display: flex; flex-wrap: wrap; gap: 10px; }
+.sv { font-size: 13px; color: var(--muted); }
+.sv b { color: var(--txt); font-size: 16px; font-weight: 650; }
+.sensor-meta { font-size: 12px; color: var(--muted); margin-top: 7px; }
+.sensor { cursor: pointer; transition: border-color .15s; }
+.sensor:hover { border-color: var(--accent); }
+.sensor.open { grid-column: 1 / -1; border-color: var(--accent); }
+.chev { color: var(--muted); font-size: 12px; }
+
+/* admin state */
+.admin-on { color: var(--ok); font-weight: 700; font-size: 13px; }
+
+/* charts */
+.charts { margin-top: 12px; cursor: default; }
+.charts-head { font-size: 11px; text-transform: uppercase; letter-spacing: .8px; color: var(--muted); margin-bottom: 6px; }
+.chart-block { margin-bottom: 12px; }
+.chart-label { font-size: 13px; color: var(--txt); margin-bottom: 2px; }
+.chart { width: 100%; height: 110px; background: var(--bg); border: 1px solid var(--line); border-radius: 8px; display: block; }
+.chart-ax { display: flex; justify-content: space-between; font-size: 11px; color: var(--muted); margin-top: 3px; }
+.chart-ax b { color: var(--txt); }

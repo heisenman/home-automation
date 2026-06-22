@@ -149,6 +149,10 @@ class Controller:
             metrics["humidity_pct"] = st["humidity"]           # ONBOARD = non-authoritative
         if "temp" in st:
             metrics["temperature_c"] = st["temp"]
+        if "target" in st:
+            metrics["target_humidity_pct"] = st["target"]      # device setpoint (telemetry, for the UI)
+        if "fan" in st:
+            metrics["fan_speed"] = st["fan"]                   # current fan level
         # stamp the publish time: the writer keys readings on (device_id, ts, metric), so without a
         # fresh ts every self-report collides on ts="" and INSERT OR IGNORE freezes onboard RH forever.
         ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())

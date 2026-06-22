@@ -32,8 +32,38 @@ def _latest(hot, device_id: str, metric: str, authoritative: int):
     return (r[0], r[1]) if r else None
 
 
-def build_display(control_conn, hot_conn, device_id: str, now: float) -> dict | None:
-    """Compose the display view-model for one controllable device. None if it has no control policy."""
+def build_sensor_list(hot_conn, now: float) -> list[dict]:
+    """All TRUSTED sensors with their latest value per metric, grouped per device (one query). Device
+    self-reports (authoritative=0, e.g. the dehumidifier's onboard RH) are excluded — they live in the
+    control view, not the sensor view. Sorted by area then device_id."""
+    if hot_conn is None:
+        return []
+    rows = hot_conn.execute(
+        """SELECT r.device_id, r.metric, r.value, r.ts, d.device_type, d.area
+             FROM readings r
+             JOIN (SELECT device_id, metric, MAX(ts) AS mts FROM readings
+                   WHERE authoritative=1 GROUP BY device_id, metric) m
+               ON r.device_id=m.device_id AND r.metric=m.metric AND r.ts=m.mts
+             LEFT JOIN device_last_seen d ON d.device_id=r.device_id
+            WHERE r.authoritative=1""").fetchall()
+    by_dev: dict[str, dict] = {}
+    for did, metric, value, ts, dtype, area in rows:
+        e = by_dev.setdefault(did, {"device_id": did, "device_type": dtype or "unknown",
+                                    "area": area or "unknown", "ts": ts, "metrics": {}})
+        e["metrics"][metric] = value
+        if ts and ts > e["ts"]:
+            e["ts"] = ts
+    out = list(by_dev.values())
+    for e in out:
+        e["age_s"] = _age_s(e["ts"], now)
+    out.sort(key=lambda e: (e["area"], e["device_id"]))
+    return out
+
+
+def build_display(control_conn, hot_conn, device_id: str, now: float, registry=None) -> dict | None:
+    """Compose the display view-model for one controllable device. None if it has no control policy.
+    `registry` (device_id -> DeviceCtl), when supplied, adds the device's command capabilities (traits)
+    so the UI can render manual controls."""
     from server.api.control import read_control_state
 
     snap = read_control_state(control_conn, device_id, now)
@@ -57,6 +87,23 @@ def build_display(control_conn, hot_conn, device_id: str, now: float) -> dict | 
         ov = _latest(hot_conn, device_id, "humidity_pct", 0)
         if ov:
             onboard = {"humidity_pct": ov[0], "ts": ov[1]}
+
+    # current actuator telemetry (device setpoint + fan), published non-authoritative by the controller
+    actuator = {}
+    if hot_conn is not None:
+        tv = _latest(hot_conn, device_id, "target_humidity_pct", 0)
+        fv = _latest(hot_conn, device_id, "fan_speed", 0)
+        if tv:
+            actuator["target_pct"] = tv[0]
+        if fv:
+            actuator["fan_speed"] = fv[0]
+
+    # command capabilities (traits + ranges) so the UI can render manual controls
+    traits = None
+    if registry is not None:
+        ctl = registry.get(device_id)
+        if ctl is not None:
+            traits = getattr(ctl, "traits_cfg", None)
 
     # running state: the latest tick logged res.running, which mirrors the live device status each tick
     last = snap["last_decision"]
@@ -85,6 +132,8 @@ def build_display(control_conn, hot_conn, device_id: str, now: float) -> dict | 
         },
         "sensor": sensor,
         "onboard": onboard,
+        "actuator": actuator,
+        "traits": traits,
         "override": snap["override"],
         "last_decision": ({"source": last["source"], "reason": last["reason"], "ts": last["ts"]}
                           if last else None),

@@ -204,6 +204,12 @@ def make_override_router(api_authz, control_db, device_ids=None):
         store.ensure_schema(c)
         return c
 
+    @router.get("/auth/check", dependencies=[Depends(require_admin)])
+    async def auth_check():
+        # 200 only if the admin bearer is valid (the dependency 401s otherwise). Lets the UI confirm a
+        # password actually worked at login instead of discovering it on the first failed command.
+        return JSONResponse(status_code=200, content={"ok": True})
+
     @router.post("/{device_id}/override", dependencies=[Depends(require_admin)])
     async def post_override(device_id: str, body: dict = Body(...)):
         c = _conn()
