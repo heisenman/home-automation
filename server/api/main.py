@@ -189,6 +189,8 @@ function card(dev,last){
   const tc=getM(rs,'temperature_c');
   const hum=getM(rs,'humidity_pct');
   const bat=getM(rs,'battery_pct');
+  const rad=getM(rs,'radon_bqm3');
+  const pres=getM(rs,'pressure_hpa');
   const ts=lastTs(rs)||dev.last_ts;
   const ageS=ts?(Date.now()-new Date(ts).getTime())/1000:Infinity;
   const stale=ageS>300;
@@ -202,7 +204,9 @@ function card(dev,last){
       ?`<div class="temp">${toF(tc)}<sup>°F</sup></div>`
       :`<div class="no-data">—</div>`}
     <div class="metrics">
+      ${rad!==null?`<div class="m"><div class="ml">RADON</div>${Math.round(rad)}<span style="font-size:.55em"> Bq/m³</span></div>`:''}
       ${hum!==null?`<div class="m"><div class="ml">RH</div>${Math.round(hum)}%</div>`:''}
+      ${pres!==null?`<div class="m"><div class="ml">PRES</div>${Math.round(pres)}<span style="font-size:.55em"> hPa</span></div>`:''}
       ${bat!==null?`<div class="m"><div class="ml">BAT</div><span class="${batClass(bat)}">${batLabel}</span></div>`:''}
       ${dev.last_rssi?`<div class="m"><div class="ml">RSSI</div>${dev.last_rssi}</div>`:''}
     </div>
@@ -384,7 +388,7 @@ function chartCard(title,series,unit,spanSec){
 
 // ── Composable graphs workspace ───────────────────────────────────────────
 const PALETTE=['#fb923c','#38bdf8','#4ade80','#f472b6','#a78bfa','#facc15','#fb7185','#2dd4bf'];
-const MLABEL={temperature_c:'temp',humidity_pct:'humidity',dew_point_c:'dew pt',pressure_hpa:'pressure',pressure_msl_hpa:'pressure msl'};
+const MLABEL={temperature_c:'temp',humidity_pct:'humidity',dew_point_c:'dew pt',pressure_hpa:'pressure',pressure_msl_hpa:'pressure msl',radon_bqm3:'radon (Bq/m³)',battery_pct:'battery',co2_ppm:'CO₂'};
 let GRAPHS=loadGraphs(), WX_METRICS=[];
 
 function loadGraphs(){try{return JSON.parse(localStorage.getItem('ha_graphs')||'[]')}catch{return[]}}
@@ -415,7 +419,11 @@ async function ensureMeta(){
   if(!DEVICES.length){try{DEVICES=await(await fetch('/devices')).json();}catch{}}
   if(!WX_METRICS.length){try{const m=await(await fetch('/weather/meta')).json();if(m.available)WX_METRICS=m.metrics;}catch{}}
 }
-function metricsFor(src){return src==='weather'?(WX_METRICS.length?WX_METRICS:['temperature_c','humidity_pct','pressure_hpa']):['temperature_c','humidity_pct','dew_point_c'];}
+function metricsFor(src){
+  if(src==='weather')return WX_METRICS.length?WX_METRICS:['temperature_c','humidity_pct','pressure_hpa'];
+  const d=DEVICES.find(x=>x.device_id===src);   // offer the device's REAL metrics (radon, pressure, …)
+  return (d&&d.metrics&&d.metrics.length)?d.metrics:['temperature_c','humidity_pct','dew_point_c'];
+}
 
 function addGraph(){GRAPHS.push({id:gid(),title:'New graph',range:86400,series:[]});saveGraphs();renderGraphs();}
 function removeGraph(id){GRAPHS=GRAPHS.filter(g=>g.id!==id);saveGraphs();renderGraphs();}

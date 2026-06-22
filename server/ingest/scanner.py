@@ -180,8 +180,10 @@ class Scanner:
             else:
                 self._publish_raw(mac, "switchbot", mfr, svc, rssi)
 
-        elif aranet.is_aranet(svc):
-            result = aranet.decode(mac, svc, rssi)
+        elif aranet.is_aranet(mfr):
+            # Aranet broadcasts in manufacturer data 0x0702 via BLE5 extended advertising (received by
+            # BlueZ on a BT5 adapter). should_publish() rate-limits the ~1 Hz adv to real changes.
+            result = aranet.decode_manufacturer(mac, mfr, rssi)
             if result:
                 self._publish(mac, result["device_type"], result["metrics"], rssi, "ble-adv")
             else:
