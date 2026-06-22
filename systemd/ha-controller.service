@@ -1,0 +1,33 @@
+[Unit]
+Description=Home Automation — Automation Controller (sensor → resolver → actuator loop)
+Documentation=file:///home/visko/home_automation/docs/adr/ADR-0011-automation-controller.md
+After=ha-writer.service ha-edge-mapper.service ha-scanner.service mosquitto.service network.target
+Wants=mosquitto.service
+
+[Service]
+Type=simple
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+Environment=HA_BROKER=localhost
+Environment=HA_CONTROL_DB=instance/db/control.db
+# broker creds for sensor intake + command publish; the master passphrase is read from
+# instance/.master_pass by the issuer (decrypts the node LUT, derives the admin token).
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+ExecStart=/home/visko/home_automation/venv/bin/python3 -m server.control.controller --tick-s 45
+
+Restart=on-failure
+RestartSec=10
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/visko/home_automation/instance
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-controller
+
+[Install]
+WantedBy=multi-user.target
