@@ -58,5 +58,20 @@ def test_sensitive_with_bad_pin_denied():
     assert code == 403 and body["reason"] == "confirm-required", body
 
 
+def test_sha_confirm_token_gates_unlock():
+    # the real software second factor: confirm_pin must equal SHA256("ha-confirm:"+master)
+    from server.control import secret_store as S
+    v = S.make_confirm_verifier("CHANGE_ME_master_passphrase")
+    tok = S.confirm_token("CHANGE_ME_master_passphrase")
+    ok, _ = C.handle_command(_issuer(), "lock_front",
+                             {"trait": "lockable", "action": "unlock", "confirm_pin": tok},
+                             confirm_verifier=v)
+    assert ok == 200, ok
+    bad, body = C.handle_command(_issuer(), "lock_front",
+                                 {"trait": "lockable", "action": "unlock", "confirm_pin": "CHANGE_ME_master_passphrase"},
+                                 confirm_verifier=v)   # the MASTER itself is NOT the token → denied
+    assert bad == 403 and body["reason"] == "confirm-required", (bad, body)
+
+
 if __name__ == "__main__":
     run_module(globals())
