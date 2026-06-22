@@ -78,3 +78,23 @@ so the v4-lockdown forwarder write-disable does not block this).
 
 **If refuted** (the app uses the *same* sequence and it still works): fall back to a firmware/revision
 variant difference, and the diff still hands us the exact bytes to match.
+
+## RESOLVED (2026-06-22): root cause = hardcoded history-bank index, not a wrap-mode
+
+App HCI-btsnoop of attic + h_bed pulls (decoded with `btmon`; raw in `instance/research/`, gitignored)
+settles it. The outdoor read command is `570f3c [bank:1] [addr:4 BE] [count:1]`, where the byte after
+`570f3c` is a **history-bank index** that must match the bank actually holding data — discovered by
+probing `570f3b00..03` and taking the index whose `0x69` metadata has non-zero pointers.
+
+- App reads **attic from bank 00** (`570f3c00…`, probed via `570f3b00`) and **h_bed from bank 03**
+  (`570f3c03…`, via `570f3b03/02/01`).
+- Our firmware **hardcodes bank 01** (`od_rp = 570f3c01…`, `gatt_history.c`). Bank 01 is empty on those
+  meters, so the meter NAKs every read with a 1-byte `02`. `living_room_outdoor` pulled cleanly only
+  because its data sat in bank 01.
+
+**Wrap-hypothesis verdict:** directionally right, mechanism refined. Banks evidently **rotate as the
+ring buffer wraps**, which is why the three outdoor meters sit in different banks — so the prediction
+"`living_room_outdoor` will fail too once it wraps (into the next bank)" still stands. The fix is **not**
+a wrap-specific read; it's **dynamic bank discovery**: probe `570f3b00..03`, pick the populated bank,
+read `570f3c<bank>` over that bank's pointer range. (The dedicated `gatt_history.c` path still issues
+GATT writes, so the v4 forwarder write-lockdown does not block this.)
