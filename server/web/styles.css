@@ -1,0 +1,96 @@
+/* Home Automation web app — self-contained, no external CSS. Dark, dense, touch-friendly. */
+:root {
+  --bg: #0f1720; --panel: #1a2330; --panel-2: #222d3d; --line: #2b3a4d;
+  --txt: #e6edf3; --muted: #8aa0b4; --accent: #4aa3ff;
+  --ok: #34d399; --stale: #fbbf24; --override: #60a5fa; --disabled: #6b7280; --bad: #f87171;
+  --radius: 14px;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--txt);
+  font: 15px/1.45 -apple-system, system-ui, "Segoe UI", Roboto, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+.wrap { max-width: 760px; margin: 0 auto; padding: 16px 14px 64px; }
+
+/* ── top bar ─────────────────────────────────────────────── */
+.topbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.topbar h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+.topbar .spacer { flex: 1; }
+.dot { width: 9px; height: 9px; border-radius: 50%; background: var(--disabled); }
+.dot.live { background: var(--ok); box-shadow: 0 0 0 3px rgba(52,211,153,.18); }
+.dot.down { background: var(--bad); }
+.btn {
+  background: var(--panel-2); color: var(--txt); border: 1px solid var(--line);
+  border-radius: 10px; padding: 8px 12px; font-size: 14px; cursor: pointer;
+}
+.btn:hover { border-color: var(--accent); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #04121f; font-weight: 600; }
+.btn.ghost { background: transparent; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.btn.sm { padding: 6px 10px; font-size: 13px; }
+
+/* ── device card ─────────────────────────────────────────── */
+.card {
+  background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 14px; margin-bottom: 14px; border-left: 4px solid var(--disabled);
+}
+.card.health-ok { border-left-color: var(--ok); }
+.card.health-stale { border-left-color: var(--stale); }
+.card.health-overridden { border-left-color: var(--override); }
+.card.health-disabled { border-left-color: var(--disabled); }
+.card-head { display: flex; align-items: baseline; gap: 10px; }
+.card-head h2 { font-size: 16px; margin: 0; }
+.badge {
+  font-size: 11px; text-transform: uppercase; letter-spacing: .6px; font-weight: 700;
+  padding: 3px 8px; border-radius: 999px; background: var(--panel-2); color: var(--muted);
+}
+.badge.health-ok { color: var(--ok); } .badge.health-stale { color: var(--stale); }
+.badge.health-overridden { color: var(--override); } .badge.health-disabled { color: var(--disabled); }
+.state-row { display: flex; align-items: center; gap: 8px; margin: 10px 0 4px; }
+.pill {
+  font-weight: 700; font-size: 13px; padding: 4px 10px; border-radius: 8px;
+  background: var(--panel-2);
+}
+.pill.on { background: rgba(52,211,153,.16); color: var(--ok); }
+.pill.off { background: rgba(107,114,128,.18); color: var(--muted); }
+.readings { display: flex; flex-wrap: wrap; gap: 14px; margin: 8px 0; }
+.reading .v { font-size: 22px; font-weight: 650; }
+.reading .k { font-size: 12px; color: var(--muted); }
+.reading.muted .v { color: var(--muted); font-weight: 500; }
+.reason { color: var(--muted); font-size: 13px; margin-top: 6px; }
+.controls { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
+.divider { height: 1px; background: var(--line); margin: 12px -14px; }
+
+/* ── settings + override ─────────────────────────────────── */
+.settings { margin-top: 4px; }
+.field { display: flex; align-items: center; gap: 10px; margin: 8px 0; }
+.field label { width: 130px; color: var(--muted); font-size: 13px; }
+.field input[type=number] {
+  width: 90px; background: var(--bg); border: 1px solid var(--line); color: var(--txt);
+  border-radius: 8px; padding: 7px 9px; font-size: 14px;
+}
+.field input[type=text] {
+  flex: 1; background: var(--bg); border: 1px solid var(--line); color: var(--txt);
+  border-radius: 8px; padding: 7px 9px; font-size: 14px;
+}
+.switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
+.note { color: var(--muted); font-size: 12px; }
+.err { color: var(--bad); font-size: 13px; margin-top: 8px; }
+.ok-flash { color: var(--ok); font-size: 13px; margin-top: 8px; }
+
+/* ── modal ───────────────────────────────────────────────── */
+.modal-bg {
+  position: fixed; inset: 0; background: rgba(0,0,0,.55);
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.modal { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+  padding: 18px; width: 100%; max-width: 380px; }
+.modal h3 { margin: 0 0 4px; }
+.modal input {
+  width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--txt);
+  border-radius: 8px; padding: 10px; font-size: 15px; margin: 10px 0;
+}
+.modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+.empty { color: var(--muted); text-align: center; padding: 40px 0; }
+.age-fresh { color: var(--ok); } .age-stale { color: var(--stale); }

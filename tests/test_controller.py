@@ -71,6 +71,31 @@ def test_interlock_tank_full_forces_off():
         assert rows[0]["source"] == "safety"
 
 
+class _FakeMqtt:
+    def __init__(self):
+        self.published = []
+
+    def publish(self, topic, payload, qos=0):
+        import json as _json
+        self.published.append((topic, _json.loads(payload)))
+
+
+def test_published_state_carries_timestamp():
+    """Regression: onboard self-reports must carry a fresh ts, else the writer's (device_id,ts,metric)
+    unique index collapses them and INSERT OR IGNORE freezes onboard RH forever."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make(tmp, STATUS_ON)
+        ctrl.mqtt = _FakeMqtt()
+        ctrl.inject_reading("meter_pro_living_room", 50.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        states = [p for t, p in ctrl.mqtt.published if t.endswith("/state")]
+        assert states, "no state published"
+        st = states[-1]
+        assert st.get("ts"), f"state missing ts: {st}"
+        assert st["metrics"].get("humidity_pct") == 30      # onboard value present...
+        assert st["meta"]["authoritative"] is False          # ...flagged non-authoritative
+
+
 def test_disabled_policy_is_skipped():
     with tempfile.TemporaryDirectory() as tmp:
         ctrl, iss, db = _make(tmp, STATUS_ON)

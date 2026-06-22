@@ -75,7 +75,11 @@ CREATE TABLE IF NOT EXISTS readings (
     metric      TEXT    NOT NULL,
     value       REAL    NOT NULL,
     unit        TEXT    NOT NULL,
-    schema_v    INTEGER NOT NULL DEFAULT 1
+    schema_v    INTEGER NOT NULL DEFAULT 1,
+    -- 1 = trusted sensor (SwitchBot meters etc.); 0 = a device's own self-report (e.g. the
+    -- dehumidifier's onboard RH, which reads 9-15% low). Lets the dashboard/view-models keep
+    -- self-reports out of canonical area readings while still surfacing them per-device.
+    authoritative INTEGER NOT NULL DEFAULT 1
 );
 -- Idempotency: one row per (device_id, ts, metric). Lets the live writer and any
 -- history backfill/re-import use INSERT OR IGNORE so overlapping data never dupes.
@@ -101,9 +105,21 @@ def _open_db(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA synchronous=NORMAL")
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(_DDL)
+    _migrate(conn)
     conn.commit()
     log.info("Database opened at %s", path)
     return conn
+
+
+def _migrate(conn: sqlite3.Connection) -> None:
+    """Idempotent in-place migrations for an existing hot.db (the table predates some columns)."""
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(readings)")}
+    if "authoritative" not in cols:
+        # metadata-only ALTER in SQLite (no row rewrite); existing rows default to 1...
+        conn.execute("ALTER TABLE readings ADD COLUMN authoritative INTEGER NOT NULL DEFAULT 1")
+        # ...so demote the device self-reports that were already written before this flag existed.
+        conn.execute("UPDATE readings SET authoritative=0 WHERE transport='midea-lan'")
+        log.info("migrated readings: added 'authoritative' column (demoted midea-lan self-reports)")
 
 
 def _insert_readings(conn: sqlite3.Connection, payload: dict) -> int:
@@ -120,18 +136,21 @@ def _insert_readings(conn: sqlite3.Connection, payload: dict) -> int:
     metrics = payload.get("metrics", {})
     meta = payload.get("meta", {})
     rssi = meta.get("rssi")
+    # default authoritative; a publisher marks meta.authoritative=false for a device self-report.
+    authoritative = 0 if meta.get("authoritative") is False else 1
 
     rows = []
     for metric, value in metrics.items():
         if not isinstance(value, (int, float)):
             continue
         unit = _UNITS.get(metric, "")
-        rows.append((ts, device_id, device_type, area, transport, metric, float(value), unit, schema_v))
+        rows.append((ts, device_id, device_type, area, transport, metric, float(value), unit,
+                     schema_v, authoritative))
 
     if rows:
         conn.executemany(
             """INSERT OR IGNORE INTO readings (ts, device_id, device_type, area, transport,
-               metric, value, unit, schema_v) VALUES (?,?,?,?,?,?,?,?,?)""",
+               metric, value, unit, schema_v, authoritative) VALUES (?,?,?,?,?,?,?,?,?,?)""",
             rows,
         )
         conn.execute(

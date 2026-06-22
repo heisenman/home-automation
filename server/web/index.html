@@ -1,0 +1,19 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+  <meta name="theme-color" content="#0f1720" />
+  <title>Home Automation</title>
+  <link rel="manifest" href="/app/manifest.webmanifest" />
+  <link rel="stylesheet" href="/app/styles.css" />
+</head>
+<body>
+  <div id="root">
+    <!-- app shell; replaced by Preact on load. Visible if JS is disabled / mid-load. -->
+    <noscript>This dashboard needs JavaScript.</noscript>
+  </div>
+  <!-- ES module, no build step: app.js imports the vendored Preact+HTM runtime directly. -->
+  <script type="module" src="/app/app.js"></script>
+</body>
+</html>

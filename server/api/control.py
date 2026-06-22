@@ -9,6 +9,7 @@ The Result→HTTP mapping is a pure function so it is unit-testable without a we
 """
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from server.control.issuer import CommandIssuer, Result
@@ -54,6 +55,185 @@ def handle_command(issuer: CommandIssuer, device_id: str, body: dict[str, Any],
         confirmed = bool(confirm_verifier(device_id, str(pin)))
     r = issuer.issue(device_id=device_id, trait=trait, action=action, args=args, confirmed=confirmed)
     return result_to_http(r)
+
+
+# ── Manual override (user-initiated timeout) ─────────────────────────────────────
+# The override is the human escape hatch over the automation loop (ADR-0011 precedence layer 2):
+# "off" parks the device, "boost_on" forces it, both with a TTL so a forgotten override self-clears;
+# "clear" hands control straight back to the rule. The API only WRITES control.db's override row — the
+# controller reads it every tick (store.get_override) and the resolver enforces it (incl. min-off/safety),
+# so there is no separate command path and a stale API can't strand the device ON.
+_OVERRIDE_ACTIONS = ("off", "boost_on", "clear")
+_MAX_OVERRIDE_MIN = 1440          # 24h cap — an override is a timeout, never a permanent mode
+
+
+def handle_override(conn, device_id: str, body: dict[str, Any], now: float,
+                    valid_devices=None) -> tuple[int, dict]:
+    """Set or clear a manual override on control.db. Pure (no HTTP framework). `valid_devices`, if
+    given, restricts to known controllable device_ids (else 404)."""
+    from server.control import control_store as store
+    if valid_devices is not None and device_id not in valid_devices:
+        return 404, {"status": "unknown-device", "reason": f"no controllable device {device_id!r}"}
+    action = body.get("action")
+    if action not in _OVERRIDE_ACTIONS:
+        return 400, {"status": "bad-request", "reason": f"action must be one of {_OVERRIDE_ACTIONS}"}
+    if action == "clear":
+        store.clear_override(conn, device_id)
+        return 200, {"status": "ok", "device_id": device_id, "override": None}
+    dur = body.get("duration_min")
+    if isinstance(dur, bool) or not isinstance(dur, (int, float)) or dur <= 0:
+        return 400, {"status": "bad-request", "reason": "duration_min must be a positive number"}
+    if dur > _MAX_OVERRIDE_MIN:
+        return 400, {"status": "bad-request",
+                     "reason": f"duration_min exceeds {_MAX_OVERRIDE_MIN} (24h) cap"}
+    expiry = now + float(dur) * 60.0
+    store.set_override(conn, device_id, action, expiry)
+    return 200, {"status": "ok", "device_id": device_id,
+                 "override": {"action": action, "expiry": expiry, "duration_min": dur}}
+
+
+def read_control_state(conn, device_id: str, now: float) -> dict:
+    """Compose a device's live control snapshot (policy + active override + recent decisions) from
+    control.db. Pure; shared by the admin GET and the display view-model (BFF)."""
+    from server.control import control_store as store
+    ov = store.get_override(conn, device_id, now)
+    override = None
+    if ov:
+        action, expiry = ov
+        override = {"action": action, "expiry": expiry,
+                    "expires_in_min": None if expiry is None else max(0.0, (expiry - now) / 60.0)}
+    log_rows = store.recent_log(conn, device_id, limit=10)
+    return {
+        "device_id": device_id,
+        "policy": store.get_policy(conn, device_id),
+        "override": override,
+        "last_decision": log_rows[0] if log_rows else None,
+        "recent_log": log_rows,
+    }
+
+
+# ── Policy editing (app-mutable settings) ────────────────────────────────────────
+_ALLOWED_STRATEGIES = ("hysteresis", "setpoint")
+_WINDOW_RE = re.compile(r"^\d{1,2}:\d{2}-\d{1,2}:\d{2}$")
+
+
+def _is_num(v) -> bool:
+    return not isinstance(v, bool) and isinstance(v, (int, float))
+
+
+def handle_policy_update(conn, device_id: str, body: dict[str, Any],
+                         valid_devices=None) -> tuple[int, dict]:
+    """MERGE-patch a device's automation policy (the app-mutable thresholds/enable/quiet-window). Pure.
+    A merge (not replace) so a partial edit never silently drops fields the UI didn't send. The controller
+    re-reads the policy every tick, so edits take effect on the next cycle."""
+    from server.control import control_store as store
+    if valid_devices is not None and device_id not in valid_devices:
+        return 404, {"status": "unknown-device", "reason": f"no controllable device {device_id!r}"}
+    pol = store.get_policy(conn, device_id)
+    if pol is None:
+        return 404, {"status": "unknown-device", "reason": f"no policy for {device_id!r}"}
+    patch = body or {}
+
+    def bad(reason):
+        return 400, {"status": "bad-request", "reason": reason}
+
+    if "enabled" in patch:
+        if not isinstance(patch["enabled"], bool):
+            return bad("enabled must be a boolean")
+        pol["enabled"] = patch["enabled"]
+    if "source_sensor" in patch:
+        if not isinstance(patch["source_sensor"], str) or not patch["source_sensor"]:
+            return bad("source_sensor must be a non-empty string")
+        pol["source_sensor"] = patch["source_sensor"]
+    if "sensor_stale_min" in patch:
+        if not _is_num(patch["sensor_stale_min"]) or patch["sensor_stale_min"] <= 0:
+            return bad("sensor_stale_min must be a positive number")
+        pol["sensor_stale_min"] = patch["sensor_stale_min"]
+    if "control" in patch:
+        cp = patch["control"]
+        if not isinstance(cp, dict):
+            return bad("control must be an object")
+        c = dict(pol.get("control", {}))
+        for k in ("strategy", "on_above", "off_below", "min_on_min", "min_off_min"):
+            if k in cp:
+                c[k] = cp[k]
+        if c.get("strategy") not in _ALLOWED_STRATEGIES:
+            return bad(f"strategy must be one of {_ALLOWED_STRATEGIES}")
+        for k in ("on_above", "off_below", "min_on_min", "min_off_min"):
+            if k in c and not _is_num(c[k]):
+                return bad(f"control.{k} must be a number")
+        if c.get("strategy") == "hysteresis" and float(c.get("on_above", 0)) <= float(c.get("off_below", 0)):
+            return bad("on_above must be strictly greater than off_below (deadband)")
+        pol["control"] = c
+    if "schedule" in patch:
+        sched = patch["schedule"]
+        if not isinstance(sched, list):
+            return bad("schedule must be a list")
+        for e in sched:
+            if not isinstance(e, dict) or not _WINDOW_RE.match(str(e.get("when", ""))):
+                return bad("each schedule entry needs when='HH:MM-HH:MM'")
+            if e.get("policy") not in ("off", "auto"):
+                return bad("each schedule entry needs policy='off'|'auto'")
+        pol["schedule"] = sched
+
+    store.set_policy(conn, device_id, pol)
+    return 200, {"status": "ok", "device_id": device_id, "policy": pol}
+
+
+def make_override_router(api_authz, control_db, device_ids=None):
+    """Admin-gated control router (prefix /control): set/clear the manual override and read the live
+    control state. Writes only control.db (the controller's source of truth); same bearer as /devices."""
+    import sqlite3
+    import time
+
+    from fastapi import APIRouter, Body, Depends, Header, HTTPException
+    from fastapi.responses import JSONResponse
+
+    from server.control import control_store as store
+
+    router = APIRouter(prefix="/control", tags=["control"])
+    devices = set(device_ids) if device_ids is not None else None
+
+    def require_admin(authorization: str | None = Header(default=None)):
+        if api_authz is None or not api_authz(authorization):
+            raise HTTPException(status_code=401, detail="unauthorized",
+                                headers={"WWW-Authenticate": "Bearer"})
+
+    def _conn():
+        c = sqlite3.connect(str(control_db))
+        store.ensure_schema(c)
+        return c
+
+    @router.post("/{device_id}/override", dependencies=[Depends(require_admin)])
+    async def post_override(device_id: str, body: dict = Body(...)):
+        c = _conn()
+        try:
+            code, payload = handle_override(c, device_id, body, time.time(), devices)
+        finally:
+            c.close()
+        return JSONResponse(status_code=code, content=payload)
+
+    @router.get("/{device_id}", dependencies=[Depends(require_admin)])
+    async def get_control(device_id: str):
+        if devices is not None and device_id not in devices:
+            return JSONResponse(status_code=404, content={"status": "unknown-device"})
+        c = _conn()
+        try:
+            state = read_control_state(c, device_id, time.time())
+        finally:
+            c.close()
+        return JSONResponse(status_code=200, content=state)
+
+    @router.put("/{device_id}/policy", dependencies=[Depends(require_admin)])
+    async def put_policy(device_id: str, body: dict = Body(...)):
+        c = _conn()
+        try:
+            code, payload = handle_policy_update(c, device_id, body, devices)
+        finally:
+            c.close()
+        return JSONResponse(status_code=code, content=payload)
+
+    return router
 
 
 def make_router(issuer: CommandIssuer, confirm_verifier=None, api_authz=None):

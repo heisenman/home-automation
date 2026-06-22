@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Home Automation">
+  <rect width="512" height="512" rx="96" fill="#0f1720"/>
+  <path d="M256 104 110 232v176h92V304h108v104h92V232z" fill="none" stroke="#4aa3ff"
+        stroke-width="28" stroke-linejoin="round"/>
+  <circle cx="256" cy="356" r="34" fill="#34d399"/>
+</svg>

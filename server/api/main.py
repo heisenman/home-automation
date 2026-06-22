@@ -28,7 +28,8 @@ from typing import Optional
 import duckdb
 from fastapi import FastAPI, HTTPException, Query
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -71,6 +72,8 @@ NODE_SECRETS_LUT = Path(os.environ.get("HA_NODE_SECRETS", "instance/node_secrets
 CONTROL_POLICY = Path(os.environ.get("HA_CONTROL_POLICY", "instance/control_policy.yaml"))
 CONTROL_SECRETS = Path(os.environ.get("HA_CONTROL_SECRETS", "instance/control_secrets.yaml"))
 MIDEA_DEVICE_ENV = Path(os.environ.get("HA_MIDEA_DEVICE_ENV", "instance/midea-device.env"))
+CONTROL_DB = Path(os.environ.get("HA_CONTROL_DB", "instance/db/control.db"))
+WEB_DIR = Path(__file__).resolve().parents[1] / "web"   # server/web — the no-build PWA
 
 
 def _parse_env_file(path: Path) -> dict:
@@ -100,7 +103,7 @@ def _mount_control(app: FastAPI) -> None:
         import yaml
         from server.control.bootstrap import build_issuer
         from server.control.registry import check_secrets_present
-        from server.api.control import make_router
+        from server.api.control import make_override_router, make_router
 
         broker = os.environ.get("HA_BROKER", "localhost")
         port = int(os.environ.get("HA_BROKER_PORT", "1883"))
@@ -110,8 +113,10 @@ def _mount_control(app: FastAPI) -> None:
             master, control_registry=CONTROL_REGISTRY, node_secrets_lut=NODE_SECRETS_LUT,
             control_policy=CONTROL_POLICY, control_secrets=CONTROL_SECRETS,
             midea_device_env=MIDEA_DEVICE_ENV, broker=broker, port=port)
-        app.include_router(make_router(issuer, make_confirm_verifier(master),
-                                       make_api_token_verifier(master)))
+        api_authz = make_api_token_verifier(master)
+        app.include_router(make_router(issuer, make_confirm_verifier(master), api_authz))
+        # the manual-override + control-state router (writes control.db, read by the controller each tick)
+        app.include_router(make_override_router(api_authz, CONTROL_DB, device_ids=set(registry)))
         missing = check_secrets_present(registry, issuer.secrets)
         log.info("control plane MOUNTED — %d device(s), %d controllable; broker %s:%s%s",
                  len(registry), len(issuer.secrets), broker, port,
@@ -121,6 +126,10 @@ def _mount_control(app: FastAPI) -> None:
 
 
 _mount_control(app)
+
+# ── Web app (PWA) — self-contained, no build step (server/web). Mounted at /app; "/" serves it. ──
+if WEB_DIR.exists():
+    app.mount("/app", StaticFiles(directory=str(WEB_DIR), html=True), name="webapp")
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────
@@ -140,8 +149,19 @@ def _parquet_glob() -> str:
 
 # ── Endpoints ─────────────────────────────────────────────────────────────────
 
-@app.get("/", response_class=HTMLResponse, include_in_schema=False)
-def dashboard():
+@app.get("/", include_in_schema=False)
+def root():
+    # The PWA is the front door. Fall back to the frozen inline dashboard if the web bundle is absent.
+    index = WEB_DIR / "index.html"
+    if index.exists():
+        return FileResponse(str(index))
+    return HTMLResponse(_DASHBOARD_HTML)
+
+
+@app.get("/legacy", response_class=HTMLResponse, include_in_schema=False)
+def legacy_dashboard():
+    # Frozen 2026-06-22 when the PWA (server/web) became the primary UI. Kept as a zero-dependency
+    # fallback / sanity page; no longer developed. See ADR-0013.
     return _DASHBOARD_HTML
 
 
@@ -597,6 +617,61 @@ def health():
         }
     except Exception as exc:
         return JSONResponse(status_code=503, content={"status": "error", "detail": str(exc)})
+
+
+def _control_conn() -> Optional[sqlite3.Connection]:
+    """Open control.db read-only-ish (None if it doesn't exist yet — controller never started)."""
+    if not CONTROL_DB.exists():
+        return None
+    from server.control import control_store as store
+    conn = sqlite3.connect(str(CONTROL_DB))
+    store.ensure_schema(conn)
+    return conn
+
+
+@app.get("/api/v1/displays", include_in_schema=True)
+def display_list():
+    """All controllable devices as render-ready view-models (one call for the dashboard). Read-only."""
+    import time
+
+    from server.api.viewmodel import build_display
+    from server.control import control_store as store
+    cc = _control_conn()
+    if cc is None:
+        return {"devices": []}
+    hc = _hot_conn() if DB_PATH.exists() else None
+    now = time.time()
+    try:
+        ids = sorted(store.all_policies(cc).keys())
+        out = [vm for did in ids if (vm := build_display(cc, hc, did, now)) is not None]
+    finally:
+        cc.close()
+        if hc is not None:
+            hc.close()
+    return {"devices": out}
+
+
+@app.get("/api/v1/display/{device_id}", include_in_schema=True)
+def display_viewmodel(device_id: str):
+    """Render-ready snapshot for a constrained display (ADR-0013 BFF). Read-only, unauthenticated like
+    the rest of the dashboard — composes control.db (policy/override/decision) + hot.db (the sensor
+    driving the loop + the device's own non-authoritative read) into one flat object + a health word."""
+    import time
+
+    from server.api.viewmodel import build_display
+    cc = _control_conn()
+    if cc is None:
+        raise HTTPException(status_code=503, detail="control state not available")
+    hc = _hot_conn() if DB_PATH.exists() else None
+    try:
+        vm = build_display(cc, hc, device_id, time.time())
+    finally:
+        cc.close()
+        if hc is not None:
+            hc.close()
+    if vm is None:
+        raise HTTPException(status_code=404, detail=f"no controllable device {device_id!r}")
+    return vm
 
 
 @app.get("/devices")
