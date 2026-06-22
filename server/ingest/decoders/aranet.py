@@ -1,94 +1,79 @@
 """
 Aranet BLE advertisement decoder.
 
-Protocol reference: aranet4 Python library (Anrijs/aranet4 on GitHub) and
-Aranet Smart Home Integration broadcast specification.
+CORRECTED 2026-06-21: Aranet broadcasts its readings in **manufacturer data, company 0x0702**
+(SAF Tehnika) via **extended advertising** — NOT service-data `fce0` (the earlier guess). Verified
+live against an `AranetRn+` on a BT5 adapter and cross-checked byte-for-byte with the reference
+`aranet4` library.
 
-Supported devices:
-  Aranet4           — CO2 + temp + pressure + humidity + battery
-  Aranet Radon Plus — above + radon (Bq/m³)
+Supported: Aranet Radon Plus (type byte 0x03). The CO2 Aranet4 uses a different field layout (TODO if
+one is ever added). Requires "Smart Home Integration" mode = On (the device then broadcasts).
 
-Detection: service data UUID 0000fce0-0000-1000-8000-00805f9b34fb.
-
-Requires "Smart Home Integration" mode enabled on the device
-(Settings → Smart Home Integration → On).
+Manufacturer-data layout (little-endian; readings block starts at offset 8):
+  [0]      device type        uint8    (3 = Aranet Radon)
+  [8:10]   radon              uint16   Bq/m³   (0xFFFF = warming up / no reading)
+  [10:12]  temperature        uint16   raw/20 = °C
+  [12:14]  pressure           uint16   raw/10 = hPa
+  [14:16]  humidity           uint16   raw/10 = %
+  [17]     battery            uint8    %
+  [18]     status             uint8    (1 green / 2 amber / 3 red)
+  [19:21]  interval           uint16   s between readings
+  [21:23]  ago                uint16   s since the last reading was taken
+  [23]     counter            uint8
 """
-
 import logging
-import struct
 
 log = logging.getLogger(__name__)
 
-SERVICE_UUID: str = "0000fce0-0000-1000-8000-00805f9b34fb"
-
-# Sentinel value meaning "no radon reading yet" (device warming up)
-_RADON_NO_READING: int = 0xFFFF
-
-
-def is_aranet(svc_data: dict) -> bool:
-    return SERVICE_UUID in svc_data
+COMPANY_ID: int = 0x0702
+_TYPE_RADON: int = 0x03
+_U16_NO_READING: int = 0xFFFF
 
 
-def decode(
-    mac: str,
-    svc_data: dict[str, bytes],
-    rssi: int,
-) -> dict | None:
-    """
-    Return decoded metrics dict or None.
+def is_aranet(mfr_data: dict[int, bytes]) -> bool:
+    return COMPANY_ID in (mfr_data or {})
 
-    Smart Home Integration advertisement service data layout (little-endian):
-      Bytes  0–1   CO2            uint16   ppm
-      Bytes  2–3   Temperature    uint16   raw / 20 = °C
-      Bytes  4–5   Pressure       uint16   raw / 10 = hPa
-      Byte   6     Humidity       uint8    %
-      Byte   7     Battery        uint8    %
-      Byte   8     Status flags   uint8
-      Bytes  9–10  Interval       uint16   seconds between readings
-      Byte   11    Age            uint8    seconds since last reading
-      Bytes 12–13  Radon          uint16   Bq/m³  (Radon Plus only; 0xFFFF = no reading)
-    """
-    raw = svc_data.get(SERVICE_UUID, b"")
-    log.debug("aranet raw mac=%s len=%d bytes=%s", mac, len(raw), raw.hex())
 
-    if len(raw) < 12:
-        log.warning("aranet advertisement too short mac=%s len=%d", mac, len(raw))
+def _u16(b: bytes, i: int) -> int:
+    return b[i] | (b[i + 1] << 8)
+
+
+def decode_manufacturer(mac: str, mfr_data: dict[int, bytes], rssi: int) -> dict | None:
+    """Return {device_type, metrics, meta} or None. `mfr_data` is {company_id: bytes} (as bleak gives)."""
+    raw = (mfr_data or {}).get(COMPANY_ID)
+    if not raw or len(raw) < 24:
+        if raw is not None:
+            log.warning("aranet mfr data too short mac=%s len=%d", mac, len(raw))
+        return None
+    if raw[0] != _TYPE_RADON:
+        log.debug("aranet non-radon type=0x%02x mac=%s — unsupported layout", raw[0], mac)
         return None
 
-    try:
-        co2, temp_raw, pressure_raw, humidity, battery = struct.unpack_from("<HHHBb", raw, 0)
-    except struct.error as exc:
-        log.warning("aranet struct unpack failed mac=%s: %s raw=%s", mac, exc, raw.hex())
-        return None
+    radon = _u16(raw, 8)
+    temperature = round(_u16(raw, 10) / 20.0, 2)
+    pressure = round(_u16(raw, 12) / 10.0, 1)
+    humidity = round(_u16(raw, 14) / 10.0, 1)
+    battery = raw[17]
+    status = raw[18]
+    interval = _u16(raw, 19)
+    ago = _u16(raw, 21)
 
-    temperature = round(temp_raw / 20.0, 2)
-    pressure = round(pressure_raw / 10.0, 1)
-
-    # Reject implausible readings
-    if not (300 <= co2 <= 10000):
-        log.warning("aranet CO2 %s ppm out of range mac=%s raw=%s", co2, mac, raw.hex())
-        return None
     if not (-40.0 <= temperature <= 85.0):
         log.warning("aranet temp %s°C out of range mac=%s raw=%s", temperature, mac, raw.hex())
         return None
 
     metrics: dict = {
-        "co2_ppm": int(co2),
         "temperature_c": temperature,
         "pressure_hpa": pressure,
-        "humidity_pct": int(humidity),
-        "battery_pct": int(abs(battery)),  # pySwitchbot stores as signed; take abs
+        "humidity_pct": humidity,
+        "battery_pct": int(battery),
     }
-
-    # Radon Plus: 14+ bytes
-    if len(raw) >= 14:
-        (radon,) = struct.unpack_from("<H", raw, 12)
-        if radon != _RADON_NO_READING:
-            metrics["radon_bqm3"] = int(radon)
-        else:
-            log.debug("aranet radon not yet available mac=%s", mac)
+    if radon != _U16_NO_READING:
+        metrics["radon_bqm3"] = int(radon)        # device still warming up → omitted
 
     return {
-        "device_type": "aranet_radon_plus" if len(raw) >= 14 else "aranet4",
+        "device_type": "aranet_radon_plus",
         "metrics": metrics,
+        # status: 1 green / 2 amber / 3 red; ago_s lets the relay back-date the reading's ts.
+        "meta": {"status": int(status), "interval_s": int(interval), "ago_s": int(ago)},
     }
