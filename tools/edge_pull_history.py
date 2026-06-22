@@ -31,6 +31,8 @@ def main() -> None:
     cmd = wrap({"op": "history", "mac": a.mac.upper(), "profile": a.profile})
     topic = f"home/edge/{a.node}/cmd"
     c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    if os.environ.get("HA_MQTT_USER"):   # broker auth: admin tools connect as the dictator
+        c.username_pw_set(os.environ["HA_MQTT_USER"], os.environ.get("HA_MQTT_PASS"))
     c.connect(a.broker, a.broker_port, 30)
     c.loop_start()
     info = c.publish(topic, json.dumps(cmd), qos=1)

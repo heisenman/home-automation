@@ -86,6 +86,8 @@ def push_ota(node, bin_path, serve_ip, broker, serve_port=8090, broker_port=1883
                 result["outcome"] = "rollback"
 
     c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    if os.environ.get("HA_MQTT_USER"):   # broker auth: admin tools connect as the dictator
+        c.username_pw_set(os.environ["HA_MQTT_USER"], os.environ.get("HA_MQTT_PASS"))
     c.on_connect = on_connect
     c.on_message = on_message
     c.connect(broker, broker_port, 30)

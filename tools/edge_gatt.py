@@ -84,6 +84,8 @@ def edge_gatt(node, mac, steps, broker="localhost", port=1883, timeout=60.0,
             done.set()
 
     c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    if os.environ.get("HA_MQTT_USER"):   # broker auth: admin tools connect as the dictator
+        c.username_pw_set(os.environ["HA_MQTT_USER"], os.environ.get("HA_MQTT_PASS"))
     c.on_connect = on_connect
     c.on_message = on_message
     c.connect(broker, port, 30)
