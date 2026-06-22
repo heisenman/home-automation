@@ -35,6 +35,15 @@ static const uint8_t HANDSHAKE_PREFIX[] = {0x57,0x00,0x05,0x03,0x04,0x00,0x00,0x
                              // the server's assign_timestamps gets a consistent interval; reanchor_to_now
                              // then corrects the meter's own clock drift.
 
+// Fast connection params for the pull — without these the link can negotiate a ~300ms interval, making a
+// 4096-read paging pass take ~20 min (and pausing the scanner that whole time). 30–50ms keeps it ~1–2 min.
+static const struct ble_gap_conn_params FAST_CONN = {
+    .scan_itvl = 0x0010, .scan_window = 0x0010,
+    .itvl_min = 24, .itvl_max = 40,            // 24..40 * 1.25ms = 30..50 ms connection interval
+    .latency = 0, .supervision_timeout = 400,  // 400 * 10ms = 4 s
+    .min_ce_len = 0, .max_ce_len = 0,
+};
+
 typedef struct { const uint8_t *bytes; uint8_t len; } cmd_t;
 // meter_pro
 static const uint8_t mp_s0[]={0x57,0x0f,0x68,0x05,0x04,0x01,0x03,0x08,0x02,0x00,0x0b,0x01,0x02,0x00,0x0e,0x10};
@@ -157,11 +166,14 @@ static int on_write(uint16_t conn, const struct ble_gatt_error *err, struct ble_
     return 0;
 }
 // blocking write (serialises GATT procedures; the device can't keep up with a flood)
-static int write_blocking(uint16_t handle, const void *data, uint16_t len) {
+static int write_blocking_t(uint16_t handle, const void *data, uint16_t len, int timeout_ms) {
     int rc = ble_gattc_write_flat(g.conn, handle, data, len, on_write, NULL);
     if (rc != 0) return rc;
-    if (xSemaphoreTake(s_write_sem, pdMS_TO_TICKS(4000)) != pdTRUE) return BLE_HS_ETIMEOUT;
+    if (xSemaphoreTake(s_write_sem, pdMS_TO_TICKS(timeout_ms)) != pdTRUE) return BLE_HS_ETIMEOUT;
     return s_write_status;
+}
+static int write_blocking(uint16_t handle, const void *data, uint16_t len) {
+    return write_blocking_t(handle, data, len, 4000);
 }
 
 static int on_chr(uint16_t conn, const struct ble_gatt_error *err, const struct ble_gatt_chr *chr, void *arg) {
@@ -273,7 +285,7 @@ static const char *outdoor_pull(void) {
     g.best_bank = (uint8_t)best_bank; g.newest_addr = best;
     ha_mqtt_log("outdoor bank=%d newest_addr=%u", best_bank, (unsigned)best);
 
-    const uint32_t WINDOW = 4096u * REC_STRIDE;                 // cap recent-window depth (~4096 records)
+    const uint32_t WINDOW = 2048u * REC_STRIDE;                 // ~2048 records (~34h) — bounds pull time
     uint32_t start = (g.newest_addr > WINDOW) ? (g.newest_addr - WINDOW) : 0;
     start -= start % REC_STRIDE;
     g.start_addr = start;                                       // sample[0] address (publish_meta needs it)
@@ -282,7 +294,8 @@ static const char *outdoor_pull(void) {
     uint8_t cmd[9] = {0x57, 0x0f, 0x3c, (uint8_t)best_bank, 0x00, 0, 0, 0, 0x06};
     for (uint32_t addr = start; addr <= g.newest_addr; addr += REC_STRIDE) {
         cmd[5] = (addr >> 16) & 0xff; cmd[6] = (addr >> 8) & 0xff; cmd[7] = addr & 0xff;
-        if (write_blocking(g.cmd_handle, cmd, sizeof cmd) != 0) ESP_LOGW(TAG, "read fail @%u", (unsigned)addr);
+        // short per-read timeout: a dead read must not stall the pull 4s (it just yields no record)
+        if (write_blocking_t(g.cmd_handle, cmd, sizeof cmd, 700) != 0) ESP_LOGW(TAG, "read fail @%u", (unsigned)addr);
         vTaskDelay(pdMS_TO_TICKS(8));
     }
     vTaskDelay(pdMS_TO_TICKS(1500));                            // flush tail notifications
@@ -403,7 +416,7 @@ bool gatt_history_pull(const char *mac_str, const char *profile) {
 
     ha_mqtt_log("pull %s: connecting (addr_type=%d, profile=%s)", mac_str, g.addr.type,
                 g.prof == &PROF_METER_PRO ? "meter_pro" : "outdoor");
-    int rc = ble_gap_connect(ha_ble_own_addr_type(), &g.addr, 10000, NULL, conn_event, NULL);
+    int rc = ble_gap_connect(ha_ble_own_addr_type(), &g.addr, 10000, &FAST_CONN, conn_event, NULL);
     if (rc != 0) {
         ha_mqtt_log("pull %s: ble_gap_connect rc=%d", mac_str, rc);
         ha_ble_scan_resume(); s_busy = false; return false;
