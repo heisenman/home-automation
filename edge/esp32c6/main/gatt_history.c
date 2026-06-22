@@ -43,6 +43,13 @@ static const struct ble_gap_conn_params FAST_CONN = {
     .latency = 0, .supervision_timeout = 400,  // 400 * 10ms = 4 s
     .min_ce_len = 0, .max_ce_len = 0,
 };
+// Same interval as an update-params struct — pushed proactively after connect AND used to override the
+// meter's slow renegotiation requests (BLE_GAP_EVENT_CONN_UPDATE_REQ).
+static const struct ble_gap_upd_params FAST_UPD = {
+    .itvl_min = 24, .itvl_max = 40,
+    .latency = 0, .supervision_timeout = 400,
+    .min_ce_len = 0, .max_ce_len = 0,
+};
 
 typedef struct { const uint8_t *bytes; uint8_t len; } cmd_t;
 // meter_pro
@@ -220,6 +227,14 @@ static int conn_event(struct ble_gap_event *event, void *arg) {
         ha_mqtt_log("disconnect reason=%d", event->disconnect.reason);
         xEventGroupSetBits(s_evt, BIT_DISCONNECT);
         return 0;
+    case BLE_GAP_EVENT_CONN_UPDATE_REQ:
+        // The meter tries to renegotiate to a slow interval (~150-300ms) mid-pull — override its request
+        // with our fast params so paging stays quick (v8).
+        *event->conn_update_req.self_params = FAST_UPD;
+        return 0;
+    case BLE_GAP_EVENT_CONN_UPDATE:
+        ha_mqtt_log("conn update: status=%d", event->conn_update.status);
+        return 0;
     case BLE_GAP_EVENT_NOTIFY_RX: {
         if (event->notify_rx.attr_handle != g.notify_handle) return 0;
         uint8_t buf[32];
@@ -343,6 +358,10 @@ static void pull_task(void *arg) {
     // subscribe to notifications (CCCD = notify value handle + 1)
     uint8_t cccd[2] = {0x01, 0x00};
     if (write_blocking(g.notify_handle + 1, cccd, 2) != 0) { finish("subscribe failed"); vTaskDelete(NULL); return; }
+
+    // proactively force a fast connection interval (v8) — don't wait for the meter to (slowly) propose
+    ble_gap_update_params(g.conn, &FAST_UPD);
+    vTaskDelay(pdMS_TO_TICKS(200));
 
     // handshake (prefix + current unix time, BE)
     g.pull_now = (uint32_t)time(NULL);
