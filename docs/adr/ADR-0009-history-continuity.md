@@ -49,3 +49,32 @@ on-device buffer is unnecessary for ongoing data.
 - **Cloud history:** SwitchBot's cloud API has no history endpoint (ADR-0007); violates offline-first.
 - **Routine CSV export:** manual; doesn't fit the autonomous/air-gapped goal — acceptable only as a
   backstop for large one-time recoveries.
+
+## Addendum (2026-06-21): the `02` read-reject — wrap-state hypothesis (confirm/refute target)
+
+**Observation.** The three outdoor meters (model `0x77`) split in behaviour: `living_room_outdoor`'s
+buffer read cleanly via the server tool, but `attic` and `h_bed` NAK **every** read with a 1-byte `02`
+at any address (arbitrary / grid-aligned / burst-from-oldest / alt-prefix). Same model → not hardware.
+
+**Telltale.** Readable meters return **two** `0x69` metadata packets (answering both `570f3b00` and
+`570f3b01`); attic/h_bed return **one**. And attic/h_bed are exactly the meters whose buffers have
+**wrapped** (`oldest_ptr > newest_ptr`); living_room hadn't wrapped when it pulled.
+
+**Hypothesis.** The history read protocol **changes once the ring buffer wraps**: a wrapped meter
+collapses its metadata to one packet and expects a different read handshake. Our implementation only
+speaks the **unwrapped** dialect, so wrapped meters reject it with `02`. The app handles both (its CSVs
+work), so a correct wrapped-read sequence exists — we just haven't captured it.
+
+**Sharp prediction (falsifiable).** `living_room_outdoor` will start rejecting our reads too, *once it
+wraps*. If a meter that reads cleanly today flips to `02` after its buffer fills, the hypothesis is
+confirmed. (Quick pre-check: is living_room's on-device log near full?)
+
+**Crack path.** Capture an app **HCI-btsnoop of an attic or h_bed pull specifically** (a *wrapped*
+meter — not living_room). Diff vs our sequence on two axes: (1) the read opcode/format — we send
+`570f3c010000+addr+06`; a living_room app capture once showed `570f3c000001+addr`, so the format may
+differ by wrap-state; (2) the `570f3a` / `570f3b00` / `570f3b01` setup/priming before the reads. Then
+implement the wrapped-read path in `gatt_history.c` (the dedicated history path still does GATT writes,
+so the v4-lockdown forwarder write-disable does not block this).
+
+**If refuted** (the app uses the *same* sequence and it still works): fall back to a firmware/revision
+variant difference, and the diff still hands us the exact bytes to match.
