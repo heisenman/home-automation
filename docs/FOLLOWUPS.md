@@ -1,5 +1,20 @@
 # Follow-ups & clarifications for Hugh
 
+## 📋 TOMORROW (2026-06-22) — two app-side tasks while Hugh is in the SwitchBot app
+1. **Backfill attic/h_bed gap from app CSV** — tonight's broker cutover/flash left ~6–12 min ingestion
+   gaps (all sensors briefly; live feed fully recovered). attic/h_bed minutes are BLE-unrecoverable (the
+   `02` outdoor-read reject), so re-import an app CSV. ⚠️ **Use `--tz America/Los_Angeles`** (the app
+   exports phone-local; wrong TZ reintroduced the original duplicate-band). `import_switchbot_csv.py` is
+   idempotent (INSERT OR IGNORE) so overlap is safe.
+2. **Capture an app HCI-btsnoop of an attic OR h_bed history pull** (NOT living_room) → the missing piece
+   to root-cause the `02` reject (ADR-0009). Android: Developer Options → enable "Bluetooth HCI snoop log"
+   → open the attic meter's history in the SwitchBot app → pull the btsnoop log
+   (`/sdcard/.../btsnoop_hci.log` or via `adb bugreport`). Then diff the app's read sequence for THIS
+   variant vs ours. Why it matters: our format works for living_room_outdoor but attic/h_bed reject it —
+   they return ONE 0x69 metadata packet vs living_room's TWO, i.e. a firmware/revision variant the app
+   adapts to and we don't. Implement the corrected sequence in `gatt_history.c` (dedicated path still
+   writes; no need to re-enable the v4 forwarder write-lockdown).
+
 ## 🟡 NODE-SIDE RAW-GATT/OTA LOCKDOWN — firmware coded, needs build+flash (2026-06-21)
 Two cheap least-privilege guards (defense-in-depth on top of the existing HMAC signature). Code in
 `edge/esp32c6/main/`, `HA_FW_VERSION` → `v4-lockdown`. **Not yet built/flashed** (ESP-IDF + C6 live on
