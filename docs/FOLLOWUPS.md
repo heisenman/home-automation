@@ -79,6 +79,7 @@ dictator / failover / edge nodes / endpoints.
 ## Open / deferred (lower priority)
 - Outdoor history read (`02` reject on attic/h_bed) — needs an app HCI-btsnoop of an attic/h_bed pull. LOW (ADR-0009).
 - c_office meter **battery swap** (1–2%) — physical.
+- **✅ ARANET FULLY INTEGRATED (live via ha-scanner on .245 + web app + 90d history).**
 - **Aranet — DECODER + LIVE RELAY DONE & validated (2026-06-21).** Corrected to mfr 0x0702 ext-adv;
   `tools/aranet_relay.py` decodes + publishes canonical state (radon/temp/pressure/humidity/battery).
   Live-validated from `.112` (radon 10 Bq/m³). Registry MAC fixed locally (placeholder→F4:37:5A…).
