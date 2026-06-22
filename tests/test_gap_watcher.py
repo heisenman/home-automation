@@ -36,6 +36,17 @@ def test_route_explicit_wins():
     assert G.backfill_plan(info)["via"] == "server"
 
 
+def test_route_file_overrides_inference():
+    info = {"device_id": "meter_h_bed", "device_type": "switchbot_meter_outdoor"}  # would infer edge
+    routes = {"meter_h_bed": {"via": "server"}}
+    assert G.backfill_plan(info, routes)["via"] == "server"
+
+
+def test_route_precedence_registry_beats_file():
+    info = {"device_id": "x", "device_type": "switchbot_meter_pro", "backfill": {"via": "edge"}}
+    assert G.backfill_plan(info, {"x": {"via": "server"}})["via"] == "edge"
+
+
 def test_route_inferred_by_type():
     assert G.backfill_plan({"device_type": "switchbot_meter_outdoor"}) == {
         "via": "edge", "node": G.EDGE_NODE, "profile": "outdoor"}

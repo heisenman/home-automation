@@ -1,0 +1,27 @@
+# Gap-watcher backfill routing — copy to instance/backfill-routes.yaml.
+# Maps device_id -> how the daily gap watcher should pull that device's history. Keyed by device_id (NOT
+# MAC), so deployment-specific routing (which node can reach which meter) stays out of the MAC-bearing
+# devices.yaml. Precedence: registry `backfill:` block > this file > inference from device_type.
+#
+#   via: edge    -> signed op:history GATT pull via an edge node (node + profile required)
+#   via: server  -> server-side GATT pull from the .245 dongle (close meters it can hear)
+#   via: aranet  -> aranet_history.py
+#
+# Example topology (edit device_ids to your registry):
+
+# far meters — only the C6 at the end of the house reaches these:
+meter_attic_south_wall: { via: edge, node: c6-bench, profile: outdoor }
+meter_h_bed:            { via: edge, node: c6-bench, profile: outdoor }
+meter_pro_c_office:     { via: edge, node: c6-bench, profile: meter_pro }
+
+# close meters — the .245 dongle hears these directly:
+meter_pro_master_bed:  { via: server }
+meter_pro_living_room: { via: server }
+meter_living_room:     { via: server }
+meter_master_bath:     { via: server }
+meter_h_bath:          { via: server }
+meter_c_bed:           { via: server }
+meter_kitchen:         { via: server }
+
+# radon:
+aranet_radon:          { via: aranet }

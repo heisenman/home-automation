@@ -57,11 +57,16 @@ def device_gaps(conn, device_id: str, lookback_days: int, min_gap_s: float):
 
 
 # ── routing ─────────────────────────────────────────────────────────────────────
-def backfill_plan(info: dict) -> dict | None:
-    """Explicit `backfill:` block wins; else infer from device_type. None = no known route (skip)."""
+def backfill_plan(info: dict, routes: dict | None = None) -> dict | None:
+    """Routing precedence: explicit `backfill:` in the registry → routes file (by device_id) → inferred
+    from device_type. None = no known route (skip). The routes file keeps deployment-specific routing
+    (which node reaches which meter) out of the MAC-bearing registry."""
     bf = info.get("backfill")
     if isinstance(bf, dict) and bf.get("via"):
         return bf
+    r = (routes or {}).get(info.get("device_id"))
+    if isinstance(r, dict) and r.get("via"):
+        return r
     dt = (info.get("device_type") or "").lower()
     if "aranet" in dt:
         return {"via": "aranet"}
@@ -78,8 +83,10 @@ def dispatch(mac: str, info: dict, plan: dict, dry: bool) -> None:
         cmd = [PY, str(REPO / "tools" / "edge_pull_history.py"), "--node", plan.get("node", EDGE_NODE),
                "--mac", mac, "--profile", plan.get("profile", "outdoor"), "--broker", BROKER]
     elif via == "server":
-        cmd = [PY, str(REPO / "tools" / "switchbot_history.py"), "--mac", mac,
-               "--profile", plan.get("profile", "meter_pro")]
+        cmd = [PY, str(REPO / "tools" / "switchbot_history.py"), "--device", mac,
+               "--device-id", did, "--area", info.get("area", "unknown"),
+               "--device-type", info.get("device_type", "switchbot_meter_pro"),
+               "--db", str(DB)]
     elif via == "aranet":
         cmd = [PY, str(REPO / "tools" / "aranet_history.py"), "--mac", mac]
     else:
@@ -98,6 +105,8 @@ def dispatch(mac: str, info: dict, plan: dict, dry: bool) -> None:
 def main() -> None:
     p = argparse.ArgumentParser(description="Daily per-device gap detector + history backfill dispatcher")
     p.add_argument("--registry", default=REPO / "instance" / "devices.yaml", type=Path)
+    p.add_argument("--routes", default=REPO / "instance" / "backfill-routes.yaml", type=Path,
+                   help="optional device_id -> {via,node,profile} routing overrides (no MACs)")
     p.add_argument("--lookback-days", type=int, default=int(os.environ.get("HA_GAP_LOOKBACK_DAYS", "3")))
     p.add_argument("--min-gap-min", type=float, default=float(os.environ.get("HA_GAP_MIN_MIN", "20")),
                    help="a window with no readings longer than this (minutes) is a gap")
@@ -109,6 +118,7 @@ def main() -> None:
                         format="%(asctime)s %(levelname)s %(name)s — %(message)s")
 
     reg = (yaml.safe_load(a.registry.read_text()) or {}).get("devices", {})
+    routes = (yaml.safe_load(a.routes.read_text()) or {}) if a.routes.exists() else {}
     conn = sqlite3.connect(f"file:{DB}?mode=ro", uri=True)
     min_gap_s = a.min_gap_min * 60.0
     todo: list[tuple[str, dict, dict]] = []
@@ -120,7 +130,7 @@ def main() -> None:
         if not gaps:
             continue
         biggest = max(g[2] for g in gaps) / 60.0
-        plan = backfill_plan(info)
+        plan = backfill_plan(info, routes)
         if not plan:
             log.info("%s: %d gap(s) (biggest %.0f min) but no backfill route — skipping", did, len(gaps), biggest)
             continue
