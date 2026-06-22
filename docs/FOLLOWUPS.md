@@ -1,14 +1,13 @@
 # Follow-ups & clarifications for Hugh
 
-## 🔴 ACTION NEEDED FROM YOU (2026-06-21, late)
-1. **Deploy the attic duplicate-data fix** — committed + pushed (`005d031`) but the live deploy to
-   `.245` was blocked by the safety classifier (needs your explicit OK). Run on/against `.245`:
-   ```
-   git -C ~/home_automation pull && sudo systemctl restart ha-api
-   ```
-   (or tell me "deploy it" and I'll do it). After restart, the attic 7d graph band disappears.
+## ✅ Attic "duplicate data" — FULLY RESOLVED (2026-06-21)
+API hot-wins dedup deployed (you ran it) + deeper remediation run (`fix_meter_reimport.py`): backed up,
+purged **438,068** tangled attic `csv-import` rows from parquet (~2.4× overlap), re-imported the clean
+**179,396**. Verified: 6/18 band gone (single 16.78 °C), Apr 21 clean, 1440 rows/1440 unique-ts per day
+(no dupes). Backup at `instance/db/backup-20260621-202947`. Next compaction folds the corrected hot
+rows into parquet cleanly.
 
-## Attic "duplicate data / one set wrong" — ROOT-CAUSED + fixed (deploy pending)
+## Attic "duplicate data / one set wrong" — ROOT-CAUSE (kept for reference)
 - **Cause:** a timezone-corrected CSV **re-import** landed in `hot.db` for dates already compacted to
   **parquet**, so the readings API returned BOTH rows at each timestamp → the duplicate band.
 - **Which was wrong:** parquet (the pre-fix import) held **time-shifted** values; hot (the corrected
