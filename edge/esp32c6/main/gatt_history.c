@@ -104,6 +104,7 @@ static struct {
     volatile uint32_t newest_addr;     // full (3-byte) newest pointer of the chosen bank
     volatile uint32_t start_addr;      // address of sample[0] (paging start) — for timestamp mapping
     volatile uint32_t probe_ptr;       // newest pointer parsed during the current bank probe
+    volatile uint32_t probe_ts;        // newest timestamp of the current bank (selects the active bank)
     volatile bool     probe_got;       // a 0x69 metadata arrived since the probe flag was cleared
     uint32_t pull_now;
     // relay batch (guarded by s_batch_mux)
@@ -149,17 +150,19 @@ static void flush_remaining(void) {
 }
 
 static void parse_meta(const uint8_t *d, int len) {
-    if (len != 15 || d[1] != 0x69) return;
+    if (len != 15) return;
     uint32_t ts = ((uint32_t)d[5]<<24)|((uint32_t)d[6]<<16)|((uint32_t)d[7]<<8)|d[8];
     g.meta_count++;
     if (g.prof == &PROF_OUTDOOR) {
-        // newest pointer is the 4-byte BE field at d[9:13] (e.g. 00 01 60 d4 -> 0x000160d4); the read
-        // address IS this value. (The old code read only d[11:13], truncating the high bytes -> wrong
-        // address -> the meter NAK'd.) Attribute to whichever bank we are currently probing.
+        // A bank's metadata is type 0x69 (sealed/older bank) OR 0x6a (the active/current bank — h_bed's
+        // live data is in a 0x6a bank, which the old 0x69-only guard wrongly rejected). newest pointer =
+        // 4-byte BE at d[9:13] (the read address); ts = d[5:9] (the absolute discriminator across banks).
+        if (d[1] != 0x69 && d[1] != 0x6a) return;
         uint32_t ptr = ((uint32_t)d[9]<<24)|((uint32_t)d[10]<<16)|((uint32_t)d[11]<<8)|d[12];
-        g.probe_ptr = ptr; g.newest_ts = ts; g.probe_got = true; g.meta_seen = true;
+        g.probe_ptr = ptr; g.probe_ts = ts; g.probe_got = true; g.meta_seen = true;
         return;
     }
+    if (d[1] != 0x69) return;
     uint16_t ptr = ((uint16_t)d[11]<<8)|d[12];     // meter_pro: unchanged 2-byte pointer
     if (!g.meta_seen || ptr > g.newest_ptr) { g.newest_ptr = ptr; g.newest_ts = ts; }
     if (!g.meta_seen || ptr < g.oldest_ptr) { g.oldest_ptr = ptr; g.oldest_ts = ts; }
@@ -286,19 +289,25 @@ static const char *outdoor_pull(void) {
     write_blocking(g.cmd_handle, od_s0, sizeof od_s0);          // 570f3a primer
     vTaskDelay(pdMS_TO_TICKS(300));
 
-    int best_bank = -1; uint32_t best = 0;
+    // Select the ACTIVE bank by newest TIMESTAMP, not largest pointer: pointers are per-bank address
+    // spaces (not comparable across banks), but the timestamp is the meter's absolute clock — the bank
+    // holding the most recent record is the current one (e.g. h_bed bank 03).
+    int best_bank = -1; uint32_t best_ptr = 0, best_ts = 0;
     for (int bank = 0; bank <= 3; bank++) {
-        g.probe_got = false; g.probe_ptr = 0;
+        g.probe_got = false; g.probe_ptr = 0; g.probe_ts = 0;
         uint8_t pb[4] = {0x57, 0x0f, 0x3b, (uint8_t)bank};
         write_blocking(g.cmd_handle, pb, sizeof pb);
-        vTaskDelay(pdMS_TO_TICKS(900));                        // let the 0x69 metadata land
-        ha_mqtt_log("bank %d: meta=%d ptr=%u", bank, (int)g.probe_got, (unsigned)g.probe_ptr);
-        if (g.probe_got && g.probe_ptr > best) { best = g.probe_ptr; best_bank = bank; }
+        vTaskDelay(pdMS_TO_TICKS(900));                        // let the metadata land
+        ha_mqtt_log("bank %d: meta=%d ptr=%u ts=%u", bank, (int)g.probe_got, (unsigned)g.probe_ptr,
+                    (unsigned)g.probe_ts);
+        if (g.probe_got && g.probe_ptr && g.probe_ts > best_ts) {
+            best_ts = g.probe_ts; best_ptr = g.probe_ptr; best_bank = bank;
+        }
     }
     g.diag = false;
-    if (best_bank < 0 || best == 0) return "no populated history bank";
-    g.best_bank = (uint8_t)best_bank; g.newest_addr = best;
-    ha_mqtt_log("outdoor bank=%d newest_addr=%u", best_bank, (unsigned)best);
+    if (best_bank < 0 || best_ptr == 0) return "no populated history bank";
+    g.best_bank = (uint8_t)best_bank; g.newest_addr = best_ptr; g.newest_ts = best_ts;
+    ha_mqtt_log("outdoor bank=%d newest_addr=%u ts=%u", best_bank, (unsigned)best_ptr, (unsigned)best_ts);
 
     const uint32_t WINDOW = 2048u * REC_STRIDE;                 // ~2048 records (~34h) — bounds pull time
     uint32_t start = (g.newest_addr > WINDOW) ? (g.newest_addr - WINDOW) : 0;
