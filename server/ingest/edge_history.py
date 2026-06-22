@@ -109,7 +109,21 @@ class HistoryIngest:
                 ("newest_ts", "newest_ptr", "oldest_ts", "oldest_ptr", "start_addr", "pull_now")}
         samples = sbh.decode_meter_pro(s.notifs)
         sbh.reanchor_to_now(meta, enabled=True)          # correct drifted device clocks
-        tsamples = sbh.assign_timestamps(samples, meta)
+        is_outdoor = "outdoor" in (reg.get("device_type") or "").lower()
+        if is_outdoor and samples and meta.get("newest_ts"):
+            # Outdoor history banks can WRAP, so the paged records don't begin at start_addr and the
+            # address->index mapping in assign_timestamps slides the timestamps. The last relayed record
+            # IS the newest, so anchor it to newest_ts (already re-anchored to ~now) and count backward at
+            # the interval — robust regardless of where the records physically sit (h_bed bank 3).
+            np_, op, ot = meta.get("newest_ptr"), meta.get("oldest_ptr"), meta.get("oldest_ts")
+            interval = ((meta["newest_ts"] - ot) / (np_ - op)
+                        if ot is not None and np_ and op is not None and np_ != op else 60.0)
+            if not 20 <= interval <= 3600:
+                interval = 60.0
+            nt, n = meta["newest_ts"], len(samples)
+            tsamples = [(int(round(nt - (n - 1 - k) * interval)), t, h) for k, (t, h) in enumerate(samples)]
+        else:
+            tsamples = sbh.assign_timestamps(samples, meta)
         if not tsamples:
             log.warning("[%s] decoded %d notifs -> 0 timestamped samples (bad meta?)", key, len(s.notifs))
             return
