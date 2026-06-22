@@ -110,6 +110,20 @@ class MqttTransport:
         return result or None
 
 
+class RoutingTransport:
+    """Dispatch each command to a per-device Transport, else a default. Lets ONE issuer drive a mixed
+    fleet: BLE nodes via MqttTransport (default), local-driver appliances (Midea LAN) via their own
+    Transport (the resource-manager seam of ADR-0012)."""
+    def __init__(self, default: Transport, overrides: dict[str, Transport]):
+        self.default = default
+        self.overrides = overrides
+
+    def send_and_wait(self, *, node, device_id, area, cmd, now=None, timeout=5.0):
+        t = self.overrides.get(device_id, self.default)
+        return t.send_and_wait(node=node, device_id=device_id, area=area, cmd=cmd,
+                               now=now, timeout=timeout)
+
+
 class CommandIssuer:
     def __init__(self, *, registry: dict[str, DeviceCtl], secrets: dict[str, str],
                  policy: PolicyStore, transport: Transport,

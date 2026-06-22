@@ -81,6 +81,26 @@ def test_transport_unsupported_trait_rejected():
     assert ack["status"] == "rejected"
 
 
+def test_routing_transport_dispatches_by_device():
+    from server.control.issuer import RoutingTransport
+    seen = {"default": 0}
+
+    class FakeDefault:
+        def send_and_wait(self, **kw):
+            seen["default"] += 1
+            return protocol.build_ack(cmd_id=kw["cmd"]["id"], status="ok")
+    drv = M.MideaDriver("ip", "t", "k", runner=lambda argv: SAMPLE)
+    rt = RoutingTransport(FakeDefault(), {"dehumidifier_office": M.MideaTransport({"dehumidifier_office": drv})})
+    # Midea device -> Midea transport (default not touched)
+    a1 = rt.send_and_wait(node="server", device_id="dehumidifier_office", area="living_room",
+                          cmd={"id": "x", "trait": "switchable", "action": "set", "args": {"on": True}})
+    assert a1["status"] == "ok" and seen["default"] == 0
+    # anything else -> default (MQTT path)
+    rt.send_and_wait(node="c6-bench", device_id="meter_x", area="kitchen",
+                     cmd={"id": "y", "trait": "switchable", "action": "set", "args": {"on": True}})
+    assert seen["default"] == 1
+
+
 def test_load_drivers_from_env():
     d = M.load_drivers_from_env({"MIDEA_IP": "1.2.3.4", "MIDEA_TOKEN": "t", "MIDEA_KEY": "k"},
                                 "dehumidifier_office")

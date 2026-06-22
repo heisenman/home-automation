@@ -69,6 +69,21 @@ app.add_middleware(
 CONTROL_REGISTRY = Path(os.environ.get("HA_CONTROL_REGISTRY", "instance/control.yaml"))
 NODE_SECRETS_LUT = Path(os.environ.get("HA_NODE_SECRETS", "instance/node_secrets.enc"))
 CONTROL_POLICY = Path(os.environ.get("HA_CONTROL_POLICY", "instance/control_policy.yaml"))
+CONTROL_SECRETS = Path(os.environ.get("HA_CONTROL_SECRETS", "instance/control_secrets.yaml"))
+MIDEA_DEVICE_ENV = Path(os.environ.get("HA_MIDEA_DEVICE_ENV", "instance/midea-device.env"))
+
+
+def _parse_env_file(path: Path) -> dict:
+    """Parse a KEY=value env file (instance/*.env) into a dict. Missing file -> {}."""
+    out: dict[str, str] = {}
+    if not path.exists():
+        return out
+    for line in path.read_text().splitlines():
+        line = line.strip()
+        if line and not line.startswith("#") and "=" in line:
+            k, _, v = line.partition("=")
+            out[k.strip()] = v.strip()
+    return out
 
 
 def _mount_control(app: FastAPI) -> None:
@@ -83,21 +98,31 @@ def _mount_control(app: FastAPI) -> None:
                      "instance/.master_pass to enable /devices command API)")
             return
         import yaml
-        from server.control.issuer import CommandIssuer, MqttTransport
+        from server.control.issuer import CommandIssuer, MqttTransport, RoutingTransport
         from server.control.policy import PolicyStore
         from server.control.registry import (check_secrets_present, load_control_registry,
-                                             secrets_from_lut)
+                                             load_secrets, secrets_from_lut)
+        from server.control.midea_driver import MideaTransport, load_drivers_from_env
         from server.api.control import make_router
 
         registry = load_control_registry(CONTROL_REGISTRY)
         lut = load_lut(NODE_SECRETS_LUT, master)
-        secrets = secrets_from_lut(registry, lut)
+        # secrets: per-NODE cmd_secret from the encrypted LUT, PLUS per-device secrets for local-driver
+        # appliances (the Midea dehumidifier's node isn't an enrolled firmware node).
+        secrets = {**secrets_from_lut(registry, lut), **load_secrets(CONTROL_SECRETS)}
         policy_data = yaml.safe_load(CONTROL_POLICY.read_text()) if CONTROL_POLICY.exists() else None
         policy = PolicyStore(policy_data or {"version": 1})
         broker = os.environ.get("HA_BROKER", "localhost")
         port = int(os.environ.get("HA_BROKER_PORT", "1883"))
-        issuer = CommandIssuer(registry=registry, secrets=secrets, policy=policy,
-                               transport=MqttTransport(broker=broker, port=port))
+        # transport: MQTT to BLE nodes (default) + per-device overrides for LAN appliances (Midea).
+        default_tr = MqttTransport(broker=broker, port=port)
+        midea_drivers = load_drivers_from_env(_parse_env_file(MIDEA_DEVICE_ENV), "dehumidifier_office")
+        if midea_drivers:
+            mt = MideaTransport(midea_drivers)
+            transport = RoutingTransport(default_tr, {d: mt for d in midea_drivers})
+        else:
+            transport = default_tr
+        issuer = CommandIssuer(registry=registry, secrets=secrets, policy=policy, transport=transport)
         app.include_router(make_router(issuer, make_confirm_verifier(master),
                                        make_api_token_verifier(master)))
         missing = check_secrets_present(registry, secrets)
