@@ -237,7 +237,10 @@ def reanchor_to_now(meta: dict, enabled: bool = True) -> None:
         return
     interval = (nt - ot) / (np_ - op)
     offset = pull_now - nt
-    if not (20 <= interval <= 3600) or not (-3600 <= offset <= 90 * 86400):
+    # Symmetric bound: a screenless meter's clock can drift EITHER way (observed attic ~2h ahead). Since
+    # re-anchoring discards the device clock and pins the newest sample to the connection time, an ahead
+    # drift is just as valid as a behind drift; only truly garbage metadata (>90 days off) is rejected.
+    if not (20 <= interval <= 3600) or not (-90 * 86400 <= offset <= 90 * 86400):
         log.warning("metadata implausible (interval=%.1fs, offset=%.0fs) — not re-anchoring", interval, offset)
         return
     if abs(offset) > 120:
