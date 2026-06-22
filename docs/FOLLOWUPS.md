@@ -82,11 +82,13 @@ dictator / failover / edge nodes / endpoints.
 - **Aranet — DECODER + LIVE RELAY DONE & validated (2026-06-21).** Corrected to mfr 0x0702 ext-adv;
   `tools/aranet_relay.py` decodes + publishes canonical state (radon/temp/pressure/humidity/battery).
   Live-validated from `.112` (radon 10 Bq/m³). Registry MAC fixed locally (placeholder→F4:37:5A…).
-  **DECIDE — where it scans from:** the relay needs a BT5/ext-adv-capable, *always-on* scanner IN RANGE
-  of the device's final spot. `.112` works on the desk; the **crawlspace** needs its own scanner (the
-  `.245` dongle couldn't reach it). Best full solution = a **Pi-class node** near the crawlspace (does
-  BOTH live relay AND history pull, both Python). A C6 with ext-adv firmware could do live relay only.
-  For now I can run the relay from `.112` on demand.
+  **SCANNER LOCATION — RESOLVED (2026-06-21):** with the Aranet moved downstairs, **`.245` (server)
+  sees it at RSSI −64** (better than `.112` at −78) and its BlueZ already receives the `0x0702` ext-adv.
+  So NO dedicated crawlspace node is needed for this spot — the server can scan it. CLEANEST PERMANENT
+  PATH: **teach the running `ha-scanner` to also decode manufacturer `0x0702`** (it already receives the
+  packets via BlueZ) → one scanner, both SwitchBot + Aranet, no extra process. Small `scanner.py` change
+  + a deploy (restart ha-scanner — your OK). History (`get_all_records`) can also run from `.245`. (90-day
+  radon history already imported.)
   - **History pull DONE** (`tools/aranet_history.py`): 30 days / 4320 records backfilled from the desk
     via the `aranet4` lib (GATT), idempotent. `aranet_radon` now on the dashboard. Re-run anytime in
     range to top up. ONGOING live data needs the relay running somewhere in range (placement decision).
