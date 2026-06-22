@@ -1,5 +1,23 @@
 # Follow-ups & clarifications for Hugh
 
+## 🟡 CONTROL PLANE GO-LIVE — code DONE, awaiting .245 deploy (2026-06-21)
+Authenticated control API wired + tested (68 tests green); built in the **server folder**
+(`/home/visko/Desktop/Profile/home_automation` = the CIFS-mounted `.245:~/home_automation`, per your
+"new work → server folder" instruction). What's live in code:
+- `/devices/{id}/command` mounts into the live API **only when the master passphrase is present** (else
+  read API runs unchanged — never unauthenticated control). Graceful-degrades on any config error.
+- **Admin auth** = `Authorization: Bearer SHA256("ha-api:"+master)` (your SHA-derive choice). **Confirm
+  token** `SHA256("ha-confirm:"+master)` stays the separate 2nd factor for sensitive actions.
+- PEP sources each device's HMAC key from the encrypted **LUT** by node (`secrets_from_lut`).
+- `ha-api.service` gains `HA_MASTER_PASS_FILE` + `EnvironmentFile=-instance/mqtt.env`.
+- Fixed a latent FastAPI bug (typed Request/Response params + `from __future__ annotations` → 422) and
+  hardened `MqttTransport` (broker-down → clean 504, not a 500).
+**TO GO LIVE (supervised, `provisioning/control-go-live.md`):** place `instance/{.master_pass,
+node_secrets.enc,control.yaml}` on `.245` → `sudo ./install.sh` + `sudo systemctl restart ha-api` →
+verify `control plane MOUNTED` + 401-without-bearer. **Node-side caveat:** no actuator firmware consumes
+`home/<area>/<dev>/cmd` yet (c6-bench only does edge gatt/history/ota), so `control.yaml` stays minimal
+until the first actuator — the server plane is the deliverable here.
+
 ## ✅ BROKER AUTH/ACL CUTOVER — COMPLETE (2026-06-21)
 Broker flipped from anonymous to authenticated + topic-ACL'd on `.245`, live and verified. Identities:
 **dictator** (all server services — writer/scanner/edge-mapper all authenticated + connected) and

@@ -43,5 +43,26 @@ def test_check_secrets_present():
     assert missing == ["lock_front"]
 
 
+def test_secrets_from_lut_maps_by_node():
+    # both devices live on node c6-bench → both get that node's cmd_secret
+    reg = R.parse_control_registry(DATA)
+    lut = {"c6-bench": {"cmd_secret": "NODEKEY", "mqtt_pass": "x"}}
+    secrets = R.secrets_from_lut(reg, lut)
+    assert secrets == {"lamp_office": "NODEKEY", "lock_front": "NODEKEY"}
+
+
+def test_secrets_from_lut_skips_unenrolled_or_secretless_nodes():
+    data = {"devices": {
+        "a": {"node": "node_a", "area": "x", "traits": {"switchable": {}}},
+        "b": {"node": "node_b", "area": "x", "traits": {"switchable": {}}},   # not in LUT
+        "c": {"node": "node_c", "area": "x", "traits": {"switchable": {}}},   # in LUT but no cmd_secret
+    }}
+    reg = R.parse_control_registry(data)
+    lut = {"node_a": {"cmd_secret": "K"}, "node_c": {"mqtt_pass": "p"}}
+    secrets = R.secrets_from_lut(reg, lut)
+    assert secrets == {"a": "K"}                      # b and c omitted → uncommandable until enrolled
+    assert R.check_secrets_present(reg, secrets) == ["b", "c"]
+
+
 if __name__ == "__main__":
     run_module(globals())

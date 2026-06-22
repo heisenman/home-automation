@@ -28,6 +28,7 @@ from cryptography.fernet import Fernet, InvalidToken
 from cryptography.hazmat.primitives.kdf.scrypt import Scrypt
 
 _CONFIRM_LABEL = "ha-confirm:"
+_API_LABEL = "ha-api:"
 _DEFAULT_MASTER_FILE = Path.home() / "home_automation/instance/.master_pass"
 
 
@@ -38,10 +39,24 @@ def load_master(explicit: str | None = None) -> str:
     env = os.environ.get("HA_MASTER_PASSPHRASE")
     if env:
         return env
+    # explicit file path (HOME-independent — e.g. ha-api overrides $HOME for DuckDB scratch, which would
+    # otherwise misplace the default below):
+    fpath = os.environ.get("HA_MASTER_PASS_FILE")
+    if fpath and Path(fpath).exists():
+        return Path(fpath).read_text().strip()
     if _DEFAULT_MASTER_FILE.exists():
         return _DEFAULT_MASTER_FILE.read_text().strip()
-    raise SystemExit("master passphrase not set — export HA_MASTER_PASSPHRASE or create "
-                     f"{_DEFAULT_MASTER_FILE} (0600)")
+    raise SystemExit("master passphrase not set — export HA_MASTER_PASSPHRASE, set HA_MASTER_PASS_FILE, "
+                     f"or create {_DEFAULT_MASTER_FILE} (0600)")
+
+
+def available_master(explicit: str | None = None) -> str | None:
+    """Non-raising variant for optional features (e.g. mounting the control plane): returns the master
+    if configured (arg / $HA_MASTER_PASSPHRASE / the 0600 file), else None — never aborts the process."""
+    try:
+        return load_master(explicit)
+    except SystemExit:
+        return None
 
 
 # ── LUT encryption (at rest) ─────────────────────────────────────────────────────
@@ -85,3 +100,26 @@ def make_confirm_verifier(passphrase: str):
     """Returns confirm_verifier(device_id, pin) -> bool for the control API (server/api/control.py).
     (device_id is accepted for a future per-device PIN; today one master-derived token covers all.)"""
     return lambda device_id, pin: verify_confirm(passphrase, pin)
+
+
+# ── API admin bearer token (gates who may issue ANY command) ─────────────────────
+def api_token(passphrase: str) -> str:
+    """The control-API admin bearer = SHA256("ha-api:"+master). A SEPARATE one-way token from the
+    confirm token (different label) so leaking the bearer never reveals the master nor the confirm token,
+    yet there is still only ONE secret to manage (Hugh's "two separate entities" via SHA, 2026-06-21).
+    Send as `Authorization: Bearer <api_token>`. The confirm token stays the second factor for sensitive
+    actions, so a sniffed bearer (pre-TLS) still can't unlock anything."""
+    return hashlib.sha256((_API_LABEL + passphrase).encode()).hexdigest()
+
+
+def verify_api_token(passphrase: str, authorization: str | None) -> bool:
+    """Accepts the raw token or a full `Bearer <token>` header value; constant-time compare."""
+    supplied = authorization or ""
+    if supplied.startswith("Bearer "):
+        supplied = supplied[len("Bearer "):].strip()
+    return hmac.compare_digest(api_token(passphrase), supplied)
+
+
+def make_api_token_verifier(passphrase: str):
+    """Returns authz(authorization_header) -> bool for the control router's auth dependency."""
+    return lambda authorization: verify_api_token(passphrase, authorization)

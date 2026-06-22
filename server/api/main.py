@@ -56,9 +56,57 @@ app = FastAPI(title="Home Automation API", version="1.0.0", lifespan=lifespan)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_methods=["GET"],
+    allow_methods=["GET", "POST"],   # POST for the control router (/devices/{id}/command)
     allow_headers=["*"],
 )
+
+
+# ── Control plane (mounted only when configured) ─────────────────────────────────
+# The read/dashboard endpoints above stay open on the LAN (read-only). The control router is mounted
+# ONLY when the master passphrase is present (→ admin bearer + confirm token derivable) AND degrades
+# gracefully otherwise, so a box without control config still serves reads. Admin auth = SHA-derived
+# bearer; sensitive actions need the separate confirm token (ADR-0010/0011, go-live 2026-06-21).
+CONTROL_REGISTRY = Path(os.environ.get("HA_CONTROL_REGISTRY", "instance/control.yaml"))
+NODE_SECRETS_LUT = Path(os.environ.get("HA_NODE_SECRETS", "instance/node_secrets.enc"))
+CONTROL_POLICY = Path(os.environ.get("HA_CONTROL_POLICY", "instance/control_policy.yaml"))
+
+
+def _mount_control(app: FastAPI) -> None:
+    from server.control.secret_store import (available_master, load_lut, make_api_token_verifier,
+                                             make_confirm_verifier)
+    master = available_master()
+    if not master:
+        log.info("control plane NOT mounted — no master passphrase (set HA_MASTER_PASSPHRASE or "
+                 "instance/.master_pass to enable /devices command API)")
+        return
+    try:
+        import yaml
+        from server.control.issuer import CommandIssuer, MqttTransport
+        from server.control.policy import PolicyStore
+        from server.control.registry import (check_secrets_present, load_control_registry,
+                                             secrets_from_lut)
+        from server.api.control import make_router
+
+        registry = load_control_registry(CONTROL_REGISTRY)
+        lut = load_lut(NODE_SECRETS_LUT, master)
+        secrets = secrets_from_lut(registry, lut)
+        policy_data = yaml.safe_load(CONTROL_POLICY.read_text()) if CONTROL_POLICY.exists() else None
+        policy = PolicyStore(policy_data or {"version": 1})
+        broker = os.environ.get("HA_BROKER", "localhost")
+        port = int(os.environ.get("HA_BROKER_PORT", "1883"))
+        issuer = CommandIssuer(registry=registry, secrets=secrets, policy=policy,
+                               transport=MqttTransport(broker=broker, port=port))
+        app.include_router(make_router(issuer, make_confirm_verifier(master),
+                                       make_api_token_verifier(master)))
+        missing = check_secrets_present(registry, secrets)
+        log.info("control plane MOUNTED — %d device(s), %d controllable; broker %s:%s%s",
+                 len(registry), len(secrets), broker, port,
+                 f"; NO secret for {missing}" if missing else "")
+    except Exception:
+        log.exception("control plane mount FAILED — read API stays up, control disabled")
+
+
+_mount_control(app)
 
 
 # ── DB helpers ────────────────────────────────────────────────────────────────

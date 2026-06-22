@@ -50,3 +50,19 @@ def load_secrets(path: Path) -> dict[str, str]:
 def check_secrets_present(registry: dict[str, DeviceCtl], secrets: dict[str, str]) -> list[str]:
     """Return device_ids that are declared but have no secret (cannot be commanded). For startup warnings."""
     return [d for d in registry if d not in secrets]
+
+
+def secrets_from_lut(registry: dict[str, DeviceCtl], lut: dict[str, dict]) -> dict[str, str]:
+    """Map each control device to its owning NODE's `cmd_secret` from the encrypted enrollment LUT.
+
+    The HMAC command key is per-NODE (baked into that node's firmware and verified by the node, which may
+    relay to several end devices), so every device on `node` signs with `lut[node]["cmd_secret"]`. Devices
+    whose node isn't enrolled (or whose record lacks a secret) are omitted — they simply can't be commanded
+    yet (see check_secrets_present for the startup warning). This is the bridge that lets the PEP source
+    secrets from the encrypted store instead of an inline dict (control go-live, 2026-06-21)."""
+    out: dict[str, str] = {}
+    for dev_id, ctl in registry.items():
+        rec = lut.get(ctl.node)
+        if rec and rec.get("cmd_secret"):
+            out[dev_id] = rec["cmd_secret"]
+    return out

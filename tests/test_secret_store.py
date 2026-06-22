@@ -53,5 +53,42 @@ def test_confirm_verifier_for_api():
     assert v("lock_front", "nope") is False
 
 
+def test_api_token_one_way_and_distinct_from_confirm():
+    tok = S.api_token(MASTER)
+    assert len(tok) == 64 and MASTER not in tok                 # SHA-256 hex, master not recoverable
+    assert tok != S.confirm_token(MASTER)                       # different label → different token
+    assert tok != S.api_token("Canticum2")                      # depends on the master
+
+
+def test_api_token_verify_accepts_bearer_or_raw():
+    tok = S.api_token(MASTER)
+    assert S.verify_api_token(MASTER, tok) is True              # raw token
+    assert S.verify_api_token(MASTER, f"Bearer {tok}") is True  # full header value
+    assert S.verify_api_token(MASTER, "Bearer nope") is False
+    assert S.verify_api_token(MASTER, None) is False
+    assert S.verify_api_token(MASTER, S.confirm_token(MASTER)) is False   # confirm token ≠ api bearer
+
+
+def test_api_token_verifier_for_router():
+    authz = S.make_api_token_verifier(MASTER)
+    assert authz(f"Bearer {S.api_token(MASTER)}") is True
+    assert authz(None) is False
+
+
+def test_available_master_optional(monkeypatch=None):
+    # available_master must never raise even when nothing is configured
+    import os
+    saved_env = os.environ.pop("HA_MASTER_PASSPHRASE", None)
+    saved_file = os.environ.pop("HA_MASTER_PASS_FILE", None)
+    try:
+        assert S.available_master() is None or isinstance(S.available_master(), str)
+        assert S.available_master("explicit-master") == "explicit-master"
+    finally:
+        if saved_env is not None:
+            os.environ["HA_MASTER_PASSPHRASE"] = saved_env
+        if saved_file is not None:
+            os.environ["HA_MASTER_PASS_FILE"] = saved_file
+
+
 if __name__ == "__main__":
     run_module(globals())

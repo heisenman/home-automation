@@ -17,6 +17,11 @@ Environment=HOME=/home/visko/home_automation/instance
 # Bind address: 0.0.0.0 = reachable on the LAN; 127.0.0.1 = localhost only.
 # API is read-only and unauthenticated — only expose on a trusted home LAN.
 Environment=HA_BIND_HOST=0.0.0.0
+# Control plane (go-live): master passphrase derives the admin bearer + confirm token and decrypts the
+# node-secret LUT; mqtt.env carries the dictator broker creds the issuer's MqttTransport authenticates
+# with. Both gitignored under instance/. Absent → control router simply isn't mounted (reads still work).
+Environment=HA_MASTER_PASS_FILE=/home/visko/home_automation/instance/.master_pass
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
 ExecStart=/home/visko/home_automation/venv/bin/python3 \
     -m uvicorn server.api.main:app \
     --host ${HA_BIND_HOST} \

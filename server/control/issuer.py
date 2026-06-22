@@ -91,12 +91,22 @@ class MqttTransport:
         c = self._mqtt.Client(self._mqtt.CallbackAPIVersion.VERSION2)
         apply_credentials(c)
         c.on_message = on_msg
-        c.connect(self.broker, self.port, 30)
-        c.loop_start()
-        c.subscribe(ack_topic, qos=1)
-        c.publish(cmd_topic, json.dumps(cmd), qos=1)
-        got.wait(timeout)
-        c.loop_stop(); c.disconnect()
+        try:
+            c.connect(self.broker, self.port, 30)
+            c.loop_start()
+            c.subscribe(ack_topic, qos=1)
+            c.publish(cmd_topic, json.dumps(cmd), qos=1)
+            got.wait(timeout)
+        except OSError as e:
+            # broker unreachable/auth-refused → treat as no-ack (issuer maps to 504), not a 500 crash
+            log.warning("MqttTransport: broker %s:%s unreachable for %s: %s",
+                        self.broker, self.port, device_id, e)
+            return None
+        finally:
+            try:
+                c.loop_stop(); c.disconnect()
+            except Exception:
+                pass
         return result or None
 
 

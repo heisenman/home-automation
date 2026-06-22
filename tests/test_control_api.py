@@ -73,5 +73,36 @@ def test_sha_confirm_token_gates_unlock():
     assert bad == 403 and body["reason"] == "confirm-required", (bad, body)
 
 
+def test_router_requires_admin_bearer():
+    """End-to-end auth at the router: no/!wrong bearer → 401; correct SHA-derived bearer → reaches the
+    PEP. Skips cleanly if fastapi isn't installed (keeps the suite dependency-light)."""
+    try:
+        from fastapi import FastAPI
+        from fastapi.testclient import TestClient
+    except Exception:
+        print("    (skip: fastapi/testclient not available)")
+        return
+    from server.control import secret_store as S
+    master = "CHANGE_ME_master_passphrase"
+    app = FastAPI()
+    app.include_router(C.make_router(_issuer(), S.make_confirm_verifier(master),
+                                     S.make_api_token_verifier(master)))
+    client = TestClient(app)
+    body = {"trait": "switchable", "action": "set", "args": {"on": True}}
+
+    # no bearer → 401
+    assert client.post("/devices/lamp_office/command", json=body).status_code == 401
+    # wrong bearer → 401
+    assert client.post("/devices/lamp_office/command", json=body,
+                       headers={"Authorization": "Bearer nope"}).status_code == 401
+    # the master itself is NOT the bearer → 401
+    assert client.post("/devices/lamp_office/command", json=body,
+                       headers={"Authorization": f"Bearer {master}"}).status_code == 401
+    # correct SHA-derived bearer → reaches the PEP and switches the lamp
+    r = client.post("/devices/lamp_office/command", json=body,
+                    headers={"Authorization": f"Bearer {S.api_token(master)}"})
+    assert r.status_code == 200 and r.json()["status"] == "ok", (r.status_code, r.text)
+
+
 if __name__ == "__main__":
     run_module(globals())

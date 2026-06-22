@@ -56,17 +56,29 @@ def handle_command(issuer: CommandIssuer, device_id: str, body: dict[str, Any],
     return result_to_http(r)
 
 
-def make_router(issuer: CommandIssuer, confirm_verifier=None):
-    """Build the FastAPI router (imported lazily so non-API code/tests don't need fastapi)."""
-    from fastapi import APIRouter, Request, Response
+def make_router(issuer: CommandIssuer, confirm_verifier=None, api_authz=None):
+    """Build the FastAPI control router (fastapi imported lazily so non-API code/tests don't need it).
+
+    `api_authz(authorization_header) -> bool` is the admin gate (bearer = SHA256("ha-api:"+master), see
+    secret_store.make_api_token_verifier). It is REQUIRED: with no verifier every request is 401, so the
+    control plane can never be exposed unauthenticated even if mounted by mistake. `confirm_verifier`
+    remains the SEPARATE second factor for sensitive actions (checked inside handle_command)."""
+    from fastapi import APIRouter, Body, Depends, Header, HTTPException
+    from fastapi.responses import JSONResponse
 
     router = APIRouter(prefix="/devices", tags=["control"])
 
-    @router.post("/{device_id}/command")
-    async def post_command(device_id: str, request: Request, response: Response):
-        body = await request.json()
+    def require_admin(authorization: str | None = Header(default=None)):
+        if api_authz is None or not api_authz(authorization):
+            raise HTTPException(status_code=401, detail="unauthorized",
+                                headers={"WWW-Authenticate": "Bearer"})
+
+    # NB: take the JSON body as a `dict` param and return a JSONResponse rather than typed
+    # Request/Response params — with `from __future__ import annotations` those local-scope types
+    # aren't resolvable by FastAPI's hint analysis and get mis-read as query params (422).
+    @router.post("/{device_id}/command", dependencies=[Depends(require_admin)])
+    async def post_command(device_id: str, body: dict = Body(...)):
         code, payload = handle_command(issuer, device_id, body, confirm_verifier)
-        response.status_code = code
-        return payload
+        return JSONResponse(status_code=code, content=payload)
 
     return router
