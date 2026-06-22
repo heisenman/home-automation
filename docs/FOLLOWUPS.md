@@ -79,6 +79,16 @@ dictator / failover / edge nodes / endpoints.
 ## Open / deferred (lower priority)
 - Outdoor history read (`02` reject on attic/h_bed) — needs an app HCI-btsnoop of an attic/h_bed pull. LOW (ADR-0009).
 - c_office meter **battery swap** (1–2%) — physical.
-- Aranet radon live capture — needs ext-advertising scan firmware + a node near the crawlspace.
+- **Aranet — DECODER + LIVE RELAY DONE & validated (2026-06-21).** Corrected to mfr 0x0702 ext-adv;
+  `tools/aranet_relay.py` decodes + publishes canonical state (radon/temp/pressure/humidity/battery).
+  Live-validated from `.112` (radon 10 Bq/m³). Registry MAC fixed locally (placeholder→F4:37:5A…).
+  **DECIDE — where it scans from:** the relay needs a BT5/ext-adv-capable, *always-on* scanner IN RANGE
+  of the device's final spot. `.112` works on the desk; the **crawlspace** needs its own scanner (the
+  `.245` dongle couldn't reach it). Best full solution = a **Pi-class node** near the crawlspace (does
+  BOTH live relay AND history pull, both Python). A C6 with ext-adv firmware could do live relay only.
+  For now I can run the relay from `.112` on demand.
+  - **History pull**: `aranet4` lib does it over GATT (`get_all_records`) — no RE. I can build
+    `tools/aranet_history.py` (pull-all + idempotent ingest); needs a Python BLE central in range.
+  - **Deploy note:** `.245`'s registry also needs the real Aranet MAC if a scanner runs there.
 - Retire `.112` duplicate services (`sudo systemctl disable --now ha-api ha-writer mosquitto`) — your sudo.
 - G11 provisioning bring-up (arrives ~2026-06-23) — your hardware step + on-device LLM.
