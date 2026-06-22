@@ -30,6 +30,10 @@ static const ble_uuid128_t NOTIFY_UUID =
 // Handshake: 57 00 05 03 04 00 00 00 00 + now(BE u32)
 static const uint8_t HANDSHAKE_PREFIX[] = {0x57,0x00,0x05,0x03,0x04,0x00,0x00,0x00,0x00};
 #define REC_STRIDE 6
+#define HIST_INTERVAL_S 60   // outdoor: ~60s per address-unit (per-minute log), measured from two
+                             // metadata captures (Δaddr 56 / Δts 3369s). Used to synthesize oldest_ts so
+                             // the server's assign_timestamps gets a consistent interval; reanchor_to_now
+                             // then corrects the meter's own clock drift.
 
 typedef struct { const uint8_t *bytes; uint8_t len; } cmd_t;
 // meter_pro
@@ -82,6 +86,7 @@ static struct {
     // probing 570f3b00..03 and taking the one whose 0x69 metadata carries a non-zero newest pointer.
     volatile uint8_t  best_bank;
     volatile uint32_t newest_addr;     // full (3-byte) newest pointer of the chosen bank
+    volatile uint32_t start_addr;      // address of sample[0] (paging start) — for timestamp mapping
     volatile uint32_t probe_ptr;       // newest pointer parsed during the current bank probe
     volatile bool     probe_got;       // a 0x69 metadata arrived since the probe flag was cleared
     uint32_t pull_now;
@@ -225,11 +230,23 @@ static int conn_event(struct ble_gap_event *event, void *arg) {
 // ── Pull orchestration task ─────────────────────────────────────────────────────
 static void publish_meta(void) {
     char p[256];
-    snprintf(p, sizeof(p),
-        "{\"t\":\"meta\",\"mac\":\"%s\",\"newest_ts\":%u,\"newest_ptr\":%u,\"oldest_ts\":%u,"
-        "\"oldest_ptr\":%u,\"bank\":%u,\"newest_addr\":%u,\"pull_now\":%u}",
-        g.mac_str, (unsigned)g.newest_ts, g.newest_ptr, (unsigned)g.oldest_ts,
-        g.oldest_ptr, g.best_bank, (unsigned)g.newest_addr, (unsigned)g.pull_now);
+    if (g.prof == &PROF_OUTDOOR) {
+        // synthesize a complete, consistent meta: oldest_ptr=start_addr, newest_ptr=newest_addr,
+        // oldest_ts = newest_ts - span*interval  => server interval = (nt-ot)/(np-op) = HIST_INTERVAL_S.
+        uint32_t span = g.newest_addr - g.start_addr;
+        uint32_t oldest_ts = g.newest_ts - span * HIST_INTERVAL_S;
+        snprintf(p, sizeof(p),
+            "{\"t\":\"meta\",\"mac\":\"%s\",\"newest_ts\":%u,\"newest_ptr\":%u,\"oldest_ts\":%u,"
+            "\"oldest_ptr\":%u,\"start_addr\":%u,\"bank\":%u,\"pull_now\":%u}",
+            g.mac_str, (unsigned)g.newest_ts, (unsigned)g.newest_addr, (unsigned)oldest_ts,
+            (unsigned)g.start_addr, (unsigned)g.start_addr, g.best_bank, (unsigned)g.pull_now);
+    } else {
+        snprintf(p, sizeof(p),
+            "{\"t\":\"meta\",\"mac\":\"%s\",\"newest_ts\":%u,\"newest_ptr\":%u,\"oldest_ts\":%u,"
+            "\"oldest_ptr\":%u,\"start_addr\":%u,\"pull_now\":%u}",
+            g.mac_str, (unsigned)g.newest_ts, g.newest_ptr, (unsigned)g.oldest_ts,
+            g.oldest_ptr, g.oldest_ptr, (unsigned)g.pull_now);
+    }
     ha_mqtt_publish_history(g.mac_str, p);
 }
 
@@ -255,11 +272,12 @@ static const char *outdoor_pull(void) {
     if (best_bank < 0 || best == 0) return "no populated history bank";
     g.best_bank = (uint8_t)best_bank; g.newest_addr = best;
     ha_mqtt_log("outdoor bank=%d newest_addr=%u", best_bank, (unsigned)best);
-    publish_meta();
 
     const uint32_t WINDOW = 4096u * REC_STRIDE;                 // cap recent-window depth (~4096 records)
     uint32_t start = (g.newest_addr > WINDOW) ? (g.newest_addr - WINDOW) : 0;
     start -= start % REC_STRIDE;
+    g.start_addr = start;                                       // sample[0] address (publish_meta needs it)
+    publish_meta();
     ESP_LOGI(TAG, "paging bank %d %u..%u", best_bank, (unsigned)start, (unsigned)g.newest_addr);
     uint8_t cmd[9] = {0x57, 0x0f, 0x3c, (uint8_t)best_bank, 0x00, 0, 0, 0, 0x06};
     for (uint32_t addr = start; addr <= g.newest_addr; addr += REC_STRIDE) {
