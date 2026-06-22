@@ -52,11 +52,11 @@ dictator / failover / edge nodes / endpoints.
    should EVENTUALLY be cable-from-the-G11 (the "scary" op). OTA = dev/break-glass. (Captured in ADR-0011/0005.)
 4. **Mode mechanism** — ✅ built (deadband + dwell). Real power/UPS input drivers still TBD hardware.
 
-## Still open for you
-5. **Per-device secret distribution / enrollment** — model is physical-presence/console (plan §13). Confirm
-   before scaling past one node (vs. a provisioning USB from the G11).
-6. **Confirm-PIN storage** — where the software confirm PIN(s) live (per-device? one admin PIN?) and how the
-   admin UI collects it. Currently the verifier is a pluggable callable; needs a real store + API auth.
+## ✅ Enrollment + confirm — BUILT (2026-06-21)
+5. Per-device secrets: `tools/enroll_node.py` → encrypted LUT (`instance/node_secrets.enc`, master
+   `CHANGE_ME_master_passphrase` in `instance/.master_pass`). Physical-presence: emit `secrets.h`, cable-flash from G11.
+   c6-bench seeded. 6. Confirm = `SHA256("ha-confirm:"+master)` (`secret_store.make_confirm_verifier`).
+   DEFERRED to control-go-live: mount control router + issuer sources node secret from LUT; LUT→.245.
 
 ## Done live this session (2026-06-21)
 - ✅ **Signed-only commands incl OTA** — deployed C6 (now `ota_1 v2-sec`) requires a valid HMAC
