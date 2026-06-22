@@ -72,14 +72,16 @@ CONTROL_POLICY = Path(os.environ.get("HA_CONTROL_POLICY", "instance/control_poli
 
 
 def _mount_control(app: FastAPI) -> None:
-    from server.control.secret_store import (available_master, load_lut, make_api_token_verifier,
-                                             make_confirm_verifier)
-    master = available_master()
-    if not master:
-        log.info("control plane NOT mounted — no master passphrase (set HA_MASTER_PASSPHRASE or "
-                 "instance/.master_pass to enable /devices command API)")
-        return
+    # EVERYTHING (incl. the control-package imports, which pull in cryptography) is guarded: a missing
+    # optional dep or any config error must DISABLE control, never crash the read API at import time.
     try:
+        from server.control.secret_store import (available_master, load_lut, make_api_token_verifier,
+                                                 make_confirm_verifier)
+        master = available_master()
+        if not master:
+            log.info("control plane NOT mounted — no master passphrase (set HA_MASTER_PASSPHRASE or "
+                     "instance/.master_pass to enable /devices command API)")
+            return
         import yaml
         from server.control.issuer import CommandIssuer, MqttTransport
         from server.control.policy import PolicyStore

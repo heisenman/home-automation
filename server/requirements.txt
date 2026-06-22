@@ -9,3 +9,4 @@ duckdb==1.1.3
 fastapi==0.115.5
 uvicorn[standard]==0.32.1
 httpx==0.28.1
+cryptography==49.0.0   # control plane: Fernet-encrypted node-secret LUT (server/control/secret_store.py)
