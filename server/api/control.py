@@ -180,6 +180,63 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
     return 200, {"status": "ok", "device_id": device_id, "policy": pol}
 
 
+# ── device meta (R8: user-set friendly name / room / hidden) ─────────────────────
+def handle_device_meta(conn, device_id: str, body: dict[str, Any]) -> tuple[int, dict]:
+    """Set a device's display overlay (name/room/hidden). Pure. Empty-string name/room clears that label
+    (UI falls back to the registry); fields omitted are left unchanged. Works for ANY device_id."""
+    from server.control import control_store as store
+    patch = body or {}
+    name, room, hidden = patch.get("name"), patch.get("room"), patch.get("hidden")
+    if name is not None and not isinstance(name, str):
+        return 400, {"status": "bad-request", "reason": "name must be a string"}
+    if room is not None and not isinstance(room, str):
+        return 400, {"status": "bad-request", "reason": "room must be a string"}
+    if hidden is not None and not isinstance(hidden, bool):
+        return 400, {"status": "bad-request", "reason": "hidden must be a boolean"}
+    if name is None and room is None and hidden is None:
+        return 400, {"status": "bad-request", "reason": "nothing to set (name/room/hidden)"}
+    store.set_device_meta(conn, device_id, name=name, room=room, hidden=hidden)
+    return 200, {"status": "ok", "device_id": device_id, "meta": store.get_device_meta(conn, device_id)}
+
+
+def make_device_meta_router(api_authz, control_db):
+    """Admin-gated device overlay editor (prefix /api/v1/devices). Works for any device (sensors too)."""
+    import sqlite3
+
+    from fastapi import APIRouter, Body, Depends, Header, HTTPException
+    from fastapi.responses import JSONResponse
+
+    from server.control import control_store as store
+
+    router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
+
+    def require_admin(authorization: str | None = Header(default=None)):
+        if api_authz is None or not api_authz(authorization):
+            raise HTTPException(status_code=401, detail="unauthorized",
+                                headers={"WWW-Authenticate": "Bearer"})
+
+    @router.put("/{device_id}/meta", dependencies=[Depends(require_admin)])
+    async def put_meta(device_id: str, body: dict = Body(...)):
+        c = sqlite3.connect(str(control_db))
+        store.ensure_schema(c)
+        try:
+            code, payload = handle_device_meta(c, device_id, body)
+        finally:
+            c.close()
+        return JSONResponse(status_code=code, content=payload)
+
+    @router.get("/meta")            # open read: lets the UI find hidden devices to un-hide them
+    async def get_all_meta():
+        c = sqlite3.connect(str(control_db))
+        store.ensure_schema(c)
+        try:
+            return JSONResponse(status_code=200, content={"meta": store.all_device_meta(c)})
+        finally:
+            c.close()
+
+    return router
+
+
 def make_override_router(api_authz, control_db, device_ids=None):
     """Admin-gated control router (prefix /control): set/clear the manual override and read the live
     control state. Writes only control.db (the controller's source of truth); same bearer as /devices."""

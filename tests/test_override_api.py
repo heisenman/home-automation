@@ -120,6 +120,24 @@ def test_policy_rejects_bad_strategy_and_schedule():
     assert C.handle_policy_update(c, "nope", {"enabled": True}, {DEV})[0] == 404
 
 
+def test_device_meta_set_merge_and_validate():
+    c = _conn()
+    # set name + room
+    code, body = C.handle_device_meta(c, "meter_attic", {"name": "Attic", "room": "attic loft"})
+    assert code == 200 and body["meta"]["name"] == "Attic" and body["meta"]["room"] == "attic loft"
+    # merge: hide without touching name/room
+    C.handle_device_meta(c, "meter_attic", {"hidden": True})
+    m = store.get_device_meta(c, "meter_attic")
+    assert m["hidden"] is True and m["name"] == "Attic"      # name preserved across merge
+    # empty string clears a label
+    C.handle_device_meta(c, "meter_attic", {"name": ""})
+    assert store.get_device_meta(c, "meter_attic")["name"] == ""
+    # validation
+    assert C.handle_device_meta(c, "meter_attic", {"hidden": "yes"})[0] == 400
+    assert C.handle_device_meta(c, "meter_attic", {})[0] == 400
+    assert C.handle_device_meta(c, "meter_attic", {"name": 5})[0] == 400
+
+
 def test_router_requires_admin_bearer():
     """End-to-end: override + control-state routes 401 without the SHA bearer, 200 with it."""
     try:

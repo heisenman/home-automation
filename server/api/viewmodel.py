@@ -32,12 +32,14 @@ def _latest(hot, device_id: str, metric: str, authoritative: int):
     return (r[0], r[1]) if r else None
 
 
-def build_sensor_list(hot_conn, now: float) -> list[dict]:
+def build_sensor_list(hot_conn, now: float, meta: dict | None = None) -> list[dict]:
     """All TRUSTED sensors with their latest value per metric, grouped per device (one query). Device
     self-reports (authoritative=0, e.g. the dehumidifier's onboard RH) are excluded — they live in the
-    control view, not the sensor view. Sorted by area then device_id."""
+    control view, not the sensor view. Sorted by (overlay) room then device_id. `meta` is the user overlay
+    {device_id: {name, room, hidden}} (ADR-0014 R8): hidden devices are dropped, name/room surfaced."""
     if hot_conn is None:
         return []
+    meta = meta or {}
     rows = hot_conn.execute(
         """SELECT r.device_id, r.metric, r.value, r.ts, d.device_type, d.area
              FROM readings r
@@ -50,6 +52,8 @@ def build_sensor_list(hot_conn, now: float) -> list[dict]:
     for did, metric, value, ts, dtype, area in rows:
         if did.startswith("unknown"):       # unregistered MAC the scanner saw — not a user device; hide
             continue
+        if (meta.get(did) or {}).get("hidden"):     # user-hidden (R8 lifecycle)
+            continue
         e = by_dev.setdefault(did, {"device_id": did, "device_type": dtype or "unknown",
                                     "area": area or "unknown", "ts": ts, "metrics": {}})
         e["metrics"][metric] = value
@@ -57,15 +61,19 @@ def build_sensor_list(hot_conn, now: float) -> list[dict]:
             e["ts"] = ts
     out = list(by_dev.values())
     for e in out:
+        m = meta.get(e["device_id"]) or {}
+        e["name"] = m.get("name") or None           # UI falls back to a prettified device_id
+        e["room"] = m.get("room") or e["area"]      # overlay room wins; else the registry area
         e["age_s"] = _age_s(e["ts"], now)
-    out.sort(key=lambda e: (e["area"], e["device_id"]))
+    out.sort(key=lambda e: (e["room"], e["device_id"]))
     return out
 
 
-def build_display(control_conn, hot_conn, device_id: str, now: float, registry=None) -> dict | None:
+def build_display(control_conn, hot_conn, device_id: str, now: float, registry=None,
+                  meta: dict | None = None) -> dict | None:
     """Compose the display view-model for one controllable device. None if it has no control policy.
     `registry` (device_id -> DeviceCtl), when supplied, adds the device's command capabilities (traits)
-    so the UI can render manual controls."""
+    so the UI can render manual controls. `meta` is the user overlay (R8): friendly name / room."""
     from server.api.control import read_control_state
 
     snap = read_control_state(control_conn, device_id, now)
@@ -121,9 +129,12 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
     else:
         health = "ok"
 
+    dm = (meta or {}).get(device_id) or {}
     return {
         "schema": 1,
         "device_id": device_id,
+        "name": dm.get("name") or None,
+        "room": dm.get("room") or None,
         "running": running,
         "control": {
             "enabled": bool(policy.get("enabled", True)),

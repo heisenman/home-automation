@@ -71,7 +71,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v13 (2026-06-22)";
+const BUILD = "v14 (2026-06-23)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -270,15 +270,17 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
 }
 
 // ── device card ──────────────────────────────────────────────────────────────
-function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
+function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit }) {
   const running = vm.running;
   const s = vm.sensor, o = vm.onboard, d = vm.last_decision;
   const ageStale = vm.health === "stale";   // the BFF already derives staleness; mirror it on the age
   return html`
     <div class="card health-${vm.health}">
       <div class="card-head">
-        <h2>${vm.device_id}</h2>
+        <h2>${dispName(vm)}</h2>
+        ${vm.room && html`<span class="sensor-area">${vm.room}</span>`}
         <span class="badge health-${vm.health}">${vm.health}</span>
+        <button class="btn sm ghost edit-btn" onClick=${() => onEdit(vm)}>✎</button>
       </div>
       <div class="state-row">
         <span class="pill ${running ? "on" : "off"}">${running == null ? "?" : running ? "RUNNING" : "IDLE"}</span>
@@ -312,6 +314,9 @@ function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
 // ── sensors (read-only) ──────────────────────────────────────────────────────
 const prettyArea = (a) => (a || "unknown").replace(/_/g, " ");
 const prettyName = (id) => id.replace(/^meter_/, "").replace(/_/g, " ");
+// R8: prefer the user overlay (name/room), fall back to the prettified registry id/area.
+const dispName = (o) => (o && o.name) || prettyName(o.device_id);
+const dispRoom = (o) => (o && o.room) || prettyArea(o && o.area);
 
 // which metrics get a graph, with display unit + line color
 const GRAPHABLE = [
@@ -340,8 +345,8 @@ function SensorChip({ s, onOpen }) {
   const stale = s.age_s != null && s.age_s > 1800;             // 30m: meters report often
   return html`
     <div class="sensor" onClick=${onOpen}>
-      <div class="sensor-name">${prettyName(s.device_id)} <span class="chev">▸</span></div>
-      <div class="sensor-area">${prettyArea(s.area)}</div>
+      <div class="sensor-name">${dispName(s)} <span class="chev">▸</span></div>
+      <div class="sensor-area">${dispRoom(s)}</div>
       <${SensorVals} m=${m} unit=${unit} />
       <div class="sensor-meta">
         <span class=${stale ? "age-stale" : "age-fresh"}>${fmtAge(s.age_s)}</span>
@@ -351,7 +356,7 @@ function SensorChip({ s, onOpen }) {
 }
 
 // expanded — full width, below the grid, charts over the shared range. Click the header to collapse.
-function ExpandedSensor({ s, range, onClose }) {
+function ExpandedSensor({ s, range, isAdmin, onEdit, onClose }) {
   const m = s.metrics || {};
   const unit = useTemp();
   const [series, setSeries] = useState(null);
@@ -370,9 +375,10 @@ function ExpandedSensor({ s, range, onClose }) {
   }, [s.device_id, range.start, range.end]);
   return html`
     <div class="sensor open">
-      <div class="sensor-head" onClick=${onClose}>
-        <span class="sensor-name">${prettyName(s.device_id)} <span class="chev">▾</span></span>
-        <span class="sensor-area">${prettyArea(s.area)}</span>
+      <div class="sensor-head">
+        <span class="sensor-name" onClick=${onClose}>${dispName(s)} <span class="chev">▾</span></span>
+        <span class="sensor-area">${dispRoom(s)}</span>
+        <button class="btn sm ghost edit-btn" onClick=${() => onEdit(s)}>✎</button>
       </div>
       <${SensorVals} m=${m} unit=${unit} />
       <div class="charts">
@@ -387,15 +393,29 @@ function ExpandedSensor({ s, range, onClose }) {
     </div>`;
 }
 
-function Sensors({ sensors }) {
+function Sensors({ sensors, isAdmin, onEdit, onChange }) {
   const [expanded, setExpanded] = useState(new Set());        // device_ids currently expanded
   const [range, setRange] = useState(() => computeRange(24, { start: "", end: "" }));
+  const [hiddenList, setHiddenList] = useState(null);         // null=not loaded, []=loaded
   if (sensors == null) return null;
   if (sensors.length === 0) return html`<p class="note">No sensor readings yet.</p>`;
   const open = (id) => setExpanded((p) => new Set(p).add(id));
   const close = (id) => setExpanded((p) => { const n = new Set(p); n.delete(id); return n; });
   const mins = sensors.filter((s) => !expanded.has(s.device_id));
   const exps = sensors.filter((s) => expanded.has(s.device_id));
+
+  const loadHidden = async () => {
+    try {
+      const d = await getJSON("/api/v1/devices/meta");
+      setHiddenList(Object.entries(d.meta || {}).filter(([, m]) => m.hidden)
+        .map(([id, m]) => ({ device_id: id, ...m })));
+    } catch { setHiddenList([]); }
+  };
+  const unhide = async (id) => {
+    try { await adminSend("PUT", `/api/v1/devices/${id}/meta`, { hidden: false }); } catch {}
+    await onChange(); loadHidden();
+  };
+
   return html`
     <div class="sensors-wrap">
       <h2 class="section">Sensors</h2>
@@ -406,8 +426,16 @@ function Sensors({ sensors }) {
         <div class="expanded-list">
           <${RangeControl} onRange=${setRange} />
           ${exps.map((s) => html`<${ExpandedSensor} key=${s.device_id} s=${s} range=${range}
-            onClose=${() => close(s.device_id)} />`)}
+            isAdmin=${isAdmin} onEdit=${onEdit} onClose=${() => close(s.device_id)} />`)}
         </div>`}
+      ${isAdmin && html`<div class="hidden-ctl">
+        ${hiddenList == null
+          ? html`<button class="btn sm ghost" onClick=${loadHidden}>show hidden devices</button>`
+          : hiddenList.length === 0
+            ? html`<span class="note">no hidden devices</span>`
+            : html`<span class="note">hidden — tap to restore:</span> ${hiddenList.map((h) => html`
+                <span class="trace-chip" onClick=${() => unhide(h.device_id)}>${h.name || prettyName(h.device_id)} ↺</span>`)}`}
+      </div>`}
     </div>`;
 }
 
@@ -565,6 +593,40 @@ function GraphBuilder({ sensors, weather }) {
 }
 
 // ── admin unlock modal ───────────────────────────────────────────────────────
+// ── device edit (R8: friendly name / room / hide) ────────────────────────────
+function DeviceMetaModal({ device, onClose, onSaved }) {
+  const [name, setName] = useState(device.name || "");
+  const [room, setRoom] = useState(device.room || (device.area ? prettyArea(device.area) : ""));
+  const [hidden, setHidden] = useState(!!device.hidden);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      await adminSend("PUT", `/api/v1/devices/${encodeURIComponent(device.device_id)}/meta`,
+                      { name, room, hidden });
+      onSaved(); onClose();
+    } catch (e) { setErr(String(e.message)); setBusy(false); }
+  };
+  return html`
+    <div class="modal-bg" onClick=${onClose}>
+      <div class="modal" onClick=${(e) => e.stopPropagation()}>
+        <h3>Edit device</h3>
+        <p class="note">${device.device_id}</p>
+        <input value=${name} placeholder=${`name (default: ${prettyName(device.device_id)})`}
+          onInput=${(e) => setName(e.target.value)} />
+        <input value=${room} placeholder="room" onInput=${(e) => setRoom(e.target.value)} />
+        <label class="switch"><input type="checkbox" checked=${hidden}
+          onChange=${(e) => setHidden(e.target.checked)} /> Hide from dashboard</label>
+        ${err && html`<div class="err">${err}</div>`}
+        <div class="modal-actions">
+          <button class="btn ghost" onClick=${onClose}>Cancel</button>
+          <button class="btn primary" disabled=${busy} onClick=${save}>${busy ? "Saving…" : "Save"}</button>
+        </div>
+      </div>
+    </div>`;
+}
+
 function AdminModal({ onClose, onUnlock }) {
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
@@ -611,6 +673,8 @@ function App() {
   const [isAdmin, setIsAdmin] = useState(!!getToken());
   const [showAdmin, setShowAdmin] = useState(false);
   const [tempUnit, setTempUnit] = useState(tempPref());
+  const [editDevice, setEditDevice] = useState(null);   // R8 edit modal target
+  const onEdit = (d) => (isAdmin ? setEditDevice(d) : setShowAdmin(true));
 
   // weather lane catalog (locations + metrics) — fetched once for the graph builder
   useEffect(() => { getJSON("/weather/meta").then(setWeather).catch(() => {}); }, []);
@@ -659,15 +723,17 @@ function App() {
       ${devices && devices.length > 0 && html`<h2 class="section">Automations</h2>`}
       ${devices && devices.map((vm) => html`
         <${DeviceCard} key=${vm.device_id} vm=${vm} sensors=${sensors} isAdmin=${isAdmin}
-          onChange=${refresh} onNeedAdmin=${() => setShowAdmin(true)} />`)}
+          onChange=${refresh} onNeedAdmin=${() => setShowAdmin(true)} onEdit=${onEdit} />`)}
 
-      <${Sensors} sensors=${sensors} />
+      <${Sensors} sensors=${sensors} isAdmin=${isAdmin} onEdit=${onEdit} onChange=${refresh} />
       <${GraphBuilder} sensors=${sensors} weather=${weather} />
 
       ${status === "down" && html`<p class="note">⚠ Can't reach the server — showing last known state.</p>`}
 
       ${showAdmin && html`<${AdminModal} onClose=${() => setShowAdmin(false)}
         onUnlock=${() => setIsAdmin(true)} />`}
+      ${editDevice && html`<${DeviceMetaModal} device=${editDevice}
+        onClose=${() => setEditDevice(null)} onSaved=${refresh} />`}
     </div>
     </${UnitsCtx.Provider}>`;
 }

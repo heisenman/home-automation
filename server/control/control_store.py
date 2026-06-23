@@ -26,6 +26,10 @@ CREATE TABLE IF NOT EXISTS override (
 CREATE TABLE IF NOT EXISTS control_log (
     ts TEXT, device_id TEXT, desired INTEGER, source TEXT, reason TEXT, acted INTEGER, status TEXT);
 CREATE INDEX IF NOT EXISTS idx_control_log ON control_log(device_id, ts);
+-- device_meta: user-set OVERLAY on the registry (ADR-0014 R8) — friendly name, room, hidden flag.
+-- The registry (devices.yaml/control.yaml) stays the source of truth; this just personalizes display.
+CREATE TABLE IF NOT EXISTS device_meta (
+    device_id TEXT PRIMARY KEY, name TEXT, room TEXT, hidden INTEGER NOT NULL DEFAULT 0, updated_ts TEXT);
 """
 
 
@@ -118,3 +122,28 @@ def recent_log(conn, device_id: str, limit: int = 50) -> list[dict]:
     return [dict(zip(cols, r)) for r in conn.execute(
         f"SELECT {','.join(cols)} FROM control_log WHERE device_id=? ORDER BY ts DESC LIMIT ?",
         (device_id, limit))]
+
+
+# ── device meta (user overlay: friendly name / room / hidden) ─────────────────────
+def get_device_meta(conn, device_id: str) -> dict | None:
+    r = conn.execute("SELECT name, room, hidden FROM device_meta WHERE device_id=?",
+                     (device_id,)).fetchone()
+    return {"name": r[0], "room": r[1], "hidden": bool(r[2])} if r else None
+
+
+def set_device_meta(conn, device_id: str, *, name=None, room=None, hidden=None) -> None:
+    """Merge-update the overlay; a field left None keeps its current value (empty string clears a label)."""
+    cur = get_device_meta(conn, device_id) or {"name": None, "room": None, "hidden": False}
+    name = cur["name"] if name is None else name
+    room = cur["room"] if room is None else room
+    hidden = cur["hidden"] if hidden is None else hidden
+    conn.execute("""INSERT INTO device_meta(device_id, name, room, hidden, updated_ts) VALUES(?,?,?,?,?)
+                    ON CONFLICT(device_id) DO UPDATE SET name=excluded.name, room=excluded.room,
+                        hidden=excluded.hidden, updated_ts=excluded.updated_ts""",
+                 (device_id, name, room, int(bool(hidden)), _now_iso()))
+    conn.commit()
+
+
+def all_device_meta(conn) -> dict:
+    return {r[0]: {"name": r[1], "room": r[2], "hidden": bool(r[3])}
+            for r in conn.execute("SELECT device_id, name, room, hidden FROM device_meta")}

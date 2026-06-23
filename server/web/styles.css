@@ -18,6 +18,9 @@ body {
 .topbar h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: .2px; }
 .topbar .spacer { flex: 1; }
 .build { font-size: 11px; color: var(--muted); opacity: .7; }
+.edit-btn { padding: 2px 8px; font-size: 13px; line-height: 1.2; }
+.card-head .edit-btn, .sensor-head .edit-btn { margin-left: auto; }
+.hidden-ctl { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--disabled); }
 .dot.live { background: var(--ok); box-shadow: 0 0 0 3px rgba(52,211,153,.18); }
 .dot.down { background: var(--bad); }

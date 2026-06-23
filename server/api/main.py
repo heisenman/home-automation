@@ -90,7 +90,7 @@ def _mount_control(app: FastAPI) -> None:
         import yaml
         from server.control.bootstrap import build_issuer
         from server.control.registry import check_secrets_present
-        from server.api.control import make_override_router, make_router
+        from server.api.control import make_device_meta_router, make_override_router, make_router
 
         broker = os.environ.get("HA_BROKER", "localhost")
         port = int(os.environ.get("HA_BROKER_PORT", "1883"))
@@ -104,6 +104,7 @@ def _mount_control(app: FastAPI) -> None:
         app.include_router(make_router(issuer, make_confirm_verifier(master), api_authz))
         # the manual-override + control-state router (writes control.db, read by the controller each tick)
         app.include_router(make_override_router(api_authz, CONTROL_DB, device_ids=set(registry)))
+        app.include_router(make_device_meta_router(api_authz, CONTROL_DB))   # R8 friendly-name/room/hide
         app.state.control_registry = registry      # device_id -> DeviceCtl (traits for manual-control UI)
         missing = check_secrets_present(registry, issuer.secrets)
         log.info("control plane MOUNTED — %d device(s), %d controllable; broker %s:%s%s",
@@ -628,6 +629,18 @@ def _control_conn() -> Optional[sqlite3.Connection]:
     return conn
 
 
+def _device_meta() -> dict:
+    """User overlay {device_id: {name, room, hidden}} from control.db (R8); {} if unavailable."""
+    cc = _control_conn()
+    if cc is None:
+        return {}
+    from server.control import control_store as store
+    try:
+        return store.all_device_meta(cc)
+    finally:
+        cc.close()
+
+
 @app.get("/api/v1/sensors", include_in_schema=True)
 def sensor_list():
     """All trusted sensors with latest values per metric (one call for the dashboard). Read-only."""
@@ -636,7 +649,7 @@ def sensor_list():
     from server.api.viewmodel import build_sensor_list
     hc = _hot_conn() if DB_PATH.exists() else None
     try:
-        sensors = build_sensor_list(hc, time.time())
+        sensors = build_sensor_list(hc, time.time(), meta=_device_meta())
     finally:
         if hc is not None:
             hc.close()
@@ -655,10 +668,12 @@ def display_list():
         return {"devices": []}
     hc = _hot_conn() if DB_PATH.exists() else None
     reg = getattr(app.state, "control_registry", None)
+    dm = store.all_device_meta(cc)
     now = time.time()
     try:
         ids = sorted(store.all_policies(cc).keys())
-        out = [vm for did in ids if (vm := build_display(cc, hc, did, now, registry=reg)) is not None]
+        out = [vm for did in ids
+               if (vm := build_display(cc, hc, did, now, registry=reg, meta=dm)) is not None]
     finally:
         cc.close()
         if hc is not None:
@@ -680,7 +695,8 @@ def display_viewmodel(device_id: str):
     hc = _hot_conn() if DB_PATH.exists() else None
     reg = getattr(app.state, "control_registry", None)
     try:
-        vm = build_display(cc, hc, device_id, time.time(), registry=reg)
+        from server.control import control_store as store
+        vm = build_display(cc, hc, device_id, time.time(), registry=reg, meta=store.all_device_meta(cc))
     finally:
         cc.close()
         if hc is not None:

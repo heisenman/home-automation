@@ -152,6 +152,31 @@ def test_sensor_list_hides_unknown_devices():
         assert SRC in ids and not any(i.startswith("unknown") for i in ids)
 
 
+def test_sensor_list_applies_meta_overlay():
+    now, iso = _now_and_iso()
+    with tempfile.TemporaryDirectory() as tmp:
+        hc = _hot(tmp, iso, iso)
+        W._insert_readings(hc, {"schema": 1, "device_id": "meter_attic", "device_type": "switchbot_meter",
+                                "area": "attic", "transport": "ble-adv", "ts": iso,
+                                "metrics": {"humidity_pct": 55.0}})
+        meta = {SRC: {"name": "Living Room Pro", "room": "den", "hidden": False},
+                "meter_attic": {"name": None, "room": None, "hidden": True}}
+        sensors = V.build_sensor_list(hc, now + 5, meta=meta)
+        ids = [s["device_id"] for s in sensors]
+        assert "meter_attic" not in ids                      # hidden -> dropped
+        src = next(s for s in sensors if s["device_id"] == SRC)
+        assert src["name"] == "Living Room Pro" and src["room"] == "den"  # overlay applied
+
+
+def test_display_includes_meta_name_room():
+    now, iso = _now_and_iso()
+    with tempfile.TemporaryDirectory() as tmp:
+        cc, hc = _control(tmp), _hot(tmp, iso, iso)
+        vm = V.build_display(cc, hc, DEV, now + 5, meta={DEV: {"name": "Office Dehum", "room": "office"}})
+        assert vm["name"] == "Office Dehum" and vm["room"] == "office"
+        assert V.build_display(cc, hc, DEV, now + 5)["name"] is None   # no overlay -> null, UI falls back
+
+
 def test_sensor_list_empty_without_hot():
     now, _ = _now_and_iso()
     assert V.build_sensor_list(None, now) == []
