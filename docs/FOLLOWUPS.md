@@ -1,5 +1,36 @@
 # Follow-ups & clarifications for Hugh
 
+## ✅ RECONCILED 2026-06-23 — AUTHORITATIVE current state (everything below is historical log)
+Reconciliation after the firmware items below were found stale (node had moved past them). Verified
+against the live system + source on this date.
+
+**DONE since written (the older sections below are kept as a record, not a to-do list):**
+- **Edge firmware = `v9-bankts`**, running on c6-bench. It already INCLUDES everything the
+  "NODE-SIDE LOCKDOWN" + "OTA image-hash verify" items below asked for — verified in source:
+  GATT-writes-off-by-default (`gatt_exec.c` `HA_ALLOW_GATT_WRITE=0`), OTA host-pin (`ha_ota.c`
+  `HA_OTA_HOST="192.168.0.245"`), and OTA image-hash verify (`ha_ota.c` mbedtls SHA-256 + anti-downgrade).
+  → the 🟡 lockdown section and the "OTA image-hash verify" queued item are **OBSOLETE**.
+- **`.112` duplicate stack retired** — API (8123) + mosquitto (1883) down/refused (verified from .245).
+- **c_office meter battery** = 74% (not 1–2%) — swap item moot.
+- **Automation controller + full PWA** — LIVE (control loop, override/policy/manual API, view-model BFF,
+  multi-source graphs, °F/°C). ADR-0011 status corrected to Accepted/live.
+
+**ACTUALLY OPEN (2026-06-23):**
+1. **G11 provisioning bring-up** (hardware, ~today) — your step; unblocks Secure-Boot/flash-enc (Phase 8)
+   and moves the OTA-host pin target off .245.
+2. **attic/h_bed outdoor BLE history `02` reject** — needs an app HCI-btsnoop capture to root-cause
+   (LOW; live adv fine, only deep history backfill affected). ADR-0009.
+3. **PWA/automation software** (ADR-0014): R8 device friendly-name/room/lifecycle in UI; R9 auth roles +
+   token expiry/rotation + TLS; gaps — alerts (battery/unreachable/tank), richer schedules/modes,
+   strategy-in-UI, source-fallback, "why is it on?" decision-history view, sensor calibration offsets.
+4. **Small code cleanups**: dead `_parse_env_file` in `api/main.py`; wrap Midea MANUAL commands in a
+   threadpool (they block the async API loop); watch Midea token ~18h rotation.
+5. **(deferred)** per-node nonce/counter to close the 60s ts-replay window; Secure-Boot v2 + flash-enc +
+   anti-rollback eFuse → G11 / Phase 8.
+
+---
+
+## 📋 ~~TOMORROW (2026-06-22)~~ — DONE/MOOT (item 2 lives on as OPEN #2 above)
 ## 📋 TOMORROW (2026-06-22) — two app-side tasks while Hugh is in the SwitchBot app
 1. **Backfill attic/h_bed gap from app CSV** — tonight's broker cutover/flash left ~6–12 min ingestion
    gaps (all sensors briefly; live feed fully recovered). attic/h_bed minutes are BLE-unrecoverable (the
@@ -15,7 +46,7 @@
    adapts to and we don't. Implement the corrected sequence in `gatt_history.c` (dedicated path still
    writes; no need to re-enable the v4 forwarder write-lockdown).
 
-## 🟡 NODE-SIDE RAW-GATT/OTA LOCKDOWN — firmware coded, needs build+flash (2026-06-21)
+## ✅ NODE-SIDE RAW-GATT/OTA LOCKDOWN — DONE, shipped in `v9-bankts` (reconciled 2026-06-23; section below is the original 2026-06-21 plan)
 Two cheap least-privilege guards (defense-in-depth on top of the existing HMAC signature). Code in
 `edge/esp32c6/main/`, `HA_FW_VERSION` → `v4-lockdown`. **Not yet built/flashed** (ESP-IDF + C6 live on
 .112 — build there after `git pull`):

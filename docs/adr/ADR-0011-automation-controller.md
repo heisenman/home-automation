@@ -1,6 +1,9 @@
 # ADR-0011 — Automation controller (sensor → policy → actuator)
 
-Status: Proposed (2026-06-22). MVP scope agreed; phased build.
+Status: Accepted — **IMPLEMENTED & LIVE** (2026-06-22). The full MVP shipped: pure resolver
+(`server/control/automation.py`), Midea LAN driver/transport, signed control plane, `ha-controller`
+service running autonomous closed-loop control on .245, plus the override/policy/manual API and the PWA.
+(Originally "Proposed (2026-06-22), phased build" — corrected in the 2026-06-23 doc reconciliation.)
 
 ## Context
 

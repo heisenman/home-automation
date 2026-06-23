@@ -1,7 +1,10 @@
 # ADR-0010 — Command & Control Protocol (Authenticated Directives)
 
 **Date:** 2026-06-21
-**Status:** Accepted (server-side + protocol built; node-side enforcement + broker cutover pending)
+**Status:** Accepted — **fully implemented** (reconciled 2026-06-23). Server-side + protocol built;
+**broker auth/ACL cutover done** (2026-06-21); **node-side enforcement live** in firmware `v9-bankts`
+(signed-directive verify + GATT-write lockdown + OTA host-pin + image-hash verify). Remaining: per-node
+nonce/counter for the 60s ts-replay window (deferred).
 
 ## Decision
 
