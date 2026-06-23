@@ -641,18 +641,36 @@ def _device_meta() -> dict:
         cc.close()
 
 
+def _device_calibration(device_id: str) -> dict:
+    """Display offsets {metric: offset} for one device from control.db; {} if unavailable."""
+    cc = _control_conn()
+    if cc is None:
+        return {}
+    from server.control import control_store as store
+    try:
+        return store.all_calibration(cc).get(device_id, {})
+    finally:
+        cc.close()
+
+
 @app.get("/api/v1/sensors", include_in_schema=True)
 def sensor_list():
     """All trusted sensors with latest values per metric (one call for the dashboard). Read-only."""
     import time
 
     from server.api.viewmodel import build_sensor_list
+    from server.control import control_store as store
     hc = _hot_conn() if DB_PATH.exists() else None
+    cc = _control_conn()
     try:
-        sensors = build_sensor_list(hc, time.time(), meta=_device_meta())
+        meta = store.all_device_meta(cc) if cc is not None else {}
+        calib = store.all_calibration(cc) if cc is not None else {}
+        sensors = build_sensor_list(hc, time.time(), meta=meta, calib=calib)
     finally:
         if hc is not None:
             hc.close()
+        if cc is not None:
+            cc.close()
     return {"sensors": sensors}
 
 
@@ -859,9 +877,15 @@ async def device_readings(
     Bounded by MAX_DEEP_ROWS and serialised to prevent concurrent heavy queries.
     """
     async with _deep_query_lock:
-        return await asyncio.to_thread(
-            _deep_query, device_id, start, end, metric, limit
-        )
+        res = await asyncio.to_thread(_deep_query, device_id, start, end, metric, limit)
+    # display calibration: add the per-metric offset so graphs match the (corrected) live readouts.
+    offs = _device_calibration(device_id)
+    if offs:
+        for r in res.get("readings", []):
+            o = offs.get(r.get("metric"))
+            if o:
+                r["value"] = r["value"] + o
+    return res
 
 
 _COLS = ["ts", "device_id", "metric", "value", "unit", "area", "transport"]

@@ -106,6 +106,14 @@ def test_policy_set_source_sensor():
     assert C.handle_policy_update(c, DEV, {"source_sensor": ""}, {DEV})[0] == 400
 
 
+def test_policy_fallback_sensors():
+    c = _conn()
+    code, _ = C.handle_policy_update(c, DEV, {"fallback_sensors": ["meter_a", "meter_b"]}, {DEV})
+    assert code == 200 and store.get_policy(c, DEV)["fallback_sensors"] == ["meter_a", "meter_b"]
+    assert C.handle_policy_update(c, DEV, {"fallback_sensors": "nope"}, {DEV})[0] == 400
+    assert C.handle_policy_update(c, DEV, {"fallback_sensors": [""]}, {DEV})[0] == 400
+
+
 def test_policy_rejects_inverted_deadband():
     c = _conn()
     code, body = C.handle_policy_update(c, DEV, {"control": {"on_above": 40, "off_below": 44}}, {DEV})
@@ -136,6 +144,16 @@ def test_device_meta_set_merge_and_validate():
     assert C.handle_device_meta(c, "meter_attic", {"hidden": "yes"})[0] == 400
     assert C.handle_device_meta(c, "meter_attic", {})[0] == 400
     assert C.handle_device_meta(c, "meter_attic", {"name": 5})[0] == 400
+
+
+def test_device_calibration():
+    c = _conn()
+    code, body = C.handle_device_calibration(c, "meter_x", {"metric": "humidity_pct", "offset": -2.5})
+    assert code == 200 and store.all_calibration(c)["meter_x"]["humidity_pct"] == -2.5
+    C.handle_device_calibration(c, "meter_x", {"metric": "humidity_pct", "offset": 0})   # 0 clears
+    assert "meter_x" not in store.all_calibration(c)
+    assert C.handle_device_calibration(c, "meter_x", {"metric": "", "offset": 1})[0] == 400
+    assert C.handle_device_calibration(c, "meter_x", {"metric": "humidity_pct", "offset": "x"})[0] == 400
 
 
 def test_router_requires_admin_bearer():

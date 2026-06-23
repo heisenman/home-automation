@@ -71,7 +71,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v16 (2026-06-23)";
+const BUILD = "v18 (2026-06-23)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -165,6 +165,7 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
   const [enabled, setEnabled] = useState(!!c.enabled);
   const [strategy, setStrategy] = useState(c.strategy || "hysteresis");
   const [source, setSource] = useState(vm.control.source_sensor || "");
+  const [fallbacks, setFallbacks] = useState(vm.control.fallback_sensors || []);
   const [onAbove, setOnAbove] = useState(c.on_above ?? "");
   const [offBelow, setOffBelow] = useState(c.off_below ?? "");
   const [quiet, setQuiet] = useState("");
@@ -189,6 +190,7 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
       control: { strategy, on_above: Number(onAbove), off_below: Number(offBelow) },
     };
     if (source) patch.source_sensor = source;
+    patch.fallback_sensors = fallbacks;
     if (quiet.trim()) patch.schedule = [{ when: quiet.trim(), policy: "off" }];
     try {
       await adminSend("PUT", `/control/${vm.device_id}/policy`, patch);
@@ -219,6 +221,17 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
             ${opts.length === 0 && html`<option value="">(no humidity sensors)</option>`}
             ${opts.map((o) => html`<option value=${o.id}>${o.label}</option>`)}
           </select></div>
+        <div class="field"><label>Fallback sources</label>
+          <div class="controls">
+            ${fallbacks.map((id) => html`<span class="trace-chip"
+              onClick=${() => setFallbacks(fallbacks.filter((x) => x !== id))}>${prettyName(id)} ✕</span>`)}
+            <select class="trace-add" value=""
+              onChange=${(e) => { if (e.target.value) { setFallbacks([...fallbacks, e.target.value]); e.target.value = ""; } }}>
+              <option value="">+ add fallback…</option>
+              ${opts.filter((o) => o.id !== source && !fallbacks.includes(o.id))
+                .map((o) => html`<option value=${o.id}>${o.label}</option>`)}
+            </select>
+          </div></div>
         <div class="field"><label>Turn ON at/above (%RH)</label>
           <input type="number" value=${onAbove} onInput=${(e) => setOnAbove(e.target.value)} /></div>
         <div class="field"><label>Turn OFF below (%RH)</label>
@@ -619,19 +632,26 @@ function GraphBuilder({ sensors, weather }) {
     </div>`;
 }
 
-// ── admin unlock modal ───────────────────────────────────────────────────────
-// ── device edit (R8: friendly name / room / hide) ────────────────────────────
+// ── device edit (R8 friendly name / room / hide + display calibration) ───────
 function DeviceMetaModal({ device, onClose, onSaved }) {
   const [name, setName] = useState(device.name || "");
   const [room, setRoom] = useState(device.room || (device.area ? prettyArea(device.area) : ""));
   const [hidden, setHidden] = useState(!!device.hidden);
+  const [offsets, setOffsets] = useState({ ...(device.offsets || {}) });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const metrics = GRAPHABLE.filter((g) => device.metrics && device.metrics[g.key] != null);
+  const id = encodeURIComponent(device.device_id);
   const save = async () => {
     setBusy(true); setErr("");
     try {
-      await adminSend("PUT", `/api/v1/devices/${encodeURIComponent(device.device_id)}/meta`,
-                      { name, room, hidden });
+      await adminSend("PUT", `/api/v1/devices/${id}/meta`, { name, room, hidden });
+      for (const g of metrics) {               // PUT only the offsets that changed
+        const v = Number(offsets[g.key] || 0);
+        if (v !== Number((device.offsets || {})[g.key] || 0)) {
+          await adminSend("PUT", `/api/v1/devices/${id}/calibration`, { metric: g.key, offset: v });
+        }
+      }
       onSaved(); onClose();
     } catch (e) { setErr(String(e.message)); setBusy(false); }
   };
@@ -645,6 +665,15 @@ function DeviceMetaModal({ device, onClose, onSaved }) {
         <input value=${room} placeholder="room" onInput=${(e) => setRoom(e.target.value)} />
         <label class="switch"><input type="checkbox" checked=${hidden}
           onChange=${(e) => setHidden(e.target.checked)} /> Hide from dashboard</label>
+        ${metrics.length > 0 && html`
+          <div class="divider"></div>
+          <p class="note">Display calibration — added to shown values + graphs (control uses raw):</p>
+          ${metrics.map((g) => html`
+            <div class="field"><label>${g.label} offset</label>
+              <input type="number" step="0.1" value=${offsets[g.key] ?? ""}
+                onInput=${(e) => setOffsets({ ...offsets, [g.key]: e.target.value })} />
+              <span class="note">${g.unit}</span>
+            </div>`)}`}
         ${err && html`<div class="err">${err}</div>`}
         <div class="modal-actions">
           <button class="btn ghost" onClick=${onClose}>Cancel</button>

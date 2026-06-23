@@ -68,6 +68,28 @@ class Controller:
         with self._lock:
             self.readings[sensor_id] = Reading(value, ts)
 
+    def _pick_source(self, pol, stale_s, now):
+        """Pick the control input: the FIRST FRESH reading across [source_sensor] + fallback_sensors.
+        If none are fresh, return the first one seen (possibly stale) so the resolver fail-safes to
+        default. Returns (reading|None, used_id|None, via_fallback)."""
+        primary = pol.get("source_sensor")
+        order = [primary, *(pol.get("fallback_sensors") or [])]
+        first = None
+        with self._lock:
+            for sid in order:
+                if not sid:
+                    continue
+                r = self.readings.get(sid)
+                if r is None:
+                    continue
+                if first is None:
+                    first = (r, sid)
+                if (now - r.ts) <= stale_s:
+                    return r, sid, sid != primary
+        if first:
+            return first[0], first[1], first[1] != primary
+        return None, None, False
+
     # ── tick ────────────────────────────────────────────────────────────────────
     def tick(self, now: float | None = None, dry_run: bool = False):
         now = now if now is not None else time.time()
@@ -103,15 +125,15 @@ class Controller:
         dev_state = DeviceState(running=bool(st.get("running")), interlocks=tuple(interlocks),
                                 last_on_ts=last_on, last_off_ts=last_off)
         policy = Policy.from_dict(pol)
-        with self._lock:
-            sensor = self.readings.get(pol.get("source_sensor"))
+        sensor, used_id, via_fallback = self._pick_source(pol, policy.sensor_stale_s, now)
         if sensor is not None and (now - sensor.ts) > policy.sensor_stale_s:
-            self._emit(device_id, "ble-adv", ev.STALE, f"{pol.get('source_sensor')} stale")
+            self._emit(device_id, "ble-adv", ev.STALE, f"{used_id} stale")
         ov = store.get_override(conn, device_id, now)
         override = Override(ov[0], ov[1]) if ov else None
         sched_off = schedule_off_now(pol.get("schedule"), tod)
 
         res = resolve(policy, now, sensor, dev_state, override, sched_off)
+        reason = res.reason + (f" (via fallback {used_id})" if via_fallback and res.source == "rule" else "")
         status = "noop"
         if res.act and not dry_run:
             result = self.issuer.issue(device_id=device_id, trait="switchable", action="set",
@@ -122,7 +144,7 @@ class Controller:
             self._emit(device_id, "midea-lan", ev.from_issue_status(result.status), res.reason)
         elif res.act and dry_run:
             status = "dry-run"
-        store.append_log(conn, device_id, res.running, res.source, res.reason, res.act, status)
+        store.append_log(conn, device_id, res.running, res.source, reason, res.act, status)
         log.info("%s -> %s | %s | act=%s status=%s%s", device_id,
                  "ON" if res.running else "OFF", res.reason, res.act, status,
                  f" | sensor={sensor.value:.0f}%" if sensor else " | sensor=none")

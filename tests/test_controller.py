@@ -96,6 +96,24 @@ def test_published_state_carries_timestamp():
         assert st["meta"]["authoritative"] is False          # ...flagged non-authoritative
 
 
+def test_fallback_source_used_when_primary_stale():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make(tmp, STATUS_ON)                  # device ON
+        conn = sqlite3.connect(db)
+        pol = store.get_policy(conn, "dehumidifier_office")
+        pol["fallback_sensors"] = ["meter_backup"]
+        store.set_policy(conn, "dehumidifier_office", pol)
+        conn.close()
+        ctrl.inject_reading("meter_pro_living_room", 60.0, ts=NOW - 99999)  # primary STALE
+        ctrl.inject_reading("meter_backup", 60.0, ts=NOW - 30)             # fallback FRESH, 60 -> ON
+        ctrl.tick(now=NOW)
+        # fallback fresh 60 >= 44 -> ON, device already ON -> no command. (Without fallback the stale
+        # primary would default-OFF and issue {on:False}.) So no issue proves the fallback was used.
+        assert iss.calls == []
+        rows = store.recent_log(sqlite3.connect(db), "dehumidifier_office")
+        assert "via fallback meter_backup" in rows[0]["reason"]
+
+
 def test_disabled_policy_is_skipped():
     with tempfile.TemporaryDirectory() as tmp:
         ctrl, iss, db = _make(tmp, STATUS_ON)

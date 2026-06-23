@@ -30,6 +30,10 @@ CREATE INDEX IF NOT EXISTS idx_control_log ON control_log(device_id, ts);
 -- The registry (devices.yaml/control.yaml) stays the source of truth; this just personalizes display.
 CREATE TABLE IF NOT EXISTS device_meta (
     device_id TEXT PRIMARY KEY, name TEXT, room TEXT, hidden INTEGER NOT NULL DEFAULT 0, updated_ts TEXT);
+-- device_calibration: per-(device, metric) DISPLAY offset (ADR-0014). Added to the value shown in the
+-- UI + graphs; the control loop reads raw MQTT and is NOT affected (offset is display-only).
+CREATE TABLE IF NOT EXISTS device_calibration (
+    device_id TEXT, metric TEXT, offset REAL NOT NULL DEFAULT 0, PRIMARY KEY (device_id, metric));
 """
 
 
@@ -147,3 +151,21 @@ def set_device_meta(conn, device_id: str, *, name=None, room=None, hidden=None) 
 def all_device_meta(conn) -> dict:
     return {r[0]: {"name": r[1], "room": r[2], "hidden": bool(r[3])}
             for r in conn.execute("SELECT device_id, name, room, hidden FROM device_meta")}
+
+
+# ── display calibration (per device+metric offset; display-only) ─────────────────
+def set_calibration(conn, device_id: str, metric: str, offset: float) -> None:
+    if not offset:                                          # 0 clears the offset
+        conn.execute("DELETE FROM device_calibration WHERE device_id=? AND metric=?", (device_id, metric))
+    else:
+        conn.execute("""INSERT INTO device_calibration(device_id, metric, offset) VALUES(?,?,?)
+                        ON CONFLICT(device_id, metric) DO UPDATE SET offset=excluded.offset""",
+                     (device_id, metric, float(offset)))
+    conn.commit()
+
+
+def all_calibration(conn) -> dict:
+    out: dict = {}
+    for d, m, o in conn.execute("SELECT device_id, metric, offset FROM device_calibration"):
+        out.setdefault(d, {})[m] = o
+    return out

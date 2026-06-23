@@ -145,6 +145,11 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
         if not isinstance(patch["source_sensor"], str) or not patch["source_sensor"]:
             return bad("source_sensor must be a non-empty string")
         pol["source_sensor"] = patch["source_sensor"]
+    if "fallback_sensors" in patch:
+        fb = patch["fallback_sensors"]
+        if not isinstance(fb, list) or any(not isinstance(x, str) or not x for x in fb):
+            return bad("fallback_sensors must be a list of non-empty strings")
+        pol["fallback_sensors"] = fb
     if "sensor_stale_min" in patch:
         if not _is_num(patch["sensor_stale_min"]) or patch["sensor_stale_min"] <= 0:
             return bad("sensor_stale_min must be a positive number")
@@ -199,6 +204,19 @@ def handle_device_meta(conn, device_id: str, body: dict[str, Any]) -> tuple[int,
     return 200, {"status": "ok", "device_id": device_id, "meta": store.get_device_meta(conn, device_id)}
 
 
+def handle_device_calibration(conn, device_id: str, body: dict[str, Any]) -> tuple[int, dict]:
+    """Set a per-metric DISPLAY offset (added to shown/graphed values; control is unaffected). Pure.
+    Body: {metric, offset}. offset=0 clears it."""
+    from server.control import control_store as store
+    metric, offset = (body or {}).get("metric"), (body or {}).get("offset")
+    if not isinstance(metric, str) or not metric:
+        return 400, {"status": "bad-request", "reason": "metric must be a non-empty string"}
+    if isinstance(offset, bool) or not isinstance(offset, (int, float)):
+        return 400, {"status": "bad-request", "reason": "offset must be a number"}
+    store.set_calibration(conn, device_id, metric, float(offset))
+    return 200, {"status": "ok", "device_id": device_id, "calibration": store.all_calibration(conn).get(device_id, {})}
+
+
 def make_device_meta_router(api_authz, control_db):
     """Admin-gated device overlay editor (prefix /api/v1/devices). Works for any device (sensors too)."""
     import sqlite3
@@ -225,12 +243,23 @@ def make_device_meta_router(api_authz, control_db):
             c.close()
         return JSONResponse(status_code=code, content=payload)
 
-    @router.get("/meta")            # open read: lets the UI find hidden devices to un-hide them
+    @router.put("/{device_id}/calibration", dependencies=[Depends(require_admin)])
+    async def put_calibration(device_id: str, body: dict = Body(...)):
+        c = sqlite3.connect(str(control_db))
+        store.ensure_schema(c)
+        try:
+            code, payload = handle_device_calibration(c, device_id, body)
+        finally:
+            c.close()
+        return JSONResponse(status_code=code, content=payload)
+
+    @router.get("/meta")            # open read: hidden devices (to un-hide) + calibration offsets
     async def get_all_meta():
         c = sqlite3.connect(str(control_db))
         store.ensure_schema(c)
         try:
-            return JSONResponse(status_code=200, content={"meta": store.all_device_meta(c)})
+            return JSONResponse(status_code=200, content={"meta": store.all_device_meta(c),
+                                                          "calibration": store.all_calibration(c)})
         finally:
             c.close()
 

@@ -75,7 +75,8 @@ def build_alerts(sensors: list[dict], displays: list[dict], now: float) -> list[
     return out
 
 
-def build_sensor_list(hot_conn, now: float, meta: dict | None = None) -> list[dict]:
+def build_sensor_list(hot_conn, now: float, meta: dict | None = None,
+                      calib: dict | None = None) -> list[dict]:
     """All TRUSTED sensors with their latest value per metric, grouped per device (one query). Device
     self-reports (authoritative=0, e.g. the dehumidifier's onboard RH) are excluded — they live in the
     control view, not the sensor view. Sorted by (overlay) room then device_id. `meta` is the user overlay
@@ -102,9 +103,15 @@ def build_sensor_list(hot_conn, now: float, meta: dict | None = None) -> list[di
         e["metrics"][metric] = value
         if ts and ts > e["ts"]:
             e["ts"] = ts
+    calib = calib or {}
     out = list(by_dev.values())
     for e in out:
         m = meta.get(e["device_id"]) or {}
+        offs = calib.get(e["device_id"]) or {}
+        for metric, off in offs.items():            # display-only offset (control reads raw MQTT)
+            if metric in e["metrics"]:
+                e["metrics"][metric] = e["metrics"][metric] + off
+        e["offsets"] = offs
         e["name"] = m.get("name") or None           # UI falls back to a prettified device_id
         e["room"] = m.get("room") or e["area"]      # overlay room wins; else the registry area
         e["age_s"] = _age_s(e["ts"], now)
@@ -185,6 +192,7 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
             "on_above": ctrl.get("on_above"),
             "off_below": ctrl.get("off_below"),
             "source_sensor": source_id,
+            "fallback_sensors": policy.get("fallback_sensors") or [],
         },
         "sensor": sensor,
         "onboard": onboard,

@@ -200,6 +200,16 @@ def test_build_alerts():
     assert V.build_alerts([s for s in sensors if s["device_id"] == "meter_d"], [], 0.0) == []  # all-fine
 
 
+def test_sensor_list_applies_calibration():
+    now, iso = _now_and_iso()
+    with tempfile.TemporaryDirectory() as tmp:
+        hc = _hot(tmp, iso, iso)                              # SRC humidity 43
+        sensors = V.build_sensor_list(hc, now + 5, calib={SRC: {"humidity_pct": -3.0}})
+        src = next(s for s in sensors if s["device_id"] == SRC)
+        assert src["metrics"]["humidity_pct"] == 40.0        # 43 + (-3) display offset
+        assert src["offsets"] == {"humidity_pct": -3.0}
+
+
 def test_sensor_list_empty_without_hot():
     now, _ = _now_and_iso()
     assert V.build_sensor_list(None, now) == []
