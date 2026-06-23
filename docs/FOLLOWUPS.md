@@ -32,8 +32,14 @@ against the live system + source on this date.
      delivery deferred — needs push subscription + SW push handler.)*
    - **R9** auth roles + token expiry/rotation + TLS — deferred to ride with the G11 (TLS wants a cert;
      reads are already open on the LAN so a viewer role is moot until reads are gated).
-   - remaining gaps — richer schedules/modes, strategy-in-UI, source-fallback, "why is it on?"
-     decision-history view, sensor calibration offsets.
+   - ✅ **decision-history "why is it on?"** — BUILT (`4d3da77`, v16): card expander of the last 8 control_log entries.
+   - ✅ **strategy-in-UI** (hysteresis vs setpoint) — BUILT (`4d3da77`, v16).
+   - ✅ **source-fallback chain** — BUILT (`d7ac15f`, v18): ordered `fallback_sensors`; controller uses
+     the first fresh one, logs "(via fallback X)".
+   - ✅ **calibration offsets (display-only)** — BUILT (`d7ac15f`, v18): per-(device,metric) offset added
+     to chips + graphs; control reads raw. (Decision 2026-06-23: display-only.)
+   - ⏸️ **richer schedules + modes/scenes (Away/Home/Sleep)** — DEFERRED (decision 2026-06-23): low value
+     with a single actuator; revisit when there are multiple devices to coordinate.
 3. ✅ **Small code cleanups — DONE 2026-06-23 (`4b14d73`)**: removed dead `_parse_env_file`; wrapped the
    `/devices/{id}/command` handler in `run_in_threadpool` so a Midea LAN command (≤40s subprocess) no
    longer stalls the async API. *(Midea token ~18h rotation → folded into the alerts work under #2.)*

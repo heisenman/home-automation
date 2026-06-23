@@ -92,9 +92,9 @@ UI/view-model work as new trait types appear.
 ## Open user-control surface (proposed — not yet rules; see gap analysis)
 
 Recorded so they aren't lost; each needs a Hugh decision before becoming a rule or a build item.
-(Elevated to accepted rules 2026-06-22: device identity/lifecycle → R8; access/auth → R9.) Still open:
-**sensor calibration offsets**; **battery / unreachable / tank-full alerts + delivery (Web Push, MQTT)**;
-richer **schedules** (multi-window, day-of-week, time-based setpoints) and **modes/scenes**
-(Away/Home/Sleep); **strategy choice (hysteresis vs setpoint) in the UI**; **source fallback chains**; a
-**decision-history ("why is it on?") view**; **runtime/duty-cycle budgets**; **per-client/user audit** in
-the control log.
+(Elevated to accepted rules 2026-06-22: device identity/lifecycle → R8; access/auth → R9.)
+**BUILT 2026-06-23:** R8 device naming/room/hide; alerts (battery/unreachable/tank/override-expiring;
+Web-Push delivery still deferred); strategy-in-UI; source-fallback chains; decision-history view;
+calibration offsets (display-only). **DEFERRED:** richer schedules + modes/scenes (Away/Home/Sleep) —
+low value with one actuator; revisit at multi-device. **Still open:** R9 (auth roles/expiry/TLS → with
+G11); runtime/duty-cycle budgets; per-client/user audit in the control log; Web-Push alert delivery.
