@@ -190,6 +190,8 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         "onboard": onboard,
         "actuator": actuator,
         "traits": traits,
+        "recent_decisions": [{"ts": r["ts"], "source": r["source"], "reason": r["reason"],
+                              "acted": r["acted"]} for r in (snap.get("recent_log") or [])[:8]],
         "override": snap["override"],
         "last_decision": ({"source": last["source"], "reason": last["reason"], "ts": last["ts"]}
                           if last else None),

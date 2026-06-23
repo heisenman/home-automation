@@ -71,7 +71,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v15 (2026-06-23)";
+const BUILD = "v16 (2026-06-23)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -140,11 +140,30 @@ function OverrideControls({ id, override, isAdmin, onChange, onNeedAdmin }) {
     </div>`;
 }
 
+// ── decision history ("why is it on?") ───────────────────────────────────────
+function DecisionHistory({ decisions }) {
+  const [open, setOpen] = useState(false);
+  if (!decisions || !decisions.length) return null;
+  return html`
+    <div class="settings">
+      <button class="btn sm ghost" onClick=${() => setOpen(!open)}>
+        ${open ? "▾" : "▸"} Why? · last ${decisions.length} decisions</button>
+      ${open && html`<div class="history">
+        ${decisions.map((r, i) => html`<div class="hist-row" key=${i}>
+          <span class="hist-ts">${(r.ts || "").slice(11, 16)}</span>
+          <span class="hist-src src-${r.source}">${r.source}</span>
+          <span class="hist-reason">${r.reason}${r.acted ? " · acted" : ""}</span>
+        </div>`)}
+      </div>`}
+    </div>`;
+}
+
 // ── settings (app-mutable policy) ────────────────────────────────────────────
 function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
   const c = vm.control || {};
   const [open, setOpen] = useState(false);
   const [enabled, setEnabled] = useState(!!c.enabled);
+  const [strategy, setStrategy] = useState(c.strategy || "hysteresis");
   const [source, setSource] = useState(vm.control.source_sensor || "");
   const [onAbove, setOnAbove] = useState(c.on_above ?? "");
   const [offBelow, setOffBelow] = useState(c.off_below ?? "");
@@ -167,7 +186,7 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
     setBusy(true); setErr(""); setFlash("");
     const patch = {
       enabled,
-      control: { strategy: c.strategy || "hysteresis", on_above: Number(onAbove), off_below: Number(offBelow) },
+      control: { strategy, on_above: Number(onAbove), off_below: Number(offBelow) },
     };
     if (source) patch.source_sensor = source;
     if (quiet.trim()) patch.schedule = [{ when: quiet.trim(), policy: "off" }];
@@ -189,15 +208,23 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
         <input type="checkbox" checked=${enabled} onChange=${(e) => setEnabled(e.target.checked)} />
         Automation enabled
       </label>
-      <div class="field"><label>Humidity source</label>
-        <select value=${source} onChange=${(e) => setSource(e.target.value)}>
-          ${opts.length === 0 && html`<option value="">(no humidity sensors)</option>`}
-          ${opts.map((o) => html`<option value=${o.id}>${o.label}</option>`)}
+      <div class="field"><label>Strategy</label>
+        <select value=${strategy} onChange=${(e) => setStrategy(e.target.value)}>
+          <option value="hysteresis">hysteresis (external sensor + thresholds)</option>
+          <option value="setpoint">setpoint (trust the device's own loop)</option>
         </select></div>
-      <div class="field"><label>Turn ON at/above (%RH)</label>
-        <input type="number" value=${onAbove} onInput=${(e) => setOnAbove(e.target.value)} /></div>
-      <div class="field"><label>Turn OFF below (%RH)</label>
-        <input type="number" value=${offBelow} onInput=${(e) => setOffBelow(e.target.value)} /></div>
+      ${strategy === "hysteresis" ? html`
+        <div class="field"><label>Humidity source</label>
+          <select value=${source} onChange=${(e) => setSource(e.target.value)}>
+            ${opts.length === 0 && html`<option value="">(no humidity sensors)</option>`}
+            ${opts.map((o) => html`<option value=${o.id}>${o.label}</option>`)}
+          </select></div>
+        <div class="field"><label>Turn ON at/above (%RH)</label>
+          <input type="number" value=${onAbove} onInput=${(e) => setOnAbove(e.target.value)} /></div>
+        <div class="field"><label>Turn OFF below (%RH)</label>
+          <input type="number" value=${offBelow} onInput=${(e) => setOffBelow(e.target.value)} /></div>`
+        : html`<p class="note">setpoint: the device runs its own loop to its target — the dashboard just
+          keeps it powered. (Not recommended here: this unit's onboard RH reads low.)</p>`}
       <div class="field"><label>Quiet window</label>
         <input type="text" placeholder="22:00-07:00 (optional)" value=${quiet}
           onInput=${(e) => setQuiet(e.target.value)} /></div>
@@ -207,7 +234,6 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
         ${flash && html`<span class="ok-flash">${flash}</span>`}
         ${err && html`<span class="err">${err}</span>`}
       </div>
-      <p class="note">strategy: ${c.strategy} · the device's own RH is never used for control</p>
     </div>`;
 }
 
@@ -303,6 +329,7 @@ function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit }) {
         </div>
       </div>
       ${d && html`<div class="reason">${d.source}: ${d.reason}</div>`}
+      <${DecisionHistory} decisions=${vm.recent_decisions} />
       <${OverrideControls} id=${vm.device_id} override=${vm.override} isAdmin=${isAdmin}
         onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
       <${ManualControl} vm=${vm} isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
