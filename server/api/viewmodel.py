@@ -9,7 +9,17 @@ Pure functions over two sqlite connections (control.db + hot.db) so they unit-te
 """
 from __future__ import annotations
 
+import math
 from datetime import datetime, timezone
+
+
+def dewpoint_c(temp_c, rh_pct):
+    """Dew point (°C) from temperature (°C) + relative humidity (%), Magnus-Tetens. None if undefined."""
+    if temp_c is None or rh_pct is None or rh_pct <= 0:
+        return None
+    a, b = 17.625, 243.04
+    g = math.log(rh_pct / 100.0) + a * temp_c / (b + temp_c)
+    return round(b * g / (a - g), 1)
 
 
 def _age_s(ts_iso: str | None, now: float) -> float | None:
@@ -112,6 +122,10 @@ def build_sensor_list(hot_conn, now: float, meta: dict | None = None,
             if metric in e["metrics"]:
                 e["metrics"][metric] = e["metrics"][metric] + off
         e["offsets"] = offs
+        # derived: dew point for any sensor reporting both temp + RH (often more useful than RH alone)
+        dp = dewpoint_c(e["metrics"].get("temperature_c"), e["metrics"].get("humidity_pct"))
+        if dp is not None:
+            e["metrics"]["dewpoint_c"] = dp
         e["name"] = m.get("name") or None           # UI falls back to a prettified device_id
         e["room"] = m.get("room") or e["area"]      # overlay room wins; else the registry area
         e["age_s"] = _age_s(e["ts"], now)

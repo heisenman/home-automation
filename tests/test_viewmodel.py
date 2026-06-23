@@ -210,6 +210,26 @@ def test_sensor_list_applies_calibration():
         assert src["offsets"] == {"humidity_pct": -3.0}
 
 
+def test_dewpoint_formula():
+    assert abs(V.dewpoint_c(25.0, 50.0) - 13.9) < 0.2     # 25°C/50% ≈ 13.9°C dew point
+    assert V.dewpoint_c(20.0, 0) is None                  # RH<=0 undefined
+    assert V.dewpoint_c(None, 50) is None
+
+
+def test_dewpoint_added_when_temp_and_rh_present():
+    now, iso = _now_and_iso()
+    with tempfile.TemporaryDirectory() as tmp:
+        hc = _hot(tmp, iso, iso)
+        W._insert_readings(hc, {"schema": 1, "device_id": "meter_both", "device_type": "switchbot_meter",
+                                "area": "den", "transport": "ble-adv", "ts": iso,
+                                "metrics": {"temperature_c": 25.0, "humidity_pct": 50.0}})
+        sensors = V.build_sensor_list(hc, now + 5)
+        both = next(s for s in sensors if s["device_id"] == "meter_both")
+        assert abs(both["metrics"]["dewpoint_c"] - 13.9) < 0.3
+        src = next(s for s in sensors if s["device_id"] == SRC)
+        assert "dewpoint_c" not in src["metrics"]         # SRC has only humidity -> no dew point
+
+
 def test_sensor_list_empty_without_hot():
     now, _ = _now_and_iso()
     assert V.build_sensor_list(None, now) == []

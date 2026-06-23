@@ -9,7 +9,7 @@ import {
 const UnitsCtx = createContext("F");
 const useTemp = () => useContext(UnitsCtx);
 const tempPref = () => localStorage.getItem("ha.tempUnit") || "F";
-const isTempMetric = (m) => m === "temperature_c";
+const isTempMetric = (m) => m === "temperature_c" || m === "dewpoint_c";   // both convert °C↔°F
 const convT = (c, unit) => (unit === "F" ? c * 9 / 5 + 32 : c);
 const tUnit = (unit) => (unit === "F" ? "°F" : "°C");
 
@@ -123,7 +123,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v19 (2026-06-23)";
+const BUILD = "v20 (2026-06-23)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -414,6 +414,7 @@ const dispRoom = (o) => (o && o.room) || prettyArea(o && o.area);
 const GRAPHABLE = [
   { key: "temperature_c", unit: "°C", color: "#f87171", label: "Temperature" },
   { key: "humidity_pct", unit: "%RH", color: "#4aa3ff", label: "Humidity" },
+  { key: "dewpoint_c", unit: "°C", color: "#22d3ee", label: "Dew point" },
   { key: "co2_ppm", unit: "ppm", color: "#fbbf24", label: "CO₂" },
   { key: "radon_bqm3", unit: "Bq", color: "#a78bfa", label: "Radon" },
   { key: "pressure_hpa", unit: "hPa", color: "#34d399", label: "Pressure" },
@@ -424,6 +425,7 @@ function SensorVals({ m, unit }) {
   return html`<div class="sensor-vals">
     ${m.temperature_c != null && html`<span class="sv"><b>${round1(convT(m.temperature_c, unit))}°</b>${unit}</span>`}
     ${m.humidity_pct != null && html`<span class="sv"><b>${round1(m.humidity_pct)}</b>%RH</span>`}
+    ${m.dewpoint_c != null && html`<span class="sv"><b>${round1(convT(m.dewpoint_c, unit))}°</b>${unit} dp</span>`}
     ${m.co2_ppm != null && html`<span class="sv"><b>${Math.round(m.co2_ppm)}</b>ppm</span>`}
     ${m.radon_bqm3 != null && html`<span class="sv"><b>${Math.round(m.radon_bqm3)}</b>Bq</span>`}
     ${m.pressure_hpa != null && html`<span class="sv"><b>${Math.round(m.pressure_hpa)}</b>hPa</span>`}

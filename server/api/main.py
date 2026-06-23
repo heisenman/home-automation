@@ -876,6 +876,8 @@ async def device_readings(
     native reader (no sqlite_scan extension → works offline, no network/extension dir).
     Bounded by MAX_DEEP_ROWS and serialised to prevent concurrent heavy queries.
     """
+    if metric == "dewpoint_c":                  # derived metric: compute from paired temp + RH
+        return await _dewpoint_readings(device_id, start, end, limit)
     async with _deep_query_lock:
         res = await asyncio.to_thread(_deep_query, device_id, start, end, metric, limit)
     # display calibration: add the per-metric offset so graphs match the (corrected) live readouts.
@@ -886,6 +888,28 @@ async def device_readings(
             if o:
                 r["value"] = r["value"] + o
     return res
+
+
+async def _dewpoint_readings(device_id: str, start: str, end: str, limit: int) -> dict:
+    """Dew-point series, computed from this device's temperature_c + humidity_pct rows paired by ts
+    (SwitchBot meters publish both in one packet → same ts). Calibration offsets applied first."""
+    from server.api.viewmodel import dewpoint_c
+    offs = _device_calibration(device_id)
+    to, ho = offs.get("temperature_c", 0), offs.get("humidity_pct", 0)
+    async with _deep_query_lock:
+        t = await asyncio.to_thread(_deep_query, device_id, start, end, "temperature_c", limit)
+        h = await asyncio.to_thread(_deep_query, device_id, start, end, "humidity_pct", limit)
+    hmap = {r["ts"]: r["value"] + ho for r in h.get("readings", [])}
+    rows = []
+    for r in t.get("readings", []):
+        hv = hmap.get(r["ts"])
+        if hv is None:
+            continue
+        dp = dewpoint_c(r["value"] + to, hv)
+        if dp is not None:
+            rows.append({"ts": r["ts"], "device_id": device_id, "metric": "dewpoint_c", "value": dp,
+                         "unit": "degC", "area": r.get("area"), "transport": r.get("transport")})
+    return {"device_id": device_id, "metric": "dewpoint_c", "rows": len(rows), "readings": rows}
 
 
 _COLS = ["ts", "device_id", "metric", "value", "unit", "area", "transport"]
