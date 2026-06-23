@@ -51,9 +51,10 @@ cover; we are explicitly **not** hardening against a determined active attacker.
 - **Defense in depth, still required:** broker auth + topic ACLs (only the dictator identity may
   publish any `…/cmd`; nodes pub only own telemetry, sub only own cmd/reply) + local-CA TLS. The
   signature authenticates the *directive*; ACLs/TLS protect the *channel*. Both are needed.
-- **Node-side enforcement is pending firmware:** the deployed C6 does not yet verify (it still runs
-  unsigned commands / unsigned OTA). Closing this is itself OTA-deliverable: push the verify-capable
-  firmware once over the current path, then all subsequent directives must be signed.
+- **Node-side enforcement is LIVE** (reconciled 2026-06-23): the C6 runs `v9-bankts`, which verifies the
+  HMAC signature on every directive (incl. OTA), refuses GATT writes by default, pins the OTA host, and
+  hash-verifies OTA images. (Originally written "pending firmware: the deployed C6 does not yet verify" —
+  that was true at authoring; it shipped since.)
 - **Broker auth is a coordinated cutover** (services + node + tools need credentials at once) — done
   deliberately, not flipped live unsupervised.
 - Freshness depends on synced clocks (plan §10, server is time authority); the default window is 30 s.

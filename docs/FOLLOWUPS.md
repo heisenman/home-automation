@@ -40,6 +40,11 @@ against the live system + source on this date.
      to chips + graphs; control reads raw. (Decision 2026-06-23: display-only.)
    - ⏸️ **richer schedules + modes/scenes (Away/Home/Sleep)** — DEFERRED (decision 2026-06-23): low value
      with a single actuator; revisit when there are multiple devices to coordinate.
+   - ✅ **dew point** — BUILT (`0631caa`, v20): for any sensor with temp+RH, shown in chip + expanded
+     (labeled "Dew", v21) and graphable (`?metric=dewpoint_c` computes a paired series). RH kept.
+   - ✅ **admin-login bug FIXED** (`166e935`, v19): `crypto.subtle` needs HTTPS/localhost → undefined on
+     plain-HTTP LAN, hung the login. Now a pure-JS SHA-256 (self-tested) + non-hanging submit. (Off-LAN
+     TLS still the proper fix → with G11.) **PWA is at build v21; all features above are live.**
 3. ✅ **Small code cleanups — DONE 2026-06-23 (`4b14d73`)**: removed dead `_parse_env_file`; wrapped the
    `/devices/{id}/command` handler in `run_in_threadpool` so a Midea LAN command (≤40s subprocess) no
    longer stalls the async API. *(Midea token ~18h rotation → folded into the alerts work under #2.)*
