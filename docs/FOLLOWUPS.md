@@ -27,9 +27,13 @@ against the live system + source on this date.
 2. **PWA/automation software** (ADR-0014):
    - ✅ **R8 device friendly-name/room/hide — BUILT 2026-06-23 (`e81ff34`).** (Still TODO under R8:
      add-new-device + explicit retire-vs-hide.)
-   - **R9** auth roles + token expiry/rotation + TLS — next.
-   - gaps — alerts (battery/unreachable/tank), richer schedules/modes, strategy-in-UI, source-fallback,
-     "why is it on?" decision-history view, sensor calibration offsets.
+   - ✅ **Alerts — BUILT 2026-06-23 (`9208852`)**: low-battery/unreachable/tank-full/override-expiring
+     via `GET /api/v1/alerts` (server-side rules, reusable by MCU/push) + a PWA banner. *(Web Push
+     delivery deferred — needs push subscription + SW push handler.)*
+   - **R9** auth roles + token expiry/rotation + TLS — deferred to ride with the G11 (TLS wants a cert;
+     reads are already open on the LAN so a viewer role is moot until reads are gated).
+   - remaining gaps — richer schedules/modes, strategy-in-UI, source-fallback, "why is it on?"
+     decision-history view, sensor calibration offsets.
 3. ✅ **Small code cleanups — DONE 2026-06-23 (`4b14d73`)**: removed dead `_parse_env_file`; wrapped the
    `/devices/{id}/command` handler in `run_in_threadpool` so a Midea LAN command (≤40s subprocess) no
    longer stalls the async API. *(Midea token ~18h rotation → folded into the alerts work under #2.)*
