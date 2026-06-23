@@ -76,19 +76,6 @@ CONTROL_DB = Path(os.environ.get("HA_CONTROL_DB", "instance/db/control.db"))
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"   # server/web — the no-build PWA
 
 
-def _parse_env_file(path: Path) -> dict:
-    """Parse a KEY=value env file (instance/*.env) into a dict. Missing file -> {}."""
-    out: dict[str, str] = {}
-    if not path.exists():
-        return out
-    for line in path.read_text().splitlines():
-        line = line.strip()
-        if line and not line.startswith("#") and "=" in line:
-            k, _, v = line.partition("=")
-            out[k.strip()] = v.strip()
-    return out
-
-
 def _mount_control(app: FastAPI) -> None:
     # EVERYTHING (incl. the control-package imports, which pull in cryptography) is guarded: a missing
     # optional dep or any config error must DISABLE control, never crash the read API at import time.

@@ -264,7 +264,11 @@ def make_router(issuer: CommandIssuer, confirm_verifier=None, api_authz=None):
     # aren't resolvable by FastAPI's hint analysis and get mis-read as query params (422).
     @router.post("/{device_id}/command", dependencies=[Depends(require_admin)])
     async def post_command(device_id: str, body: dict = Body(...)):
-        code, payload = handle_command(issuer, device_id, body, confirm_verifier)
+        # handle_command can block for seconds (a Midea LAN command shells out to the CLI, up to a 40s
+        # subprocess timeout). Run it off the event loop so one device command doesn't stall the whole
+        # async API (reads, other clients) while it waits on the appliance.
+        from starlette.concurrency import run_in_threadpool
+        code, payload = await run_in_threadpool(handle_command, issuer, device_id, body, confirm_verifier)
         return JSONResponse(status_code=code, content=payload)
 
     return router
