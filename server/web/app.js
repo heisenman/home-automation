@@ -123,7 +123,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v20 (2026-06-23)";
+const BUILD = "v21 (2026-06-23)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -425,7 +425,7 @@ function SensorVals({ m, unit }) {
   return html`<div class="sensor-vals">
     ${m.temperature_c != null && html`<span class="sv"><b>${round1(convT(m.temperature_c, unit))}°</b>${unit}</span>`}
     ${m.humidity_pct != null && html`<span class="sv"><b>${round1(m.humidity_pct)}</b>%RH</span>`}
-    ${m.dewpoint_c != null && html`<span class="sv"><b>${round1(convT(m.dewpoint_c, unit))}°</b>${unit} dp</span>`}
+    ${m.dewpoint_c != null && html`<span class="sv"><b>${round1(convT(m.dewpoint_c, unit))}°</b>${unit} Dew</span>`}
     ${m.co2_ppm != null && html`<span class="sv"><b>${Math.round(m.co2_ppm)}</b>ppm</span>`}
     ${m.radon_bqm3 != null && html`<span class="sv"><b>${Math.round(m.radon_bqm3)}</b>Bq</span>`}
     ${m.pressure_hpa != null && html`<span class="sv"><b>${Math.round(m.pressure_hpa)}</b>hPa</span>`}
