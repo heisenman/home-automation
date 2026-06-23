@@ -15,22 +15,28 @@ against the live system + source on this date.
 - **Automation controller + full PWA** — LIVE (control loop, override/policy/manual API, view-model BFF,
   multi-source graphs, °F/°C). ADR-0011 status corrected to Accepted/live.
 
+- **Outdoor-meter history backfill — WORKING (verified 2026-06-23).** The `02` outdoor-read reject is
+  resolved in practice: h_bed / c_office / h_bath / attic all have recent **`ble-history`** rows in
+  parquet (e.g. h_bed 2,795 rows 6/21→6/22, attic 11,580 6/14→6/22). Pulls run **server-side** (Bleak,
+  `server:server>meter_…`); the only recent pull_log failures are transient `connect_fail`/`empty_buffer`
+  (range / nothing-new), NOT the format reject. → the btsnoop root-cause + CSV-gap items are MOOT.
+
 **ACTUALLY OPEN (2026-06-23):**
 1. **G11 provisioning bring-up** (hardware, ~today) — your step; unblocks Secure-Boot/flash-enc (Phase 8)
    and moves the OTA-host pin target off .245.
-2. **attic/h_bed outdoor BLE history `02` reject** — needs an app HCI-btsnoop capture to root-cause
-   (LOW; live adv fine, only deep history backfill affected). ADR-0009.
-3. **PWA/automation software** (ADR-0014): R8 device friendly-name/room/lifecycle in UI; R9 auth roles +
+2. **PWA/automation software** (ADR-0014): R8 device friendly-name/room/lifecycle in UI; R9 auth roles +
    token expiry/rotation + TLS; gaps — alerts (battery/unreachable/tank), richer schedules/modes,
    strategy-in-UI, source-fallback, "why is it on?" decision-history view, sensor calibration offsets.
-4. **Small code cleanups**: dead `_parse_env_file` in `api/main.py`; wrap Midea MANUAL commands in a
+3. **Small code cleanups**: dead `_parse_env_file` in `api/main.py`; wrap Midea MANUAL commands in a
    threadpool (they block the async API loop); watch Midea token ~18h rotation.
-5. **(deferred)** per-node nonce/counter to close the 60s ts-replay window; Secure-Boot v2 + flash-enc +
+4. **(deferred)** per-node nonce/counter to close the 60s ts-replay window; Secure-Boot v2 + flash-enc +
    anti-rollback eFuse → G11 / Phase 8.
+- *Operational note:* server-side history pulls see occasional transient BLE `connect_fail` (range) — a
+  retry/scheduling concern, not a bug. Not tracked as an action item.
 
 ---
 
-## 📋 ~~TOMORROW (2026-06-22)~~ — DONE/MOOT (item 2 lives on as OPEN #2 above)
+## 📋 ~~TOMORROW (2026-06-22)~~ — DONE/MOOT (outdoor history now backfills server-side; see reconciled section)
 ## 📋 TOMORROW (2026-06-22) — two app-side tasks while Hugh is in the SwitchBot app
 1. **Backfill attic/h_bed gap from app CSV** — tonight's broker cutover/flash left ~6–12 min ingestion
    gaps (all sensors briefly; live feed fully recovered). attic/h_bed minutes are BLE-unrecoverable (the
@@ -170,7 +176,8 @@ dictator / failover / edge nodes / endpoints.
 - **Confirm-PIN store + admin API auth** (decision #6 above).
 
 ## Open / deferred (lower priority)
-- Outdoor history read (`02` reject on attic/h_bed) — needs an app HCI-btsnoop of an attic/h_bed pull. LOW (ADR-0009).
+- ✅ Outdoor history read (`02` reject on attic/h_bed) — RESOLVED 2026-06-23: all outdoor meters now
+  backfill `ble-history` via server-side Bleak pulls (no btsnoop needed). See reconciled section at top.
 - c_office meter **battery swap** (1–2%) — physical.
 - **✅ ARANET FULLY INTEGRATED (live via ha-scanner on .245 + web app + 90d history).**
 - **Aranet — DECODER + LIVE RELAY DONE & validated (2026-06-21).** Corrected to mfr 0x0702 ext-adv;

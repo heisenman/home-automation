@@ -1,7 +1,10 @@
 # ADR-0009 — History Continuity (Relay-Primary, Buffer-Pull for Gaps)
 
 **Date:** 2026-06-20
-**Status:** Accepted
+**Status:** Accepted. **Update 2026-06-23:** the outdoor-variant history `02` reject is resolved in
+practice — h_bed / c_office / h_bath / attic all backfill `ble-history` via **server-side Bleak pulls**
+(verified rows in parquet). The earlier btsnoop root-cause task is no longer needed; remaining variance is
+transient BLE `connect_fail` (range), handled by retry.
 
 ## Decision
 
