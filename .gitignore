@@ -28,3 +28,10 @@ ca/
 
 # Logs
 *.log
+
+# Imported data dumps & device diagnostics — local only, may carry PII (real MACs,
+# location, account names). Root-anchored so tracked source (edge/esp32c6/partitions.csv) stays.
+/*.csv
+/bugreport-*.zip
+/screenshot-*.png
+*.btsnoop*

@@ -3,6 +3,11 @@
 A "checkpoint" (Hugh says "checkpoint", or a task-set / work session ends) is **NOT just a commit.** It
 must leave the repo's action-item docs **true**, so the next session — human or LLM — can trust them.
 
+**Also reconcile when external state changes outside our work** — firmware flashed by Hugh, a service
+retired, hardware swapped, a token rotated. The original rot (below) happened *between* sessions, when
+firmware moved past the docs without a code change to trigger a checkpoint. If reality moved, reconcile
+even if we didn't write any code.
+
 The failure this guards against (2026-06-23): code shipped (edge firmware reached `v9-bankts` with the
 full lockdown + OTA-hash-verify) while `FOLLOWUPS.md` still listed those as pending at `v4`. Checkpoints
 were capturing code but not the wrap-up, so the action-item list rotted.
@@ -32,3 +37,7 @@ were capturing code but not the wrap-up, so the action-item list rotted.
 - An ADR says "Proposed" for something running in production.
 - The memory RESUME points at a step already completed.
 - "Done" was claimed without checking the live system or source.
+- `git status` shows a stray data dump or device diagnostic in the tree that is **trackable** (not
+  gitignored) — imported CSVs, bugreports, btsnoop logs, screenshots. These carry PII (real MACs,
+  location, account names) and are one `git add -A` from being committed. Gitignore the pattern (root-
+  anchored so tracked source survives) or move the file out before finishing. (Caught 2026-06-23.)
