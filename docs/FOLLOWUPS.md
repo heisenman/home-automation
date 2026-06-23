@@ -27,8 +27,9 @@ against the live system + source on this date.
 2. **PWA/automation software** (ADR-0014): R8 device friendly-name/room/lifecycle in UI; R9 auth roles +
    token expiry/rotation + TLS; gaps — alerts (battery/unreachable/tank), richer schedules/modes,
    strategy-in-UI, source-fallback, "why is it on?" decision-history view, sensor calibration offsets.
-3. **Small code cleanups**: dead `_parse_env_file` in `api/main.py`; wrap Midea MANUAL commands in a
-   threadpool (they block the async API loop); watch Midea token ~18h rotation.
+3. ✅ **Small code cleanups — DONE 2026-06-23 (`4b14d73`)**: removed dead `_parse_env_file`; wrapped the
+   `/devices/{id}/command` handler in `run_in_threadpool` so a Midea LAN command (≤40s subprocess) no
+   longer stalls the async API. *(Midea token ~18h rotation → folded into the alerts work under #2.)*
 4. **(deferred)** per-node nonce/counter to close the 60s ts-replay window; Secure-Boot v2 + flash-enc +
    anti-rollback eFuse → G11 / Phase 8.
 - *Operational note:* server-side history pulls see occasional transient BLE `connect_fail` (range) — a
