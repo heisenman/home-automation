@@ -71,7 +71,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v14 (2026-06-23)";
+const BUILD = "v15 (2026-06-23)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -664,10 +664,26 @@ function AdminModal({ onClose, onUnlock }) {
     </div>`;
 }
 
+// ── alerts banner ────────────────────────────────────────────────────────────
+function AlertsBanner({ alerts }) {
+  if (!alerts || !alerts.length) return null;
+  const icon = { critical: "⛔", warning: "⚠️", info: "ℹ️" };
+  return html`
+    <div class="alerts">
+      ${alerts.map((a) => html`
+        <div class="alert ${a.severity}" key=${a.kind + a.device_id}>
+          <span class="alert-ic">${icon[a.severity] || "•"}</span>
+          <span class="alert-name">${a.name}</span>
+          <span class="alert-detail">${a.detail}</span>
+        </div>`)}
+    </div>`;
+}
+
 // ── app shell ────────────────────────────────────────────────────────────────
 function App() {
   const [devices, setDevices] = useState(null);
   const [sensors, setSensors] = useState(null);
+  const [alerts, setAlerts] = useState([]);
   const [weather, setWeather] = useState(null);
   const [status, setStatus] = useState("init");      // init | live | down
   const [isAdmin, setIsAdmin] = useState(!!getToken());
@@ -684,12 +700,14 @@ function App() {
 
   const refresh = useCallback(async () => {
     try {
-      const [disp, sens] = await Promise.all([
+      const [disp, sens, alr] = await Promise.all([
         getJSON("/api/v1/displays"),
         getJSON("/api/v1/sensors"),
+        getJSON("/api/v1/alerts"),
       ]);
       setDevices(disp.devices || []);
       setSensors(sens.sensors || []);
+      setAlerts(alr.alerts || []);
       setStatus("live");
     } catch {
       setStatus("down");
@@ -718,6 +736,8 @@ function App() {
                  <button class="btn sm ghost" onClick=${lock}>Lock</button>`
           : html`<button class="btn sm" onClick=${() => setShowAdmin(true)}>🔒 Admin</button>`}
       </div>
+
+      <${AlertsBanner} alerts=${alerts} />
 
       ${devices == null && html`<div class="empty">Loading…</div>`}
       ${devices && devices.length > 0 && html`<h2 class="section">Automations</h2>`}

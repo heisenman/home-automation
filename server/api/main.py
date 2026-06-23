@@ -656,6 +656,33 @@ def sensor_list():
     return {"sensors": sensors}
 
 
+@app.get("/api/v1/alerts", include_in_schema=True)
+def alerts():
+    """Active alerts (low battery / unreachable / tank-full / override-expiring). Read-only; the single
+    source of alert rules for the web app, MCU panels, and future push."""
+    import time
+
+    from server.api.viewmodel import build_alerts, build_display, build_sensor_list
+    from server.control import control_store as store
+    now = time.time()
+    hc = _hot_conn() if DB_PATH.exists() else None
+    cc = _control_conn()
+    try:
+        meta = store.all_device_meta(cc) if cc is not None else {}
+        sensors = build_sensor_list(hc, now, meta=meta) if hc is not None else []
+        displays = []
+        if cc is not None:
+            reg = getattr(app.state, "control_registry", None)
+            displays = [vm for did in sorted(store.all_policies(cc))
+                        if (vm := build_display(cc, hc, did, now, registry=reg, meta=meta)) is not None]
+        return {"alerts": build_alerts(sensors, displays, now)}
+    finally:
+        if hc is not None:
+            hc.close()
+        if cc is not None:
+            cc.close()
+
+
 @app.get("/api/v1/displays", include_in_schema=True)
 def display_list():
     """All controllable devices as render-ready view-models (one call for the dashboard). Read-only."""

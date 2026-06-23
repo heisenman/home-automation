@@ -32,6 +32,49 @@ def _latest(hot, device_id: str, metric: str, authoritative: int):
     return (r[0], r[1]) if r else None
 
 
+# ── alerts (derived from the sensor list + device displays) ──────────────────────
+LOW_BATTERY_PCT = 20         # warning below this
+CRIT_BATTERY_PCT = 10        # critical below this
+SENSOR_STALE_S = 1800        # 30 min with no reading -> unreachable
+OVERRIDE_EXPIRING_S = 300    # warn when a manual override has <5 min left
+
+
+def build_alerts(sensors: list[dict], displays: list[dict], now: float) -> list[dict]:
+    """Active, actionable alerts derived from the current sensor list + device view-models. Pure.
+    Severity: critical | warning | info. Each: {severity, kind, device_id, name, detail}."""
+    out: list[dict] = []
+
+    def label(o):
+        return o.get("name") or o.get("device_id")
+
+    for s in sensors or []:
+        m = s.get("metrics") or {}
+        b = m.get("battery_pct")
+        if b is not None and b < LOW_BATTERY_PCT:
+            out.append({"severity": "critical" if b < CRIT_BATTERY_PCT else "warning",
+                        "kind": "low_battery", "device_id": s["device_id"], "name": label(s),
+                        "detail": f"battery {round(b)}%"})
+        age = s.get("age_s")
+        if age is not None and age > SENSOR_STALE_S:
+            out.append({"severity": "warning", "kind": "unreachable", "device_id": s["device_id"],
+                        "name": label(s), "detail": f"no data for {round(age / 60)} min"})
+
+    for d in displays or []:
+        last = d.get("last_decision") or {}
+        if last.get("source") == "safety" and "tank" in (last.get("reason") or "").lower():
+            out.append({"severity": "critical", "kind": "tank_full", "device_id": d["device_id"],
+                        "name": label(d), "detail": "tank full — dehumidifier paused"})
+        ov = d.get("override")
+        if ov and ov.get("expires_in_min") is not None and ov["expires_in_min"] * 60 < OVERRIDE_EXPIRING_S:
+            out.append({"severity": "info", "kind": "override_expiring", "device_id": d["device_id"],
+                        "name": label(d), "detail": f"{ov['action']} override ends in "
+                        f"{max(0, round(ov['expires_in_min']))} min"})
+
+    rank = {"critical": 0, "warning": 1, "info": 2}
+    out.sort(key=lambda a: (rank.get(a["severity"], 3), a["device_id"]))
+    return out
+
+
 def build_sensor_list(hot_conn, now: float, meta: dict | None = None) -> list[dict]:
     """All TRUSTED sensors with their latest value per metric, grouped per device (one query). Device
     self-reports (authoritative=0, e.g. the dehumidifier's onboard RH) are excluded — they live in the

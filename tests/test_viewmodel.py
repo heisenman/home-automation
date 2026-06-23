@@ -177,6 +177,29 @@ def test_display_includes_meta_name_room():
         assert V.build_display(cc, hc, DEV, now + 5)["name"] is None   # no overlay -> null, UI falls back
 
 
+def test_build_alerts():
+    sensors = [
+        {"device_id": "meter_a", "name": "Bedroom", "metrics": {"battery_pct": 8.0}, "age_s": 30},   # crit batt
+        {"device_id": "meter_b", "metrics": {"battery_pct": 15.0}, "age_s": 30},                      # warn batt
+        {"device_id": "meter_c", "metrics": {"battery_pct": 90.0}, "age_s": 4000},                    # unreachable
+        {"device_id": "meter_d", "metrics": {"battery_pct": 90.0}, "age_s": 30},                      # fine
+    ]
+    displays = [
+        {"device_id": "dehum", "name": "Dehum", "last_decision": {"source": "safety",
+            "reason": "interlock tank_full -> OFF"}, "override": None},                               # tank
+        {"device_id": "d2", "last_decision": {"source": "rule", "reason": "x"},
+            "override": {"action": "off", "expires_in_min": 3}},                                      # override exp
+    ]
+    a = V.build_alerts(sensors, displays, 0.0)
+    kinds = {x["kind"] for x in a}
+    assert kinds == {"low_battery", "unreachable", "tank_full", "override_expiring"}
+    assert a[0]["severity"] == "critical"                       # critical sorted first
+    crit = [x for x in a if x["severity"] == "critical"]
+    assert {x["kind"] for x in crit} == {"low_battery", "tank_full"}
+    assert next(x for x in a if x["kind"] == "low_battery")["name"] == "Bedroom"  # friendly name used
+    assert V.build_alerts([s for s in sensors if s["device_id"] == "meter_d"], [], 0.0) == []  # all-fine
+
+
 def test_sensor_list_empty_without_hot():
     now, _ = _now_and_iso()
     assert V.build_sensor_list(None, now) == []

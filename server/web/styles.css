@@ -21,6 +21,15 @@ body {
 .edit-btn { padding: 2px 8px; font-size: 13px; line-height: 1.2; }
 .card-head .edit-btn, .sensor-head .edit-btn { margin-left: auto; }
 .hidden-ctl { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+
+/* alerts banner */
+.alerts { margin: 0 0 14px; display: flex; flex-direction: column; gap: 6px; }
+.alert { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-radius: 10px; font-size: 14px; border: 1px solid var(--line); }
+.alert.critical { background: rgba(248,113,113,.14); border-color: var(--bad); }
+.alert.warning { background: rgba(251,191,36,.12); border-color: var(--stale); }
+.alert.info { background: rgba(74,163,255,.10); border-color: var(--accent); }
+.alert-name { font-weight: 650; text-transform: capitalize; }
+.alert-detail { color: var(--muted); }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--disabled); }
 .dot.live { background: var(--ok); box-shadow: 0 0 0 3px rgba(52,211,153,.18); }
 .dot.down { background: var(--bad); }
