@@ -24,9 +24,12 @@ against the live system + source on this date.
 **ACTUALLY OPEN (2026-06-23):**
 1. **G11 provisioning bring-up** (hardware, ~today) — your step; unblocks Secure-Boot/flash-enc (Phase 8)
    and moves the OTA-host pin target off .245.
-2. **PWA/automation software** (ADR-0014): R8 device friendly-name/room/lifecycle in UI; R9 auth roles +
-   token expiry/rotation + TLS; gaps — alerts (battery/unreachable/tank), richer schedules/modes,
-   strategy-in-UI, source-fallback, "why is it on?" decision-history view, sensor calibration offsets.
+2. **PWA/automation software** (ADR-0014):
+   - ✅ **R8 device friendly-name/room/hide — BUILT 2026-06-23 (`e81ff34`).** (Still TODO under R8:
+     add-new-device + explicit retire-vs-hide.)
+   - **R9** auth roles + token expiry/rotation + TLS — next.
+   - gaps — alerts (battery/unreachable/tank), richer schedules/modes, strategy-in-UI, source-fallback,
+     "why is it on?" decision-history view, sensor calibration offsets.
 3. ✅ **Small code cleanups — DONE 2026-06-23 (`4b14d73`)**: removed dead `_parse_env_file`; wrapped the
    `/devices/{id}/command` handler in `run_in_threadpool` so a Midea LAN command (≤40s subprocess) no
    longer stalls the async API. *(Midea token ~18h rotation → folded into the alerts work under #2.)*

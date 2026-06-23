@@ -61,13 +61,14 @@ order: (1) registry entry — id / area / device_type; (2) friendly name; (3) tr
 (4) sensor source binding, **confirmed** (R2); (5) secrets in gitignored `instance/`; (6) UI exposure
 confirmed (R1); (7) a seeded default policy the user can edit. Skipping a step is an incomplete onboard.
 
-**R8 — Device identity & lifecycle are user-managed (accepted 2026-06-22; build queued).** Every device
-has a **user-editable friendly name and room/area**, set from the UI — a user never sees a raw
-`device_id` as the only label. The app also supports lifecycle ops from the UI: **add, rename,
-retire/disable**. The registry (`devices.yaml`/`control.yaml`) stays the durable source of truth, but
-user-set names/rooms live in an editable overlay (a DB table, like `control.db`) surfaced via the API —
-the app is a first-class editor, not forced to rewrite gitignored YAML. Retired/disabled devices stop
-driving automation but retain history.
+**R8 — Device identity & lifecycle are user-managed (accepted 2026-06-22; ✅ BUILT 2026-06-23, `e81ff34`).**
+Every device has a **user-editable friendly name and room/area**, set from the UI — a user never sees a
+raw `device_id` as the only label. User-set names/rooms live in an editable overlay (`control.db`
+`device_meta` table) surfaced via the API (`PUT /api/v1/devices/{id}/meta`), NOT by rewriting the
+gitignored registry YAML (which stays the source of truth). **Lifecycle shipped so far: rename + room +
+hide/restore** (hidden devices drop from the dashboard; an admin "show hidden → tap to restore" recovers
+them). **Still TODO under R8:** add-new-device (needs discovery/pairing) and an explicit retire (vs hide)
+that also stops automation while keeping history.
 
 **R9 — Access is role-aware, time-bounded, and TLS-protected off-LAN (accepted 2026-06-22; build
 queued).** The current single shared master→bearer is an **interim single-admin** model. Target:
