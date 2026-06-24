@@ -30,6 +30,24 @@ Treat the dictator's onboard scanner as node **`local`** in the topology, so *al
 each edge node) are uniform vertices and every meter resolves to exactly one preferred source. This also
 fixes the edge-vs-local wrinkle (below) by funnelling all readings through one dedup point.
 
+### Identity — assign over REGISTERED device_ids / node_ids, never raw MAC
+The preferred map and the whole topology are keyed by **logical identity**, matching ADR-0010's vertices
+`('endpoint', device_id)`, `('node', node_id)`, `('server','server')` — **registered devices and nodes, not
+MAC addresses.** A MAC is only the BLE *transport address*, resolved from the registry by the dictator at the
+point of enforcement (nodes stay dumb — ADR-0001). This makes three classes of target first-class:
+- **Sensors** = endpoint `device_id` → *uplink* adv-relay routing (who hears it best).
+- **Actuators** = endpoint `device_id` → ***downlink* command-relay routing** (which node best *reaches* it).
+  Covers a BLE actuator sitting behind an edge node; LAN actuators (Midea) are `local`-direct but use the
+  same map. So an assignment is **bidirectional**: best receiver for a sensor's adverts *and* best relay
+  for an actuator's commands.
+- **Edge nodes** = `node_id` vertices → **multi-hop daisy chains** `server→node_a→node_b→endpoint`. In a
+  large house/property the fabric is a real graph, not a star — exactly ADR-0010's deferred Phase-3 multi-hop
+  transport, now sharing one identity model and one graph.
+
+A MAC appears ONLY in the per-node BLE-adv filter; the dictator resolves each assigned `device_id` → its
+MAC(s) from the registry when it builds that node's directive. Command relay (downlink to actuators) is
+addressed by `device_id` end-to-end (ADR-0010 command-control), no MAC at all.
+
 ### Preferred-source selection (`server/mesh/`)
 - Add **`best_relay(graph, endpoint)`** — a relay variant of `best_path` that scores live-adv reach
   (link kind + RSSI + failure ratio + staleness) but **skips the pull-history `_terminal_adjust`** (that
@@ -52,11 +70,16 @@ dropping the rest (with stale-source failover). Edge-vs-local is solved by the m
   save yet — that's Tier 2).
 
 ### Tier 2 — edge relay directives (firmware; saves edge energy)
-The dictator computes each node's **relay allowlist** (the meters it's the preferred source for) and
-pushes a **retained** directive on the existing downlink `home/edge/<node>/cmd` (or a dedicated
-`home/edge/<node>/relay`):
+The dictator computes each node's **assignment** (the endpoints it's the preferred relay for, by
+`device_id`) and pushes a **retained** directive on the existing downlink `home/edge/<node>/cmd` (or a
+dedicated `home/edge/<node>/relay`). `relay_macs` is the dictator's registry resolution of those
+device_ids → BLE MACs (all the node's adv filter can match); a node that also relays commands to a BLE
+actuator gets a parallel `cmd_relay` keyed by **device_id** (ADR-0010 command-control, no MAC):
 ```json
-{"schema":1, "type":"relay_assign", "epoch":7, "relay_macs":["B0:E9:FE:54:AB:A2", "..."], "ttl_s":3600}
+{"schema":1, "type":"relay_assign", "epoch":7,
+ "relay_macs":  ["B0:E9:FE:54:AB:A2", "..."],            // resolved from assigned sensor device_ids
+ "cmd_relay":   ["dehumidifier_hall", "..."],            // actuator device_ids this node relays cmds to
+ "ttl_s":3600}
 ```
 - Node: persists the allowlist in **NVS** (recorded, survives reboot), filters its relay so it publishes
   only assigned MACs, applies updates (epoch-guarded → idempotent/ordered). Retained so a rebooting node
@@ -79,7 +102,7 @@ pushes a **retained** directive on the existing downlink `home/edge/<node>/cmd` 
 | Area | File | Change |
 |------|------|--------|
 | Topology | `server/mesh/topology.py` | add `best_relay()` (or `best_path(…, for_relay=True)`) |
-| Assignment | `server/mesh/assign.py` (new) | `{mac→source}` + `{node→relay_macs}`, hysteresis, failover, persist current |
+| Assignment | `server/mesh/assign.py` (new) | `{device_id→source}` + `{node→device_ids}` (MAC-resolved for BLE adv; device_id for cmd relay), hysteresis, failover, persist |
 | Tier-1 dedup | `server/ingest/edge_mapper.py` | preferred-source gate + live `record_link()` |
 | Local-as-node | `server/ingest/scanner.py` | (recommended) publish via `home/edge/local/<mac>/adv` |
 | Coordinator | `ha-relay-coordinator` (new svc) or fold into ha-controller | compute + publish directives (Tier 2) |
