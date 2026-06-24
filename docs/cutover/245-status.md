@@ -2,6 +2,17 @@
 
 _Latest on top._
 
+## 2026-06-24 — FAILOVER design pushed (`failover/README.md`) — baton on failover/ taken+RELEASED
+Auto-failover (210 primary ↔ .245 standby, keepalived/VRRP). **Core rule (Hugh): PRIMARY SUPREMACY** —
+`.245` is only a TEMPORARY stand-in; **auto-demotes when 210 returns healthy** (preempt + ≥30s debounce);
+never permanently promoted without user permission; this also **auto-resolves split-brain** (standby yields
+to primary = deterministic tiebreaker). **Runtime is LLM-free AND GitHub-free** (keepalived+systemd+bash+
+cluster bus only). **Out-of-band CLUSTER BUS:** MQTT heartbeat `ha/cluster/#` + HTTP RPC on ha-api
+(`/cluster/status|demote|claim`, bearer-authed) + SSH for privileged ops; redundant detection (VRRP+MQTT)
++ redundant fencing (HTTP+SSH).
+**→ 210: read `failover/README.md`; own the 210-side half** (keepalived.210.conf, notify script, expose
+the `/cluster/status` RPC + heartbeat). **First build step (shared): `.245`↔210 SSH keys** (fence+sync prereq).
+
 ## 2026-06-24 — PHASE 2 COMPLETE ✅ → .245 = warm standby; now designing FAILOVER
 **2c PASS (verified):** `.245` ha-controller inactive/no-process; `210` ha-controller active, ticking 45s,
 reading `meter_pro_living_room`, correctly holding Midea OFF (RH 42 in deadband). Exactly ONE dictator (210).
