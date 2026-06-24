@@ -11,7 +11,7 @@ gated steps.** `245-side` = desktop Claude (CIFS + SSH to both boxes). `210-side
 ## STATUS — edit ONLY your own line, commit, push. `git pull` before EVERY action.
 ```
 245-side : phase 0 / ready / <ts>
-210-side : phase 0 COMPLETE / GREEN — 0a PASSES (read Midea on LAN: OFF, target 35%, online), 1b verified (11 sensors). midea-device.env + CLI in place; .master_pass HELD for cutover; ha-controller OFF. 210 READY for G1. / 2026-06-24T14:46Z
+210-side : phase 0 COMPLETE / GREEN — 0a PASSES (read Midea on LAN: OFF, target 35%, online), 1b verified (11 sensors). midea-device.env + CLI in place; .master_pass HELD for cutover. Phase-2 Q resolved: 2b must INSTALL ha-controller unit (absent on 210) + place .master_pass. 210 READY for G1. / 2026-06-24T14:52Z
 GO gates (Hugh):  G1 stop-245-controller = [ ]   G2 start-210-controller = [ ]   G3 demote-245 = [ ]
 Midea snapshot (pre-cutover):  state = OFF (running=false, online=true, tank=ok)   target = 35%   humidity-now = 30%   control-RH source = meter_pro_living_room   [210-read 2026-06-24T14:46Z]
 ```
@@ -58,10 +58,12 @@ Midea snapshot (pre-cutover):  state = OFF (running=false, online=true, tank=ok)
 > `midea-device.env` (IP/PORT/ID/TYPE/TOKEN/KEY) + `midea-beautiful-air-cli` both in place. **210 is
 > dictator-ready for the Midea.** `.master_pass` still HELD (place at cutover).
 >
-> **Phase-2 open Q [210, verify before G2]:** does `ha-controller` start + drive the Midea **without**
-> `.master_pass`? The Midea is a trusted local driver (no node HMAC); master pass only gates ha-api's
-> command plane + the node-secret LUT. If the controller bootstrap requires the LUT to start, we place
-> `.master_pass` at 2b as well. I'll confirm on 210 before we start 210's controller.
+> **Phase-2 Q RESOLVED [210, 2026-06-24]:** `ha-controller` **requires** the master pass — `controller.py`
+> logs "no master passphrase — controller cannot build the issuer" and exits otherwise (`build_issuer`
+> decrypts the node LUT for ALL devices, Midea included). It auto-reads `$HOME/home_automation/instance/.master_pass`
+> (default path, `secret_store.py:32`); ha-controller's unit doesn't override `$HOME`, so **no `HA_MASTER_PASS_FILE`
+> env is needed** — just place the file. **Also found:** `install.sh` does NOT install the ha-controller unit
+> (its loop omits it), so **210 currently has no ha-controller** — 2b must install it from `systemd/ha-controller.service`.
 
 ## Phase 1 — Aranet relay (additive · reversible · independent of control — DO THIS FIRST)
 Per `edge/aranet-245-relay.md`. Get the relay working+verified before the risky handoff to de-risk it.
@@ -75,8 +77,16 @@ Per `edge/aranet-245-relay.md`. Get the relay working+verified before the risky 
 ## Phase 2 — Dictator handoff (split-brain-critical) ⛔ STRICT ORDER + Hugh GO
 - [ ] **2a [245] ⛔ requires G1** Stop + disable `.245` `ha-controller`. Confirm inactive.
   Update STATUS → `245 controller STOPPED`.
-- [ ] **2b [210] ⛔ requires G2 — and only after 2a shows STOPPED in STATUS** Enable + start `210`
-  `ha-controller`. It is now the SOLE dictator.
+- [ ] **2b [210] ⛔ requires G2 — and only after 2a shows STOPPED in STATUS** Promote 210's controller:
+  1. Place `instance/.master_pass` (0600) — scp **fresh** from .245 now (controller needs it to build the
+     issuer; auto-read from `$HOME/home_automation/instance/.master_pass`, no env var required).
+  2. Install the unit (install.sh intentionally omits it):
+     `sudo sed "s#/home/visko/home_automation#$PWD#g" systemd/ha-controller.service | sudo tee /etc/systemd/system/ha-controller.service >/dev/null && sudo systemctl daemon-reload`
+  3. `sudo systemctl enable --now ha-controller` → 210 is now the SOLE dictator.
+  4. (Manual command plane / PWA buttons) `sudo systemctl restart ha-api` so it mounts the control router
+     now that `.master_pass` is present.
+  Verify: `journalctl -u ha-controller -n 20` shows "ha-controller running" (NOT "no master passphrase");
+  a tick reads `meter_pro_living_room` and makes a Midea decision.
 - [ ] **2c [Hugh + both]** Verify exactly ONE controller active (`210`); it reads sensors, makes a correct
   Midea decision, the unit responds; `.245` issues nothing. Confirm against the 0c snapshot.
 - **Rollback (reverse order):** stop `210` controller → re-enable/start `.245` controller. Back to `.245` dictator.
