@@ -11,7 +11,7 @@ gated steps.** `245-side` = desktop Claude (CIFS + SSH to both boxes). `210-side
 ## STATUS — edit ONLY your own line, commit, push. `git pull` before EVERY action.
 ```
 245-side : phase 0 / ready / <ts>
-210-side : phase 0 COMPLETE / GREEN — 0a PASSES (read Midea on LAN: OFF, target 35%, online), 1b verified (11 sensors). midea-device.env + CLI in place; .master_pass HELD for cutover. Phase-2 Q resolved: 2b must INSTALL ha-controller unit (absent on 210) + place .master_pass. 210 READY for G1. / 2026-06-24T14:52Z
+210-side : phase 0 COMPLETE / GREEN — 0a PASSES (read Midea on LAN: OFF, target 35%, online), 1b verified (11 sensors). midea-device.env + CLI in place; .master_pass HELD for cutover. Phase-2 Q resolved. ha-controller unit now PRE-INSTALLED (disabled). 2b = place .master_pass + enable --now. 210 READY for G1. / 2026-06-24T14:55Z
 GO gates (Hugh):  G1 stop-245-controller = [ ]   G2 start-210-controller = [ ]   G3 demote-245 = [ ]
 Midea snapshot (pre-cutover):  state = OFF (running=false, online=true, tank=ok)   target = 35%   humidity-now = 30%   control-RH source = meter_pro_living_room   [210-read 2026-06-24T14:46Z]
 ```
@@ -80,8 +80,9 @@ Per `edge/aranet-245-relay.md`. Get the relay working+verified before the risky 
 - [ ] **2b [210] ⛔ requires G2 — and only after 2a shows STOPPED in STATUS** Promote 210's controller:
   1. Place `instance/.master_pass` (0600) — scp **fresh** from .245 now (controller needs it to build the
      issuer; auto-read from `$HOME/home_automation/instance/.master_pass`, no env var required).
-  2. Install the unit (install.sh intentionally omits it):
-     `sudo sed "s#/home/visko/home_automation#$PWD#g" systemd/ha-controller.service | sudo tee /etc/systemd/system/ha-controller.service >/dev/null && sudo systemctl daemon-reload`
+  2. ✅ **Unit already installed** (pre-staged 2026-06-24T14:55Z, **disabled** — can't run without
+     `.master_pass`, won't start on reboot). If ever missing:
+     `sudo cp systemd/ha-controller.service /etc/systemd/system/ && sudo systemctl daemon-reload`.
   3. `sudo systemctl enable --now ha-controller` → 210 is now the SOLE dictator.
   4. (Manual command plane / PWA buttons) `sudo systemctl restart ha-api` so it mounts the control router
      now that `.master_pass` is present.
