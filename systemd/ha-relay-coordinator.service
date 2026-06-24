@@ -15,6 +15,7 @@ WorkingDirectory=/home/visko/home_automation
 EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
 Environment=HA_BROKER=localhost
 Environment=HA_VIP=192.168.0.200
+Environment=PYTHONUNBUFFERED=1
 ExecStart=/home/visko/home_automation/venv/bin/python3 server/mesh/coordinator.py \
   --publish --loop 900 --dwell 900 --broker localhost \
   --registry instance/devices.yaml --mesh-db instance/db/mesh.db --node-secrets instance/node_secrets.enc
