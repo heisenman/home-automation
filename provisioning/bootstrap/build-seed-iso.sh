@@ -46,7 +46,10 @@ echo "==> copying firstboot.sh to /ha on the ISO"
 mkdir -p "$ISO/ha"; cp "$FIRSTBOOT" "$ISO/ha/firstboot.sh"
 
 echo "==> wiring boot menus for an automated install"
-AUTO='auto=true priority=critical preseed/file=/preseed.cfg ---'
+# priority=high (not critical): everything we preseed still auto-answers, but genuinely-unset
+# high-priority prompts — i.e. the Wi-Fi ESSID/passphrase on wired-failure fallback — are shown
+# to the user instead of being skipped. Keep it 'high' for the wired-first/Wi-Fi-fallback flow.
+AUTO='auto=true priority=high preseed/file=/preseed.cfg ---'
 # BIOS (isolinux)
 if [ -f "$ISO/isolinux/txt.cfg" ]; then
   cat > "$ISO/isolinux/txt.cfg" <<EOF

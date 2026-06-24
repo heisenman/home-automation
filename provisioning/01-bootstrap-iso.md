@@ -79,6 +79,18 @@ Point it at **`provisioning/02-full-server-spec.md`** and let it proceed.
 ---
 
 ### Notes / gotchas
+- **Network: wired-first, Wi-Fi fallback (learned the hard way on the G11, 2026-06-23).** The G11's
+  2.5GbE Realtek **RTL8125** relinks slowly; stock d-i waits only a couple seconds for link, decides the
+  wired port is dead, and bails to Wi-Fi — even mid-install it kept turning the port "off." The preseed now
+  (a) pre-ups every wired NIC in `early_command`, (b) waits `netcfg/link_wait_timeout 60` for a wired link,
+  (c) DHCPs unattended if wired comes up, and (d) falls back to **interactive Wi-Fi** (prompts for SSID +
+  passphrase) only if there's truly no wired link — which is why `build-seed-iso.sh` boots at
+  `priority=high`, not `critical` (critical would *skip* the Wi-Fi prompts). If the installer ever still
+  bails to Wi-Fi on a wired box: drop to a shell (the menu's "Execute a shell"), `ip link set <eth> up`,
+  then re-run "Configure the network". For a headless unit with **no** Wi-Fi, preseed a **static wired IP**
+  instead (working example baked for `ha-dev` in gitignored `instance/g11/preseed.cfg`: set
+  `netcfg/disable_autoconfig true` + `get_ipaddress/netmask/gateway/nameservers`). Note Wi-Fi fallback can't
+  join a **WPA3-only** SSID from d-i — use WPA2 or WPA2/WPA3-mixed.
 - **Bootstrap is online.** This is the first unit's fast path. For an air-gapped rebuild later, the
   same preseed points at a **local snapshot mirror** instead of `deb.debian.org`, and `firstboot.sh`
   installs Node/Claude from sneakernet artifacts (see `03-sneakernet-updates.md`).
