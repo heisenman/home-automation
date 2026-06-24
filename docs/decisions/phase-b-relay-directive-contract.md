@@ -46,10 +46,19 @@ Tier-1 (the mapper, LIVE) already drops redundant readings **server-side**. Tier
 - **Re-negotiation:** on node up/down + sustained coverage shift, plus a ~15-min periodic backstop (debounced).
 - **Default OFF / dry-run** until the firmware consumer exists: `--dry-run` prints the directives it would send.
 
-## Open tuning note (surfaced for review)
-`best_relay` strongly prefers `local` (the dictator's own radio) because an edge path adds a ~1.0 cost IP
-hop (~10 dB-equivalent). On the live `mesh.db`, local out-competes the S3 for nearly every meter → the S3's
-allowlist comes out near-empty. Confirm this is desired (big energy save, but only if local reliably hears
-those meters) vs. tuning the live-adv IP-hop cost down so a *closer* edge node wins for marginal-signal
-meters (reliability). See the coordinator dry-run output. **Do not enable live publish until this is settled
-+ the firmware lands.**
+## Open tuning note — RESOLVED (2026-06-24)
+The original concern (`best_relay` over-preferring `local`, leaving the S3 allowlist near-empty) is **resolved
+by the adv-reception RATE signal** (`adv_score`, commit 25407a0): the coordinator now weighs *how often* a
+source is heard, not just last-seen age, so a steadily-heard edge node beats a gappy-but-recent local. Soak-
+validated on live 210: s3 wins 6 meters, c6-bench 2, local only `aranet_radon` + genuinely-closer meters —
+matching the live sniff. So edge allowlists are non-empty and reflect real reliability.
+
+## Implementation status — server half (2026-06-24)
+BUILT + unit-tested (offline), **not yet publishing live**:
+- `sign_envelope()` — the `{p,s}` firmware envelope (HMAC over literal `p`); `publish_pass()` signs per-node
+  from the master-decrypted LUT and publishes retained QoS1 on `/relay`.
+- `reconcile()` — decision #5 debounce: a changed allowlist must hold `--dwell` (default 900 s) before
+  re-publish; monotonic per-node `epoch` bumped only on a committed change; `relay_state` persists across runs.
+- CLI: `--publish` (live), `--loop N` (periodic backstop), default **dry-run**.
+- **Gated rollout** (needs Hugh GO): dry-run preview on 210 → `--publish` canary on ONE node (short dwell) →
+  confirm firmware applies (NVS epoch + filtered relay) → full + a systemd timer for the periodic backstop.

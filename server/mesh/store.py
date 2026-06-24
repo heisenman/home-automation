@@ -10,6 +10,7 @@ Tables:
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import sqlite3
@@ -45,6 +46,17 @@ CREATE TABLE IF NOT EXISTS pull_log (
     reason     TEXT
 );
 CREATE INDEX IF NOT EXISTS idx_pull_log_dev ON pull_log (device_id, ts);
+-- relay_state: the coordinator's PUBLISHED per-node allowlist (ADR-0015 Phase B, decision #5). `epoch`
+-- is monotonic per node (firmware ignores epoch <= last applied); `relay_macs` is the live published set;
+-- `pending_macs`/`pending_since` hold a candidate awaiting the switch dwell (debounce, so borderline
+-- meters don't flap the firmware allowlist).
+CREATE TABLE IF NOT EXISTS relay_state (
+    node_id       TEXT PRIMARY KEY,
+    epoch         INTEGER NOT NULL DEFAULT 0,
+    relay_macs    TEXT NOT NULL DEFAULT '[]',
+    pending_macs  TEXT,
+    pending_since REAL,
+    updated_ts    TEXT);
 """
 
 
@@ -137,6 +149,29 @@ def pull_stats(conn):
         o, f = stats.get((recv, device_id), (0, 0))
         stats[(recv, device_id)] = (o + (1 if ok else 0), f + (0 if ok else 1))
     return stats
+
+
+def load_relay_state(conn) -> dict:
+    """node_id -> {epoch, relay_macs:[...], pending_macs:[...]|None, pending_since:float|None}."""
+    out: dict = {}
+    for nid, epoch, macs, pend, since, _ in conn.execute(
+            "SELECT node_id, epoch, relay_macs, pending_macs, pending_since, updated_ts FROM relay_state"):
+        out[nid] = {"epoch": epoch, "relay_macs": json.loads(macs),
+                    "pending_macs": json.loads(pend) if pend else None, "pending_since": since}
+    return out
+
+
+def save_relay_state(conn, node_id: str, epoch: int, relay_macs, pending_macs, pending_since) -> None:
+    conn.execute(
+        """INSERT INTO relay_state (node_id, epoch, relay_macs, pending_macs, pending_since, updated_ts)
+           VALUES (?,?,?,?,?,?)
+           ON CONFLICT(node_id) DO UPDATE SET epoch=excluded.epoch, relay_macs=excluded.relay_macs,
+             pending_macs=excluded.pending_macs, pending_since=excluded.pending_since,
+             updated_ts=excluded.updated_ts""",
+        (node_id, int(epoch), json.dumps(sorted(relay_macs)),
+         json.dumps(sorted(pending_macs)) if pending_macs is not None else None,
+         pending_since, _now_iso()))
+    conn.commit()
 
 
 def _terminal_receiver(path: str | None):
