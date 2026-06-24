@@ -1,7 +1,7 @@
 # ADR-0016 — Sensor-history reconciliation across a dictator failover
 
 **Date:** 2026-06-24
-**Status:** Proposed — spun out of [ADR-0015](ADR-0015-edge-relay-coverage-assignment.md) decision #8
+**Status:** Accepted (2026-06-24, Hugh) — spun out of [ADR-0015](ADR-0015-edge-relay-coverage-assignment.md) decision #8
 ("history reconciliation → its own ADR; reconcile-on-promotion over the cluster back-channel"). Builds on
 [ADR-0007](ADR-0007-device-history-sync.md) (idempotent ingestion), [ADR-0009](ADR-0009-history-continuity.md)
 (continuity), [ADR-0006](ADR-0006-storage-two-tier-sqlite-parquet.md) (hot.db/parquet), and the failover
@@ -29,8 +29,10 @@ replication would pay a constant cost to close a gap that only opens on a failov
    (like the existing `sync-standby` / mapper-restart hooks) — it **never blocks the takeover**. Promotion
    and demotion both reconcile; idempotency makes "reconcile on both ends" safe and self-correcting.
 2. **Mechanism (bidirectional snapshot-merge).** Each box, against its peer over `ssh -i ~/.ssh/id_cluster`:
-   - export its own `readings` for the divergence window (`ts >= now - WINDOW`, default a few days ≫ the
-     longest plausible outage) into a throwaway sqlite snapshot (`sqlite3 .backup` or a `SELECT … INTO`),
+   - export its own `readings` for the divergence window (`ts >= now - WINDOW`, where **WINDOW tracks the
+     hot-tier compaction horizon** — the daily compactor's cutoff, not a hand-tuned constant — so it self-tunes
+     and targets exactly the zone where live divergence lives) into a throwaway sqlite snapshot
+     (`sqlite3 .backup` or a `SELECT … INTO`),
    - `scp` it to the peer, which does `ATTACH` + `INSERT OR IGNORE INTO readings SELECT … FROM snap`.
    - Run it **both directions** so each box backfills exactly the rows it missed during the other's reign.
    No timestamps-of-last-sync bookkeeping needed — the unique key is the merge contract.
@@ -50,6 +52,30 @@ replication would pay a constant cost to close a gap that only opens on a failov
   async reconcile completes) — acceptable for *history* (not live control). **−** A very long outage could
   exceed the hot-tier `WINDOW`; mitigated by sizing WINDOW generously + the deferred parquet deep-reconcile.
 - **−** Reconcile reads the peer's DB over SSH — bounded by WINDOW so the transfer stays small.
+
+## Retention horizons & why the parquet deep-reconcile is safely deferred
+A gap is recoverable from **either** a peer box's parquet **or** the source device's own history buffer
+([ADR-0009](ADR-0009-history-continuity.md) relay-primary/buffer-pull; [ADR-0007](ADR-0007-device-history-sync.md)).
+Three nested horizons bound recovery:
+1. **Hot tier (~1–2 d, the compaction horizon)** — the cheap sqlite cross-box merge above; `WINDOW` tracks this.
+2. **Parquet (kept per-box, but diverged)** — the deferred periodic deep-reconcile.
+3. **Device ring buffer** (SwitchBot ≈68 d, *wrap-limited* per ADR-0007; Aranet = its own onboard-log depth,
+   TBD/measure) — source-of-last-resort. Once a meter's *circular* buffer **wraps**, the oldest data is
+   overwritten **and** the read protocol changes (the `02`-NAK that already blocks attic/h_bed, ADR-0009) — so
+   the net is finite *and* weaker than nominal for already-wrapped meters.
+
+Permanent loss requires a gap older than what the boxes will cheaply share **and** past the device buffer/wrap.
+The device buffer is therefore the explicit **deferral bound**: the parquet deep-reconcile is not load-bearing
+until an outage exceeds `min(device-buffer)`. That makes it a *deadline*, not a someday — a `cluster-doctor`
+assertion should warn when **peer-frozen-duration > min device-buffer depth** (the device-pull net has expired
+for the oldest slice of the gap → cross-box parquet reconcile must run *before* the device wraps).
+
+- **Near-term (small) lift:** record a per-device-**model** buffer-depth attribute in the registry (a documented
+  constant — *not* a per-device retention-policy engine, which stays out of scope) + add the `cluster-doctor`
+  deadline assertion above. This converts "device-pull will save us" from an implicit assumption into a stated,
+  monitored bound.
+- **Deferred (heavier) lift:** the parquet deep-reconcile transport itself, landed alongside the full
+  dictator-handover reconcile implementation (`adr-history-reconciliation`).
 
 ## Rejected alternatives
 - **Continuous time-series replication** (stream every reading to the standby): constant cost + complexity to
