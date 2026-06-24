@@ -102,6 +102,12 @@ def _ready(t: dict, tasks: dict) -> bool:
     return t.get("status") == "open" and all(_is_done(d, tasks) for d in t.get("deps", []))
 
 
+def _cancelled_deps(t: dict, tasks: dict) -> list:
+    """Deps that are CANCELLED — they can never become 'done', so they'd block this task forever
+    unless edited out. Surfaced in `list` with an escape hint (fixes dev's deadlock critique)."""
+    return [d for d in t.get("deps", []) if (tasks.get(d) or {}).get("status") == "cancelled"]
+
+
 def _beacon(agent: str, current: str = "", note: str = "") -> None:
     _pub(f"{AGENTS}/{agent}", {"agent": agent, "last_active": now(),
                                "current": current, "note": note})
@@ -132,7 +138,11 @@ def cmd_list(a, agent):
     order = {s: i for i, s in enumerate(("in_progress", "claimed", "blocked", "open", "done", "cancelled"))}
     for t in sorted(tasks.values(), key=lambda x: (order.get(x.get("status"), 9), x["id"])):
         if a.all or t.get("status") not in ("done", "cancelled"):
-            tag = "  <-- READY" if _ready(t, tasks) else ""
+            cd = _cancelled_deps(t, tasks) if t.get("status") not in ("done", "cancelled") else []
+            if cd:
+                tag = f"  <-- STUCK: dep cancelled ({','.join(cd)}); escape: dep {t['id']} --remove {cd[0]}"
+            else:
+                tag = "  <-- READY" if _ready(t, tasks) else ""
             print(_fmt(t) + tag)
 
 
@@ -253,6 +263,24 @@ def cmd_note(a, agent):
     t["note"] = a.note; _save(t, agent); print(f"noted {a.id}: {a.note}")
 
 
+def cmd_dep(a, agent):
+    """Edit a task's dependency list. Clean escape from a cancelled/wrong dep without --force."""
+    t = _get(a.id)
+    if not t:
+        print(f"ERROR: no such task '{a.id}'"); sys.exit(1)
+    deps = list(t.get("deps", []))
+    for d in (x.strip() for x in a.add.split(",")) if a.add else []:
+        if d and d not in deps:
+            deps.append(d)
+    rm = {x.strip() for x in a.remove.split(",")} if a.remove else set()
+    deps = [d for d in deps if d not in rm]
+    t["deps"] = deps
+    _save(t, agent)
+    tasks = _all_tasks()
+    state = "READY" if _ready(t, tasks) else ("STUCK" if _cancelled_deps(t, tasks) else t["status"])
+    print(f"deps for {a.id}: {deps or '-'}  ({state})")
+
+
 def cmd_beacon(a, agent):
     _beacon(agent, note=a.note or ""); print(f"beacon updated for {agent}")
 
@@ -290,6 +318,7 @@ def main():
     sp = add("block"); sp.add_argument("id"); sp.add_argument("--reason", default="")
     sp = add("cancel"); sp.add_argument("id"); sp.add_argument("--reason", default="")
     sp = add("note"); sp.add_argument("id"); sp.add_argument("--note", required=True)
+    sp = add("dep"); sp.add_argument("id"); sp.add_argument("--add", default=""); sp.add_argument("--remove", default="")
     sp = add("beacon"); sp.add_argument("--note", default="")
 
     a = p.parse_args()
@@ -308,7 +337,7 @@ def main():
     {"list": cmd_list, "ready": cmd_ready, "mine": cmd_mine, "agents": cmd_agents,
      "whoami": cmd_whoami, "add": cmd_add, "claim": cmd_claim, "start": cmd_start,
      "done": cmd_done, "block": cmd_block, "release": cmd_release, "cancel": cmd_cancel,
-     "note": cmd_note, "beacon": cmd_beacon}[a.cmd](a, agent)
+     "note": cmd_note, "dep": cmd_dep, "beacon": cmd_beacon}[a.cmd](a, agent)
 
 
 if __name__ == "__main__":

@@ -32,6 +32,10 @@ Two Claude instances coordinate here. Stable ids:
 `open → claimed → in_progress → done`, with `blocked` (recoverable) and `cancelled` (terminal) off to the
 side; `release` returns an owned task to `open`. **Terminal:** `done`, `cancelled`.
 
+**Cancelled deps don't deadlock:** a dep stuck in `cancelled` can never become `done`, so its dependents
+would block forever. They're not silently stuck — `list` flags them `STUCK: dep cancelled (…)` with an
+escape hint, and `dep <id> --remove <dep>` (or `--add`) edits the dependency cleanly without `--force`.
+
 ### Readiness & serialization (the point of all this)
 A task is **READY** ⇔ `status==open` **AND every `dep` is `done`**. Agents only `claim` ready tasks.
 When you finish work, `done <id>` flips it and the tool prints any **dependents that just became ready** —
@@ -64,6 +68,7 @@ python3 tools/agents/coord.py ready
 python3 tools/agents/coord.py add my-task --title "…" --deps adr15-finalize
 python3 tools/agents/coord.py claim my-task && python3 tools/agents/coord.py start my-task
 python3 tools/agents/coord.py done my-task --note "shipped in <commit>"
+python3 tools/agents/coord.py dep my-task --remove some-dep   # edit deps (escape a cancelled/wrong dep)
 python3 tools/agents/coord.py agents      # liveness/what's-the-other-doing
 ```
 Broker override: `--broker` or `$HA_COORD_BROKER`. Identity: `--as` or `$HA_AGENT_ID`.
