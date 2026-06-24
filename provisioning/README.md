@@ -63,8 +63,10 @@ to keep the wheelhouse identical to .245 — valid, but adds Python to the recom
                                     ▼
    ┌─────────────────────────────────────────────────────────────────────┐
    │ STAGE 2 — FULL SERVER SPEC  (provisioning/02-full-server-spec.md)    │
-   │   The on-device LLM configures everything: drivers, storage, BlueZ,  │
-   │   venv, app, systemd, mosquitto, data migration, verification.       │
+   │   Configure everything: drivers, storage, BlueZ, venv, app, systemd, │
+   │   mosquitto, data migration, verification.                           │
+   │   FAST PATH (no LLM): ./provisioning/stage2-finish.sh automates the  │
+   │   §4–§7 package/BlueZ/venv/service work; see 04-post-install.md.     │
    └───────────────────────────────┬─────────────────────────────────────┘
                                     │
                                     ▼
@@ -86,7 +88,9 @@ unit and all future rebuilds.
 | Path | What |
 |---|---|
 | `01-bootstrap-iso.md` | How to build & flash the Stage-1 bootstrap ISO |
-| `02-full-server-spec.md` | The Stage-2 spec the on-device LLM executes |
+| `02-full-server-spec.md` | The Stage-2 spec (full reference + on-device findings + LLM directive) |
+| `stage2-finish.sh` | **One-shot, idempotent Stage-2 finisher — run once after first login (no LLM)** |
+| `04-post-install.md` | What the finisher does, the manual steps left, and the "drive with Claude" prompt |
 | `03-sneakernet-updates.md` | Air-gapped update architecture (OS, pip, source, data, git) |
 | `autoinstall/preseed.cfg` | Debian 13 installer preseed (unattended install) |
 | `bootstrap/firstboot.sh` | First-boot provisioner (Node + Claude Code + clone) |

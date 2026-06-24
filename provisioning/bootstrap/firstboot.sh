@@ -50,11 +50,15 @@ fi
 cat > /etc/motd <<'MOTD'
 ────────────────────────────────────────────────────────────────────
  Home Automation server — bootstrap complete.
- NEXT: run an LLM on-device and have it execute the full spec:
+ NEXT (no LLM needed): finish provisioning with one idempotent script —
      cd ~/home_automation
-     claude            # authenticate if prompted
-     # then point it at: provisioning/02-full-server-spec.md
- Or drive remotely from your workstation via VSCode Remote-SSH.
+     ./provisioning/stage2-finish.sh
+   It installs packages, BlueZ --experimental, the venv + ha-* services,
+   then prints the few manual steps left (static IP, password, PII, reboot).
+   Details: provisioning/04-post-install.md
+ Prefer to supervise with an LLM? Run `claude` and point it at
+   provisioning/02-full-server-spec.md (the "Drive with Claude" prompt is
+   in 04-post-install.md). Or drive remotely via VSCode Remote-SSH.
  First-boot log: /var/log/ha-firstboot.log
 ────────────────────────────────────────────────────────────────────
 MOTD

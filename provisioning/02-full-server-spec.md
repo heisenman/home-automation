@@ -1,5 +1,13 @@
 # Stage 2 — Full Server Spec (executed on-device by an LLM)
 
+> **⚡ Most of §4–§7 is now automated.** For a standard box, run
+> `./provisioning/stage2-finish.sh` (idempotent, no LLM needed) — it does the package
+> set, BlueZ `--experimental`, the venv + `ha-*` services, and persistent journald,
+> then prints the human-only steps. See `provisioning/04-post-install.md`. This spec
+> remains the full reference, the source of the verify gates, the record of on-device
+> findings, and the directive for driving the box with Claude when the hardware
+> differs from the script's assumptions.
+
 **You are an LLM with shell + sudo on a freshly-bootstrapped GMKtec G11 (Debian 13 minimal).**
 Configure it into a complete home-automation server matching production (.245), reproducibly, ready
 to run air-gapped. Work top-to-bottom. Each step has a **Verify** gate — do not proceed until it
