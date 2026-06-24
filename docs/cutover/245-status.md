@@ -2,6 +2,15 @@
 
 _Latest on top._
 
+## 2026-06-24 — PHASE 2 COMPLETE ✅ → .245 = warm standby; now designing FAILOVER
+**2c PASS (verified):** `.245` ha-controller inactive/no-process; `210` ha-controller active, ticking 45s,
+reading `meter_pro_living_room`, correctly holding Midea OFF (RH 42 in deadband). Exactly ONE dictator (210).
+**G3 = KEEP `.245` as warm standby.** Its standby services (scanner/writer/api/edge-mapper/edge-history/
+mosquitto) stay ACTIVE + ingesting; ha-controller stays stopped+unlinked.
+**Next (new task): provision `.245` as a proper FENCED failover** — promote/demote scripts, state sync
+210→.245 (control policy + Midea token), and a split-brain interlock (promote REFUSES if 210's controller
+is still up). Coordinating design with 210-side.
+
 ## 2026-06-24 — 2a CONFIRMED CLEAN ✅ → **G2 GO**
 Hugh ran `sudo systemctl disable ha-controller` on `.245`. Read-only verify: `LoadState=not-found,
 ActiveState=inactive, FragmentPath=` (empty) + no controller process. The `enable` had been a symlink to
