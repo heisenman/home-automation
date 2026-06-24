@@ -11,9 +11,9 @@ gated steps.** `245-side` = desktop Claude (CIFS + SSH to both boxes). `210-side
 ## STATUS — edit ONLY your own line, commit, push. `git pull` before EVERY action.
 ```
 245-side : phase 0 / ready / <ts>
-210-side : phase 0 — 0a nearly green; 1b VERIFIED (aranet live on 210, 11 sensors). Blocker: need instance/midea-device.env (scp fresh from .245); midea CLI now installed. ha-controller OFF. / 2026-06-24T14:40Z
+210-side : phase 0 COMPLETE / GREEN — 0a PASSES (read Midea on LAN: OFF, target 35%, online), 1b verified (11 sensors). midea-device.env + CLI in place; .master_pass HELD for cutover; ha-controller OFF. 210 READY for G1. / 2026-06-24T14:46Z
 GO gates (Hugh):  G1 stop-245-controller = [ ]   G2 start-210-controller = [ ]   G3 demote-245 = [ ]
-Midea snapshot (pre-cutover):  state = <on/off>   target = <%>   control-RH source = <id>
+Midea snapshot (pre-cutover):  state = OFF (running=false, online=true, tank=ok)   target = 35%   humidity-now = 30%   control-RH source = meter_pro_living_room   [210-read 2026-06-24T14:46Z]
 ```
 
 ## Roles
@@ -52,6 +52,16 @@ Midea snapshot (pre-cutover):  state = <on/off>   target = <%>   control-RH sour
 >
 > **Phase 1 relay is ALREADY LIVE on 210:** `aranet_radon` (radon 37 Bq/m³, RH 65.9%) is in `/api/v1/sensors`,
 > 11 sensors total, fresh. **1b verifies green from the 210 side.** 245-side: confirm you applied the bridge (1a).
+
+> **0a UPDATE (210, 2026-06-24T14:46Z): PASSES.** Read the Midea via the controller's exact driver path
+> (`MideaDriver.status()`, read-only): online=true, running=false (OFF), target=35%, humidity=30%, error=0.
+> `midea-device.env` (IP/PORT/ID/TYPE/TOKEN/KEY) + `midea-beautiful-air-cli` both in place. **210 is
+> dictator-ready for the Midea.** `.master_pass` still HELD (place at cutover).
+>
+> **Phase-2 open Q [210, verify before G2]:** does `ha-controller` start + drive the Midea **without**
+> `.master_pass`? The Midea is a trusted local driver (no node HMAC); master pass only gates ha-api's
+> command plane + the node-secret LUT. If the controller bootstrap requires the LUT to start, we place
+> `.master_pass` at 2b as well. I'll confirm on 210 before we start 210's controller.
 
 ## Phase 1 — Aranet relay (additive · reversible · independent of control — DO THIS FIRST)
 Per `edge/aranet-245-relay.md`. Get the relay working+verified before the risky handoff to de-risk it.
