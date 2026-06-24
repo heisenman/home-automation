@@ -21,7 +21,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))
 from server.mesh import store as mesh_store          # noqa: E402
-from server.mesh.topology import SERVER, best_relay, build_graph  # noqa: E402
+from server.mesh.topology import SERVER, Link, best_relay, build_graph  # noqa: E402
 
 log = logging.getLogger("ha.relay_coordinator")
 
@@ -32,6 +32,11 @@ def compute_allowlists(links, dev_to_mac: dict, now: float | None = None):
                   preferred source for >=1 device (their relay allowlist).
       local_devs = device_ids the dictator's own radio ('local') is preferred for (no edge directive).
     A node's allowlist is exactly the devices best_relay picks IT for; everything else it should drop."""
+    # mesh.db records only receiver->endpoint reach, NOT the SERVER->node IP backhaul. Inject the implicit
+    # backhaul (every edge node is reachable over MQTT/IP) so best_relay can actually route through a node;
+    # without it edge nodes are disconnected from SERVER and local always wins by default.
+    edge_nodes = {l.src for l in links if l.src[0] == "node"}
+    links = list(links) + [Link(SERVER, n, "ip") for n in edge_nodes]
     g = build_graph(links)
     endpoints = sorted({n for n in g.nodes if n[0] == "endpoint"})
     per_node: dict[str, dict] = {}
