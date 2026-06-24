@@ -1,6 +1,7 @@
 # ADR-0015 — Edge relay coverage assignment & live-adv dedup (preferred-relay directives)
 
-Status: **Proposed** (2026-06-24) — plan for review before implementation. Extends
+Status: **Accepted** (2026-06-24) — 9 open questions resolved with Hugh (see *Decisions*, below);
+implementation may proceed per *Phasing*. Extends
 [ADR-0010 mesh-topology-routing](ADR-0010-mesh-topology-routing.md) and
 [ADR-0001 dictator-authority-model](ADR-0001-dictator-authority-model.md).
 
@@ -105,7 +106,8 @@ actuator gets a parallel `cmd_relay` keyed by **device_id** (ADR-0010 command-co
 | Assignment | `server/mesh/assign.py` (new) | `{device_id→source}` + `{node→device_ids}` (MAC-resolved for BLE adv; device_id for cmd relay), hysteresis, failover, persist |
 | Tier-1 dedup | `server/ingest/edge_mapper.py` | preferred-source gate + live `record_link()` |
 | Local-as-node | `server/ingest/scanner.py` | (recommended) publish via `home/edge/local/<mac>/adv` |
-| Coordinator | `ha-relay-coordinator` (new svc) or fold into ha-controller | compute + publish directives (Tier 2) |
+| Coordinator | `ha-relay-coordinator` (new svc — decided) | compute + publish **signed** directives on `…/relay` (Tier 2) |
+| Web config | PWA (`server/web` / API) | surface coverage assignment + registry edits (Hugh: user config lives in the web app) |
 | Firmware | `edge/esp32*/main` (`ble_scan`/`ha_mqtt`/`ha_config` + a cmd handler) | NVS allowlist + relay filter |
 | Schema | directive JSON (+ optional HMAC) | `relay_assign` contract above |
 
@@ -167,16 +169,40 @@ the mesh exist; #2 (history reconciliation) may graduate to its own ADR if it gr
   local-as-node change (or writer dedup) — a real decision. **−** Directive trust: fine on the trusted LAN;
   sign when the broker carries authority.
 
-## Open questions (for review)
-1. **Local scanner:** route-through-mapper as node `local` *(recommended — uniform)* vs writer-side dedup?
-2. **Pre-directive default:** relay-all *(recommended — backward-compatible)* vs relay-none?
-3. **Directive channel:** reuse `…/cmd` vs dedicated `…/relay`? Sign it now or defer to broker-auth?
-4. **Coordinator home:** new `ha-relay-coordinator` service vs fold into `ha-controller`/`ha-api`?
-5. **Re-negotiation cadence:** event-driven (node up/down, coverage shift) + slow periodic — what interval?
-6. **Scope of v1:** ship Tier 1 alone first (data-side win, zero firmware risk), then Tier 2?
-7. **VIP rollout:** repoint the edge nodes (the S3 + future) to `.200` *now* (a reflash), or fold into the
-   next firmware update? And clients/dashboard → VIP?
-8. **History reconciliation (#2):** its own ADR? And reconcile-on-promotion vs continuous time-series
-   replication (cost vs gap-size)?
-9. **`ha-api` on the standby (#4):** warm read-only + mount-control-on-promote, or cold (dashboard down
-   during an outage)?
+## Decisions (resolved with Hugh, 2026-06-24)
+1. **Local scanner → route-through-mapper as node `local`.** All readings (local + every edge node) pass one
+   dedup gate via `home/edge/local/<mac>/adv`. Uniform, single code path.
+2. **Pre-directive default → relay-all.** An un-provisioned node behaves as today; the dictator only ever
+   *narrows* coverage once learned. Backward-compatible.
+3. **Directive channel → dedicated `home/edge/<node>/relay`, signed now** (HMAC, reusing the OTA/command
+   signing infra). A directive that changes what a node ignores warrants the same integrity as a command;
+   cheap now, awkward to retrofit.
+4. **Coordinator home → Tier-1 dedup lives in `ha-edge-mapper`; the Tier-2 directive coordinator is its own
+   `ha-relay-coordinator` service.** Per Hugh, services are cheap (fast boxes + a planned OS/critical-service
+   optimization pass), so we don't contort to avoid a daemon — a dedicated coordinator is cleaner to reason
+   about and to fail over.
+5. **Re-negotiation cadence → event-driven (node up/down, sustained coverage shift) + a slow ~15-min periodic
+   backstop**, re-pushing only changed assignments (debounced). Timings are dev's to tune from live data
+   (Hugh's deferral); start at 15 min and adjust on observed churn.
+6. **v1 scope → Tier 1 first** (server-side dedup/assignment, zero firmware change), validate, then Tier 2
+   (firmware directives). Captures the data-side win with no firmware risk.
+7. **VIP rollout → clients/dashboard repoint to VIP `.200` now (wired, VIP reachable); edge nodes fold into
+   the next firmware update, NOT a reflash-now.** The S3 is parked on `.210` precisely because the wifi
+   segment can't ARP the VIP — repointing wifi nodes today would break them. Wired future nodes default to the
+   VIP; the wifi-VIP gap is fixed at the router (`openwrt-router-onboard`), not by reflashing.
+8. **History reconciliation → its own ADR; reconcile-on-promotion** (snapshot-merge over the **cluster
+   back-channel**, not the public bus/GitHub), not continuous time-series replication. A bounded gap during
+   the rare swap window is acceptable for sensor history; the writer's `(ts,metric)` dedup makes the merge
+   idempotent.
+9. **`ha-api` on the standby → warm read-only + mount-control-on-promote.** Reads/dashboard stay up during an
+   outage; control endpoints stay unmounted until `notify.sh master`, preserving the one-controller invariant.
+
+### Cross-cutting clarifications (Hugh) — apply repo-wide, not just here
+- **Aggregation is dictator-central.** All telemetry aggregates on the dictator; history syncs over an
+  **RPC/cluster back-channel** (the `ha/cluster/#` bridge + `/cluster/*` RPC + ssh), never `home/#` or GitHub.
+- **Backup nodes that are *also* edge devices still relay up.** The incoming display hardware (not yet on-site)
+  may be both a standby participant and an edge relay; being a backup does not exempt it from central
+  aggregation — its readings still flow to the dictator like any edge node.
+- **User-configurable = web-app surface.** Anything a user sets now or later (coverage assignment, device
+  registry, relay tuning) belongs in the PWA, not sneakernet YAML or CLI. New config introduced by this ADR
+  must land a web-app control, not a hand-edited file.
