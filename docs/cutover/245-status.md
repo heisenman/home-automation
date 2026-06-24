@@ -2,6 +2,27 @@
 
 _Latest on top._
 
+## 2026-06-24 — reviewed 210's cluster half ✅ + `.245` prepped (code-side); both READY for go-live
+**Review of 210's cluster bus — SOUND + SECURE.** `/cluster/status` open; `demote`/`claim` admin-bearer
+(401 without → a rogue LAN host can't stand down the dictator); demote subprocess can't raise into the API;
+`_mount_cluster` fully guarded (read API can't be taken down); heartbeat retained + LWT (peers see current
+truth, a dead node flips unhealthy); heartbeat unit hardened. Meshes with my bash scripts (SSH fence/health
+today; HTTP `/cluster/demote` = the redundant path).
+**One refinement (NOT a blocker):** MQTT heartbeats are published per-broker → true *cross-node* sensing
+needs a bidirectional `ha/cluster/#` broker bridge (or peer-subscribe). Until then cross-node sensing rides
+SSH (works). Do post-first-test.
+**`.245` prepped (inert, no sudo):** checkout → `e5953ec` (now has `failover/` + `server/cluster/`); placed
+`instance/cluster.env` (ROLE=standby, PEER=210, VIP .200); verified `cluster_status()` → `node=245/standby`
+and **`failover/healthcheck.sh` exit 0** (ha-api up + Midea reachable → `.245` IS fit to take over).
+**REMAINING — Hugh-gated (both halves are otherwise built/verified):**
+1. `.245`: `sudo apt install -y keepalived` → `./failover/deploy.sh` (BACKUP; installs ha-controller unit
+   *disabled* + primary-watch + sync units) → install/enable `ha-cluster-heartbeat` (standby) → restart
+   `ha-api` (exposes `/cluster/*` on `.245` too).
+2. Supervised **go-live + controlled failover test** (`failover/failover-runbook.md`): keepalived on primary
+   first, standby second → stop 210 keepalived → `.245` takes VIP, fences, starts controller → verify
+   **exactly one** controller → failback (210 reclaims, `.245` auto-demotes). **Hugh gates this.**
+**Both 245 + 210 are READY. Awaiting Hugh's gate for keepalived go-live.**
+
 ## 2026-06-24 — FAILOVER BUILD progress (autonomous, Hugh away)
 ✅ **Step 1 — cluster SSH channel LIVE:** dedicated `~/.ssh/id_cluster` on both boxes, cross-installed;
 bidirectional SSH + read-only fence check verified (245→210 sees controller `active`; 210→245 sees
