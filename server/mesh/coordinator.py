@@ -216,12 +216,26 @@ def main() -> None:
 
     client = None
     if a.publish:
-        if not lut:
+        vip = os.environ.get("HA_VIP", "")
+        if vip:                                            # only the dictator publishes (no split-brain)
+            try:
+                from server.cluster.state import vip_held
+                if not vip_held(vip):
+                    print(f"!! --publish refused: this node does not hold VIP {vip} "
+                          "(standby never publishes; notify.sh restarts on promote). Dry-run.")
+                    a.publish = False
+            except Exception:
+                log.warning("VIP-held check failed; refusing to publish for safety", exc_info=True)
+                a.publish = False
+        if a.publish and not lut:
             print("!! --publish refused: no node-secrets LUT / master available (can't sign). Staying dry-run.")
             a.publish = False
-        else:
+        if a.publish:
             import paho.mqtt.client as mqtt
-            client = mqtt.Client()
+            try:                                           # paho >=2 wants an explicit callback API version
+                client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+            except (AttributeError, TypeError):
+                client = mqtt.Client()
             client.connect(a.broker, a.port, keepalive=30)
             client.loop_start()
             print(f"# relay-coordinator LIVE PUBLISH -> {a.broker}:{a.port} (dwell {a.dwell:.0f}s)")

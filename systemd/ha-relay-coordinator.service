@@ -1,0 +1,30 @@
+[Unit]
+# ADR-0015 Phase B — relay-assignment coordinator. Periodically computes each edge node's relay allowlist
+# from the mesh reach graph + rate signal and publishes a signed, retained relay_assign directive on
+# home/edge/<node>/relay. Debounced (decision #5) so borderline meters don't flap the firmware allowlist.
+# Publishes ONLY when it holds the VIP (HA_VIP guard) — a standby never publishes (one-controller invariant);
+# notify.sh restarts it on a VRRP promote so it re-evaluates.
+Description=HA Phase-B relay-assignment coordinator (signs+publishes edge relay allowlists)
+After=network-online.target mosquitto.service ha-edge-mapper.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=visko
+WorkingDirectory=/home/visko/home_automation
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+Environment=HA_BROKER=localhost
+Environment=HA_VIP=192.168.0.200
+ExecStart=/home/visko/home_automation/venv/bin/python3 server/mesh/coordinator.py \
+  --publish --loop 900 --dwell 900 --broker localhost \
+  --registry instance/devices.yaml --mesh-db instance/db/mesh.db --node-secrets instance/node_secrets.enc
+Restart=always
+RestartSec=15
+# read instance secrets (.master_pass, node_secrets.enc) + write relay_state into mesh.db
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/visko/home_automation/instance
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target
