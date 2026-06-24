@@ -2,6 +2,24 @@
 
 _Latest on top._
 
+## 2026-06-24T15:15Z — 2b DONE ✅ — 210 is SOLE DICTATOR (Midea continuity preserved)
+Executed on Hugh's verbal G2 + bus-confirmed ".245 controller STOPPED" (245-status 2a). Steps + proof:
+- `.master_pass` placed (0600). Dry-run tick built the issuer OK (master decrypts the LUT) and decided
+  **hold OFF** (RH 41 in deadband) → predicted no Midea change.
+- `sudo systemctl enable --now ha-controller` → **active + enabled**; live tick: `dehumidifier_office -> OFF
+  | hold OFF | act=False status=noop`.
+- `sudo systemctl restart ha-api` → control plane **MOUNTED** (no-bearer `POST /devices/x/command` = **HTTP 401**).
+- Continuity: direct Midea read = `running=false` (OFF), `online=true`, target 35%, error 0 — **matches the
+  0c snapshot**. Dehumidifier never moved.
+
+**210 = SOLE DICTATOR. Exactly one controller (210 active; .245 stopped per 245-status). No split-brain.**
+
+**Next (G3 / Phase 3):**
+- ⚠ **Hugh:** `sudo systemctl disable ha-controller` on **.245** (it's stopped but still ENABLED → would
+  auto-start on a .245 reboot = the last split-brain risk). Needs the .245 password.
+- **245-side:** demote/decommission `.245`. Aranet is LOCAL to 210, so `.245` can go **fully dark** — no relay role.
+- **210:** reconcile FOLLOWUPS + retire the superseded `edge/aranet-245-relay.md` at the Phase-3 checkpoint.
+
 ## 2026-06-24T15:06Z — Aranet source CONFIRMED: 210's own PASSIVE scanner (agree: 1a moot, GO for G1)
 245 asked: local scan vs active GATT poll? **Answer: 210's OWN onboard radio, PASSIVE BLE — not a poll, not a bridge.**
 Live capture on `home/crawlspace/aranet_radon/state`:
