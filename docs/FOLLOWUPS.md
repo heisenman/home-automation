@@ -27,14 +27,23 @@ against the live system + source on this date.
    - ✅ **DONE:** §4 packages (bluez 5.82, mosquitto 2.0.21), §5 BlueZ `--experimental`, §6 venv on
      Py3.13 (pyarrow→18.1.0, install.sh `python3-venv`), §7 units installed; `ha-writer/api/edge-mapper/
      edge-history` + compactor/verify-hashes/gap-watcher timers **active**; `ha-scanner` **active** on the
-     onboard MT7922 (`hci0`) — verified live SwitchBot capture+decode (23.1 °C/42 %). Repo fixes pushed.
-   - ⏳ **OVERNIGHT TRIAL:** onboard-BT stability (watch for watchdog restarts / advert stalls). If it
-     flakes, fit the UB500 dongle off .245 (confirm .245 still has edge-node sensor intake first) + block `btmtk`.
-   - 🔲 **OPEN (next session, needs Hugh present):** (a) finalize static IP → **192.168.0.210** (drops the
-     SSH session — reconnect at .210); (b) `sudo passwd visko` then narrow sudoers to `ha-services` + drop
-     the broad bootstrap grant (§7e); (c) reboot test (§9); (d) sneakernet real `instance/devices.yaml`
-     (+`weather.env`) from .245 so meters decode to `/state` and `/devices` populates; (e) `ha-controller`
-     stays **disabled** on dev (must not fight .245 for the Midea). §3 dual-NVMe + §8 data-migration N/A here.
+     onboard MT7922 (`hci0`). **Registry loaded + data LIVE (eve 2026-06-24):** the real
+     `instance/devices.yaml` was present but services had started before it — a `ha-writer`+`ha-scanner`
+     restart loaded it; **10 of 11 meters now decode to `home/<area>/<device>/state`, `/devices` +
+     `/api/v1/sensors` populated, dashboard shows data.** `gh` authed (heisenman); repo pushed through
+     `ceeba71`. New: `provisioning/stage2-finish.sh` — idempotent no-LLM Stage-2 finisher (+ `04-post-install.md`).
+   - ⏳ **OVERNIGHT TRIAL:** onboard-BT stability — `NRestarts=0`, 0 stalls since the **04:31 UTC** restart
+     (clock reset by the registry-reload restart). If it flakes, fit the UB500 dongle off .245 (confirm .245
+     still has edge-node sensor intake first) + block `btmtk`. ESP32-C6 Wi-Fi relay is the documented
+     booster/alternative — `edge/esp32c6/dev-box-relay.md` (deferred: c6-bench feeds .245; use a spare or
+     repoint only at cutover).
+   - 🔲 **OPEN (next session, Hugh present):** (a) static IP → **192.168.0.210** — **scheduled tomorrow
+     2026-06-25, AFTER the BT-trial verdict and BEFORE any .245 decommission** (drops SSH; reconnect at .210);
+     (b) `sudo passwd visko` then narrow sudoers to `ha-services` + drop the broad bootstrap grant (§7e) —
+     or run `./provisioning/stage2-finish.sh --narrow-sudoers`; (c) reboot test (§9); (d) ~~sneakernet
+     devices.yaml~~ **DONE** — only `instance/weather.env` (outdoor lane) + `aranet_radon` (enable its Smart
+     Home Integration toggle; likely device-side, not range) remain; (e) `ha-controller` stays **disabled**
+     on dev (must not fight .245 for the Midea). §3 dual-NVMe + §8 data-migration N/A here.
 2. **PWA/automation software** (ADR-0014):
    - ✅ **R8 device friendly-name/room/hide — BUILT 2026-06-23 (`e81ff34`).** (Still TODO under R8:
      add-new-device + explicit retire-vs-hide.)
