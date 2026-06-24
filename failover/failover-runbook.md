@@ -58,6 +58,9 @@ sudo systemctl restart keepalived
 ```
 
 ## Monitoring
+- **`./failover/cluster-doctor.sh`** — read-only invariant + capability check (exactly-one-controller,
+  one VIP holder, dictator coherent, fresh heartbeats, SSH/keepalived/sqlite3/VIP-reach). Run on demand and
+  **after every failover** + before promoting/joining a box. Exit 0 = healthy, 1 = a FAIL. Makes no changes.
 - `/var/log/ha-failover.log` on both boxes (notify / primary-watch / sync events).
 - `GET http://<box>:8123/cluster/status` (once the cluster-RPC lands) — role / controller / health.
 - `journalctl -u keepalived` for VRRP state transitions.
