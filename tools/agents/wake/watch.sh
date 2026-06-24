@@ -37,11 +37,15 @@ mosquitto_sub -h "$BROKER" -p "$PORT" -t "$TOPIC" 2>/dev/null | while IFS= read 
   last=$(date +%s)
   if [ "$DRY_RUN" = 1 ]; then log "DRY_RUN -> would invoke runner now"; continue; fi
   log "invoking headless runner…"
+  # The prompt is passed via -p, so the runner needs NO stdin. We're inside a `mosquitto_sub | while read`
+  # loop, so claude's stdin is the bus pipe — without `< /dev/null` it blocks ~3s waiting for stdin
+  # ("no stdin data received in 3s" warning) AND could consume a queued wake message off the pipe.
+  # Detach it: feed the runner /dev/null, leave the pipe for the loop's `read`.
   ( cd "$REPO" && HA_AGENT_ID="$AGENT" "$CLAUDE_BIN" -p \
         "$(cat "$PROMPT")
 
 WAKE SIGNAL PAYLOAD: $msg" \
-        --allowedTools "Bash Read Edit Write" >>"$LOG" 2>&1 ) \
+        --allowedTools "Bash Read Edit Write" </dev/null >>"$LOG" 2>&1 ) \
     && log "runner finished ok" || log "runner exited nonzero (see log)"
 done
 log "subscription ended (broker down?) — systemd will restart"
