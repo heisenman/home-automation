@@ -116,7 +116,9 @@ actuator gets a parallel `cmd_relay` keyed by **device_id** (ADR-0010 command-co
   OTA host) **and** PWA/API clients to the **VIP `.200`**; confirm the broker answers on the VIP. Makes the
   data bus survive a dictator swap before any coverage logic is layered on. (Includes reflashing the S3.)
 - **Phase A (Tier 1):** `best_relay` + assignment + mapper dedup + local-as-node. No firmware. Gated, default
-  off, passthrough fallback. Immediate duplicate-write kill.
+  off, passthrough fallback. Immediate duplicate-write kill. **LIVE on 210 (dedup ON), validated 2026-06-24:**
+  all meters present, 1 source/meter, `mesh.db` reach graph filling, cluster-doctor green. Rollback = unset
+  `HA_RELAY_DEDUP` in `mqtt.env` + restart scanner+mapper.
 - **Phase B (Tier 2):** directive protocol + firmware relay filter + coordinator. Per-node rollout; saves
   edge energy. Default-relay-all keeps un-updated nodes safe. **Replicate `mesh_links`+assignments via
   `sync-standby`; recompute on `notify.sh master`.**
