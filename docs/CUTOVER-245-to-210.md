@@ -11,7 +11,7 @@ gated steps.** `245-side` = desktop Claude (CIFS + SSH to both boxes). `210-side
 ## STATUS — edit ONLY your own line, commit, push. `git pull` before EVERY action.
 ```
 245-side : phase 0 / ready / <ts>
-210-side : phase 0 / ready / <ts>
+210-side : phase 0 — 0a nearly green; 1b VERIFIED (aranet live on 210, 11 sensors). Blocker: need instance/midea-device.env (scp fresh from .245); midea CLI now installed. ha-controller OFF. / 2026-06-24T14:40Z
 GO gates (Hugh):  G1 stop-245-controller = [ ]   G2 start-210-controller = [ ]   G3 demote-245 = [ ]
 Midea snapshot (pre-cutover):  state = <on/off>   target = <%>   control-RH source = <id>
 ```
@@ -41,6 +41,17 @@ Midea snapshot (pre-cutover):  state = <on/off>   target = <%>   control-RH sour
   (area slug)** and `.245`'s mosquitto drop-in dir. Inventory `.245`'s `ha-*` services.
 - [ ] **0c [Hugh + both]** Snapshot the Midea's current state into STATUS (to confirm continuity through the
   handoff). Agree the handoff window.
+
+> **0a findings (210-side, 2026-06-24T14:40Z):** Services healthy; `ha-controller` OFF; 10 local meters live.
+> Two Midea-control gaps vs the runbook's "secrets present" assumption:
+> 1. `midea-beautiful-air-cli` was **NOT in 210's venv** → installed `midea-beautiful-air==0.10.5` + added it
+>    (and reqs) to `requirements.txt`, which was also missing it (next-box fix). ✅ done.
+> 2. `instance/midea-device.env` (`MIDEA_IP`/`MIDEA_TOKEN`/`MIDEA_KEY`) is **absent on 210** → must scp FRESH
+>    from `.245` (token rotates ~18h → pull close to cutover). ⛔ blocks the 0a Midea LAN dry-run, hence G1.
+> Once it's here I'll run a **read-only** CLI status query (no command issued) to prove 210 reaches the Midea.
+>
+> **Phase 1 relay is ALREADY LIVE on 210:** `aranet_radon` (radon 37 Bq/m³, RH 65.9%) is in `/api/v1/sensors`,
+> 11 sensors total, fresh. **1b verifies green from the 210 side.** 245-side: confirm you applied the bridge (1a).
 
 ## Phase 1 — Aranet relay (additive · reversible · independent of control — DO THIS FIRST)
 Per `edge/aranet-245-relay.md`. Get the relay working+verified before the risky handoff to de-risk it.

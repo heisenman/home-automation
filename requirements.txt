@@ -38,3 +38,11 @@ uvicorn==0.32.1
 uvloop==0.22.1
 watchfiles==1.2.0
 websockets==16.0
+
+# Control plane — Midea dehumidifier LAN driver (server/control/midea_driver.py shells
+# out to midea-beautiful-air-cli). Needed on the dictator; was missing from the captured
+# .245 list (installed there out-of-band). Added 2026-06-24 during the ha-dev promotion.
+charset-normalizer==3.4.7
+midea-beautiful-air==0.10.5
+requests==2.34.2
+urllib3==2.7.0
