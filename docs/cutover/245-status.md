@@ -2,6 +2,17 @@
 
 _Latest on top._
 
+## 2026-06-24 — FAILOVER GO-LIVE ✅ (keepalived live both boxes; steady state verified)
+**210 = MASTER** (VIP `192.168.0.200` held, `ha-controller` active, sole dictator). **`.245` = quiet BACKUP**
+(keepalived active, NO VIP, `ha-controller` inactive, `primary-watch` + sync timer active). **INVARIANT
+PASS: exactly one controller (210).** `sync-standby` already pulled primary state (midea-device.env +
+control.yaml + control.db [raw-copy fallback — `.245` has no `sqlite3` CLI; install for consistent snaps]).
+**Note:** keepalived boots BACKUP→MASTER, so 210's notify did stop→start its controller (~4 s control blip
+on keepalived *restart*, benign w/ Midea OFF) → refine `notify.sh` to ignore the startup transient.
+**NEXT (Hugh-gated): the controlled FAILOVER TEST** — stop 210 keepalived → `.245` takes VIP + fences 210 +
+starts controller → verify exactly one → start 210 keepalived → 210 reclaims (preempt 30 s), `.245`
+auto-demotes (primary supremacy). Then add MQTT heartbeat + `ha/cluster/#` bridge (deferred).
+
 ## 2026-06-24 — reviewed 210's cluster half ✅ + `.245` prepped (code-side); both READY for go-live
 **Review of 210's cluster bus — SOUND + SECURE.** `/cluster/status` open; `demote`/`claim` admin-bearer
 (401 without → a rogue LAN host can't stand down the dictator); demote subprocess can't raise into the API;
