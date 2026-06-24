@@ -116,6 +116,29 @@ def _mount_control(app: FastAPI) -> None:
 
 _mount_control(app)
 
+
+def _mount_cluster(app: FastAPI) -> None:
+    # Failover cluster bus HTTP RPC (failover/README.md). Fully guarded: a failure here must never take
+    # down the read API. /cluster/status is open; demote/claim need the admin bearer (built from master).
+    try:
+        from server.api.cluster import make_cluster_router
+        api_authz = None
+        try:
+            from server.control.secret_store import available_master, make_api_token_verifier
+            master = available_master()
+            if master:
+                api_authz = make_api_token_verifier(master)
+        except Exception:
+            log.exception("cluster: could not derive admin authz — /cluster/demote,claim disabled")
+        app.include_router(make_cluster_router(api_authz))
+        log.info("cluster bus MOUNTED — /cluster/status (open)%s",
+                 " + /cluster/demote,claim (authed)" if api_authz else " only (no master → no authed RPC)")
+    except Exception:
+        log.exception("cluster bus mount FAILED — read API stays up")
+
+
+_mount_cluster(app)
+
 # ── Web app (PWA) — self-contained, no build step (server/web). Mounted at /app; "/" serves it. ──
 if WEB_DIR.exists():
     app.mount("/app", StaticFiles(directory=str(WEB_DIR), html=True), name="webapp")
