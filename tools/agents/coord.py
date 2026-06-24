@@ -99,7 +99,8 @@ def _is_done(tid: str, tasks: dict) -> bool:
 
 
 def _ready(t: dict, tasks: dict) -> bool:
-    return t.get("status") == "open" and all(_is_done(d, tasks) for d in t.get("deps", []))
+    return (t.get("status") == "open" and not t.get("gate")
+            and all(_is_done(d, tasks) for d in t.get("deps", [])))
 
 
 def _cancelled_deps(t: dict, tasks: dict) -> list:
@@ -139,7 +140,9 @@ def cmd_list(a, agent):
     for t in sorted(tasks.values(), key=lambda x: (order.get(x.get("status"), 9), x["id"])):
         if a.all or t.get("status") not in ("done", "cancelled"):
             cd = _cancelled_deps(t, tasks) if t.get("status") not in ("done", "cancelled") else []
-            if cd:
+            if t.get("gate") and t.get("status") not in ("done", "cancelled"):
+                tag = f"  <-- GATED (needs {t['gate']} GO): coord.py gate {t['id']} --clear"
+            elif cd:
                 tag = f"  <-- STUCK: dep cancelled ({','.join(cd)}); escape: dep {t['id']} --remove {cd[0]}"
             else:
                 tag = "  <-- READY" if _ready(t, tasks) else ""
@@ -175,7 +178,7 @@ def cmd_add(a, agent):
         print(f"ERROR: task '{a.id}' already exists"); sys.exit(1)
     t = {"id": a.id, "title": a.title, "owner": "", "status": "open",
          "deps": [d for d in (a.deps.split(",") if a.deps else []) if d],
-         "created_by": agent, "created_ts": now(), "updated_ts": now(),
+         "gate": a.gate or "", "created_by": agent, "created_ts": now(), "updated_ts": now(),
          "updated_by": agent, "note": a.note or ""}
     _save(t, agent); _beacon(agent, note=f"added {a.id}")
     print(f"added: {a.id}"); print(_fmt(t))
@@ -186,6 +189,9 @@ def cmd_claim(a, agent):
     if not t:
         print(f"ERROR: no such task '{a.id}'"); sys.exit(1)
     tasks = _all_tasks()
+    if t.get("gate") and not a.force:
+        print(f"GATED: '{a.id}' needs {t['gate']} GO before it can be worked. Clear it first (Hugh only): coord.py gate {a.id} --clear")
+        sys.exit(2)
     if not a.force and not _ready(t, tasks):
         unmet = [d for d in t.get("deps", []) if not _is_done(d, tasks)]
         print(f"REFUSED: '{a.id}' not ready (status={t['status']}, unmet deps={unmet or '-'}). Use --force to override.")
@@ -217,7 +223,10 @@ def _require_owner(a, agent):
 
 
 def cmd_start(a, agent):
-    t = _require_owner(a, agent); t["status"] = "in_progress"
+    t = _require_owner(a, agent)
+    if t.get("gate") and not a.force:
+        print(f"GATED: '{a.id}' needs {t['gate']} GO. Clear it first (Hugh only): coord.py gate {a.id} --clear"); sys.exit(2)
+    t["status"] = "in_progress"
     _save(t, agent); _beacon(agent, current=a.id, note=f"started {a.id}")
     print(f"IN_PROGRESS {a.id}")
 
@@ -285,6 +294,23 @@ def cmd_beacon(a, agent):
     _beacon(agent, note=a.note or ""); print(f"beacon updated for {agent}")
 
 
+def cmd_gate(a, agent):
+    """Set/clear a human-GO gate on a task. A gated task is held out of `ready` and refuses claim/start
+    until cleared. CONVENTION: only Hugh clears a gate (agents must never self-clear — see POLICY.md)."""
+    t = _get(a.id)
+    if not t:
+        print(f"ERROR: no such task '{a.id}'"); sys.exit(1)
+    if a.clear:
+        t["gate"] = ""
+        _save(t, agent)
+        state = "READY" if _ready(t, _all_tasks()) else t["status"]
+        print(f"gate CLEARED on {a.id} ({state})")
+    else:
+        t["gate"] = a.set or "hugh"
+        _save(t, agent)
+        print(f"gate SET on {a.id}: needs {t['gate']} GO before it can be claimed/started")
+
+
 def cmd_wake(a, agent):
     """Send an interrupt to the other agent's wake watcher (NON-retained so it doesn't replay on
     reconnect). A watcher subscribed to ha/agents/wake/<target> invokes a headless runner. Only works
@@ -320,7 +346,7 @@ def main():
     add("ready"); add("mine"); add("agents"); add("whoami")
 
     sp = add("add"); sp.add_argument("id"); sp.add_argument("--title", required=True)
-    sp.add_argument("--deps", default=""); sp.add_argument("--note", default="")
+    sp.add_argument("--deps", default=""); sp.add_argument("--note", default=""); sp.add_argument("--gate", default="")
     for name in ("claim", "start", "release"):
         add(name).add_argument("id")
     sp = add("done"); sp.add_argument("id"); sp.add_argument("--note", default="")
@@ -328,6 +354,7 @@ def main():
     sp = add("cancel"); sp.add_argument("id"); sp.add_argument("--reason", default="")
     sp = add("note"); sp.add_argument("id"); sp.add_argument("--note", required=True)
     sp = add("dep"); sp.add_argument("id"); sp.add_argument("--add", default=""); sp.add_argument("--remove", default="")
+    sp = add("gate"); sp.add_argument("id"); sp.add_argument("--set", default=""); sp.add_argument("--clear", action="store_true")
     sp = add("beacon"); sp.add_argument("--note", default="")
     sp = add("wake"); sp.add_argument("target"); sp.add_argument("--reason", default=""); sp.add_argument("--task", default="")
 
@@ -347,7 +374,8 @@ def main():
     {"list": cmd_list, "ready": cmd_ready, "mine": cmd_mine, "agents": cmd_agents,
      "whoami": cmd_whoami, "add": cmd_add, "claim": cmd_claim, "start": cmd_start,
      "done": cmd_done, "block": cmd_block, "release": cmd_release, "cancel": cmd_cancel,
-     "note": cmd_note, "dep": cmd_dep, "beacon": cmd_beacon, "wake": cmd_wake}[a.cmd](a, agent)
+     "note": cmd_note, "dep": cmd_dep, "gate": cmd_gate, "beacon": cmd_beacon,
+     "wake": cmd_wake}[a.cmd](a, agent)
 
 
 if __name__ == "__main__":

@@ -21,6 +21,8 @@ tasks" (2026-06-24); this file is that approved list. Narrow by default; widen o
 - **No irreversible or outward-facing actions:** no force-push/history rewrite, no repo visibility changes,
   no publishing, no deleting data it didn't create, no secret handling (secrets never touch logs/transcripts).
 - **No claiming work owned by the other agent.** Respect the claim/tiebreak rules.
+- **Never clear a gate** (`coord.py gate <id> --clear`). A gate is Hugh's GO; clearing one is a human
+  action. A `GATED` task is off-limits until Hugh clears it — treat it like a hard stop.
 - **No spending past the task at hand** — one wake = one bounded unit of work, then exit.
 
 ## Always

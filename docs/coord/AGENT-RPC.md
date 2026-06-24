@@ -39,6 +39,11 @@ side; `release` returns an owned task to `open`. **Terminal:** `done`, `cancelle
 would block forever. They're not silently stuck — `list` flags them `STUCK: dep cancelled (…)` with an
 escape hint, and `dep <id> --remove <dep>` (or `--add`) edits the dependency cleanly without `--force`.
 
+**Gated tasks (human GO):** `add … --gate hugh` (or `gate <id> --set hugh`) marks a task as needing a human
+GO. A gated task is held out of `ready` and refuses `claim`/`start` (shows `GATED` in `list`). **Only Hugh
+clears a gate** — `gate <id> --clear` — agents must never self-clear (POLICY.md). This encodes "needs Hugh"
+in the board itself, so `ready` means *actually actionable by an agent*, not just unblocked-on-deps.
+
 ### Readiness & serialization (the point of all this)
 A task is **READY** ⇔ `status==open` **AND every `dep` is `done`**. Agents only `claim` ready tasks.
 When you finish work, `done <id>` flips it and the tool prints any **dependents that just became ready** —
