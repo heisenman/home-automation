@@ -91,6 +91,38 @@ if [ "${REACH[$PRIMARY]}" = yes ] && [ "${REACH[$STANDBY]}" = yes ]; then
      && ok "cluster SSH $PRIMARY -> $STANDBY (fence/sync path)" || wn "cluster SSH $PRIMARY -> $STANDBY failed (id_cluster?)"
 fi
 
+# ---- history-reconcile deadline (ADR-0016): standby divergence gap vs the device-pull net ----
+# The non-VIP box is frozen (it doesn't ingest); sync-standby does NOT copy hot.db, so the age of its
+# newest reading == how long its history has diverged. Once that exceeds the smallest device buffer,
+# on-device buffer-pull can no longer heal the oldest slice of the gap -> a failover now would rely
+# entirely on the (still-deferred) parquet cross-box deep-reconcile. Surface that as a deadline.
+hdr "History-reconcile deadline (ADR-0016)"
+# shellcheck disable=SC1091
+. "$(dirname "$0")/device-buffers.env" 2>/dev/null || true
+MIN_DEVICE_BUFFER_S=${MIN_DEVICE_BUFFER_S:-5875200}   # ~68 d (SwitchBot) fallback if the env is absent
+standby_node=""
+for h in "$PRIMARY" "$STANDBY"; do [ "${VIPH[$h]}" = no ] && standby_node="$h"; done
+if [ -z "$standby_node" ]; then
+  wn "no clear non-VIP box (unreachable or split) — skipping divergence-gap check"
+else
+  maxts=$(on "$standby_node" "sqlite3 ~/home_automation/instance/db/hot.db 'SELECT MAX(ts) FROM readings;'")
+  if [ -z "$maxts" ]; then
+    wn "standby $standby_node: no readings in hot.db to gauge the divergence gap (fresh box?) — skipping"
+  else
+    epoch=$(date -d "$maxts" +%s 2>/dev/null)
+    if [ -z "$epoch" ]; then
+      wn "standby $standby_node: couldn't parse newest reading ts '$maxts' — skipping"
+    else
+      gap=$(( now - epoch )); gd=$(( gap / 86400 )); md=$(( MIN_DEVICE_BUFFER_S / 86400 ))
+      if [ "$gap" -le "$MIN_DEVICE_BUFFER_S" ]; then
+        ok "standby $standby_node divergence gap ${gd}d within device-pull net (min buffer ${md}d) — a failover now is buffer-recoverable"
+      else
+        wn "standby $standby_node divergence gap ${gd}d EXCEEDS min device-buffer ${md}d — buffer-pull can no longer heal the oldest slice; a failover now needs the parquet deep-reconcile (ADR-0016, still deferred). Run reconcile-history before a swap, or accept the loss."
+      fi
+    fi
+  fi
+fi
+
 # ---- verdict ----
 hdr "Verdict"
 printf '  %d pass, %d warn, %d FAIL\n' "$pass" "$warn" "$fail"
