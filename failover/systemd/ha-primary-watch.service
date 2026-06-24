@@ -1,0 +1,14 @@
+[Unit]
+Description=HA failover — primary-supremacy watchdog (standby auto-demote when primary returns)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=visko
+ExecStart=/home/visko/home_automation/failover/primary-watch.sh
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target

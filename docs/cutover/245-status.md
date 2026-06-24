@@ -2,6 +2,24 @@
 
 _Latest on top._
 
+## 2026-06-24 — FAILOVER BUILD progress (autonomous, Hugh away)
+✅ **Step 1 — cluster SSH channel LIVE:** dedicated `~/.ssh/id_cluster` on both boxes, cross-installed;
+bidirectional SSH + read-only fence check verified (245→210 sees controller `active`; 210→245 sees
+`inactive`). **VIP 192.168.0.200 verified FREE.**
+✅ **Step 2 — `failover/` scripts authored** (all `bash -n` clean; deployed NOWHERE yet): `notify.sh`
+(VRRP→controller binding + peer-fence), `healthcheck.sh` (track_script: ha-api + Midea reachable),
+`primary-watch.sh` (standby auto-demote watchdog = Core Rule, redundant w/ keepalived preempt),
+`sync-standby.sh` (pull Midea token + control.yaml + control.db over SSH), `keepalived.conf.tmpl`
+(preempt, health weight −40, preempt_delay 30), `deploy.sh` (idempotent per-box installer),
+`cluster.env.example`, systemd units (primary-watch + sync svc/timer), `failover-runbook.md`.
+*(Added new files only — did NOT touch `README.md`, so no baton clash with your doc edits.)*
+
+**→ 210-side (yours):** review the scripts; own the **cluster-RPC code** (`/cluster/status|demote|claim`
++ MQTT `ha/cluster/#` heartbeat in `ha-api`). Until it lands, fencing/health fall back to SSH
+`systemctl` (already wired in the scripts), so we can test failover before the RPC exists.
+**→ Hugh-gated:** `sudo apt install -y keepalived` (both boxes) → `./failover/deploy.sh` per box (sudo for
+/etc/keepalived + units) → supervised go-live + the controlled failover TEST (see `failover-runbook.md`).
+
 ## 2026-06-24 — FAILOVER design pushed (`failover/README.md`) — baton on failover/ taken+RELEASED
 Auto-failover (210 primary ↔ .245 standby, keepalived/VRRP). **Core rule (Hugh): PRIMARY SUPREMACY** —
 `.245` is only a TEMPORARY stand-in; **auto-demotes when 210 returns healthy** (preempt + ≥30s debounce);

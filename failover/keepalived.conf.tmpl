@@ -1,0 +1,39 @@
+# keepalived VRRP for the HA dictator — rendered per box by deploy.sh.
+# Placeholders @STATE@ / @PRIORITY@ / @IFACE@ are filled from instance/cluster.env + the detected LAN iface.
+# One floating VIP (192.168.0.200) = the dictator address; whoever holds it runs ha-controller (notify.sh).
+#
+#   primary (210):  STATE=MASTER  PRIORITY=150
+#   standby (245):  STATE=BACKUP  PRIORITY=100
+# preempt is ON (no 'nopreempt') so a recovered primary RECLAIMS — enforcing PRIMARY SUPREMACY.
+
+global_defs {
+    enable_script_security
+    script_user visko          # scripts run as visko; notify.sh uses sudo (NOPASSWD: systemctl ha-*)
+}
+
+vrrp_script chk_dictator {
+    script "/home/visko/home_automation/failover/healthcheck.sh"
+    interval 5
+    timeout 4
+    fall 2
+    rise 2
+    weight -40                 # an unfit dictator drops below the peer's priority -> failover
+}
+
+vrrp_instance HA_DICTATOR {
+    state @STATE@
+    interface @IFACE@
+    virtual_router_id 51
+    priority @PRIORITY@
+    advert_int 1
+    preempt_delay 30           # on the primary's return, wait 30s stable before reclaiming (anti-flap / debounce)
+
+    virtual_ipaddress {
+        192.168.0.200/24
+    }
+    track_script {
+        chk_dictator
+    }
+    # notify.sh gets STATE as $3: MASTER -> fence peer + start controller; BACKUP/FAULT -> stop controller.
+    notify "/home/visko/home_automation/failover/notify.sh"
+}

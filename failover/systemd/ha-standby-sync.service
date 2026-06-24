@@ -1,0 +1,9 @@
+[Unit]
+Description=HA failover — pull primary state (Midea token / control policy) to the standby
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=visko
+ExecStart=/home/visko/home_automation/failover/sync-standby.sh

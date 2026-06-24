@@ -1,0 +1,10 @@
+[Unit]
+Description=HA failover — periodic standby state sync (keeps the warm copy fresh; Midea token rotates ~18h)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=30min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
