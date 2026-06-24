@@ -6,6 +6,7 @@
 #   3. cluster SSH key working        (failover/ setup already cross-installed ~/.ssh/id_cluster)
 # Does NOT start keepalived — prints the supervised go-live step at the end (see failover-runbook.md).
 set -euo pipefail
+export PATH="/usr/sbin:/sbin:$PATH"   # keepalived/ip live in sbin — not always on a non-login PATH
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && pwd)"
 [ -f "$REPO/instance/cluster.env" ] || { echo "ERROR: copy failover/cluster.env.example -> instance/cluster.env, set ROLE/PEER_HOST"; exit 1; }
 . "$REPO/instance/cluster.env"
