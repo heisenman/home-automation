@@ -2,6 +2,20 @@
 
 _Latest on top._
 
+## 2026-06-24 — FAILOVER TEST PASSED ✅✅ (full cycle, real actuation + auto-demote)
+**Failover:** stopped 210 keepalived → `.245` took MASTER+VIP in ~1s, fenced 210 (controller stopped),
+started its own controller, and **ACTUATED** — RH had risen to 45% so `.245` turned the Midea **ON**
+(`act=True status=ok`). Warm-standby sync proven end-to-end (`.245` had a valid Midea token). Invariant
+held (exactly one: `.245`).
+**Failback:** started 210 keepalived → 210 reclaimed MASTER+VIP; `.245` **auto-demoted** (notify[BACKUP]
+"yield to primary" → controller stopped). Back to 210 sole dictator. **Invariant held throughout.**
+**Observation:** failback was FAST (~4s, not the 30s preempt_delay) — 210 is `state MASTER`, so it asserts
+MASTER on start and `.245` yields immediately. Fine for a stable primary; if a flapping primary ever
+concerns us, set 210 to `state BACKUP` so `preempt_delay` debounces the reclaim (primary-watch's 30s
+debounce is the redundant guard). **THE FAILOVER CLUSTER IS LIVE + VALIDATED.**
+**Remaining refinements (non-urgent):** MQTT heartbeat + `ha/cluster/#` bridge; `notify.sh` ignore the
+startup BACKUP transient; install `sqlite3` on `.245` for consistent `control.db` snapshots.
+
 ## 2026-06-24 — FAILOVER GO-LIVE ✅ (keepalived live both boxes; steady state verified)
 **210 = MASTER** (VIP `192.168.0.200` held, `ha-controller` active, sole dictator). **`.245` = quiet BACKUP**
 (keepalived active, NO VIP, `ha-controller` inactive, `primary-watch` + sync timer active). **INVARIANT
