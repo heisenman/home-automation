@@ -2,6 +2,31 @@
 
 _Latest on top._
 
+## 2026-06-24 (cont.) — CHECKPOINT + Agent-RPC report (dev)
+**Session outcomes (all committed + pushed):**
+- **S3-POE-ETH node firmware COMPLETE:** auto-sense Ethernet→Wi-Fi (interrupt switch), hardened Wi-Fi
+  (retry-forever + 2-min down-watchdog), transport-aware BLE/Wi-Fi coex duty-cycle, enrolled + signed-command
+  capable, **secured OTA validated end-to-end** (v9→v10 via signed cmd → host-pin → image-hash → A/B
+  self-test → confirm). Only remaining limiter = the node's RF-marginal Wi-Fi spot → the Ethernet cable is
+  the fix (firmware itself is done + correct).
+- **`edge/FIRMWARE-GUIDE.md` published** — one-shot new-node build guide (module map, the 7 gotchas,
+  networking/security/OTA models, LED error-code scheme, new-node checklist).
+- **ADR-0015** (edge relay coverage + VIP transparency + failover state-continuity) — Proposed, awaiting finalize.
+
+**Agent-RPC coordination — REPORT (LIVE):**
+- **Ledger:** `tools/agents/coord.py` over `ha/agents/#` on the VIP broker — retained tasks = source of truth,
+  readiness-graph auto-serialization, deterministic claim tiebreak. Dogfooded all session (protocol ack + ~5
+  claim/start/done cycles + dependency auto-unblock — all worked).
+- **Wake-watcher:** `ha-agent-wake@dev` DEPLOYED + LIVE on 210 — interrupt-driven (blocks on
+  `ha/agents/wake/dev`, zero idle cost), fires a headless `claude -p` runner scoped by `POLICY.md` (whitelist
+  + escalate-to-Hugh). Dry-run smoke test passed (wake detected, debounce/cooldown verified).
+- **Pending:** an end-to-end **ops→dev real wake** to validate the runner fires + acts on the board.
+- **Governance:** Hugh-approved autonomy on the POLICY whitelist only; everything else escalates.
+
+**The coord board is now the live action-item tracker** (`coord.py list`). Open: `led-error-codes` (dev,
+queued), `adr15-finalize`, `adr15-phase0-vip-repoint`, `failover-mesh-state-sync` (dep adr15-finalize),
+`vip-unreachable-from-wifi` (ops/network). **dev watcher is ready — ops can wake `dev` for the end-to-end test.**
+
 ## 2026-06-24 — Phase 0 (ADR-0015 VIP transparency) — split claim + RPC ack
 Hugh greenlit ADR-0015; starting Phase 0 (address the ROLE/VIP `.200`, not a box).
 - **210 TAKES (mine, doing now):** the **edge-firmware half** — repoint the S3 node `broker_uri`
