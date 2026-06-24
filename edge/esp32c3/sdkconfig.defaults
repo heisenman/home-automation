@@ -1,0 +1,34 @@
+# Defaults applied on first `idf.py set-target esp32c3`. Edit sdkconfig (not this) for local tweaks.
+
+CONFIG_IDF_TARGET="esp32c3"
+
+# ── Bluetooth: NimBLE — observer (passive scan) + central (GATT history pull) ──
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+# (peripheral/broadcaster left off — we only scan and connect-out)
+# Host task builds history-relay JSON payloads on its stack during a pull:
+CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=6144
+
+# ── Wi-Fi + BT share the single 2.4 GHz radio: enable SW coexistence ───────────
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=y
+
+# ── Flash: most ESP32-C3 modules have 4MB flash (needed for two ~1.75MB OTA slots) ──
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# ── Partition table: custom A/B OTA layout ───────────────────────────────────────
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ── OTA rollback: bootloader auto-reverts to the last-good slot if a freshly-OTA'd ──
+# app fails its self-test (it must call esp_ota_mark_app_valid_cancel_rollback()). Cable-
+# flashed images are never in pending-verify state, so this is harmless for bench dev.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+# OTA delivery is HTTP pull from the local server (cleartext on the LAN; air-gapped, no TLS).
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+
+# ── Misc ────────────────────────────────────────────────────────────────────────
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
