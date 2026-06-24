@@ -60,11 +60,13 @@ RAW_DEBOUNCE_S: int = 60  # minimum seconds between raw/decode-fail publishes pe
 # Patterns match at offset 0 of the AD structure's data:
 #   - Manufacturer data (0xFF) starting with company ID 0x0969 (LE: 69 09) → SwitchBot
 #   - 16-bit service data (0x16) for UUID 0xfd3d (LE: 3d fd) → SwitchBot
-#   - 16-bit service data (0x16) for UUID 0xfce0 (LE: e0 fc) → Aranet
+#   - Manufacturer data (0xFF) starting with company ID 0x0702 (LE: 02 07) → Aranet
+#     (SAF Tehnika, BLE5 extended advertising — corrected from the abandoned 0xfce0
+#     service-data guess; see decoders/aranet.py header).
 _OR_PATTERNS = [
     OrPattern(0, AdvertisementDataType.MANUFACTURER_SPECIFIC_DATA, b"\x69\x09"),
     OrPattern(0, AdvertisementDataType.SERVICE_DATA_UUID16, b"\x3d\xfd"),
-    OrPattern(0, AdvertisementDataType.SERVICE_DATA_UUID16, b"\xe0\xfc"),
+    OrPattern(0, AdvertisementDataType.MANUFACTURER_SPECIFIC_DATA, b"\x02\x07"),
 ]
 
 log = logging.getLogger("ha.scanner")

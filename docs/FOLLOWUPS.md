@@ -45,9 +45,14 @@ against the live system + source on this date.
      flowing within ~40s. `ha-controller` correctly stayed inactive.
    - 🔲 **OPEN (next session, Hugh present):** (a) `sudo passwd visko` then narrow sudoers to `ha-services`
      + drop the broad bootstrap grant (§7e) — or run `./provisioning/stage2-finish.sh --narrow-sudoers`;
-     (b) `instance/weather.env` (outdoor weather lane) still missing; (c) `aranet_radon` — enable its Smart
-     Home Integration toggle (likely device-side, not range); (d) `ha-controller` stays **disabled** on dev
-     (must not fight .245 for the Midea). §3 dual-NVMe + §8 data-migration N/A here.
+     (b) `instance/weather.env` (outdoor weather lane) still missing; (c) `aranet_radon` — **diagnosed
+     2026-06-24: NOT a toggle/key/range issue.** Active probe heard it at **−70 dBm** (`F4:37:5A:68:9F:1A`),
+     but ha-dev's **passive** low-radio monitor doesn't deliver its BLE5 **extended advertising** (comes
+     through only in active scan, which we won't enable — it'd re-open MT7922 stability). Corrected the stale
+     `0xfce0`→`0x0702` or_pattern in `scanner.py` regardless. **Decision (Hugh): leave `.245` to collect the
+     Aranet and relay it to ha-dev as an edge node** (`home/edge/...`→`ha-edge-mapper`); needs a small
+     additive MQTT bridge ON `.245` → fold into the `.245` handoff (don't-disrupt-.245 rule). (d) `ha-controller`
+     stays **disabled** on dev (must not fight .245 for the Midea). §3 dual-NVMe + §8 data-migration N/A here.
 2. **PWA/automation software** (ADR-0014):
    - ✅ **R8 device friendly-name/room/hide — BUILT 2026-06-23 (`e81ff34`).** (Still TODO under R8:
      add-new-device + explicit retire-vs-hide.)
