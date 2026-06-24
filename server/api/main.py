@@ -17,6 +17,7 @@ Usage:
 """
 
 import asyncio
+import json
 import logging
 import os
 import sqlite3
@@ -26,7 +27,7 @@ from pathlib import Path
 from typing import Optional
 
 import duckdb
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -38,19 +39,81 @@ PARQUET_GLOB = Path(os.environ.get("HA_PARQUET_DIR", "instance/db/parquet"))
 WEATHER_DB = Path(os.environ.get("HA_WEATHER_DB", "instance/db/weather.db"))
 WEATHER_TABLE = os.environ.get("HA_WEATHER_TABLE", "weather")
 MAX_DEEP_ROWS: int = int(os.environ.get("HA_MAX_DEEP_ROWS", "50000"))
+VAPID_PATH = Path(os.environ.get("HA_VAPID", "instance/vapid.json"))   # PWA web-push keys (gitignored)
+PUSH_POLL_S: float = float(os.environ.get("HA_PUSH_POLL_S", "60"))
 
 log = logging.getLogger("ha.api")
+
+_vapid_cache: Optional[dict] = None
+
+
+def _load_vapid() -> Optional[dict]:
+    """The VAPID keypair (tools/gen_vapid.py), or None if web-push isn't configured. Cached."""
+    global _vapid_cache
+    if _vapid_cache is None:
+        try:
+            _vapid_cache = json.loads(VAPID_PATH.read_text()) if VAPID_PATH.exists() else {}
+        except Exception:
+            log.warning("could not read VAPID keyfile %s — web-push disabled", VAPID_PATH, exc_info=True)
+            _vapid_cache = {}
+    return _vapid_cache or None
 
 _deep_query_lock = asyncio.Lock()
 
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
+async def _push_alert_loop():
+    """Web-push driver: every PUSH_POLL_S, on the VIP holder only, diff the active alerts and send a
+    payload-less tickle to every subscription when a NEW alert appears (prune dead 404/410 subs). The SW
+    fetches the alert detail itself, so we ship no payload. Skips entirely if no VAPID keyfile."""
+    import time
+    from server.api import webpush
+    from server.control import control_store as store
+    vip = os.environ.get("HA_VIP", "")
+    last_keys: set = set()
+    while True:
+        await asyncio.sleep(PUSH_POLL_S)
+        try:
+            v = _load_vapid()
+            if not v:
+                continue
+            if vip:                                  # only the dictator pushes (one-controller invariant)
+                from server.cluster.state import vip_held
+                if not vip_held(vip):
+                    last_keys = set()
+                    continue
+            alerts = await asyncio.to_thread(_build_current_alerts, time.time())
+            keyed = {webpush.alert_key(a): a for a in alerts}
+            new = [k for k in keyed if k not in last_keys]
+            last_keys = set(keyed)
+            if not new:
+                continue
+            cc = _control_conn()
+            subs = store.all_push_subs(cc) if cc is not None else []
+            if cc is not None:
+                cc.close()
+            for s in subs:
+                status = await asyncio.to_thread(webpush.send_tickle, s["endpoint"], v)
+                if status in (404, 410):             # subscription expired — drop it
+                    c2 = _control_conn()
+                    if c2 is not None:
+                        store.remove_push_sub(c2, s["endpoint"])
+                        c2.close()
+            log.info("web-push: %d new alert(s) -> tickled %d subscription(s)", len(new), len(subs))
+        except Exception:
+            log.exception("web-push loop iteration failed (continuing)")
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("API starting — db=%s parquet=%s", DB_PATH, PARQUET_GLOB)
-    yield
-    log.info("API shutdown")
+    push_task = asyncio.create_task(_push_alert_loop())
+    try:
+        yield
+    finally:
+        push_task.cancel()
+        log.info("API shutdown")
 
 
 app = FastAPI(title="Home Automation API", version="1.0.0", lifespan=lifespan)
@@ -712,15 +775,10 @@ def sensor_list():
     return {"sensors": sensors}
 
 
-@app.get("/api/v1/alerts", include_in_schema=True)
-def alerts():
-    """Active alerts (low battery / unreachable / tank-full / override-expiring). Read-only; the single
-    source of alert rules for the web app, MCU panels, and future push."""
-    import time
-
+def _build_current_alerts(now: float) -> list[dict]:
+    """The active alert list (shared by the /alerts endpoint and the web-push loop). Read-only."""
     from server.api.viewmodel import build_alerts, build_display, build_sensor_list
     from server.control import control_store as store
-    now = time.time()
     hc = _hot_conn() if DB_PATH.exists() else None
     cc = _control_conn()
     try:
@@ -731,12 +789,65 @@ def alerts():
             reg = getattr(app.state, "control_registry", None)
             displays = [vm for did in sorted(store.all_policies(cc))
                         if (vm := build_display(cc, hc, did, now, registry=reg, meta=meta)) is not None]
-        return {"alerts": build_alerts(sensors, displays, now)}
+        return build_alerts(sensors, displays, now)
     finally:
         if hc is not None:
             hc.close()
         if cc is not None:
             cc.close()
+
+
+@app.get("/api/v1/alerts", include_in_schema=True)
+def alerts():
+    """Active alerts (low battery / unreachable / tank-full / override-expiring). Read-only; the single
+    source of alert rules for the web app, MCU panels, and web-push."""
+    import time
+    return {"alerts": _build_current_alerts(time.time())}
+
+
+# ── Web Push (PWA) — payload-less tickle; see server/api/webpush.py ──────────────
+@app.get("/api/v1/push/vapid-public-key", include_in_schema=True)
+def push_vapid_key():
+    v = _load_vapid()
+    if not v:
+        raise HTTPException(status_code=503, detail="web-push not configured (no VAPID keyfile)")
+    return {"key": v["public"]}
+
+
+@app.post("/api/v1/push/subscribe", include_in_schema=True)
+async def push_subscribe(request: Request):
+    """Store a browser PushSubscription (idempotent on endpoint). Body = the JSON from pushManager.subscribe()."""
+    sub = await request.json()
+    endpoint = (sub or {}).get("endpoint")
+    if not endpoint:
+        raise HTTPException(status_code=400, detail="missing endpoint")
+    keys = sub.get("keys") or {}
+    cc = _control_conn()
+    if cc is None:
+        raise HTTPException(status_code=503, detail="control db unavailable")
+    try:
+        from server.control import control_store as store
+        store.add_push_sub(cc, endpoint, keys.get("p256dh", ""), keys.get("auth", ""))
+    finally:
+        cc.close()
+    return {"ok": True}
+
+
+@app.post("/api/v1/push/unsubscribe", include_in_schema=True)
+async def push_unsubscribe(request: Request):
+    body = await request.json()
+    endpoint = (body or {}).get("endpoint")
+    if not endpoint:
+        raise HTTPException(status_code=400, detail="missing endpoint")
+    cc = _control_conn()
+    if cc is None:
+        raise HTTPException(status_code=503, detail="control db unavailable")
+    try:
+        from server.control import control_store as store
+        store.remove_push_sub(cc, endpoint)
+    finally:
+        cc.close()
+    return {"ok": True}
 
 
 @app.get("/api/v1/displays", include_in_schema=True)

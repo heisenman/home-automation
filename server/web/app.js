@@ -3,6 +3,7 @@
 import {
   html, render, useState, useEffect, useRef, useCallback, useMemo, createContext, useContext,
 } from "/app/vendor/preact-htm.standalone.module.js";
+import { pushSupported, pushState, enablePush, disablePush } from "/app/push.js";
 
 // ── units (°C/°F) ────────────────────────────────────────────────────────────
 // Temperatures are STORED in Celsius (SI). The UI converts for display only. Preference persisted.
@@ -790,6 +791,27 @@ function AlertsBanner({ alerts }) {
     </div>`;
 }
 
+// ── notifications toggle (Web Push) ──────────────────────────────────────────
+// Subscribes this browser to background alert notifications. Payload-less: the SW fetches the alerts.
+function NotifyToggle() {
+  const [state, setState] = useState("default");   // unsupported|denied|subscribed|default
+  const [busy, setBusy] = useState(false);
+  useEffect(() => { pushState().then(setState).catch(() => setState("unsupported")); }, []);
+  if (!pushSupported() || state === "unsupported") return null;
+  const onClick = async () => {
+    setBusy(true);
+    try { setState(state === "subscribed" ? await disablePush() : await enablePush()); }
+    catch (e) { alert("Notifications: " + e.message); }
+    setBusy(false);
+  };
+  const label = state === "subscribed" ? "🔔 On" : state === "denied" ? "🔕 Blocked" : "🔔 Off";
+  const title = state === "denied"
+    ? "Notifications blocked in browser settings"
+    : state === "subscribed" ? "Background alerts on — tap to turn off" : "Enable background alert notifications";
+  return html`<button class="btn sm ghost" disabled=${busy || state === "denied"}
+      onClick=${onClick} title=${title}>${label}</button>`;
+}
+
 // ── app shell ────────────────────────────────────────────────────────────────
 function App() {
   const [devices, setDevices] = useState(null);
@@ -842,6 +864,7 @@ function App() {
         <span class="build">${BUILD}</span>
         <div class="spacer"></div>
         <button class="btn sm ghost" onClick=${toggleUnit} title="temperature unit">°${tempUnit}</button>
+        <${NotifyToggle} />
         ${isAdmin
           ? html`<span class="admin-on" title="Admin unlocked">🔓 Admin</span>
                  <button class="btn sm ghost" onClick=${lock}>Lock</button>`

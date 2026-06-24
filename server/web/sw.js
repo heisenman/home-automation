@@ -1,8 +1,8 @@
 // Service worker — caches the app SHELL only (so the UI loads offline), never the API.
 // Live device state always goes to the network; if the box is unreachable the app shows last-known.
-const CACHE = "ha-shell-v21";   // bump on any shell (html/js/css) change to evict the old cache
+const CACHE = "ha-shell-v22";   // bump on any shell (html/js/css) change to evict the old cache
 const SHELL = [
-  "/app/", "/app/index.html", "/app/app.js", "/app/styles.css",
+  "/app/", "/app/index.html", "/app/app.js", "/app/push.js", "/app/styles.css",
   "/app/vendor/preact-htm.standalone.module.js", "/app/manifest.webmanifest", "/app/icon.svg",
 ];
 
@@ -16,6 +16,36 @@ self.addEventListener("activate", (e) => {
       .then((ks) => Promise.all(ks.filter((k) => k !== CACHE).map((k) => caches.delete(k))))
       .then(() => self.clients.claim()),
   );
+});
+
+// Web Push — payload-less "tickle": wake, fetch the current alerts, surface the most severe new one.
+// We deliberately carry NO payload (server signs VAPID only, no aes128gcm), so the SW pulls the truth
+// from /api/v1/alerts itself — the single source of alert rules.
+self.addEventListener("push", (e) => {
+  e.waitUntil((async () => {
+    let alerts = [];
+    try { alerts = await (await fetch("/api/v1/alerts", { cache: "no-store" })).json().then((d) => d.alerts || []); }
+    catch (_) { /* offline: still show a generic nudge below */ }
+    const rank = { critical: 0, warning: 1, info: 2 };
+    alerts.sort((a, b) => (rank[a.severity] ?? 3) - (rank[b.severity] ?? 3));
+    const top = alerts[0];
+    const title = top ? `${top.name}: ${top.detail}` : "Home Automation alert";
+    const body = alerts.length > 1 ? `+${alerts.length - 1} more alert(s)` : (top ? top.severity : "Tap to open");
+    await self.registration.showNotification(title, {
+      body, icon: "/app/icon.svg", badge: "/app/icon.svg",
+      tag: "ha-alerts", renotify: true, data: { url: "/app/" },
+    });
+  })());
+});
+
+self.addEventListener("notificationclick", (e) => {
+  e.notification.close();
+  const url = (e.notification.data && e.notification.data.url) || "/app/";
+  e.waitUntil((async () => {
+    const all = await self.clients.matchAll({ type: "window", includeUncontrolled: true });
+    for (const c of all) { if (c.url.includes("/app") && "focus" in c) return c.focus(); }
+    if (self.clients.openWindow) return self.clients.openWindow(url);
+  })());
 });
 
 self.addEventListener("fetch", (e) => {

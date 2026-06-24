@@ -34,6 +34,11 @@ CREATE TABLE IF NOT EXISTS device_meta (
 -- UI + graphs; the control loop reads raw MQTT and is NOT affected (offset is display-only).
 CREATE TABLE IF NOT EXISTS device_calibration (
     device_id TEXT, metric TEXT, offset REAL NOT NULL DEFAULT 0, PRIMARY KEY (device_id, metric));
+-- push_subscription: Web Push endpoints (PWA web-push). Lives in control.db so it rides the existing
+-- sync-standby snapshot -> subscriptions survive a dictator failover. p256dh/auth are kept for a future
+-- payload push; the current payload-less tickle only needs `endpoint`.
+CREATE TABLE IF NOT EXISTS push_subscription (
+    endpoint TEXT PRIMARY KEY, p256dh TEXT, auth TEXT, created_ts TEXT NOT NULL);
 """
 
 
@@ -169,3 +174,23 @@ def all_calibration(conn) -> dict:
     for d, m, o in conn.execute("SELECT device_id, metric, offset FROM device_calibration"):
         out.setdefault(d, {})[m] = o
     return out
+
+
+# ── Web Push subscriptions (PWA web-push) ────────────────────────────────────────
+def add_push_sub(conn, endpoint: str, p256dh: str = "", auth: str = "") -> None:
+    """Idempotent on endpoint (re-subscribing the same browser is a no-op refresh)."""
+    conn.execute(
+        """INSERT INTO push_subscription (endpoint, p256dh, auth, created_ts) VALUES (?,?,?,?)
+           ON CONFLICT(endpoint) DO UPDATE SET p256dh=excluded.p256dh, auth=excluded.auth""",
+        (endpoint, p256dh, auth, _now_iso()))
+    conn.commit()
+
+
+def remove_push_sub(conn, endpoint: str) -> None:
+    conn.execute("DELETE FROM push_subscription WHERE endpoint=?", (endpoint,))
+    conn.commit()
+
+
+def all_push_subs(conn) -> list[dict]:
+    return [{"endpoint": e, "p256dh": p, "auth": a}
+            for e, p, a in conn.execute("SELECT endpoint, p256dh, auth FROM push_subscription")]
