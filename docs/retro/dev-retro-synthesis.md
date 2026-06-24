@@ -1,7 +1,8 @@
 # Dev retrospective — SYNTHESIS (dictator ↔ failover build)
 
 *Synthesis of two independent write-ups: `dev-retro-245.md` (ops / `.245` failover side) and
-`dev-retro-210.md` (dev / 210 dictator side). Authored by `ops`, 2026-06-24, for joint review.*
+`dev-retro-210.md` (dev / 210 dictator side). Authored by `ops`; **reviewed + extended by `dev` (210) — see
+§F**. 2026-06-24. This is our joint output.*
 
 The two perspectives were written without seeing each other and **converged hard**. Where they agree, treat
 it as a proven principle. Where they're complementary, the union is the lesson. Where they conflict, resolved below.
@@ -86,6 +87,30 @@ it as a proven principle. Where they're complementary, the union is the lesson. 
    today a swap silently diverges history and drops the dashboard.
 3. **`network-init` with a VIP-per-segment gate** — the air-gapped OpenWRT router is the moment to get
    segment-aware reachability right *by design*, fixing the wifi-VIP gap at the root.
+
+## F. Dev (210) review — endorsement + additions
+*Reviewed by `dev` (210), 2026-06-24. The synthesis is accurate and I endorse it: the §A convergence matches
+what I found independently, and §B attributes the complementary lessons correctly. Four sharpenings from the
+on-box side:*
+
+1. **Isolate EARLY — the costly half of "diagnose by isolation."** §B credits the box-vs-VIP A/B and the
+   BLE-pause-during-OTA as decisive. The missing lesson is *when*: I ran them only after ~6 reflashes and
+   several long watches chasing the flaky Wi-Fi, conflating coex vs signal vs VIP-reachability. **The
+   single-variable test is cheapest as the FIRST move, not the tie-breaker after a thrash.** Encode it: a node
+   that won't hold a connection → A/B (box vs VIP) + check the coex duty-cycle *before* the second reflash.
+2. **Wake-layer timing: don't wake `dev` mid-interactive-turn.** When Hugh is live with interactive-`dev`
+   *and* a wake fires the headless `dev` runner, two `dev`s run at once. Cooldown + claim-tiebreak + rebase
+   *guard* it, but the clean rule is: wake `dev` when its beacon says it's idle/PAUSED, not mid-turn. (A
+   timing dimension on §C's "capability-aware placement.")
+3. **Node operability is a bring-up gate, not an afterthought.** A deployed node you can't read is one you
+   can't trust. Add to "new edge node": **error-only status LEDs** (off when healthy; slow, human-readable
+   patterns per fault class) + a **published error-code table**, so a human diagnoses a remote node at a glance
+   without a serial cable. (Queued: `led-error-codes`.)
+4. **Correction (§C):** "ops polls, dev is woken" — `ops` isn't polling; it runs when Hugh engages the desktop
+   session (human-triggered). The real asymmetry is **dev = wake-triggered, ops = human-triggered**, until an
+   ops-side box gets a `claude` CLI + watcher. Conclusion unchanged; just the mechanism.
+
+**Both perspectives are now written, reviewed, and reconciled — this synthesis stands as our joint output.**
 
 ## Thesis (merged)
 **Invest in the substrate early — the bus, the runbooks, the bench gates, the gotcha-docs, the invariant
