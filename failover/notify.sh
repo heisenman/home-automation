@@ -16,6 +16,9 @@ STATE="${3:-${1:-}}"
 
 log(){ printf '%s notify[%s] %s\n' "$(date -Is)" "$STATE" "$*" | tee -a "$LOG" 2>/dev/null || true; }
 peer_ssh(){ ssh -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "visko@$PEER_HOST" "$@"; }
+# ADR-0015 #9: restart ha-api so its control plane re-evaluates the VIP gate (mounts on the dictator,
+# stays read-only on the standby). Best-effort, active-only, never blocks the VRRP transition.
+api_remount(){ systemctl is-active --quiet ha-api && { sudo systemctl restart ha-api 2>/dev/null && log "ha-api restarted ($1) — control plane re-evaluates VIP gate" || log "ha-api restart skipped/failed (non-fatal)"; }; return 0; }
 
 case "$STATE" in
   MASTER)
@@ -34,6 +37,7 @@ case "$STATE" in
     if systemctl is-active --quiet ha-edge-mapper; then
       sudo systemctl restart ha-edge-mapper 2>/dev/null && log "edge-mapper restarted — recomputing coverage from local reach" || log "edge-mapper restart skipped/failed (non-fatal)"
     fi
+    api_remount MASTER   # mount the control plane now that this node holds the VIP
     ;;
   BACKUP)
     # Distinguish a GENUINE demotion (yield to primary) from the keepalived START-UP TRANSIENT: at boot
@@ -48,11 +52,13 @@ case "$STATE" in
     fi
     log "no VIP after ${BACKUP_GRACE}s grace -> genuine demotion; stopping controller (yield to primary)"
     if sudo systemctl stop "$CONTROLLER_UNIT" 2>/dev/null; then log "controller STOPPED"; else log "controller already stopped"; fi
+    api_remount BACKUP   # unmount the control plane — we no longer hold the VIP
     ;;
   FAULT)
     # Health check failed: we are genuinely unfit. Stop immediately — no grace (don't keep actuating while broken).
     log "becoming FAULT -> stop controller immediately (unfit)"
     if sudo systemctl stop "$CONTROLLER_UNIT" 2>/dev/null; then log "controller STOPPED"; else log "controller already stopped"; fi
+    api_remount FAULT    # unmount the control plane — we're unfit
     ;;
   *)
     log "unknown/empty STATE '$STATE' (noop)"

@@ -80,6 +80,21 @@ def _mount_control(app: FastAPI) -> None:
     # EVERYTHING (incl. the control-package imports, which pull in cryptography) is guarded: a missing
     # optional dep or any config error must DISABLE control, never crash the read API at import time.
     try:
+        # ADR-0015 decision #9: the control plane mounts ONLY on the dictator (the VIP holder). A warm
+        # standby serves reads but never control, preserving the one-controller invariant even though it
+        # holds .master_pass for fast promotion. notify.sh restarts ha-api on a VRRP state change so this
+        # re-evaluates on promote/demote. Backward-compatible: with HA_VIP unset (single box, no failover)
+        # the old master-pass gate alone applies.
+        vip = os.environ.get("HA_VIP", "")
+        if vip:
+            try:
+                from server.cluster.state import vip_held
+                if not vip_held(vip):
+                    log.info("control plane NOT mounted — this node does not hold VIP %s "
+                             "(warm standby: read-only until promoted)", vip)
+                    return
+            except Exception:
+                log.warning("VIP-held check failed; falling back to master-pass gate", exc_info=True)
         from server.control.secret_store import (available_master, load_lut, make_api_token_verifier,
                                                  make_confirm_verifier)
         master = available_master()
