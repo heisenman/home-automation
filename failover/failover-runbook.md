@@ -68,6 +68,23 @@ sudo systemctl disable --now keepalived ha-primary-watch.service ha-standby-sync
 # controllers revert to manual (210 stays dictator via its own enabled ha-controller).
 ```
 
+## Refinements (2026-06-24, post-go-live)
+Three hardening tweaks applied after the live test. None change the Core Rule; all are belt-and-suspenders.
+1. **Startup-transient suppression** (`notify.sh`): a keepalived (re)start fires `BACKUP` then `MASTER`
+   ~1-3s later, which used to blip the controller off→on. BACKUP now waits `BACKUP_GRACE` (4s) and only
+   stops the controller if the VIP is **not** held — a transient (we won MASTER) leaves the controller up.
+   `FAULT` still stops immediately (genuinely unfit).
+2. **MQTT cross-check** (`primary-watch.sh`): the standby's yield trigger now confirms the primary is back
+   via SSH **or** a fresh retained heartbeat read straight from the primary's broker
+   (`ha/cluster/$PRIMARY_NODE/heartbeat`, anon). A `ts` within `HEARTBEAT_FRESH` (12s) is required —
+   retained heartbeats outlive a dead node, so stale ones are ignored. Two independent channels → more
+   reliable detection of the primary's return; SSH alone still works if MQTT is unavailable.
+3. **Broker bridge** (`failover/mosquitto/cluster-bridge.conf`): mirrors only `ha/cluster/#` between the
+   two brokers so each box's local broker carries both heartbeats. Install on `.245` only (it bridges
+   outbound to 210's anon broker — no creds): `sudo cp … /etc/mosquitto/conf.d/ && sudo systemctl restart mosquitto`.
+   Also run the standby's own publisher: `sudo systemctl enable --now ha-cluster-heartbeat`.
+   Rollback: `sudo rm /etc/mosquitto/conf.d/cluster-bridge.conf && sudo systemctl restart mosquitto`.
+
 ## Notes / still-TODO before go-live
 - **Cluster-RPC** (`/cluster/status|demote|claim` + MQTT heartbeat) is the 210-side code task; until it
   lands, fencing/health use SSH `systemctl is-active`/`stop` (already wired in the scripts).

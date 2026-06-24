@@ -10,6 +10,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && pwd)"
 [ -f "$REPO/instance/cluster.env" ] && . "$REPO/instance/cluster.env"
 : "${CONTROLLER_UNIT:=ha-controller}"; : "${PEER_HOST:=}"; : "${CLUSTER_KEY:=$HOME/.ssh/id_cluster}"
+: "${VIP:=192.168.0.200}"; : "${BACKUP_GRACE:=4}"   # see BACKUP branch — startup-transient suppression
 LOG=/var/log/ha-failover.log
 STATE="${3:-${1:-}}"
 
@@ -28,8 +29,23 @@ case "$STATE" in
     if [ ! -f "$REPO/instance/.master_pass" ]; then log "ABORT: missing instance/.master_pass — NOT starting controller"; exit 1; fi
     if sudo systemctl start "$CONTROLLER_UNIT"; then log "controller STARTED — this box is now the dictator"; else log "ERROR: failed to start $CONTROLLER_UNIT"; exit 1; fi
     ;;
-  BACKUP|FAULT)
-    log "becoming $STATE -> stop controller (step down / yield to primary)"
+  BACKUP)
+    # Distinguish a GENUINE demotion (yield to primary) from the keepalived START-UP TRANSIENT: at boot
+    # keepalived fires BACKUP first, then wins the election and fires MASTER ~1-3s later. The naive
+    # "BACKUP -> stop" caused a ~4s control blip on the primary every keepalived (re)start. Wait a short
+    # grace, then re-check the VIP: if we now HOLD it, MASTER has taken over here -> this was the boot
+    # transient, NOT a demotion -> leave the controller alone. No VIP after grace == real demotion -> stop.
+    sleep "$BACKUP_GRACE"
+    if ip -o addr show 2>/dev/null | grep -qw "$VIP"; then
+      log "VIP $VIP present after ${BACKUP_GRACE}s grace -> startup transient (MASTER active here); NOT stopping controller"
+      exit 0
+    fi
+    log "no VIP after ${BACKUP_GRACE}s grace -> genuine demotion; stopping controller (yield to primary)"
+    if sudo systemctl stop "$CONTROLLER_UNIT" 2>/dev/null; then log "controller STOPPED"; else log "controller already stopped"; fi
+    ;;
+  FAULT)
+    # Health check failed: we are genuinely unfit. Stop immediately — no grace (don't keep actuating while broken).
+    log "becoming FAULT -> stop controller immediately (unfit)"
     if sudo systemctl stop "$CONTROLLER_UNIT" 2>/dev/null; then log "controller STOPPED"; else log "controller already stopped"; fi
     ;;
   *)
