@@ -32,18 +32,22 @@ against the live system + source on this date.
      restart loaded it; **10 of 11 meters now decode to `home/<area>/<device>/state`, `/devices` +
      `/api/v1/sensors` populated, dashboard shows data.** `gh` authed (heisenman); repo pushed through
      `ceeba71`. New: `provisioning/stage2-finish.sh` — idempotent no-LLM Stage-2 finisher (+ `04-post-install.md`).
-   - ⏳ **OVERNIGHT TRIAL:** onboard-BT stability — `NRestarts=0`, 0 stalls since the **04:31 UTC** restart
-     (clock reset by the registry-reload restart). If it flakes, fit the UB500 dongle off .245 (confirm .245
-     still has edge-node sensor intake first) + block `btmtk`. ESP32-C6 Wi-Fi relay is the documented
-     booster/alternative — `edge/esp32c6/dev-box-relay.md` (deferred: c6-bench feeds .245; use a spare or
-     repoint only at cutover).
-   - 🔲 **OPEN (next session, Hugh present):** (a) static IP → **192.168.0.210** — **scheduled tomorrow
-     2026-06-25, AFTER the BT-trial verdict and BEFORE any .245 decommission** (drops SSH; reconnect at .210);
-     (b) `sudo passwd visko` then narrow sudoers to `ha-services` + drop the broad bootstrap grant (§7e) —
-     or run `./provisioning/stage2-finish.sh --narrow-sudoers`; (c) reboot test (§9); (d) ~~sneakernet
-     devices.yaml~~ **DONE** — only `instance/weather.env` (outdoor lane) + `aranet_radon` (enable its Smart
-     Home Integration toggle; likely device-side, not range) remain; (e) `ha-controller` stays **disabled**
-     on dev (must not fight .245 for the Midea). §3 dual-NVMe + §8 data-migration N/A here.
+   - ✅ **BT TRIAL PASSED (2026-06-24):** onboard MT7922 ran ~9.5h overnight with `NRestarts=0`, 0
+     "discovery appears dead" stalls, all 10 meters fresh through the morning. **Decision: keep the onboard
+     radio — UB500 dongle NOT needed.** ESP32-C6 Wi-Fi relay remains the documented booster for the
+     attic/crawlspace corner — `edge/esp32c6/dev-box-relay.md` (deferred: c6-bench feeds .245; use a spare or
+     repoint only at cutover; doc now points the C6 at the new `.210` broker).
+   - ✅ **STATIC IP CUTOVER DONE (2026-06-24):** box moved `192.168.0.150` → **`192.168.0.210`** (edited
+     `/etc/network/interfaces`, backup at `/etc/network/interfaces.bak-150`, applied via reboot). Reconnected
+     at .210; all services + 10 meters returned. **Done BEFORE any .245 decommission, per plan.**
+   - ✅ **REBOOT TEST (§9) PASSED (2026-06-24):** folded into the IP cutover — after reboot all
+     `ha-*`/infra services auto-returned `active`, `ha-scanner` resumed on `hci0` (`NRestarts=0`), data
+     flowing within ~40s. `ha-controller` correctly stayed inactive.
+   - 🔲 **OPEN (next session, Hugh present):** (a) `sudo passwd visko` then narrow sudoers to `ha-services`
+     + drop the broad bootstrap grant (§7e) — or run `./provisioning/stage2-finish.sh --narrow-sudoers`;
+     (b) `instance/weather.env` (outdoor weather lane) still missing; (c) `aranet_radon` — enable its Smart
+     Home Integration toggle (likely device-side, not range); (d) `ha-controller` stays **disabled** on dev
+     (must not fight .245 for the Midea). §3 dual-NVMe + §8 data-migration N/A here.
 2. **PWA/automation software** (ADR-0014):
    - ✅ **R8 device friendly-name/room/hide — BUILT 2026-06-23 (`e81ff34`).** (Still TODO under R8:
      add-new-device + explicit retire-vs-hide.)

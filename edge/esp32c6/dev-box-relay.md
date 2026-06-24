@@ -1,4 +1,4 @@
-# Pointing an ESP32-C6 at the dev box (ha-dev, 192.168.0.150)
+# Pointing an ESP32-C6 at the dev box (ha-dev, 192.168.0.210)
 
 **Goal:** relay BLE meter readings to **ha-dev** over Wi-Fi so the meters its onboard
 radio can't reach show up, and so the box doesn't depend on its (known-risk) onboard
@@ -18,7 +18,7 @@ just aimed at the dev box's broker instead of `.245`.
 Verified on ha-dev 2026-06-24; a C6 is effectively plug-and-play here:
 
 - Broker is **LAN-reachable**: `mosquitto` listens on `0.0.0.0:1883` (not localhost),
-  `allow_anonymous true` — a C6 on the Wi-Fi can publish to `192.168.0.150:1883`.
+  `allow_anonymous true` — a C6 on the Wi-Fi can publish to `192.168.0.210:1883`.
 - Edge ingest is **running**: `ha-edge-mapper` (subscribes `home/edge/+/+/adv`,
   republishes `home/<area>/<device>/state` by resolving MAC→id via the registry) and
   `ha-edge-history` are both `active`.
@@ -36,7 +36,7 @@ mosquitto_sub -h localhost -t 'home/edge/#' -v # watch for incoming relays
 
 Edge readings are timestamped on the node; `SCOPE.md` syncs the C6's clock from the
 **dictator's** NTP. ha-dev isn't an NTP server yet. Before deploying a C6 here, either:
-- run an NTP service on ha-dev and set the C6's `ntp_server` to `192.168.0.150`, or
+- run an NTP service on ha-dev and set the C6's `ntp_server` to `192.168.0.210`, or
 - point the C6 at a LAN/internet NTP while online (simplest for dev).
 
 ---
@@ -50,7 +50,7 @@ flashed as runtime NVS. To aim a C6 at ha-dev:
    ```bash
    cd edge/esp32c6
    cp main/secrets.example.h main/secrets.h     # edit: Wi-Fi SSID/pass,
-                                                 #   broker IP = 192.168.0.150,
+                                                 #   broker IP = 192.168.0.210,
                                                  #   node id   = e.g. c6-c-office
    ```
    (Or the NVS path from README §runtime-config: set `broker_uri`, `node_id`,
