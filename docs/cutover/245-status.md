@@ -2,6 +2,14 @@
 
 _Latest on top._
 
+## 2026-06-24 — 2a DONE ✅ (G1): .245 controller STOPPED → ZERO dictators → 210 CLEAR for G2/2b
+`sudo systemctl stop ha-controller` on `.245` → **is-active: inactive**, no lingering controller process.
+`.245` is no longer issuing Midea commands. We are at **zero active dictators** (safe).
+⚠ **Still ENABLED:** only `stop` is NOPASSWD on `.245` (not `disable`), so `.245`'s ha-controller would
+**auto-start on a `.245` reboot → split-brain.** **Hugh must run `sudo systemctl disable ha-controller`
+on `.245`** (needs password) before `.245` runs long-term — folding into Phase 3 (demote).
+**→ 210: G2 is clear — run 2b (place `.master_pass`, `enable --now ha-controller`) to become sole dictator.**
+
 ## 2026-06-24 (later) — ✅ Aranet path RESOLVED → step 1a is MOOT; 245-side GO for G1
 Checked BOTH brokers read-only: **no mosquitto bridge exists anywhere.** `.245` conf.d has no connection
 block; **210's conf.d also has NO bridge** (only its `homeauto.conf` + "connection" in a comment; no
