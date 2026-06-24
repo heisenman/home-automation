@@ -116,14 +116,18 @@ def reconcile(state: dict | None, desired, now: float, dwell_s: float = DEFAULT_
 
 
 def publish_pass(conn, dev_to_mac: dict, lut: dict, *, client=None, now: float | None = None,
-                 dwell_s: float = DEFAULT_DWELL_S, log_fn=print) -> dict:
-    """One reconcile/publish pass. With client=None it's a DRY-RUN (prints decisions, no MQTT). Returns a
-    summary {published:[nodes], pending:[nodes], skipped_no_secret:[nodes]}. A node that fell out of the
-    graph but still has state is reconciled toward an empty allowlist (tell it to stop relaying)."""
+                 dwell_s: float = DEFAULT_DWELL_S, only: set | None = None, log_fn=print) -> dict:
+    """One reconcile/publish pass. client=None ⇒ DRY-RUN: prints decisions, **no MQTT and no DB writes**
+    (a real publish is what advances epoch/dwell state — so a dry-run can never make a later publish wrongly
+    skip). `only` limits the pass to a node subset (canary). A node that fell out of the graph but still has
+    state is reconciled toward an empty allowlist (tell it to stop relaying)."""
     now = now if now is not None else time.time()
+    persist = client is not None
     per_node, local_devs = compute_allowlists(mesh_store.load_links(conn), dev_to_mac, now=now)
     state = mesh_store.load_relay_state(conn)
     nodes = sorted(set(per_node) | set(state))
+    if only is not None:
+        nodes = [n for n in nodes if n in only]
     out = {"published": [], "pending": [], "skipped_no_secret": [], "local_devs": sorted(local_devs)}
     for nid in nodes:
         desired = sorted(per_node.get(nid, {}).get("relay_macs", []))
@@ -138,17 +142,18 @@ def publish_pass(conn, dev_to_mac: dict, lut: dict, *, client=None, now: float |
                 continue
             env = sign_envelope(secret, directive)
             topic = RELAY_TOPIC.format(node=nid)
-            if client is not None:
+            if persist:
                 client.publish(topic, json.dumps(env), qos=1, retain=True)
+                mesh_store.save_relay_state(conn, nid, new["epoch"], new["relay_macs"], None, None)
                 log_fn(f"PUBLISH {topic}  epoch={new['epoch']} relay={len(desired)} {desired}")
             else:
                 log_fn(f"# DRY-RUN would PUBLISH {topic}  epoch={new['epoch']} relay={len(desired)} {desired}")
                 log_fn(f"#   envelope={json.dumps(env)}")
-            mesh_store.save_relay_state(conn, nid, new["epoch"], new["relay_macs"], None, None)
-            out["published"].append(nid)
+            out["published"].append(nid)                   # in dry-run this means 'would publish'
         elif action in ("pending", "clear"):
-            mesh_store.save_relay_state(conn, nid, new["epoch"], new["relay_macs"],
-                                        new["pending_macs"], new["pending_since"])
+            if persist:
+                mesh_store.save_relay_state(conn, nid, new["epoch"], new["relay_macs"],
+                                            new["pending_macs"], new["pending_since"])
             if action == "pending":
                 out["pending"].append(nid)
     return out
@@ -198,6 +203,7 @@ def main() -> None:
                    help="re-run every N seconds (decision #5 periodic backstop). 0 = single pass.")
     p.add_argument("--dwell", type=float, default=DEFAULT_DWELL_S,
                    help="seconds a changed allowlist must hold before re-publishing (debounce)")
+    p.add_argument("--only", default="", help="comma-separated node ids to limit this pass to (canary)")
     p.add_argument("--broker", default=os.environ.get("HA_BROKER", "localhost"))
     p.add_argument("--port", type=int, default=int(os.environ.get("HA_BROKER_PORT", "1883")))
     p.add_argument("--log-level", default="INFO")
@@ -220,8 +226,10 @@ def main() -> None:
             client.loop_start()
             print(f"# relay-coordinator LIVE PUBLISH -> {a.broker}:{a.port} (dwell {a.dwell:.0f}s)")
 
+    only = {n.strip() for n in a.only.split(",") if n.strip()} or None
+
     def one_pass():
-        out = publish_pass(conn, dev_to_mac, lut, client=client, dwell_s=a.dwell)
+        out = publish_pass(conn, dev_to_mac, lut, client=client, dwell_s=a.dwell, only=only)
         mode = "PUBLISH" if client else "dry-run"
         print(f"# [{mode}] local={len(out['local_devs'])} | published={out['published'] or '-'} | "
               f"pending(dwell)={out['pending'] or '-'} | no-secret={out['skipped_no_secret'] or '-'}")

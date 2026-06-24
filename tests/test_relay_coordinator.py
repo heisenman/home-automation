@@ -136,3 +136,26 @@ def test_publish_pass_skips_unprovisioned_node():
     mesh_store.record_link(c, ("node", "c6"), ("endpoint", "X"), "ble-adv", rssi=-60, ok=None)
     out = publish_pass(c, {"X": "AA:AA"}, lut={}, client=_FakeClient(), now=1000.0, dwell_s=0)
     assert out["skipped_no_secret"] == ["c6"] and out["published"] == []
+
+
+def test_dry_run_does_not_persist_state():
+    # client=None must write NOTHING — so a dry-run can never make a later real publish wrongly skip.
+    c = sqlite3.connect(":memory:")
+    mesh_store.ensure_schema(c)
+    mesh_store.record_link(c, ("node", "c6"), ("endpoint", "X"), "ble-adv", rssi=-60, ok=None)
+    out = publish_pass(c, {"X": "AA:AA"}, {"c6": {"cmd_secret": "sek"}}, client=None, now=1000.0, dwell_s=0,
+                       log_fn=lambda *_: None)
+    assert out["published"] == ["c6"]                       # 'would publish'
+    assert mesh_store.load_relay_state(c) == {}             # but nothing persisted
+
+
+def test_publish_pass_only_filters_to_canary_node():
+    c = sqlite3.connect(":memory:")
+    mesh_store.ensure_schema(c)
+    mesh_store.record_link(c, ("node", "c6"), ("endpoint", "X"), "ble-adv", rssi=-60, ok=None)
+    mesh_store.record_link(c, ("node", "s3"), ("endpoint", "Y"), "ble-adv", rssi=-60, ok=None)
+    lut = {"c6": {"cmd_secret": "k1"}, "s3": {"cmd_secret": "k2"}}
+    client = _FakeClient()
+    out = publish_pass(c, {"X": "AA", "Y": "BB"}, lut, client=client, now=1.0, dwell_s=0, only={"c6"},
+                       log_fn=lambda *_: None)
+    assert out["published"] == ["c6"] and [t for t, *_ in client.pubs] == ["home/edge/c6/relay"]
