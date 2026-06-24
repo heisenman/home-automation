@@ -31,6 +31,18 @@ def test_best_relay_unreachable():
     assert node is None and hops == -1
 
 
+def test_best_relay_reliability_fresh_edge_beats_stale_strong_local():
+    # local hears it STRONGER (-55) but STALE (heard 150s ago); edge weaker (-78) but FRESH (5s).
+    # Live-adv selection must prefer the steadily-heard source (reliability > raw rssi).
+    g = build_graph([
+        Link(SERVER, EP, "ble-adv", rssi=-55, age_s=150),
+        Link(SERVER, ("node", "s3"), "ip"),
+        Link(("node", "s3"), EP, "ble-adv", rssi=-78, age_s=5),
+    ])
+    node, hops, _ = best_relay(g, EP)
+    assert node == ("node", "s3")
+
+
 def test_assigner_cold_start_assigns_only_source():
     a = Assigner()
     a.observe("m1", LOCAL, -60, 0.0)

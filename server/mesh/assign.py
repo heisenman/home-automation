@@ -62,13 +62,14 @@ class Assigner:
         endpoint = ("endpoint", device_id)
         links: list[Link] = []
         for sid, o in self._obs.get(device_id, {}).items():
-            if now - o.ts > self.fresh_window_s:
+            age = max(0.0, now - o.ts)
+            if age > self.fresh_window_s:
                 continue
             if sid == LOCAL:
-                links.append(Link(SERVER, endpoint, "ble-adv", rssi=o.rssi))
+                links.append(Link(SERVER, endpoint, "ble-adv", rssi=o.rssi, age_s=age))
             else:
                 links.append(Link(SERVER, ("node", sid), "ip"))
-                links.append(Link(("node", sid), endpoint, "ble-adv", rssi=o.rssi))
+                links.append(Link(("node", sid), endpoint, "ble-adv", rssi=o.rssi, age_s=age))
         return build_graph(links), endpoint
 
     def _cost_of(self, device_id: str, source_id: str, now: float) -> float:
@@ -77,11 +78,12 @@ class Assigner:
         if not o or now - o.ts > self.fresh_window_s:
             return float("inf")
         endpoint = ("endpoint", device_id)
+        age = max(0.0, now - o.ts)
         if source_id == LOCAL:
-            links = [Link(SERVER, endpoint, "ble-adv", rssi=o.rssi)]
+            links = [Link(SERVER, endpoint, "ble-adv", rssi=o.rssi, age_s=age)]
         else:
             links = [Link(SERVER, ("node", source_id), "ip"),
-                     Link(("node", source_id), endpoint, "ble-adv", rssi=o.rssi)]
+                     Link(("node", source_id), endpoint, "ble-adv", rssi=o.rssi, age_s=age)]
         _, _, cost = best_relay(build_graph(links), endpoint)
         return cost
 

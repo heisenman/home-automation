@@ -26,12 +26,21 @@ from __future__ import annotations
 
 import heapq
 import math
+import os
 from dataclasses import dataclass, field
 
 SERVER = ("server", "server")
 
 # link base costs (lower = preferred). IP backhaul is cheap+reliable; BLE depends on rssi.
 _BASE = {"ip": 1.0, "ble-gatt": 2.0, "espnow": 3.0, "ble-adv": 4.0}
+# Live-adv RELAY selection (best_relay) cares about RECEPTION RELIABILITY, not just signal strength: a
+# source that hears a meter strongly but rarely is a worse live source than one that hears it steadily.
+# So for_relay makes the IP backhaul cheap (reliable Ethernet, unlike a GATT pull) and adds a recency-
+# dominant penalty by link age (a source not heard within ~RELAY_FRESH_S is heavily penalised). Empirically
+# set from the 210 sniff (local 0-2 adv/120s vs s3 3-4) — see ADR-0015 Phase B tuning.
+_RELAY_IP_COST = float(os.environ.get("HA_RELAY_IP_COST", "0.2"))
+_RELAY_FRESH_S = float(os.environ.get("HA_RELAY_FRESH_COST_S", "60"))
+_RELAY_STALE_WEIGHT = float(os.environ.get("HA_RELAY_STALE_WEIGHT", "4.0"))
 _RSSI_REF = -50          # dBm at/above which a radio link adds ~no penalty
 _RSSI_SCALE = 10.0       # each 10 dBm weaker adds ~1.0 cost
 _FAIL_WEIGHT = 8.0       # a link that keeps failing gets pushed toward last-resort
@@ -52,15 +61,21 @@ class Link:
     age_s: float = 0.0
 
 
-def link_cost(link: Link) -> float:
-    """Cost of traversing one observed link. inf if it's effectively dead."""
+def link_cost(link: Link, for_relay: bool = False) -> float:
+    """Cost of traversing one observed link. inf if it's effectively dead. for_relay=True scores LIVE-ADV
+    source selection (best_relay): cheap IP backhaul + a recency-dominant age penalty (reliability), so a
+    steadily-heard source beats a strong-but-gappy one. Default (pull routing) is unchanged."""
     base = _BASE.get(link.kind, 5.0)
+    if for_relay and link.kind == "ip":
+        base = _RELAY_IP_COST
     if link.kind in ("ble-adv", "ble-gatt", "espnow") and link.rssi is not None:
         base += max(0.0, (_RSSI_REF - link.rssi) / _RSSI_SCALE)
     total = link.n_ok + link.n_fail
     if total:
         base += _FAIL_WEIGHT * (link.n_fail / total)
-    if link.age_s > _STALE_S:                     # decay stale observations
+    if for_relay:
+        base += _RELAY_STALE_WEIGHT * (link.age_s / _RELAY_FRESH_S)   # recency dominates for live-adv
+    elif link.age_s > _STALE_S:                   # decay stale observations (pull routing)
         base += math.log2(1 + link.age_s / _STALE_S)
     return base
 
@@ -96,10 +111,11 @@ def build_graph(links) -> Graph:
     return g
 
 
-def best_path(graph: Graph, endpoint: tuple, src: tuple = SERVER, pull_stats: dict | None = None):
+def best_path(graph: Graph, endpoint: tuple, src: tuple = SERVER, pull_stats: dict | None = None,
+              for_relay: bool = False):
     """Dijkstra from src to endpoint. Returns (path, cost) where path is [src, ..., endpoint], or
     (None, inf) if unreachable. The terminal pull-history adjustment makes a proven puller win even
-    if a louder receiver exists."""
+    if a louder receiver exists. for_relay switches to the live-adv reliability cost (see link_cost)."""
     dist = {src: 0.0}
     prev: dict = {}
     pq = [(0.0, src)]
@@ -112,7 +128,7 @@ def best_path(graph: Graph, endpoint: tuple, src: tuple = SERVER, pull_stats: di
         if u == endpoint:
             break
         for link in graph.adj.get(u, []):
-            c = link_cost(link)
+            c = link_cost(link, for_relay=for_relay)
             if link.dst == endpoint:
                 c += _terminal_adjust(u, endpoint, pull_stats)
             c = max(c, 0.0)
@@ -138,7 +154,7 @@ def best_relay(graph: Graph, endpoint: tuple, src: tuple = SERVER):
     is a different fact. Returns (source_node, n_hops, cost): source_node is the receiver adjacent to
     the endpoint — ('server','server') when hops==0 (the dictator's own radio = "local"), or the
     ('node', id) relay when hops==1. hops>=2 is deferred (multi-hop relay transport, ADR-0010 Ph3)."""
-    path, cost = best_path(graph, endpoint, src=src, pull_stats=None)
+    path, cost = best_path(graph, endpoint, src=src, pull_stats=None, for_relay=True)
     if not path:
         return None, -1, UNREACHABLE
     source = path[-2] if len(path) >= 2 else src
