@@ -192,15 +192,18 @@ def handle_device_meta(conn, device_id: str, body: dict[str, Any]) -> tuple[int,
     from server.control import control_store as store
     patch = body or {}
     name, room, hidden = patch.get("name"), patch.get("room"), patch.get("hidden")
+    retired = patch.get("retired")
     if name is not None and not isinstance(name, str):
         return 400, {"status": "bad-request", "reason": "name must be a string"}
     if room is not None and not isinstance(room, str):
         return 400, {"status": "bad-request", "reason": "room must be a string"}
     if hidden is not None and not isinstance(hidden, bool):
         return 400, {"status": "bad-request", "reason": "hidden must be a boolean"}
-    if name is None and room is None and hidden is None:
-        return 400, {"status": "bad-request", "reason": "nothing to set (name/room/hidden)"}
-    store.set_device_meta(conn, device_id, name=name, room=room, hidden=hidden)
+    if retired is not None and not isinstance(retired, bool):
+        return 400, {"status": "bad-request", "reason": "retired must be a boolean"}
+    if name is None and room is None and hidden is None and retired is None:
+        return 400, {"status": "bad-request", "reason": "nothing to set (name/room/hidden/retired)"}
+    store.set_device_meta(conn, device_id, name=name, room=room, hidden=hidden, retired=retired)
     return 200, {"status": "ok", "device_id": device_id, "meta": store.get_device_meta(conn, device_id)}
 
 

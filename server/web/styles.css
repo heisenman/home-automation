@@ -20,7 +20,9 @@ body {
 .build { font-size: 11px; color: var(--muted); opacity: .7; }
 .edit-btn { padding: 2px 8px; font-size: 13px; line-height: 1.2; }
 .card-head .edit-btn, .sensor-head .edit-btn { margin-left: auto; }
-.hidden-ctl { margin-top: 10px; display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.hidden-ctl { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
+.mgmt-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.trace-chip.retired { opacity: .6; font-style: italic; }
 
 /* alerts banner */
 .alerts { margin: 0 0 14px; display: flex; flex-direction: column; gap: 6px; }

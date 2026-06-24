@@ -168,6 +168,18 @@ def test_sensor_list_applies_meta_overlay():
         assert src["name"] == "Living Room Pro" and src["room"] == "den"  # overlay applied
 
 
+def test_sensor_list_drops_retired():
+    now, iso = _now_and_iso()
+    with tempfile.TemporaryDirectory() as tmp:
+        hc = _hot(tmp, iso, iso)
+        W._insert_readings(hc, {"schema": 1, "device_id": "meter_dead", "device_type": "switchbot_meter",
+                                "area": "garage", "transport": "ble-adv", "ts": iso,
+                                "metrics": {"humidity_pct": 55.0}})
+        meta = {"meter_dead": {"name": None, "room": None, "hidden": False, "retired": True}}
+        ids = [s["device_id"] for s in V.build_sensor_list(hc, now + 5, meta=meta)]
+        assert "meter_dead" not in ids                       # retired -> dropped from the view
+
+
 def test_display_includes_meta_name_room():
     now, iso = _now_and_iso()
     with tempfile.TemporaryDirectory() as tmp:

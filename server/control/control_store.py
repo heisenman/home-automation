@@ -26,10 +26,13 @@ CREATE TABLE IF NOT EXISTS override (
 CREATE TABLE IF NOT EXISTS control_log (
     ts TEXT, device_id TEXT, desired INTEGER, source TEXT, reason TEXT, acted INTEGER, status TEXT);
 CREATE INDEX IF NOT EXISTS idx_control_log ON control_log(device_id, ts);
--- device_meta: user-set OVERLAY on the registry (ADR-0014 R8) — friendly name, room, hidden flag.
+-- device_meta: user-set OVERLAY on the registry (ADR-0014 R8) — friendly name, room, hidden/retired flags.
 -- The registry (devices.yaml/control.yaml) stays the source of truth; this just personalizes display.
+-- hidden = temporarily out of view (easily restored); retired = decommissioned/end-of-life (archived,
+-- not expected to report again — history kept). Distinct so a dead device doesn't masquerade as hidden.
 CREATE TABLE IF NOT EXISTS device_meta (
-    device_id TEXT PRIMARY KEY, name TEXT, room TEXT, hidden INTEGER NOT NULL DEFAULT 0, updated_ts TEXT);
+    device_id TEXT PRIMARY KEY, name TEXT, room TEXT, hidden INTEGER NOT NULL DEFAULT 0,
+    retired INTEGER NOT NULL DEFAULT 0, updated_ts TEXT);
 -- device_calibration: per-(device, metric) DISPLAY offset (ADR-0014). Added to the value shown in the
 -- UI + graphs; the control loop reads raw MQTT and is NOT affected (offset is display-only).
 CREATE TABLE IF NOT EXISTS device_calibration (
@@ -48,6 +51,10 @@ def _now_iso() -> str:
 
 def ensure_schema(conn: sqlite3.Connection) -> None:
     conn.executescript(_SCHEMA)
+    # R8 retire-vs-hide: additive migration for DBs created before `retired` existed (CREATE IF NOT
+    # EXISTS won't add a column to an existing table). Idempotent, default 0.
+    if "retired" not in {r[1] for r in conn.execute("PRAGMA table_info(device_meta)")}:
+        conn.execute("ALTER TABLE device_meta ADD COLUMN retired INTEGER NOT NULL DEFAULT 0")
 
 
 # ── automation policy (app-mutable) ──────────────────────────────────────────────
@@ -135,27 +142,29 @@ def recent_log(conn, device_id: str, limit: int = 50) -> list[dict]:
 
 # ── device meta (user overlay: friendly name / room / hidden) ─────────────────────
 def get_device_meta(conn, device_id: str) -> dict | None:
-    r = conn.execute("SELECT name, room, hidden FROM device_meta WHERE device_id=?",
+    r = conn.execute("SELECT name, room, hidden, retired FROM device_meta WHERE device_id=?",
                      (device_id,)).fetchone()
-    return {"name": r[0], "room": r[1], "hidden": bool(r[2])} if r else None
+    return {"name": r[0], "room": r[1], "hidden": bool(r[2]), "retired": bool(r[3])} if r else None
 
 
-def set_device_meta(conn, device_id: str, *, name=None, room=None, hidden=None) -> None:
+def set_device_meta(conn, device_id: str, *, name=None, room=None, hidden=None, retired=None) -> None:
     """Merge-update the overlay; a field left None keeps its current value (empty string clears a label)."""
-    cur = get_device_meta(conn, device_id) or {"name": None, "room": None, "hidden": False}
+    cur = get_device_meta(conn, device_id) or {"name": None, "room": None, "hidden": False, "retired": False}
     name = cur["name"] if name is None else name
     room = cur["room"] if room is None else room
     hidden = cur["hidden"] if hidden is None else hidden
-    conn.execute("""INSERT INTO device_meta(device_id, name, room, hidden, updated_ts) VALUES(?,?,?,?,?)
+    retired = cur["retired"] if retired is None else retired
+    conn.execute("""INSERT INTO device_meta(device_id, name, room, hidden, retired, updated_ts)
+                    VALUES(?,?,?,?,?,?)
                     ON CONFLICT(device_id) DO UPDATE SET name=excluded.name, room=excluded.room,
-                        hidden=excluded.hidden, updated_ts=excluded.updated_ts""",
-                 (device_id, name, room, int(bool(hidden)), _now_iso()))
+                        hidden=excluded.hidden, retired=excluded.retired, updated_ts=excluded.updated_ts""",
+                 (device_id, name, room, int(bool(hidden)), int(bool(retired)), _now_iso()))
     conn.commit()
 
 
 def all_device_meta(conn) -> dict:
-    return {r[0]: {"name": r[1], "room": r[2], "hidden": bool(r[3])}
-            for r in conn.execute("SELECT device_id, name, room, hidden FROM device_meta")}
+    return {r[0]: {"name": r[1], "room": r[2], "hidden": bool(r[3]), "retired": bool(r[4])}
+            for r in conn.execute("SELECT device_id, name, room, hidden, retired FROM device_meta")}
 
 
 # ── display calibration (per device+metric offset; display-only) ─────────────────

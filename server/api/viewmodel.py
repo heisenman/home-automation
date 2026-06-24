@@ -106,7 +106,8 @@ def build_sensor_list(hot_conn, now: float, meta: dict | None = None,
     for did, metric, value, ts, dtype, area in rows:
         if did.startswith("unknown"):       # unregistered MAC the scanner saw — not a user device; hide
             continue
-        if (meta.get(did) or {}).get("hidden"):     # user-hidden (R8 lifecycle)
+        m = meta.get(did) or {}
+        if m.get("hidden") or m.get("retired"):      # user-hidden or retired (R8 lifecycle) — drop from view
             continue
         e = by_dev.setdefault(did, {"device_id": did, "device_type": dtype or "unknown",
                                     "area": area or "unknown", "ts": ts, "metrics": {}})

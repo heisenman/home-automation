@@ -124,7 +124,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v21 (2026-06-23)";
+const BUILD = "v22 (2026-06-24) retire-vs-hide";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -491,7 +491,7 @@ function ExpandedSensor({ s, range, isAdmin, onEdit, onClose }) {
 function Sensors({ sensors, isAdmin, onEdit, onChange }) {
   const [expanded, setExpanded] = useState(new Set());        // device_ids currently expanded
   const [range, setRange] = useState(() => computeRange(24, { start: "", end: "" }));
-  const [hiddenList, setHiddenList] = useState(null);         // null=not loaded, []=loaded
+  const [managed, setManaged] = useState(null);               // null=not loaded; {hidden:[], retired:[]}
   if (sensors == null) return null;
   if (sensors.length === 0) return html`<p class="note">No sensor readings yet.</p>`;
   const open = (id) => setExpanded((p) => new Set(p).add(id));
@@ -499,16 +499,17 @@ function Sensors({ sensors, isAdmin, onEdit, onChange }) {
   const mins = sensors.filter((s) => !expanded.has(s.device_id));
   const exps = sensors.filter((s) => expanded.has(s.device_id));
 
-  const loadHidden = async () => {
+  const loadManaged = async () => {
     try {
       const d = await getJSON("/api/v1/devices/meta");
-      setHiddenList(Object.entries(d.meta || {}).filter(([, m]) => m.hidden)
-        .map(([id, m]) => ({ device_id: id, ...m })));
-    } catch { setHiddenList([]); }
+      const rows = Object.entries(d.meta || {}).map(([id, m]) => ({ device_id: id, ...m }));
+      setManaged({ hidden: rows.filter((m) => m.hidden && !m.retired),   // retired shows only in its list
+                   retired: rows.filter((m) => m.retired) });
+    } catch { setManaged({ hidden: [], retired: [] }); }
   };
-  const unhide = async (id) => {
-    try { await adminSend("PUT", `/api/v1/devices/${id}/meta`, { hidden: false }); } catch {}
-    await onChange(); loadHidden();
+  const restore = async (id, field) => {                  // field = "hidden" | "retired"
+    try { await adminSend("PUT", `/api/v1/devices/${id}/meta`, { [field]: false }); } catch {}
+    await onChange(); loadManaged();
   };
 
   return html`
@@ -524,12 +525,17 @@ function Sensors({ sensors, isAdmin, onEdit, onChange }) {
             isAdmin=${isAdmin} onEdit=${onEdit} onClose=${() => close(s.device_id)} />`)}
         </div>`}
       ${isAdmin && html`<div class="hidden-ctl">
-        ${hiddenList == null
-          ? html`<button class="btn sm ghost" onClick=${loadHidden}>show hidden devices</button>`
-          : hiddenList.length === 0
-            ? html`<span class="note">no hidden devices</span>`
-            : html`<span class="note">hidden — tap to restore:</span> ${hiddenList.map((h) => html`
-                <span class="trace-chip" onClick=${() => unhide(h.device_id)}>${h.name || prettyName(h.device_id)} ↺</span>`)}`}
+        ${managed == null
+          ? html`<button class="btn sm ghost" onClick=${loadManaged}>manage hidden / retired</button>`
+          : html`
+            <div class="mgmt-row">${managed.hidden.length === 0
+              ? html`<span class="note">no hidden devices</span>`
+              : html`<span class="note">hidden — tap to restore:</span> ${managed.hidden.map((h) => html`
+                  <span class="trace-chip" onClick=${() => restore(h.device_id, "hidden")}>${h.name || prettyName(h.device_id)} ↺</span>`)}</div>
+            <div class="mgmt-row">${managed.retired.length === 0
+              ? html`<span class="note">no retired devices</span>`
+              : html`<span class="note">retired (archived) — tap to restore:</span> ${managed.retired.map((h) => html`
+                  <span class="trace-chip retired" onClick=${() => restore(h.device_id, "retired")}>${h.name || prettyName(h.device_id)} ↺</span>`)}</div>`}
       </div>`}
     </div>`;
 }
@@ -692,6 +698,7 @@ function DeviceMetaModal({ device, onClose, onSaved }) {
   const [name, setName] = useState(device.name || "");
   const [room, setRoom] = useState(device.room || (device.area ? prettyArea(device.area) : ""));
   const [hidden, setHidden] = useState(!!device.hidden);
+  const [retired, setRetired] = useState(!!device.retired);
   const [offsets, setOffsets] = useState({ ...(device.offsets || {}) });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -700,7 +707,7 @@ function DeviceMetaModal({ device, onClose, onSaved }) {
   const save = async () => {
     setBusy(true); setErr("");
     try {
-      await adminSend("PUT", `/api/v1/devices/${id}/meta`, { name, room, hidden });
+      await adminSend("PUT", `/api/v1/devices/${id}/meta`, { name, room, hidden, retired });
       for (const g of metrics) {               // PUT only the offsets that changed
         const v = Number(offsets[g.key] || 0);
         if (v !== Number((device.offsets || {})[g.key] || 0)) {
@@ -719,7 +726,12 @@ function DeviceMetaModal({ device, onClose, onSaved }) {
           onInput=${(e) => setName(e.target.value)} />
         <input value=${room} placeholder="room" onInput=${(e) => setRoom(e.target.value)} />
         <label class="switch"><input type="checkbox" checked=${hidden}
-          onChange=${(e) => setHidden(e.target.checked)} /> Hide from dashboard</label>
+          onChange=${(e) => setHidden(e.target.checked)} /> Hide from dashboard (temporary)</label>
+        <label class="switch"><input type="checkbox" checked=${retired}
+          onChange=${(e) => setRetired(e.target.checked)} /> Retire (decommissioned — archives it)</label>
+        ${retired && !device.retired && html`<p class="note">Retiring archives the device — history is kept,
+          it's removed from the dashboard, and it's not expected to report again. Restore it later from the
+          "retired" list.</p>`}
         ${metrics.length > 0 && html`
           <div class="divider"></div>
           <p class="note">Display calibration — added to shown values + graphs (control uses raw):</p>
