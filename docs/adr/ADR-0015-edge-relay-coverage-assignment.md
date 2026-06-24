@@ -121,7 +121,14 @@ actuator gets a parallel `cmd_relay` keyed by **device_id** (ADR-0010 command-co
   `HA_RELAY_DEDUP` in `mqtt.env` + restart scanner+mapper.
 - **Phase B (Tier 2):** directive protocol + firmware relay filter + coordinator. Per-node rollout; saves
   edge energy. Default-relay-all keeps un-updated nodes safe. **Replicate `mesh_links`+assignments via
-  `sync-standby`; recompute on `notify.sh master`.**
+  `sync-standby`; recompute on `notify.sh master`.** **LIVE 2026-06-24:** firmware `ha_relay` v10-relay
+  consumes the signed `{p,s}` `relay_assign` on `home/edge/<node>/relay` (NVS allowlist+epoch, default
+  relay-all); the adv-reception **rate signal** (`adv_score`) fixed the coordinator's local-over-credit
+  (Open-tuning-note resolved); `ha-relay-coordinator.service` on 210 publishes per-node directives debounced
+  (decision #5, `--dwell 900`), VIP-guarded. Canary (c6-bench) verified live: HMAC-accept + relay-filter +
+  stale-epoch-ignore PASS; NVS/reboot code-verified. Deferred polish: reboot-survival live confirm +
+  `notify.sh` restart-on-promote (`phase-b-notify-failover`). Rollback: stop the service + clear the retained
+  `/relay` directive (reverts a node to relay-all).
 - **Phase C:** sensor-history reconciliation across failover (§transparency #2), `ha-api` on the VIP (#4),
   directive signing, re-negotiation tuning, and converge with ADR-0010 Phase 3 (multi-hop relay transport)
   so one graph drives both live-adv routing and backfill pulls.
