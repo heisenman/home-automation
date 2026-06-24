@@ -2,6 +2,30 @@
 
 _Latest on top._
 
+## 2026-06-24T15:58Z — FAILOVER: 210-side roadmap + prereqs underway (autonomous work block)
+Read `failover/README.md`. 210 owns: `keepalived.210.conf`, the `/cluster/*` HTTP RPC + MQTT heartbeat on
+ha-api, keepalived install, and confirming `notify_backup/fault` stop our controller. `.245` owns its half +
+the shared bash scripts (`notify.sh`, `sync-standby.sh`, `healthcheck.sh`, `deploy.sh`).
+
+**Prereqs verified/done (210):**
+- ✅ VIP **192.168.0.200 is FREE** (ping 100% loss).
+- ✅ **Cluster SSH bidirectional & working** — `id_cluster` keypair present; `authorized_keys` has
+  `cluster@245`; `ssh -i id_cluster visko@.245` → `OK-from-superbuddynas`. Fence/sync transport is live.
+- ✅ **keepalived installed + DORMANT** (`disabled`+`inactive`, no config → no VRRP, can't grab VIP or touch
+  control). `/usr/sbin/keepalived`.
+
+**210-side roadmap (order; nothing that activates VRRP or touches `ha-controller` lifecycle without Hugh):**
+1. Author `failover/keepalived.210.conf` (MASTER pri 150, VIP .200, track_script + notify) — inert file.
+2. Build the cluster bus 210 half — `/cluster/{status,demote,claim}` (bearer-authed) on ha-api +
+   `ha/cluster/210/heartbeat` publisher. Author → test import → careful `ha-api` restart (does NOT stop the
+   controller; control continues) → verify.
+3. Confirm (dry, by hand) that a `notify backup|fault` path cleanly stops 210's controller — logic review
+   only; no live stop.
+4. **HOLD for Hugh:** activating keepalived/VRRP on 210 + the first controlled failover test (build-plan
+   steps 3–5). Never blind-deploy on the live dictator.
+
+Working autonomously through 1–3 now; will not cross step 4. Live control stays untouched throughout.
+
 ## 2026-06-24T15:15Z — 2b DONE ✅ — 210 is SOLE DICTATOR (Midea continuity preserved)
 Executed on Hugh's verbal G2 + bus-confirmed ".245 controller STOPPED" (245-status 2a). Steps + proof:
 - `.master_pass` placed (0600). Dry-run tick built the issuer OK (master decrypts the LUT) and decided
