@@ -110,12 +110,54 @@ actuator gets a parallel `cmd_relay` keyed by **device_id** (ADR-0010 command-co
 | Schema | directive JSON (+ optional HMAC) | `relay_assign` contract above |
 
 ## Phasing
+- **Phase 0 (failover transparency — prerequisite, low-risk):** repoint edge nodes (`broker_uri` / NTP /
+  OTA host) **and** PWA/API clients to the **VIP `.200`**; confirm the broker answers on the VIP. Makes the
+  data bus survive a dictator swap before any coverage logic is layered on. (Includes reflashing the S3.)
 - **Phase A (Tier 1):** `best_relay` + assignment + mapper dedup + local-as-node. No firmware. Gated, default
-  off, static/passthrough fallback. Immediate duplicate-write kill.
+  off, passthrough fallback. Immediate duplicate-write kill.
 - **Phase B (Tier 2):** directive protocol + firmware relay filter + coordinator. Per-node rollout; saves
-  edge energy. Default-relay-all keeps un-updated nodes safe.
-- **Phase C:** signing, re-negotiation tuning, and converge with ADR-0010 Phase 3 (multi-hop relay transport)
-  so the same graph drives both live-adv routing and backfill pulls.
+  edge energy. Default-relay-all keeps un-updated nodes safe. **Replicate `mesh_links`+assignments via
+  `sync-standby`; recompute on `notify.sh master`.**
+- **Phase C:** sensor-history reconciliation across failover (§transparency #2), `ha-api` on the VIP (#4),
+  directive signing, re-negotiation tuning, and converge with ADR-0010 Phase 3 (multi-hop relay transport)
+  so one graph drives both live-adv routing and backfill pulls.
+
+## Failover transparency & state continuity (synthesis with the dictator-pair topology)
+
+The dictator is a failover **pair** (210 primary ↔ .245 standby) behind VIP **192.168.0.200** (keepalived;
+`failover/`, LIVE+tested 2026-06-24). ADR-0015 **builds on** that, it does not re-do it. The failover impl
+already provides: the VIP floats with the dictator and `ha-controller` binds to its holder (`notify.sh`);
+the cluster-coordination bus `ha/cluster/#` is bridged between the two brokers
+(`failover/mosquitto/cluster-bridge.conf`) while **device telemetry `home/#` is deliberately NOT bridged**
+(no loop/coupling); and `sync-standby.sh` (~30-min timer) replicates `midea-device.env`, `control.yaml`,
+and `control.db`. For the **relay mesh + clients** to survive a dictator swap, four paths must close:
+
+1. **Address the ROLE, not the box.** Everything that talks to the dictator must target the **VIP**, never
+   210/.245. *Concrete gap, today:* the edge nodes (incl. the S3 just flashed) use `mqtt://192.168.0.210:1883`
+   — repoint to `192.168.0.200`. Same for the **OTA host pin**, any node **NTP**, and the **PWA/API clients**.
+   The broker already listens on `0.0.0.0`, so it answers on the VIP automatically — once nodes/clients use
+   it, the data bus follows the dictator on failover with **zero per-node reconfig**. This is the immediate,
+   low-risk fix and a prerequisite for the rest.
+
+2. **Time-series continuity.** `sync-standby` replicates control state but **not** the sensor history
+   (`hot.db`/parquet). Because live edge data follows the VIP to whichever box is dictator, the two boxes'
+   histories **diverge by epoch**. Add **bidirectional reconciliation** (each box backfills the readings it
+   missed during the other's reign) as a reconcile-on-promotion/return step, reusing the history-sync
+   machinery (ADR-0007/0009); the writer's `(ts,metric)` dedup makes the merge idempotent.
+
+3. **The reselection brain must survive the swap.** ADR-0015's inputs (`mesh_links`) + outputs (assignments)
+   live in `instance/db/` → fold them into `sync-standby` (snapshot like `control.db`) so the standby
+   inherits the coverage map. **AND recompute on promotion:** the new dictator's onboard radio + reachable
+   nodes hear a *different* set, so `notify.sh master` should trigger an ADR-0015 reselection pass — a
+   dictator swap is the largest topology change. *Replicate to seed; recompute to be correct.*
+
+4. **The API/dashboard on the VIP.** `ha-controller` floats; the read/command API + PWA should too. Decide
+   whether `ha-api` runs warm on the standby (reads always; control plane mounts on `notify.sh master`) with
+   clients using the VIP — else the dashboard dies on failover even though control survived.
+
+**Net:** the failover impl nailed the *control* plane; #1–#4 extend that transparency to the *data* plane
+(edge mesh + history + clients) and to the coverage brain. They belong here because ADR-0015 is what makes
+the mesh exist; #2 (history reconciliation) may graduate to its own ADR if it grows.
 
 ## Consequences
 - **+** Eliminates redundant traffic + edge energy; coverage becomes a managed, queryable, self-learning
@@ -132,3 +174,9 @@ actuator gets a parallel `cmd_relay` keyed by **device_id** (ADR-0010 command-co
 4. **Coordinator home:** new `ha-relay-coordinator` service vs fold into `ha-controller`/`ha-api`?
 5. **Re-negotiation cadence:** event-driven (node up/down, coverage shift) + slow periodic — what interval?
 6. **Scope of v1:** ship Tier 1 alone first (data-side win, zero firmware risk), then Tier 2?
+7. **VIP rollout:** repoint the edge nodes (the S3 + future) to `.200` *now* (a reflash), or fold into the
+   next firmware update? And clients/dashboard → VIP?
+8. **History reconciliation (#2):** its own ADR? And reconcile-on-promotion vs continuous time-series
+   replication (cost vs gap-size)?
+9. **`ha-api` on the standby (#4):** warm read-only + mount-control-on-promote, or cold (dashboard down
+   during an outage)?
