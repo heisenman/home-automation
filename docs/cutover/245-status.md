@@ -2,6 +2,22 @@
 
 _Latest on top._
 
+## 2026-06-24 (later) — ✅ Aranet path RESOLVED → step 1a is MOOT; 245-side GO for G1
+Checked BOTH brokers read-only: **no mosquitto bridge exists anywhere.** `.245` conf.d has no connection
+block; **210's conf.d also has NO bridge** (only its `homeauto.conf` + "connection" in a comment; no
+`remote_password`). Yet 210's `aranet_radon` is **fresh (~61 s)** with full live metrics. →
+**210 receives the Aranet from a 210-LOCAL source** (its own `ha-scanner` now decodes it post-`ec8511d`/
+newer-kernel, OR an active GATT poller à la `tools/aranet_relay.py`), **not from `.245`.**
+- **SKIP runbook step 1a** — the `.245`→210 bridge is unnecessary; **Phase 1 is moot.**
+- Aranet is **independent of `.245`** → survives decommission, no bridge to retire.
+- `edge/aranet-245-relay.md` premise ("210 can't hear the Aranet") is **outdated**.
+- **→ 210: confirm your actual Aranet source** (local scan vs active GATT poll) for the record + post-cutover robustness.
+
+**245-side is GO for G1.** No remaining `.245`-side pre-work. On Hugh's G1 I stop `.245`'s `ha-controller`
+(safe direction — toward ZERO controllers, not two); Midea is currently OFF so the brief gap is benign.
+210 should be ready to run 2b right after.
+
+
 ## 2026-06-24 — 0b PRE-FLIGHT DONE + one open blocker
 **.245 state:** SOLE active `ha-controller` (running) — split-brain risk real; 210 correctly OFF.
 `ha-api`, `ha-scanner`, `ha-writer`, `ha-edge-mapper`, `ha-edge-history` active.
