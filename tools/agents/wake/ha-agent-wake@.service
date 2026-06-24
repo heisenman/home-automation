@@ -1,0 +1,22 @@
+# Interrupt-driven wake watcher, templated by agent id:  ha-agent-wake@dev / ha-agent-wake@ops
+# Install ONLY on a box with the claude CLI (today: 210).  WorkingDirectory differs per box — 210 uses
+# /home/visko/home_automation. Enable:  sudo systemctl enable --now ha-agent-wake@dev
+# Kill switch:  sudo systemctl stop ha-agent-wake@dev   (idle cost is zero anyway; this halts autonomy)
+[Unit]
+Description=HA agent wake watcher (%i) — interrupt-driven coordination runner
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=visko
+Environment=HA_AGENT_ID=%i
+Environment=HA_COORD_BROKER=192.168.0.200
+# Set CLAUDE_BIN if 'claude' isn't on the service PATH:  Environment=CLAUDE_BIN=/usr/bin/claude
+WorkingDirectory=/home/visko/home_automation
+ExecStart=/home/visko/home_automation/tools/agents/wake/watch.sh
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -285,6 +285,15 @@ def cmd_beacon(a, agent):
     _beacon(agent, note=a.note or ""); print(f"beacon updated for {agent}")
 
 
+def cmd_wake(a, agent):
+    """Send an interrupt to the other agent's wake watcher (NON-retained so it doesn't replay on
+    reconnect). A watcher subscribed to ha/agents/wake/<target> invokes a headless runner. Only works
+    where the target has a wake watcher running (i.e. a box with the claude CLI)."""
+    _pub(f"{BASE}/wake/{a.target}", {"from": agent, "reason": a.reason or "",
+                                     "task": a.task or "", "ts": now()}, retain=False)
+    print(f"woke {a.target}: {a.reason or '(no reason given)'}")
+
+
 def cmd_whoami(a, agent):
     print(f"agent={agent}  broker={BROKER}:{PORT}  base={BASE}/")
 
@@ -320,6 +329,7 @@ def main():
     sp = add("note"); sp.add_argument("id"); sp.add_argument("--note", required=True)
     sp = add("dep"); sp.add_argument("id"); sp.add_argument("--add", default=""); sp.add_argument("--remove", default="")
     sp = add("beacon"); sp.add_argument("--note", default="")
+    sp = add("wake"); sp.add_argument("target"); sp.add_argument("--reason", default=""); sp.add_argument("--task", default="")
 
     a = p.parse_args()
     a.force = getattr(a, "force", False)
@@ -337,7 +347,7 @@ def main():
     {"list": cmd_list, "ready": cmd_ready, "mine": cmd_mine, "agents": cmd_agents,
      "whoami": cmd_whoami, "add": cmd_add, "claim": cmd_claim, "start": cmd_start,
      "done": cmd_done, "block": cmd_block, "release": cmd_release, "cancel": cmd_cancel,
-     "note": cmd_note, "dep": cmd_dep, "beacon": cmd_beacon}[a.cmd](a, agent)
+     "note": cmd_note, "dep": cmd_dep, "beacon": cmd_beacon, "wake": cmd_wake}[a.cmd](a, agent)
 
 
 if __name__ == "__main__":

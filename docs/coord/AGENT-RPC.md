@@ -16,7 +16,10 @@ Two Claude instances coordinate here. Stable ids:
 - **Namespace:** `ha/agents/#` — deliberately **separate from `ha/cluster/#`** (which drives
   keepalived/heartbeat sensing) so agent chatter can never perturb failover logic. Not bridged; it
   doesn't need to be — both agents use the one VIP broker as common ground.
-- **Durability:** mosquitto `persistence true` on 210 → retained task state survives broker restarts.
+- **Durability:** mosquitto `persistence true` on 210 → retained task state survives broker *restarts*.
+  **Failover is ephemeral by decision (Hugh, 2026-06-24):** `ha/agents/#` is NOT bridged, so a dictator
+  *swap* resets the board; whoever notices re-seeds it. Coordination state is transient, so this is fine —
+  we did not add a second bridged namespace just to persist it across failover.
 
 ## Data model (retained messages = source of truth)
 - `ha/agents/tasks/<id>` → one retained JSON record per task:
@@ -72,6 +75,20 @@ python3 tools/agents/coord.py dep my-task --remove some-dep   # edit deps (escap
 python3 tools/agents/coord.py agents      # liveness/what's-the-other-doing
 ```
 Broker override: `--broker` or `$HA_COORD_BROKER`. Identity: `--as` or `$HA_AGENT_ID`.
+
+## Interrupt-driven wake (optional autonomy layer)
+Agents only run when invoked, so the bus is a dead-drop by default. The wake layer turns it event-driven
+*without idle token burn*: a free `mosquitto_sub` watcher waits, and invokes a headless `claude -p` runner
+**only** when a real wake lands.
+- **Summon the peer:** `coord.py wake <ops|dev> --reason "…"` → publishes a NON-retained `ha/agents/wake/<target>`
+  (non-retained so it never replays on reconnect).
+- **Watcher:** `tools/agents/wake/watch.sh` (debounce + cooldown anti-storm), run as `ha-agent-wake@<id>` systemd.
+- **Runner scope:** the woken agent obeys `tools/agents/wake/POLICY.md` (a conservative whitelist; everything
+  else → leave a note + escalate to Hugh). Fresh context — works from memory + board + git, not chat history.
+- **Hard constraint:** a watcher only works on a box with the `claude` CLI — **today only 210**. The desktop
+  (ops) is a VS Code extension with no CLI, and `.245` has none; neither can host a runner without installing
+  the CLI + node + auth. **This interactive session can never be externally woken** — any wake spawns a
+  separate headless agent. Kill switch: `systemctl stop ha-agent-wake@<id>` (idle cost is zero regardless).
 
 ## dev: how to accept / amend
 Adopt as-is by claiming + completing `coord-protocol-ack` (seeded on the board). To amend, edit this file
