@@ -1,7 +1,8 @@
-# ESP32-S3-ETH edge node — wired BLE-relay for 210
+# ESP32-S3-ETH edge node — wired BLE-relay for the dictator (VIP)
 
-A **wired** BLE-scan→relay node for the dictator (210, `192.168.0.210`). Passive-scans SwitchBot
-(and other) BLE adverts and relays them over **Ethernet** to 210's MQTT broker, so the dead-zone
+A **wired** BLE-scan→relay node for the dictator, addressed via the floating VIP **`192.168.0.200`** so it
+follows whichever server holds the dictator role across a failover (ADR-0015 Phase 0). Passive-scans
+SwitchBot (and other) BLE adverts and relays them over **Ethernet** to the dictator's MQTT broker, so the dead-zone
 meters 210's onboard radio reaches only marginally (crawlspace Aranet ~−89 dBm, attic ~−90 dBm) come
 through on a robust wire instead of Wi-Fi. Same relay contract as the C6 node:
 `home/edge/<node>/<mac>/adv` → `ha-edge-mapper` → `home/<area>/<device>/state`.
@@ -37,14 +38,14 @@ ESP-IDF **v5.4** is installed at `~/esp/esp-idf`.
 ```bash
 . ~/esp/esp-idf/export.sh                 # idf.py on PATH
 cd edge/esp32s3-eth
-cp main/secrets.example.h main/secrets.h  # set HA_BROKER_URI=mqtt://192.168.0.210:1883, HA_NODE_ID
+cp main/secrets.example.h main/secrets.h  # set HA_BROKER_URI=mqtt://192.168.0.200:1883, HA_NODE_ID
 idf.py set-target esp32s3                  # first time only
 idf.py build
 idf.py -p /dev/ttyACM0 flash monitor       # native USB; visko must be in the dialout group
 ```
 
 ## Config (`main/secrets.h`, gitignored)
-- `HA_BROKER_URI` = `mqtt://192.168.0.210:1883` (the dictator).
+- `HA_BROKER_URI` = `mqtt://192.168.0.200:1883` (the dictator).
 - `HA_NODE_ID` = e.g. `s3-crawlspace` — appears in the topic + `meta.node`.
 - `HA_NTP_SERVER` = `pool.ntp.org` (wired internet; readings are also mapper-stamped on ingest).
 - Wi-Fi fields are **unused** on the wired node (kept only because `ha_config_t` carries them).
