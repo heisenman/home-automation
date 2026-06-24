@@ -41,6 +41,11 @@ _BASE = {"ip": 1.0, "ble-gatt": 2.0, "espnow": 3.0, "ble-adv": 4.0}
 _RELAY_IP_COST = float(os.environ.get("HA_RELAY_IP_COST", "0.2"))
 _RELAY_FRESH_S = float(os.environ.get("HA_RELAY_FRESH_COST_S", "60"))
 _RELAY_STALE_WEIGHT = float(os.environ.get("HA_RELAY_STALE_WEIGHT", "4.0"))
+# Recency (age) answers "heard *recently*?"; rate answers "heard *often*?" — complementary. A source heard
+# once-recently has low age (looks good) but low rate (gappy). The rate term demotes it so a STEADILY-heard
+# source wins. Opt-in: only links carrying a rate (the persisted mesh graph) get it; the live real-time
+# Assigner passes rate=None and is unaffected. Penalty shrinks as rate rises: ~_WEIGHT at rate 0, →0 steady.
+_RELAY_RATE_WEIGHT = float(os.environ.get("HA_RELAY_RATE_WEIGHT", "4.0"))
 _RSSI_REF = -50          # dBm at/above which a radio link adds ~no penalty
 _RSSI_SCALE = 10.0       # each 10 dBm weaker adds ~1.0 cost
 _FAIL_WEIGHT = 8.0       # a link that keeps failing gets pushed toward last-resort
@@ -59,6 +64,7 @@ class Link:
     n_ok: int = 0
     n_fail: int = 0
     age_s: float = 0.0
+    rate: float | None = None   # decayed adv-reception rate (persisted graph only); None = neutral
 
 
 def link_cost(link: Link, for_relay: bool = False) -> float:
@@ -75,6 +81,8 @@ def link_cost(link: Link, for_relay: bool = False) -> float:
         base += _FAIL_WEIGHT * (link.n_fail / total)
     if for_relay:
         base += _RELAY_STALE_WEIGHT * (link.age_s / _RELAY_FRESH_S)   # recency dominates for live-adv
+        if link.rate is not None:                 # reliability: penalise gappy sources (heard rarely)
+            base += _RELAY_RATE_WEIGHT / (1.0 + max(0.0, link.rate))
     elif link.age_s > _STALE_S:                   # decay stale observations (pull routing)
         base += math.log2(1 + link.age_s / _STALE_S)
     return base

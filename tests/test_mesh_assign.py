@@ -43,6 +43,29 @@ def test_best_relay_reliability_fresh_edge_beats_stale_strong_local():
     assert node == ("node", "s3")
 
 
+def test_best_relay_rate_demotes_gappy_recent_for_steady_source():
+    # Both just heard (age 0) at comparable rssi, but local is GAPPY (rate ~1) and s3 is STEADY (rate ~10).
+    # Recency alone can't tell them apart; the rate term must demote gappy local so steady s3 wins.
+    g = build_graph([
+        Link(SERVER, EP, "ble-adv", rssi=-85, age_s=0, rate=1.0),
+        Link(SERVER, ("node", "s3"), "ip"),
+        Link(("node", "s3"), EP, "ble-adv", rssi=-88, age_s=0, rate=10.0),
+    ])
+    node, _, _ = best_relay(g, EP)
+    assert node == ("node", "s3")
+
+
+def test_rate_is_opt_in_none_leaves_selection_unchanged():
+    # rate=None (the live Assigner path) => no rate term => stronger/closer local still wins as before.
+    g = build_graph([
+        Link(SERVER, EP, "ble-adv", rssi=-85, age_s=0, rate=None),
+        Link(SERVER, ("node", "s3"), "ip"),
+        Link(("node", "s3"), EP, "ble-adv", rssi=-88, age_s=0, rate=None),
+    ])
+    node, hops, _ = best_relay(g, EP)
+    assert node == SERVER and hops == 0
+
+
 def test_assigner_cold_start_assigns_only_source():
     a = Assigner()
     a.observe("m1", LOCAL, -60, 0.0)
