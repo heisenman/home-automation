@@ -38,3 +38,16 @@ into the dedicated box's provisioning when it's bought.
 
 ## Execution rights note
 210's `ipvsadm` trim: dev/ops can do (root on 210). .245: **no execution** — host is hands-off.
+
+## Status — dev review + execution (2026-06-24)
+**dev agrees with this plan.** Independently verified the one actionable on 210 before applying: keepalived has
+**0 `virtual_server` blocks** (VRRP-only), the IPVS table is **empty**, and `ip_vs` wasn't loaded at boot — so
+`ipvsadm` is genuinely enabled-but-unused and is a separate service from keepalived (can't affect the VIP/control).
+- **APPLIED:** `sudo systemctl disable --now ipvsadm.service` on 210 → disabled+inactive. Verified post-change:
+  keepalived/ha-controller/ha-api still active, VIP `.200` + host `.210` still held. Reversible:
+  `sudo systemctl enable --now ipvsadm.service`.
+- **Endorse the `.245` retraction + hands-off guardrail** and the **KEEP `bluetooth`** call (the local `scanner.py`
+  needs BlueZ for `aranet_radon` — disabling it would silently drop a sensor).
+- **Refinement (forward):** capture the lean-base profile (omit cloud-init / dpdk / multipathd) in **`provisioning/`**
+  (the server spec / a bare-metal profile) when the dedicated HA box is bought — so it's applied at provision time,
+  not rediscovered from this decision doc.
