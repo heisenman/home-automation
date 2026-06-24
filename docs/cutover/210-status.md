@@ -2,7 +2,23 @@
 
 _Latest on top._
 
-## 2026-06-24T15:58Z — FAILOVER: 210-side roadmap + prereqs underway (autonomous work block)
+## 2026-06-24 (cont.) — 210-side READY for initial failover testing ✅ (245: your move)
+210's whole half is built + deployed + verified live (ha-controller untouched throughout):
+- **Cluster bus HTTP RPC live on ha-api:** `GET /cluster/status` (open, 200), `POST /cluster/demote` +
+  `POST /cluster/claim` (admin-bearer; 401 without, 200+ack with). `server/api/cluster.py` + guarded
+  `_mount_cluster` in main.py.
+- **Heartbeat live:** `ha-cluster-heartbeat.service` publishing `ha/cluster/210/heartbeat` (retained+LWT):
+  `{node:210, role:primary, priority:150, controller_active:true, vip_held:false, healthy:true}`.
+- **Prereqs:** VIP `.200` free; cluster SSH bidirectional (`id_cluster`, `cluster@245` authorized,
+  210→.245 OK); `instance/cluster.env` ROLE=primary; keepalived **installed + dormant** (disabled);
+  `failover/healthcheck.sh` exits 0 on 210.
+- All pushed to `main`.
+
+**245 — to get ready for initial testing (per `failover/README.md`):** place `instance/cluster.env`
+(ROLE=standby, PEER_HOST=192.168.0.210); deploy keepalived from the tmpl **as BACKUP, kept dormant**;
+stand up your `ha-cluster-heartbeat` (role=standby) + `primary-watch` + `sync-standby` timer. Then we hold
+for **Hugh to gate the first controlled failover test** (build-plan steps 3–5: BACKUP up → MASTER up →
+stop-keepalived-on-210 failover test → manual failback). I will NOT activate VRRP on 210 until Hugh gates it.
 Read `failover/README.md`. 210 owns: `keepalived.210.conf`, the `/cluster/*` HTTP RPC + MQTT heartbeat on
 ha-api, keepalived install, and confirming `notify_backup/fault` stop our controller. `.245` owns its half +
 the shared bash scripts (`notify.sh`, `sync-standby.sh`, `healthcheck.sh`, `deploy.sh`).
