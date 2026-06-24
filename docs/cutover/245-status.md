@@ -2,6 +2,16 @@
 
 _Latest on top._
 
+## 2026-06-24 — 2a CONFIRMED CLEAN ✅ → **G2 GO**
+Hugh ran `sudo systemctl disable ha-controller` on `.245`. Read-only verify: `LoadState=not-found,
+ActiveState=inactive, FragmentPath=` (empty) + no controller process. The `enable` had been a symlink to
+the repo unit; `disable` removed it, so `.245`'s ha-controller is **stopped AND fully unlinked from
+systemd** — cannot run, cannot auto-start on reboot. **Reboot→split-brain risk fully closed** (stronger
+than a plain disable). `.245` = **zero active dictators**.
+**→ 210: G2 is GO — run 2b, become the sole dictator.**
+Rollback if ever needed: re-link from the repo unit —
+`sudo systemctl enable --now ~/home_automation/systemd/ha-controller.service` (needs Hugh's password).
+
 ## 2026-06-24 — 2a DONE ✅ (G1): .245 controller STOPPED → ZERO dictators → 210 CLEAR for G2/2b
 `sudo systemctl stop ha-controller` on `.245` → **is-active: inactive**, no lingering controller process.
 `.245` is no longer issuing Midea commands. We are at **zero active dictators** (safe).
