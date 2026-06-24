@@ -108,7 +108,13 @@ air-gap reproducible). The Waveshare ESP32-S3-ETH drives its WS2812 on **GPIO21*
 disconnect/got-ip; `ha_mqtt` connect/disconnect; `ha_ota` fail). Two are sticky on purpose: **FATAL** is
 terminal (a mis-enrolled node only clears it by re-enroll + reflash — a later MQTT-up must not silence it),
 and **OTA-fail** persists until a reboot or MQTT reconnect (the node keeps relaying the old image, so the
-failed update stays visible). The hardwired power LED isn't firmware-controllable (solder-jumper to kill).
+failed update stays visible).
+
+**Only the WS2812 is firmware-controllable.** The board's other LEDs are wired to power/PHY silicon and the
+MCU cannot address them: the **power LED** (always on) and the **W5500 / RJ45 Ethernet link+activity LEDs**
+(lit whenever a cable carries link). Killing those is a *physical* job (Kapton tape, or lift the LED/jumper
+resistor) — never a firmware change. So "all LEDs off when healthy" applies to the RGB only; the hardware
+LEDs stay on by design.
 
 ## 7. New-node checklist (one-shot)
 1. Identify the board → ESP-IDF target; find the transport pins (W5500 SPI / RGB GPIO) from its schematic.
