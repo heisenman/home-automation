@@ -19,6 +19,7 @@
 #include "ha_mqtt.h"
 #include "ha_ota.h"
 #include "ha_led.h"
+#include "ha_relay.h"
 #include "ble_scan.h"
 
 static const char *TAG = "ha_edge";
@@ -84,6 +85,7 @@ void app_main(void) {
     }
     ha_sntp_start_periodic(30 * 60 * 1000);   // re-sync every 30 min
 
+    ha_relay_init();                // load the persisted Phase-B coverage allowlist (default: relay-all)
     ha_mqtt_start(cfg.broker_uri, cfg.node_id);
     ha_ble_scan_start(on_wifi);     // duty-cycle the scan when on Wi-Fi (shared radio); full when wired
     ESP_LOGI(TAG, "edge node up: node=%s broker=%s", cfg.node_id, cfg.broker_uri);

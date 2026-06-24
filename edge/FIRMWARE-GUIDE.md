@@ -6,7 +6,8 @@ re-discovering the gotchas that cost us hours on the C6 and S3. Reference implem
 
 The contract a node must satisfy (ADR-0001): **nodes are dumb relays.** A node scans BLE, publishes raw
 decoded readings keyed by MAC to `home/edge/<node>/<mac>/adv`; the **dictator owns the registry** and maps
-MAC→device/area (`ha-edge-mapper`). Commands come *down* signed on `home/edge/<node>/cmd`.
+MAC→device/area (`ha-edge-mapper`). Commands come *down* signed on `home/edge/<node>/cmd`; ADR-0015 Phase-B
+coverage directives (`relay_assign`) come down signed + retained on `home/edge/<node>/relay` (see `ha_relay`).
 
 ---
 
@@ -17,8 +18,9 @@ MAC→device/area (`ha-edge-mapper`). Commands come *down* signed on `home/edge/
 | `ha_config` (+ `secrets.h`) | node id, broker URI, NTP, Wi-Fi creds, **command secret** — compile-time from `secrets.h`, NVS-overridable | **yes** |
 | network: `ha_wifi` and/or `ha_eth` | bring up IP. `ha_eth` = W5500 SPI (boards w/ Ethernet); `ha_wifi` = onboard radio | **yes (≥1)** |
 | `ha_sntp` | clock sync (best-effort; mapper stamps on ingest anyway) | recommended |
-| `ha_mqtt` | broker client: publishes adverts/status/log, **subscribes the signed cmd topic**, verifies `{p,s}` HMAC | **yes** |
-| `ble_scan` | NimBLE passive scan → decode → publish; **transport-aware duty cycle** (see §3) | **yes** |
+| `ha_mqtt` | broker client: publishes adverts/status/log, **subscribes the signed cmd + relay topics**, verifies `{p,s}` HMAC | **yes** |
+| `ble_scan` | NimBLE passive scan → decode → publish; **transport-aware duty cycle** (see §3); filtered by `ha_relay` | **yes** |
+| `ha_relay` | ADR-0015 Phase B coverage filter: applies signed `relay_assign` directives (NVS-persisted, epoch-guarded) so the node only relays its assigned MACs. Default **relay-all**; `relay_macs` omitted = relay-all reset, `[]` = relay-none | recommended |
 | `switchbot_decode` (+ aranet) | advert byte→reading decoders | **yes** (per device family) |
 | `gatt_exec` / `gatt_history` | server-driven GATT (history pulls, actuation) on the shared radio | optional |
 | `ha_ota` | signed, host-pinned, image-hash-verified A/B OTA with self-test/rollback | recommended |

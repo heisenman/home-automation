@@ -4,6 +4,7 @@
 #include "gatt_exec.h"
 #include "ha_ota.h"
 #include "ha_led.h"
+#include "ha_relay.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -27,7 +28,7 @@
 #endif
 
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v12-led"   // bump to prove an OTA swapped the running image
+#define HA_FW_VERSION "v13-relay" // bump to prove an OTA swapped the running image
 #endif
 
 static const char *TAG = "ha_mqtt";
@@ -35,6 +36,7 @@ static esp_mqtt_client_handle_t s_client;
 static char s_node[32];
 static char s_status_topic[64];
 static char s_cmd_topic[64];
+static char s_relay_topic[64];        // home/edge/<node>/relay — signed Phase-B coverage directives
 static char s_online_msg[64];     // "online <slot> <fwver>" — shows which OTA slot/version is running
 static volatile bool s_connected;
 
@@ -140,6 +142,21 @@ static void handle_cmd(const char *data, int len) {
     cJSON_Delete(root);
 }
 
+// A signed Phase-B coverage directive on home/edge/<node>/relay: verify the {p,s} HMAC (same path as
+// commands), then hand the inner relay_assign to ha_relay (epoch-guarded + persisted). Retained, so a
+// reconnecting node re-reads its current assignment on subscribe.
+static void handle_relay(const char *data, int len) {
+    cJSON *root = cJSON_ParseWithLength(data, len);
+    if (!root) { ESP_LOGW(TAG, "bad relay json"); return; }
+    const cJSON *p = cJSON_GetObjectItem(root, "p");
+    const cJSON *s = cJSON_GetObjectItem(root, "s");
+    if (cJSON_IsString(p) && cJSON_IsString(s) && cmd_sig_ok(p->valuestring, s->valuestring))
+        ha_relay_apply(p->valuestring);
+    else
+        ha_mqtt_log("relay rejected: bad-sig/unsigned");
+    cJSON_Delete(root);
+}
+
 static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     esp_mqtt_event_handle_t e = event_data;
     switch ((esp_mqtt_event_id_t)event_id) {
@@ -149,6 +166,7 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
             ha_led_set(HA_LED_OK);                 // relaying normally → LED off
             esp_mqtt_client_publish(s_client, s_status_topic, s_online_msg, 0, 1, true);
             esp_mqtt_client_subscribe(s_client, s_cmd_topic, 1);
+            esp_mqtt_client_subscribe(s_client, s_relay_topic, 1);   // Phase B coverage directives (retained)
             break;
         case MQTT_EVENT_DISCONNECTED:
             s_connected = false;
@@ -158,6 +176,8 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
         case MQTT_EVENT_DATA:
             if (e->topic_len == (int)strlen(s_cmd_topic) && strncmp(e->topic, s_cmd_topic, e->topic_len) == 0)
                 handle_cmd(e->data, e->data_len);
+            else if (e->topic_len == (int)strlen(s_relay_topic) && strncmp(e->topic, s_relay_topic, e->topic_len) == 0)
+                handle_relay(e->data, e->data_len);
             break;
         default:
             break;
@@ -168,6 +188,7 @@ void ha_mqtt_start(const char *broker_uri, const char *node_id) {
     snprintf(s_node, sizeof(s_node), "%s", node_id);
     snprintf(s_status_topic, sizeof(s_status_topic), "home/edge/%s/status", s_node);
     snprintf(s_cmd_topic, sizeof(s_cmd_topic), "home/edge/%s/cmd", s_node);
+    snprintf(s_relay_topic, sizeof(s_relay_topic), "home/edge/%s/relay", s_node);
     const esp_partition_t *run = esp_ota_get_running_partition();
     snprintf(s_online_msg, sizeof(s_online_msg), "online %s %s", run ? run->label : "?", HA_FW_VERSION);
 

@@ -1,5 +1,6 @@
 #include "ble_scan.h"
 #include "ha_mqtt.h"
+#include "ha_relay.h"
 #include "switchbot_decode.h"
 #include <string.h>
 #include <stdio.h>
@@ -136,6 +137,7 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
     char mac_str[18];
     snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    if (!ha_relay_allowed(mac_str)) return 0;   // Phase B: only relay meters the dictator assigned us
     ha_mqtt_publish_reading(mac_str, &r, event->disc.rssi);
     return 0;
 }
