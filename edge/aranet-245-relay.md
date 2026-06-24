@@ -1,5 +1,15 @@
 # Relaying the Aranet from .245 → ha-dev (mosquitto bridge)
 
+> ## ⚠️ SUPERSEDED (2026-06-24) — DO NOT IMPLEMENT
+> This bridge is **not needed.** 210 hears the crawlspace Aranet on its **own onboard radio** via passive
+> scan once the `scanner.py` or_pattern was corrected to manufacturer `0x0702` (`ec8511d`) — confirmed live
+> (`transport: ble-adv`, 210's own RSSI −71/−89, no bridge, no TCP link to `.245`). The premise below ("210
+> can't hear the Aranet") was wrong: it advertises slowly, so the first short sample missed it. Kept for
+> history. Durable robustness for the −89 edge-of-range corner = the **ESP32-S3-ETH wired edge node** (see
+> the post-handoff edge plan), not a `.245` bridge.
+
+
+
 **Goal:** ha-dev (`192.168.0.210`) shows the crawlspace `aranet_radon` without scanning it
 locally. ha-dev can hear the unit (active probe: **−70 dBm**, `F4:37:5A:68:9F:1A`) but runs
 its BLE scanner in **passive low-radio** mode, which does **not** deliver the Aranet's BLE5

@@ -22,8 +22,8 @@ against the live system + source on this date.
   (range / nothing-new), NOT the format reject. → the btsnoop root-cause + CSV-gap items are MOOT.
 
 **ACTUALLY OPEN (updated 2026-06-24):**
-1. **G11 provisioning bring-up** (hardware) — Stage 2 IN PROGRESS on `ha-dev` (2026-06-24). Unblocks
-   Secure-Boot/flash-enc (Phase 8) and moves the OTA-host pin target off .245.
+1. **G11 provisioning bring-up** (hardware) — Stage 2 DONE; **`ha-dev` (210) is the LIVE DICTATOR** as of
+   2026-06-24. Unblocks Secure-Boot/flash-enc (Phase 8); OTA-host pin still to move off .245 (with c6-bench).
    - ✅ **DONE:** §4 packages (bluez 5.82, mosquitto 2.0.21), §5 BlueZ `--experimental`, §6 venv on
      Py3.13 (pyarrow→18.1.0, install.sh `python3-venv`), §7 units installed; `ha-writer/api/edge-mapper/
      edge-history` + compactor/verify-hashes/gap-watcher timers **active**; `ha-scanner` **active** on the
@@ -43,16 +43,25 @@ against the live system + source on this date.
    - ✅ **REBOOT TEST (§9) PASSED (2026-06-24):** folded into the IP cutover — after reboot all
      `ha-*`/infra services auto-returned `active`, `ha-scanner` resumed on `hci0` (`NRestarts=0`), data
      flowing within ~40s. `ha-controller` correctly stayed inactive.
-   - 🔲 **OPEN (next session, Hugh present):** (a) `sudo passwd visko` then narrow sudoers to `ha-services`
-     + drop the broad bootstrap grant (§7e) — or run `./provisioning/stage2-finish.sh --narrow-sudoers`;
-     (b) `instance/weather.env` (outdoor weather lane) still missing; (c) `aranet_radon` — **diagnosed
-     2026-06-24: NOT a toggle/key/range issue.** Active probe heard it at **−70 dBm** (`F4:37:5A:68:9F:1A`),
-     but ha-dev's **passive** low-radio monitor doesn't deliver its BLE5 **extended advertising** (comes
-     through only in active scan, which we won't enable — it'd re-open MT7922 stability). Corrected the stale
-     `0xfce0`→`0x0702` or_pattern in `scanner.py` regardless. **Decision (Hugh): leave `.245` to collect the
-     Aranet and relay it to ha-dev as an edge node** (`home/edge/...`→`ha-edge-mapper`); needs a small
-     additive MQTT bridge ON `.245` → fold into the `.245` handoff (don't-disrupt-.245 rule). (d) `ha-controller`
-     stays **disabled** on dev (must not fight .245 for the Midea). §3 dual-NVMe + §8 data-migration N/A here.
+   - ✅ **PROMOTED TO DICTATOR (2026-06-24, gated cutover with desktop Claude via `docs/cutover/`):** 210's
+     `ha-controller` is LIVE (sole dictator; first decision held the Midea OFF → continuity preserved),
+     `ha-api` control plane **MOUNTED** (no-bearer command = 401), weather lane enabled. `.245`'s controller
+     was stopped + disabled + unlinked → **no split-brain**. `.245` is being reconfigured as a **warm-standby
+     failover** (design in progress on the `.245` side).
+   - ✅ **Aranet RESOLVED — LOCAL to 210, no relay needed:** the `0x0702` or_pattern fix (`ec8511d`) works for
+     passive ext-adv after all (the Aranet just advertises slowly; the first 95 s sample missed it). 210 hears
+     it directly (`transport: ble-adv`, RSSI −71/−89, MAC `F4:37:5A:68:9F:1A`). **No `.245` bridge —
+     `edge/aranet-245-relay.md` is SUPERSEDED.** Robustness: −89 is edge-of-range; durable fix = the
+     **ESP32-S3-ETH wired edge node** (deferred post-handoff).
+   - ✅ **Weather lane DONE:** `instance/weather.env` present + populated; `ha-weather.timer` enabled, recording
+     open-meteo readings to `weather.db`.
+   - 🔲 **STILL OPEN (210 as dictator):** (a) **sudo hardening** — password set; narrow sudoers to `ha-services`
+     + drop the broad bootstrap grant (`stage2-finish.sh --narrow-sudoers`), do **LAST** (remaining setup needs
+     sudo); (b) **broker auth/ACL posture** — 210 is anonymous-on-LAN, `.245` had auth; decide replicate (we
+     have `mqtt.env`) vs stay anonymous — couples with (c); (c) **c6-bench repoint** off `.245`→210 (+ OTA host
+     pin .245→.210) — edge work, post-handoff; (d) **failover signaling** (dictator→standby heartbeat + state
+     replication, ADR-0001/0011) — pending `.245`'s standby design; (e) **ESP32-C3** edge-node dev.
+     §3 dual-NVMe + §8 data-migration N/A here.
 2. **PWA/automation software** (ADR-0014):
    - ✅ **R8 device friendly-name/room/hide — BUILT 2026-06-23 (`e81ff34`).** (Still TODO under R8:
      add-new-device + explicit retire-vs-hide.)
