@@ -175,8 +175,13 @@ ln -sfn /srv/ha-data/db ~/home_automation/instance/db
 **c. systemd units:** `install.sh` templates this repo's path into the units and installs them.
 ```bash
 cd ~/home_automation
-sudo ./install.sh         # templates REPO_DIR, installs ha-*.service/.timer, daemon-reload
+./install.sh              # templates REPO_DIR, installs ha-*.service/.timer, daemon-reload
 ```
+> **Do NOT run this as `sudo ./install.sh`.** The script self-elevates (internal `sudo` for
+> apt/systemctl) but creates `venv/` and `instance/` as the invoking user. Running the whole
+> script as root makes those root-owned, and the `User=visko` services (e.g. `ha-writer`) then
+> fail with `sqlite3.OperationalError: unable to open database file`. If already done:
+> `sudo chown -R visko:visko venv instance`.
 Review what it enables: `ha-writer`, `ha-scanner` (Type=notify, WatchdogSec=120), `ha-api`,
 `ha-compactor`(+timer 02:00 UTC), `ha-verify-hashes`(+timer Sun 03:00 UTC), `ha-weather`(+15min timer).
 
@@ -251,6 +256,33 @@ Restart services after the copy.
   Promotion = move the HA IP/hostname to the failover and `systemctl enable --now` its services.
 
 ---
+
+## On-device findings — ha-dev (Stage 2, 2026-06-24)
+
+Recorded per the "record anything non-obvious" rule. ha-dev is a **DEV/validation** box, not yet
+the production dictator — it must not fight .245 for live devices or publish onto .245's broker.
+
+- **§1 NIC:** dual Realtek **RTL8125** [`10ec:8125`], both bound to in-tree **`r8169`** (not `r8125`),
+  stable — **no DKMS needed**. Active primary is **`enp4s0`** (the spec's `enp1s0` is just an example);
+  `eno1` is the second port (down). Onboard Wi-Fi is **`wlp2s0`** = MediaTek **MT7922** (`mt7921e`), left down.
+- **§1 BLE:** **no UB500 dongle was fitted at bring-up.** The MT7922's onboard **Bluetooth enumerates as
+  `hci0`** and — contrary to the "leave it disabled" caution — it *does* work for passive `or_patterns`
+  scanning here: verified live capture+decode of SwitchBot meters (e.g. 23.1 °C / 42 % RH). Running an
+  overnight stability trial on it; if it stays up (no watchdog restarts / advert stalls) it may stand in
+  for the dongle. Otherwise fit the UB500 (RTL8761B → `btusb`+`btrtl`) and, to honour the original intent,
+  block onboard BT (blacklist `btmtk`) so the scanner binds the dongle.
+- **§2 IP/networking:** Stage 1 baked the static IP via **ifupdown** (`/etc/network/interfaces`), not
+  systemd-networkd — kept as-is (works, lower risk than converting over SSH). ha-dev's permanent address
+  is **192.168.0.210/24** (chosen out of the way of .245; verified free before assignment).
+- **§3 Storage:** only **one NVMe** is populated (238 G OS disk). The dual-NVMe split/mirror does **not
+  apply** — `instance/db/` stays on the OS disk; no `/srv/ha-data` mount.
+- **§6 Python:** Debian 13 ships **Python 3.13.5**. `pyarrow==17.0.0` (cp312-only) was bumped to
+  **`18.1.0`** (first cp313 wheels) in both `requirements.txt` and `server/requirements.txt`; all deps
+  resolved to cp313 wheels, import smoke test passes. `install.sh` apt line changed `python3.12-venv`
+  → `python3-venv` (portable across the .245 Ubuntu/3.12 box and this trixie/3.13 box).
+- **§8 data migration:** **skipped** for the dev box (clean separation; no passwordless SSH to .245 anyway —
+  PII config like `devices.yaml`/`weather.env` is sneakernet-only here, so meters currently publish to
+  `home/unknown/<mac>/raw` until the real registry is loaded).
 
 ### Cutover from .245
 Only after the checklist passes and data is migrated: stop services on .245, move the LAN IP

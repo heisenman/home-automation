@@ -21,9 +21,20 @@ against the live system + source on this date.
   `server:server>meter_…`); the only recent pull_log failures are transient `connect_fail`/`empty_buffer`
   (range / nothing-new), NOT the format reject. → the btsnoop root-cause + CSV-gap items are MOOT.
 
-**ACTUALLY OPEN (2026-06-23):**
-1. **G11 provisioning bring-up** (hardware, ~today) — your step; unblocks Secure-Boot/flash-enc (Phase 8)
-   and moves the OTA-host pin target off .245.
+**ACTUALLY OPEN (updated 2026-06-24):**
+1. **G11 provisioning bring-up** (hardware) — Stage 2 IN PROGRESS on `ha-dev` (2026-06-24). Unblocks
+   Secure-Boot/flash-enc (Phase 8) and moves the OTA-host pin target off .245.
+   - ✅ **DONE:** §4 packages (bluez 5.82, mosquitto 2.0.21), §5 BlueZ `--experimental`, §6 venv on
+     Py3.13 (pyarrow→18.1.0, install.sh `python3-venv`), §7 units installed; `ha-writer/api/edge-mapper/
+     edge-history` + compactor/verify-hashes/gap-watcher timers **active**; `ha-scanner` **active** on the
+     onboard MT7922 (`hci0`) — verified live SwitchBot capture+decode (23.1 °C/42 %). Repo fixes pushed.
+   - ⏳ **OVERNIGHT TRIAL:** onboard-BT stability (watch for watchdog restarts / advert stalls). If it
+     flakes, fit the UB500 dongle off .245 (confirm .245 still has edge-node sensor intake first) + block `btmtk`.
+   - 🔲 **OPEN (next session, needs Hugh present):** (a) finalize static IP → **192.168.0.210** (drops the
+     SSH session — reconnect at .210); (b) `sudo passwd visko` then narrow sudoers to `ha-services` + drop
+     the broad bootstrap grant (§7e); (c) reboot test (§9); (d) sneakernet real `instance/devices.yaml`
+     (+`weather.env`) from .245 so meters decode to `/state` and `/devices` populates; (e) `ha-controller`
+     stays **disabled** on dev (must not fight .245 for the Midea). §3 dual-NVMe + §8 data-migration N/A here.
 2. **PWA/automation software** (ADR-0014):
    - ✅ **R8 device friendly-name/room/hide — BUILT 2026-06-23 (`e81ff34`).** (Still TODO under R8:
      add-new-device + explicit retire-vs-hide.)

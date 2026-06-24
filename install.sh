@@ -17,7 +17,7 @@ sudo apt-get update -q
 sudo apt-get install -y \
     mosquitto \
     mosquitto-clients \
-    python3.12-venv \
+    python3-venv \
     python3-pip
 
 # Add visko to bluetooth group (takes effect on next login / new shell)
