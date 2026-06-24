@@ -48,7 +48,7 @@ void app_main(void) {
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
     // PREFER the wire: try Ethernet first (short wait — the W5500 link comes up fast with a cable in).
-    bool net_ok = false;
+    bool net_ok = false, on_wifi = false;
     ESP_LOGI(TAG, "network: trying Ethernet (W5500) first...");
     if (ha_eth_connect(8000) == ESP_OK) {
         ESP_LOGI(TAG, "network: on Ethernet (wired)");
@@ -63,7 +63,7 @@ void app_main(void) {
             // Cable plugged in later → the W5500 link interrupt reboots us onto Ethernet (preferred).
             ESP_ERROR_CHECK(esp_event_handler_register(ETH_EVENT, ETHERNET_EVENT_CONNECTED,
                                                        on_eth_link_up, NULL));
-            net_ok = true;
+            net_ok = true; on_wifi = true;     // Wi-Fi shares the radio → duty-cycle the BLE scan below
         }
     }
     if (!net_ok) {
@@ -78,7 +78,7 @@ void app_main(void) {
     ha_sntp_start_periodic(30 * 60 * 1000);   // re-sync every 30 min
 
     ha_mqtt_start(cfg.broker_uri, cfg.node_id);
-    ha_ble_scan_start();
+    ha_ble_scan_start(on_wifi);     // duty-cycle the scan when on Wi-Fi (shared radio); full when wired
     ESP_LOGI(TAG, "edge node up: node=%s broker=%s", cfg.node_id, cfg.broker_uri);
 
     // If we just booted a freshly-OTA'd image, self-test now and confirm-or-rollback.

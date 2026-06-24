@@ -4,9 +4,10 @@
 #include "nimble/ble.h"
 #include "host/ble_gap.h"
 
-// Initialise the NimBLE host and start a continuous passive BLE scan.
-// Decoded SwitchBot readings are published via ha_mqtt_publish_reading().
-void ha_ble_scan_start(void);
+// Initialise the NimBLE host and start a passive BLE scan. shared_radio=true (node on Wi-Fi, sharing the
+// one 2.4GHz radio) → duty-cycle the scan so Wi-Fi stays up; false (wired Ethernet) → continuous scan for
+// maximum advert capture. Decoded SwitchBot readings are published via ha_mqtt_publish_reading().
+void ha_ble_scan_start(bool shared_radio);
 
 // Pause/resume the passive scan (for a GATT history pull on the single radio).
 void ha_ble_scan_pause(void);

@@ -15,6 +15,17 @@ static const char *TAG = "ble_scan";
 static uint8_t own_addr_type;
 static volatile bool s_paused;
 
+// The S3/C6 SHARE one 2.4GHz radio between BLE and Wi-Fi. A continuous scan (window==itvl) hogs the radio
+// and starves the Wi-Fi beacon (bcn_timeout → drops). Transport-aware duty cycle: scan continuously on
+// Ethernet (no contention, max advert capture); on Wi-Fi, yield ~60% of the radio so the link stays up.
+// Set once by ha_ble_scan_start(shared_radio). (OTA/GATT still fully pause the scan via ha_ble_scan_pause.)
+#define SCAN_ITVL_FULL    BLE_GAP_SCAN_FAST_INTERVAL_MIN   // window==itvl ⇒ scan 100% of the time
+#define SCAN_WINDOW_FULL  BLE_GAP_SCAN_FAST_WINDOW
+#define SCAN_ITVL_WIFI    160U   // 100 ms (units of 0.625 ms)
+#define SCAN_WINDOW_WIFI   64U   // 40 ms  ⇒ ~40% duty, ~60% of the radio left for Wi-Fi
+static uint16_t s_scan_itvl = SCAN_ITVL_FULL;
+static uint16_t s_scan_window = SCAN_WINDOW_FULL;
+
 uint8_t ha_ble_own_addr_type(void) { return own_addr_type; }
 
 // ── Per-MAC cache (debounce + address-type lookup for GATT connect) ─────────────
@@ -75,7 +86,7 @@ static int gap_event(struct ble_gap_event *event, void *arg);
 static void start_scan(void) {
     struct ble_gap_disc_params dp = {0};
     dp.passive = 1; dp.filter_duplicates = 0;
-    dp.itvl = BLE_GAP_SCAN_FAST_INTERVAL_MIN; dp.window = BLE_GAP_SCAN_FAST_WINDOW;
+    dp.itvl = s_scan_itvl; dp.window = s_scan_window;
     int rc = ble_gap_disc(own_addr_type, BLE_HS_FOREVER, &dp, gap_event, NULL);
     if (rc != 0) ESP_LOGE(TAG, "ble_gap_disc failed rc=%d", rc);
     else ESP_LOGI(TAG, "passive scan started");
@@ -137,7 +148,14 @@ static void on_sync(void) {
 static void on_reset(int reason) { ESP_LOGW(TAG, "nimble reset; reason=%d", reason); }
 static void host_task(void *param) { nimble_port_run(); nimble_port_freertos_deinit(); }
 
-void ha_ble_scan_start(void) {
+void ha_ble_scan_start(bool shared_radio) {
+    if (shared_radio) {                 // Wi-Fi shares the radio → duty-cycle so the link survives
+        s_scan_itvl = SCAN_ITVL_WIFI;
+        s_scan_window = SCAN_WINDOW_WIFI;
+    }
+    ESP_LOGI(TAG, "BLE scan: %s (itvl=%u window=%u ×0.625ms)",
+             shared_radio ? "duty-cycled for Wi-Fi coexistence" : "continuous (wired)",
+             s_scan_itvl, s_scan_window);
     ESP_ERROR_CHECK(nimble_port_init());
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.reset_cb = on_reset;
