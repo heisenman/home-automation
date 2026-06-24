@@ -24,6 +24,8 @@ RestartSec=10
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
+# ADR-0015 §3: the mapper now persists the mesh reach graph to instance/db/mesh.db (was read-only before).
+ReadWritePaths=/home/visko/home_automation/instance
 PrivateTmp=yes
 
 StandardOutput=journal
