@@ -100,3 +100,6 @@ Per `edge/aranet-245-relay.md`. Get the relay working+verified before the risky 
   dehumidifier, do NOT stop `.245`'s controller — fix 0a first, or we get a no-dictator gap on the Midea.
 - **When `.245` is fully decommissioned** the bridge retires; the Aranet then needs an in-range source
   feeding 210 directly — the ESP32-C6 Wi-Fi relay (`edge/esp32c6/dev-box-relay.md`).
+- **DEFERRED (post-handoff, Hugh):** an **ESP32-S3 + Ethernet** board is plugged into ha-dev — bring it up
+  as a **wired edge relay** (robust alternative to the Wi-Fi C6) and swap it in for the dead-zone C6 that
+  210 can't reach. Do this **after** the dictator handoff. Will fold into `edge/` docs at the Phase-3 checkpoint.
