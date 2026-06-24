@@ -160,12 +160,15 @@ class _DeviceState:
 # ── Core scanner ──────────────────────────────────────────────────────────────
 
 class Scanner:
-    def __init__(self, registry: dict, mqtt_client: mqtt.Client):
+    def __init__(self, registry: dict, mqtt_client: mqtt.Client, relay_dedup: bool = False):
         self._registry = registry
         self._mqtt = mqtt_client
         self._state: dict[str, _DeviceState] = {}
         self._raw_last_ts: dict[str, float] = {}
         self._last_adv: float = time.monotonic()  # liveness: last advertisement received
+        # ADR-0015 Phase A: when on, the local radio's readings are emitted as edge advs (node "local")
+        # so they pass the mapper's single dedup gate instead of being published direct. Default OFF.
+        self._relay_dedup = relay_dedup
 
     def _device_state(self, mac: str) -> _DeviceState:
         if mac not in self._state:
@@ -217,6 +220,18 @@ class Scanner:
         area = reg.get("area", "unknown")
         if reg.get("device_type"):
             device_type = reg["device_type"]
+
+        if self._relay_dedup:
+            # Route through the mapper as node "local" (home/edge/local/<mac>/adv) so local + edge
+            # readings share ONE dedup gate. The mapper resolves mac→device_id and emits canonical state.
+            adv = {
+                "schema": MESSAGE_SCHEMA, "node": "local", "mac": mac,
+                "device_type": device_type, "ts": _utc_now(), "transport": transport,
+                "metrics": metrics, "meta": {"rssi": rssi},
+            }
+            self._mqtt.publish(f"home/edge/local/{mac}/adv", json.dumps(adv), qos=1, retain=False)
+            log.debug("relay-dedup: local adv %s %s", mac, metrics)
+            return
 
         topic = f"home/{area}/{device_id}/state"
         payload = {
@@ -362,6 +377,10 @@ def _parse_args() -> argparse.Namespace:
     p.add_argument("--scan-mode", default=SCANNING_MODE, choices=["passive", "active"])
     p.add_argument("--republish-interval", default=REPUBLISH_INTERVAL_S, type=int)
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    p.add_argument("--relay-dedup", action="store_true",
+                   default=os.environ.get("HA_RELAY_DEDUP", "").lower() in ("1", "true", "yes"),
+                   help="ADR-0015 Phase A: emit local readings as edge advs (node 'local') through the "
+                        "mapper's dedup gate instead of publishing canonical state direct (default OFF)")
     return p.parse_args()
 
 
@@ -381,12 +400,12 @@ def main() -> None:
     REPUBLISH_INTERVAL_S = args.republish_interval
 
     registry = load_registry(args.registry)
-    log.info("Registry loaded: %d known devices", len(registry))
+    log.info("Registry loaded: %d known devices (relay_dedup=%s)", len(registry), args.relay_dedup)
 
     client = _build_mqtt_client()
     _mqtt_connect_with_retry(client)
 
-    scanner = Scanner(registry, client)
+    scanner = Scanner(registry, client, relay_dedup=args.relay_dedup)
     asyncio.run(scanner.run())
 
     client.loop_stop()

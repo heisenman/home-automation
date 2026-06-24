@@ -131,6 +131,20 @@ def best_path(graph: Graph, endpoint: tuple, src: tuple = SERVER, pull_stats: di
     return path, dist[endpoint]
 
 
+def best_relay(graph: Graph, endpoint: tuple, src: tuple = SERVER):
+    """Live-adv SOURCE selection (ADR-0015 Phase A): which single receiver should be the preferred
+    source for this endpoint's *advertisements*. Same reach/reliability scoring as best_path but with
+    NO pull-history terminal adjust — that bonus/penalty is about GATT pulls; passively hearing an adv
+    is a different fact. Returns (source_node, n_hops, cost): source_node is the receiver adjacent to
+    the endpoint — ('server','server') when hops==0 (the dictator's own radio = "local"), or the
+    ('node', id) relay when hops==1. hops>=2 is deferred (multi-hop relay transport, ADR-0010 Ph3)."""
+    path, cost = best_path(graph, endpoint, src=src, pull_stats=None)
+    if not path:
+        return None, -1, UNREACHABLE
+    source = path[-2] if len(path) >= 2 else src
+    return source, hops(path), cost
+
+
 def hops(path) -> int:
     """Number of relay hops between server and endpoint (0 = server pulls directly via its own radio,
     1 = one edge node relays, ≥2 = needs the multi-hop relay transport)."""

@@ -34,6 +34,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root (run as a script)
 from server.util.mqtt_creds import apply_credentials  # noqa: E402
+from server.mesh.assign import Assigner  # noqa: E402
 
 import paho.mqtt.client as mqtt
 import yaml
@@ -62,10 +63,15 @@ def _utc_now() -> str:
 
 
 class EdgeMapper:
-    def __init__(self, registry: dict[str, dict], client: mqtt.Client):
+    def __init__(self, registry: dict[str, dict], client: mqtt.Client, relay_dedup: bool = False):
         self._registry = registry
         self._mqtt = client
         self._unknown_seen: set[str] = set()
+        # ADR-0015 Phase A: when on, republish a meter only from its single preferred source (drops the
+        # rest); local readings flow in as node "local" via home/edge/local/<mac>/adv. Default OFF =
+        # today's behaviour (every source republishes; the writer's UNIQUE(...) dedups at the DB).
+        self._dedup = relay_dedup
+        self._assigner = Assigner() if relay_dedup else None
 
     def on_connect(self, client, userdata, flags, rc, properties=None):
         if rc == 0:
@@ -106,6 +112,16 @@ class EdgeMapper:
         node = payload.get("node") or (parts[2] if len(parts) > 3 else "unknown")
         in_meta = payload.get("meta", {}) or {}
 
+        # ADR-0015 Phase A preferred-source gate: observe this source's reach, and if a different source
+        # is the assigned one for this device, DROP (it'll be republished from its preferred source).
+        if self._dedup:
+            nowt = time.time()
+            self._assigner.observe(device_id, node, in_meta.get("rssi"), nowt)
+            pref = self._assigner.preferred(device_id, nowt)
+            if pref is not None and node != pref:
+                log.debug("dedup drop %s from %s (preferred=%s)", device_id, node, pref)
+                return
+
         out_topic = f"home/{area}/{device_id}/state"
         out = {
             "schema": payload.get("schema", MESSAGE_SCHEMA),
@@ -127,17 +143,20 @@ def main() -> None:
     p.add_argument("--broker", default=BROKER_HOST)
     p.add_argument("--broker-port", default=BROKER_PORT, type=int)
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
+    p.add_argument("--relay-dedup", action="store_true",
+                   default=os.environ.get("HA_RELAY_DEDUP", "").lower() in ("1", "true", "yes"),
+                   help="ADR-0015 Phase A: republish each meter only from its preferred source (default OFF)")
     args = p.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level),
                         format="%(asctime)s %(levelname)s %(name)s — %(message)s", stream=sys.stdout)
 
     registry = load_registry(args.registry)
-    log.info("registry loaded: %d known devices", len(registry))
+    log.info("registry loaded: %d known devices (relay_dedup=%s)", len(registry), args.relay_dedup)
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     apply_credentials(client)
-    mapper = EdgeMapper(registry, client)
+    mapper = EdgeMapper(registry, client, relay_dedup=args.relay_dedup)
     client.on_connect = mapper.on_connect
     client.on_message = mapper.on_message
 
