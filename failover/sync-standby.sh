@@ -25,13 +25,21 @@ else log "WARN: midea-device.env sync failed (peer down?)"; fi
 # 2. Declarative control config (if present on primary).
 SCP "visko@$PEER_HOST:$REMOTE_REPO/instance/control.yaml" "$REPO/instance/control.yaml" 2>/dev/null && log "synced control.yaml" || log "control.yaml not synced (may not exist)"
 
-# 3. Live control policy/state (control.db). Prefer a consistent sqlite snapshot; fall back to raw copy.
-if RSH "test -f $REMOTE_REPO/instance/db/control.db"; then
-  if RSH "command -v sqlite3 >/dev/null && sqlite3 $REMOTE_REPO/instance/db/control.db \".backup /tmp/control.snap.db\"" 2>/dev/null; then
-    SCP "visko@$PEER_HOST:/tmp/control.snap.db" "$REPO/instance/db/control.db" 2>/dev/null && log "synced control.db (consistent snapshot)" || log "WARN: control.db snapshot copy failed"
-    RSH "rm -f /tmp/control.snap.db" 2>/dev/null || true
+# Consistent sqlite snapshot of a remote DB -> local (falls back to raw copy if sqlite3 is absent).
+sync_db(){   # $1 = relative path under instance/db
+  local name="$1" rel="instance/db/$1"
+  RSH "test -f $REMOTE_REPO/$rel" || return 0
+  if RSH "command -v sqlite3 >/dev/null && sqlite3 $REMOTE_REPO/$rel \".backup /tmp/$name.snap\"" 2>/dev/null; then
+    SCP "visko@$PEER_HOST:/tmp/$name.snap" "$REPO/$rel" 2>/dev/null && log "synced $name (consistent snapshot)" || log "WARN: $name snapshot copy failed"
+    RSH "rm -f /tmp/$name.snap" 2>/dev/null || true
   else
-    SCP "visko@$PEER_HOST:$REMOTE_REPO/instance/db/control.db" "$REPO/instance/db/control.db" 2>/dev/null && log "synced control.db (raw copy; sqlite3 absent)" || log "WARN: control.db raw copy failed"
+    SCP "visko@$PEER_HOST:$REMOTE_REPO/$rel" "$REPO/$rel" 2>/dev/null && log "synced $name (raw copy; sqlite3 absent)" || log "WARN: $name raw copy failed"
   fi
-fi
+}
+
+# 3. Live control policy/state (control.db) + the mesh reach/assignment graph (mesh.db, ADR-0015 §3) —
+#    seed the standby so it inherits coverage knowledge; it then RECOMPUTES assignments from its own
+#    reach on promotion (notify.sh master restarts the mapper).
+sync_db control.db
+sync_db mesh.db
 log "sync complete"

@@ -28,13 +28,23 @@ import argparse
 import json
 import logging
 import os
+import sqlite3
 import sys
 import time
 from pathlib import Path
 
-sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root (run as a script)
+REPO_ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(REPO_ROOT))  # repo root (run as a script)
 from server.util.mqtt_creds import apply_credentials  # noqa: E402
 from server.mesh.assign import Assigner  # noqa: E402
+from server.mesh import store as mesh_store  # noqa: E402
+from server.mesh.topology import SERVER  # noqa: E402
+
+# Persist observed reach (node→endpoint ble-adv) to a small sqlite so the topology/backfill graph is
+# always fresh AND the warm standby can inherit it via sync-standby (ADR-0015 §3). Best-effort: a DB
+# error never breaks mapping. HA_MESH_DB="" disables. Throttled per edge to bound write rate.
+MESH_DB_REL: str = os.environ.get("HA_MESH_DB", "instance/db/mesh.db")
+MESH_RECORD_INTERVAL_S: float = float(os.environ.get("HA_MESH_RECORD_INTERVAL_S", "30"))
 
 import paho.mqtt.client as mqtt
 import yaml
@@ -72,6 +82,36 @@ class EdgeMapper:
         # today's behaviour (every source republishes; the writer's UNIQUE(...) dedups at the DB).
         self._dedup = relay_dedup
         self._assigner = Assigner() if relay_dedup else None
+        self._mesh = None                       # sqlite conn for mesh_links, or None if disabled/failed
+        self._mesh_last: dict[tuple, float] = {}  # (source, device_id) -> last record monotonic ts
+        if MESH_DB_REL:
+            try:
+                p = Path(MESH_DB_REL)
+                if not p.is_absolute():
+                    p = REPO_ROOT / p
+                p.parent.mkdir(parents=True, exist_ok=True)
+                self._mesh = sqlite3.connect(str(p), check_same_thread=False)
+                self._mesh.execute("PRAGMA journal_mode=WAL")
+                mesh_store.ensure_schema(self._mesh)
+                log.info("mesh_links persistence -> %s", p)
+            except Exception as exc:                                 # never let it break mapping
+                log.warning("mesh_links persistence disabled (%s): %s", MESH_DB_REL, exc)
+                self._mesh = None
+
+    def _record_reach(self, device_id: str, node: str, rssi) -> None:
+        """Best-effort upsert of a node→endpoint ble-adv sighting (throttled per edge)."""
+        if self._mesh is None:
+            return
+        src = SERVER if node == "local" else ("node", node)
+        key = (src, device_id)
+        nowm = time.monotonic()
+        if nowm - self._mesh_last.get(key, 0.0) < MESH_RECORD_INTERVAL_S:
+            return
+        self._mesh_last[key] = nowm
+        try:
+            mesh_store.record_link(self._mesh, src, ("endpoint", device_id), "ble-adv", rssi=rssi, ok=None)
+        except Exception as exc:
+            log.debug("mesh record_link failed (%s -> %s): %s", node, device_id, exc)
 
     def on_connect(self, client, userdata, flags, rc, properties=None):
         if rc == 0:
@@ -111,6 +151,10 @@ class EdgeMapper:
         parts = msg.topic.split("/")
         node = payload.get("node") or (parts[2] if len(parts) > 3 else "unknown")
         in_meta = payload.get("meta", {}) or {}
+
+        # Persist the reach observation (even if this source is about to be deduped out — it's still a
+        # valid sighting feeding the topology/backfill graph + the standby's inherited map).
+        self._record_reach(device_id, node, in_meta.get("rssi"))
 
         # ADR-0015 Phase A preferred-source gate: observe this source's reach, and if a different source
         # is the assigned one for this device, DROP (it'll be republished from its preferred source).

@@ -28,6 +28,12 @@ case "$STATE" in
     # Never start a controller that can't build its issuer.
     if [ ! -f "$REPO/instance/.master_pass" ]; then log "ABORT: missing instance/.master_pass — NOT starting controller"; exit 1; fi
     if sudo systemctl start "$CONTROLLER_UNIT"; then log "controller STARTED — this box is now the dictator"; else log "ERROR: failed to start $CONTROLLER_UNIT"; exit 1; fi
+    # ADR-0015 §3: recompute relay coverage from THIS box's own reach (the new dictator hears a different
+    # set). Replicate-to-seed (sync-standby brought mesh.db); recompute-to-be-correct (restart the mapper).
+    # Best-effort, active-only, never blocks the takeover.
+    if systemctl is-active --quiet ha-edge-mapper; then
+      sudo systemctl restart ha-edge-mapper 2>/dev/null && log "edge-mapper restarted — recomputing coverage from local reach" || log "edge-mapper restart skipped/failed (non-fatal)"
+    fi
     ;;
   BACKUP)
     # Distinguish a GENUINE demotion (yield to primary) from the keepalived START-UP TRANSIENT: at boot
