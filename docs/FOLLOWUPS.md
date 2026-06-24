@@ -46,8 +46,9 @@ against the live system + source on this date.
    - ✅ **PROMOTED TO DICTATOR (2026-06-24, gated cutover with desktop Claude via `docs/cutover/`):** 210's
      `ha-controller` is LIVE (sole dictator; first decision held the Midea OFF → continuity preserved),
      `ha-api` control plane **MOUNTED** (no-bearer command = 401), weather lane enabled. `.245`'s controller
-     was stopped + disabled + unlinked → **no split-brain**. `.245` is being reconfigured as a **warm-standby
-     failover** (design in progress on the `.245` side).
+     was stopped + disabled + unlinked → **no split-brain**. `.245` is now a **warm-standby
+     failover — LIVE + TESTED 2026-06-24** (keepalived/VRRP, primary-supremacy auto-demote; full
+     fail-over/fail-back cycle passed incl. real Midea actuation — see `failover/` + `docs/cutover/`).
    - ✅ **Aranet RESOLVED — LOCAL to 210, no relay needed:** the `0x0702` or_pattern fix (`ec8511d`) works for
      passive ext-adv after all (the Aranet just advertises slowly; the first 95 s sample missed it). 210 hears
      it directly (`transport: ble-adv`, RSSI −71/−89, MAC `F4:37:5A:68:9F:1A`). **No `.245` bridge —
@@ -59,8 +60,10 @@ against the live system + source on this date.
      + drop the broad bootstrap grant (`stage2-finish.sh --narrow-sudoers`), do **LAST** (remaining setup needs
      sudo); (b) **broker auth/ACL posture** — 210 is anonymous-on-LAN, `.245` had auth; decide replicate (we
      have `mqtt.env`) vs stay anonymous — couples with (c); (c) **c6-bench repoint** off `.245`→210 (+ OTA host
-     pin .245→.210) — edge work, post-handoff; (d) **failover signaling** (dictator→standby heartbeat + state
-     replication, ADR-0001/0011) — pending `.245`'s standby design; (e) **ESP32-C3** edge-node dev.
+     pin .245→.210) — edge work, post-handoff; (d) ✅ **failover signaling DONE** (keepalived/VRRP
+     VIP + primary-supremacy auto-demote + heartbeat RPC + state-sync; full cycle tested live 2026-06-24,
+     `failover/`; remaining refinement = cross-node MQTT `ha/cluster/#` bridge + notify startup-transient);
+     (e) **ESP32-C3** edge-node dev.
      §3 dual-NVMe + §8 data-migration N/A here.
 2. **PWA/automation software** (ADR-0014):
    - ✅ **R8 device friendly-name/room/hide — BUILT 2026-06-23 (`e81ff34`).** (Still TODO under R8:

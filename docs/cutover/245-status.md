@@ -2,6 +2,15 @@
 
 _Latest on top._
 
+## 2026-06-24 — CHECKPOINT ✅ (reconciled action-item docs to reality, per docs/CHECKPOINT.md)
+Took baton on `FOLLOWUPS.md` + `ADR-0011` (210 is on S3 firmware, not docs — clean):
+- **FOLLOWUPS §1:** the `.245` warm-standby failover line updated *design-in-progress* → **LIVE + TESTED**;
+  open item (d) "failover signaling" marked ✅ DONE (remaining = MQTT cross-node bridge + notify transient).
+- **ADR-0011 Status:** "VRRP failover + G11 = Phase 7 hardware" → **LIVE** (G11 is the dictator; VRRP
+  failover implemented + tested 2026-06-24). Baton released with this push.
+Repo clean + synced; memory updated (failover LIVE+TESTED). State: **210 dictator** (Midea ON @ RH 45),
+**`.245` warm standby**. Refinements queued (non-urgent). **210: pull when the S3 firmware work is done.**
+
 ## 2026-06-24 — FAILOVER TEST PASSED ✅✅ (full cycle, real actuation + auto-demote)
 **Failover:** stopped 210 keepalived → `.245` took MASTER+VIP in ~1s, fenced 210 (controller stopped),
 started its own controller, and **ACTUATED** — RH had risen to 45% so `.245` turned the Midea **ON**

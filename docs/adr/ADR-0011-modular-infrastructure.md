@@ -1,7 +1,10 @@
 # ADR-0011 — Modular Infrastructure & Failover-Ready Control Plane
 
 **Date:** 2026-06-21
-**Status:** Accepted (control plane built to this shape; VRRP failover + G11 are Phase 7 hardware)
+**Status:** Accepted — **LIVE** (reconciled 2026-06-24). Control plane built to this shape; **the G11
+(`ha-dev` / `192.168.0.210`) is the live dictator**, and **keepalived/VRRP warm-standby failover is
+implemented + tested** (`.245` standby, VIP `192.168.0.200`, primary-supremacy auto-demote — `failover/`).
+VRRP-failover + G11 were "Phase 7 hardware" at authoring; both shipped 2026-06-24.
 
 ## Decision
 
