@@ -18,6 +18,7 @@
 #include "ha_sntp.h"
 #include "ha_mqtt.h"
 #include "ha_ota.h"
+#include "ha_led.h"
 #include "ble_scan.h"
 
 static const char *TAG = "ha_edge";
@@ -47,6 +48,11 @@ void app_main(void) {
     ESP_ERROR_CHECK(esp_netif_init());
     ESP_ERROR_CHECK(esp_event_loop_create_default());
 
+    // Operability LED up early: OFF when healthy, lights ONLY on a fault (see ha_led.h / FIRMWARE-GUIDE §6).
+    ha_led_init();
+    if (!ha_mqtt_has_cmd_secret())
+        ha_led_set(HA_LED_FATAL);    // un-enrolled (no command secret) → can't accept commands/OTA; RED solid
+
     // PREFER the wire: try Ethernet first (short wait — the W5500 link comes up fast with a cable in).
     bool net_ok = false, on_wifi = false;
     ESP_LOGI(TAG, "network: trying Ethernet (W5500) first...");
@@ -67,6 +73,7 @@ void app_main(void) {
         }
     }
     if (!net_ok) {
+        ha_led_set(HA_LED_NET_DOWN);     // neither Ethernet nor Wi-Fi → RED x2
         ESP_LOGE(TAG, "no network (neither Ethernet nor Wi-Fi) — restarting in 10s");
         vTaskDelay(pdMS_TO_TICKS(10000));
         esp_restart();

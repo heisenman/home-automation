@@ -1,6 +1,7 @@
 // OTA update with self-test + auto-rollback — see ha_ota.h.
 #include "ha_ota.h"
 #include "ha_mqtt.h"
+#include "ha_led.h"
 #include "ble_scan.h"
 #include <string.h>
 #include "esp_log.h"
@@ -120,6 +121,8 @@ static void ota_task(void *arg) {
 fail:
     if (h) esp_https_ota_abort(h);
 fail_noh:
+    ha_led_set(HA_LED_OTA_FAIL);                   // MAGENTA x5 — last OTA failed/rejected; sticky until a
+                                                   // reboot or an MQTT reconnect (the node keeps relaying the old image)
     ha_ble_scan_resume();
     s_busy = false;
     vTaskDelete(NULL);

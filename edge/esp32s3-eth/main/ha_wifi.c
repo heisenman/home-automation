@@ -8,6 +8,7 @@
 #include "esp_timer.h"
 #include "esp_system.h"
 #include "esp_log.h"
+#include "ha_led.h"
 
 static const char *TAG = "ha_wifi";
 static EventGroupHandle_t s_wifi_events;
@@ -32,12 +33,14 @@ static void on_wifi(void *arg, esp_event_base_t base, int32_t id, void *data) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
         ESP_LOGW(TAG, "disconnected — reconnecting");
+        ha_led_set(HA_LED_WIFI_DOWN);                           // Wi-Fi link down → AMBER x3
         esp_wifi_connect();                                     // retry forever, no cap
         if (s_down_wd && !esp_timer_is_active(s_down_wd))       // arm the down-watchdog
             esp_timer_start_once(s_down_wd, (int64_t)WIFI_DOWN_REBOOT_MS * 1000);
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *e = (ip_event_got_ip_t *)data;
         ESP_LOGI(TAG, "got ip " IPSTR, IP2STR(&e->ip_info.ip));
+        ha_led_set(HA_LED_MQTT_DOWN);                           // link back; broker pending → mqtt sets OK
         if (s_down_wd && esp_timer_is_active(s_down_wd))
             esp_timer_stop(s_down_wd);                          // recovered — cancel the pending reboot
         xEventGroupSetBits(s_wifi_events, WIFI_CONNECTED_BIT);

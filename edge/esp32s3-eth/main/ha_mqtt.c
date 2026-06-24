@@ -3,6 +3,7 @@
 #include "gatt_history.h"
 #include "gatt_exec.h"
 #include "ha_ota.h"
+#include "ha_led.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -26,7 +27,7 @@
 #endif
 
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v11-coex"  // bump to prove an OTA swapped the running image
+#define HA_FW_VERSION "v12-led"   // bump to prove an OTA swapped the running image
 #endif
 
 static const char *TAG = "ha_mqtt";
@@ -145,12 +146,14 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
         case MQTT_EVENT_CONNECTED:
             s_connected = true;
             ESP_LOGI(TAG, "connected");
+            ha_led_set(HA_LED_OK);                 // relaying normally → LED off
             esp_mqtt_client_publish(s_client, s_status_topic, s_online_msg, 0, 1, true);
             esp_mqtt_client_subscribe(s_client, s_cmd_topic, 1);
             break;
         case MQTT_EVENT_DISCONNECTED:
             s_connected = false;
             ESP_LOGW(TAG, "disconnected");
+            ha_led_set(HA_LED_MQTT_DOWN);          // network up (or flapping) but broker unreachable
             break;
         case MQTT_EVENT_DATA:
             if (e->topic_len == (int)strlen(s_cmd_topic) && strncmp(e->topic, s_cmd_topic, e->topic_len) == 0)
@@ -183,6 +186,8 @@ void ha_mqtt_start(const char *broker_uri, const char *node_id) {
 }
 
 bool ha_mqtt_is_connected(void) { return s_connected; }
+
+bool ha_mqtt_has_cmd_secret(void) { return HA_CMD_SECRET[0] != '\0'; }
 
 void ha_mqtt_publish_reading(const char *mac_str, const sb_reading_t *r, int rssi) {
     if (!s_connected) return;

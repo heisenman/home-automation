@@ -6,6 +6,10 @@
 void ha_mqtt_start(const char *broker_uri, const char *node_id);
 bool ha_mqtt_is_connected(void);
 
+// True iff a command secret was provisioned (enrolled). False = un-enrolled: every signed command
+// (incl. OTA) is rejected — app_main lights the FATAL LED so a mis-enrolled node is obvious on the bench.
+bool ha_mqtt_has_cmd_secret(void);
+
 // Publish a decoded reading keyed by MAC to home/edge/<node>/<mac>/adv.
 // mac_str is "AA:BB:CC:DD:EE:FF"; rssi in dBm.
 void ha_mqtt_publish_reading(const char *mac_str, const sb_reading_t *r, int rssi);

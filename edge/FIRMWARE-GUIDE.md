@@ -88,20 +88,27 @@ Push with `tools/edge_ota.py --node <id> --bin <bin> --serve-ip <reachable> --br
 (`HA_CMD_SECRET` in env signs it). **Validate OTA on the bench while USB-recoverable, before deploying.**
 
 ## 6. LED status / error codes (operability)
-Quiet by default; the eye only needs the LED when something's wrong. Drive the onboard **RGB (WS2812)**:
-**OFF when healthy**, and on error play a **slow, long, distinguishable** pattern — *color = category, slow
-blink-count = code* (humans + eyeballs are slow). Proposed table (impl: `ha_led`, task `led-error-codes`):
+Quiet by default; the eye only needs the LED when something's wrong. The onboard **RGB (WS2812)** is
+**OFF when healthy**, and on a fault plays a **slow, long, distinguishable** pattern — *color = category,
+slow blink-count = code* (humans + eyeballs are slow). **Implemented** in `ha_led.{c,h}` (S3 node) — a
+dependency-free WS2812 driver over the RMT peripheral (no managed component to fetch, so the build stays
+air-gap reproducible). The Waveshare ESP32-S3-ETH drives its WS2812 on **GPIO21** (clear of the W5500 pins
+9–14 and the radio); set `LED_GPIO` for another board.
 
 | Code | Pattern (slow: ~1 s on / 1 s off, then ~4 s gap, repeat) | Meaning |
 |------|----------------------------------------------------------|---------|
-| FATAL | **RED** solid | config invalid (no `secrets.h` / no command secret) |
+| FATAL | **RED** solid | un-enrolled — no command secret (`HA_CMD_SECRET ""`); can't accept commands/OTA |
 | NET-0 | **RED** × 2 | no network at all (neither Ethernet nor Wi-Fi) |
 | WIFI  | **AMBER** × 3 | Wi-Fi link down, reconnecting |
 | MQTT  | **BLUE** × 4 | network up but broker unreachable |
-| OTA   | **MAGENTA** × 5 | OTA failed / rolled back |
+| OTA   | **MAGENTA** × 5 | last OTA failed / rejected (rolled back) |
 | *(healthy)* | **off** | relaying normally |
 
-The hardwired power LED isn't firmware-controllable (solder-jumper to kill).
+**State semantics:** latest-wins, set at the event sources (`app_main` config check / no-net; `ha_wifi`
+disconnect/got-ip; `ha_mqtt` connect/disconnect; `ha_ota` fail). Two are sticky on purpose: **FATAL** is
+terminal (a mis-enrolled node only clears it by re-enroll + reflash — a later MQTT-up must not silence it),
+and **OTA-fail** persists until a reboot or MQTT reconnect (the node keeps relaying the old image, so the
+failed update stays visible). The hardwired power LED isn't firmware-controllable (solder-jumper to kill).
 
 ## 7. New-node checklist (one-shot)
 1. Identify the board → ESP-IDF target; find the transport pins (W5500 SPI / RGB GPIO) from its schematic.
