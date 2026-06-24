@@ -117,6 +117,17 @@ resistor) — never a firmware change. So "all LEDs off when healthy" applies to
 LEDs stay on by design.
 
 ## 7. New-node checklist (one-shot)
+Steps **1–2, 4** are human judgement (fork + transport pins + the §3 gotchas — board-specific code). Steps
+**3, 5, 6** are automated, each behind a hard gate, by **`tools/node_bringup.py`**:
+```bash
+python3 tools/node_bringup.py edge/<node-dir> <node-id> --mac <chip MAC> \
+    --target <esp32s3|esp32c6|esp32c3> --port /dev/ttyACM0 \
+    --broker mqtt://192.168.0.200:1883 --ota-host 192.168.0.200 --serve-ip <this-host-IP>
+#   stages: ENROLL → BUILD → FLASH → VERIFY-RELAY (online + ≥1 advert) → BENCH-OTA (self-test PASS)
+#   any gate failing aborts. Use the box IP (.210) not the VIP on a segment that can't ARP the VIP.
+#   --skip-flash / --skip-bench-ota / --skip-enroll (reuse an existing secrets.h) for partial re-runs.
+```
+The manual checklist these stages encode:
 1. Identify the board → ESP-IDF target; find the transport pins (W5500 SPI / RGB GPIO) from its schematic.
 2. `cp -r` the closest reference node; swap the transport module + `sdkconfig.defaults` (target, coex, partitions).
 3. **Enroll** (§5) → `secrets.h` (id, broker=**VIP** unless the segment can't reach it, NTP, Wi-Fi, secret); add `HA_OTA_HOST`.
