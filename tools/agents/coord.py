@@ -262,32 +262,42 @@ def cmd_whoami(a, agent):
 
 
 def main():
-    p = argparse.ArgumentParser(description="Agent-to-agent task coordination over the cluster bus.")
-    p.add_argument("--as", dest="agent", default=os.environ.get("HA_AGENT_ID"),
-                   help="agent id (ops|dev); or set $HA_AGENT_ID")
-    p.add_argument("--broker", default=None, help="override broker host (default VIP 192.168.0.200)")
-    p.add_argument("--force", action="store_true", help="override ownership/readiness guards")
+    # Shared flags live on a parent parser attached to BOTH the top parser and every subparser, so
+    # `--as/--broker/--force` work in either position. SUPPRESS => unset never clobbers across parsers.
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--as", dest="agent", default=argparse.SUPPRESS,
+                        help="agent id (ops|dev); or set $HA_AGENT_ID")
+    common.add_argument("--broker", dest="broker", default=argparse.SUPPRESS,
+                        help="override broker host (default VIP 192.168.0.200)")
+    common.add_argument("--force", dest="force", action="store_true", default=argparse.SUPPRESS,
+                        help="override ownership/readiness guards")
+
+    p = argparse.ArgumentParser(parents=[common],
+                                description="Agent-to-agent task coordination over the cluster bus.")
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    sub.add_parser("list").add_argument("--all", action="store_true", help="include done/cancelled")
-    sub.add_parser("ready"); sub.add_parser("mine"); sub.add_parser("agents")
-    sub.add_parser("whoami")
+    def add(name):
+        return sub.add_parser(name, parents=[common])
 
-    sp = sub.add_parser("add"); sp.add_argument("id"); sp.add_argument("--title", required=True)
+    add("list").add_argument("--all", action="store_true", help="include done/cancelled")
+    add("ready"); add("mine"); add("agents"); add("whoami")
+
+    sp = add("add"); sp.add_argument("id"); sp.add_argument("--title", required=True)
     sp.add_argument("--deps", default=""); sp.add_argument("--note", default="")
     for name in ("claim", "start", "release"):
-        sub.add_parser(name).add_argument("id")
-    sp = sub.add_parser("done"); sp.add_argument("id"); sp.add_argument("--note", default="")
-    sp = sub.add_parser("block"); sp.add_argument("id"); sp.add_argument("--reason", default="")
-    sp = sub.add_parser("cancel"); sp.add_argument("id"); sp.add_argument("--reason", default="")
-    sp = sub.add_parser("note"); sp.add_argument("id"); sp.add_argument("--note", required=True)
-    sp = sub.add_parser("beacon"); sp.add_argument("--note", default="")
+        add(name).add_argument("id")
+    sp = add("done"); sp.add_argument("id"); sp.add_argument("--note", default="")
+    sp = add("block"); sp.add_argument("id"); sp.add_argument("--reason", default="")
+    sp = add("cancel"); sp.add_argument("id"); sp.add_argument("--reason", default="")
+    sp = add("note"); sp.add_argument("id"); sp.add_argument("--note", required=True)
+    sp = add("beacon"); sp.add_argument("--note", default="")
 
     a = p.parse_args()
+    a.force = getattr(a, "force", False)
     global BROKER
-    if a.broker:
+    if getattr(a, "broker", None):
         BROKER = a.broker
-    agent = a.agent
+    agent = getattr(a, "agent", None) or os.environ.get("HA_AGENT_ID")
     if a.cmd in ("list", "ready", "agents", "whoami") and not agent:
         agent = "anon"
     if not agent:
