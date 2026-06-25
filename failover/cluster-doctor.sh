@@ -12,10 +12,14 @@ STANDBY="${STANDBY_HOST:-192.168.0.245}"
 VIP="${VIP:-192.168.0.200}"
 BROKER="${BROKER:-$VIP}"
 HEARTBEAT_FRESH="${HEARTBEAT_FRESH:-12}"
-KEY="${CLUSTER_KEY:-}"
+KEY="${CLUSTER_KEY:-$HOME/.ssh/id_cluster}"   # default to the cluster key like the other failover scripts (else SSH-to-peer false-fails)
 REPO_REMOTE="${REPO_REMOTE:-/home/visko/home_automation}"
 SSH(){ ssh ${KEY:+-i "$KEY"} -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=accept-new "$@"; }
-on(){ local h="$1"; shift; SSH "visko@$h" "$@" 2>/dev/null; }
+SELF_IPS=" $(hostname -I 2>/dev/null) "
+is_self(){ [[ "$SELF_IPS" == *" $1 "* ]]; }
+# Gather a node's facts: run LOCALLY when the target is this host (self-SSH often isn't authorized and
+# would false-fail as 'unreachable' -> bogus no-dictator/split-brain alarms), else over the cluster key.
+on(){ local h="$1"; shift; if is_self "$h"; then bash -c "$*" 2>/dev/null; else SSH "visko@$h" "$@" 2>/dev/null; fi; }
 
 pass=0; fail=0; warn=0
 ok(){ printf '  [PASS] %s\n' "$*"; pass=$((pass+1)); }
