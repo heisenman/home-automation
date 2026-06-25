@@ -1,0 +1,18 @@
+# Tasmota WiFi plug/meter registry — maps a Tasmota %topic% to our device identity.
+# Read by server/ingest/tasmota_bridge.py. Copy to instance/tasmota-devices.yaml and edit.
+#
+# The key is the Tasmota "Topic" (the segment in cmnd/<topic>/… , tele/<topic>/… , stat/<topic>/…).
+# Set it on the device with:  Backlog Topic plug_g11; FullTopic %prefix%/%topic%/
+#
+# device_type is free-form; "energy_meter" reads as read-only, "power_plug" as actuator-capable.
+
+plug_g11:
+  device_id: plug_g11
+  area: infra            # the G11 / ha-dev box wall-power meter (first job: power-optimization campaign)
+  device_type: energy_meter
+
+# When the S31 is repositioned onto a purifier, just repoint the same Tasmota topic:
+# plug_purifier_office:
+#   device_id: plug_purifier_office
+#   area: office
+#   device_type: power_plug

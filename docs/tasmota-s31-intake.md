@@ -62,7 +62,7 @@ Voltage alone is usually close from the factory; set Power against a known load 
 
 ## 4. Land it on our bus (system side — ops)
 1. Add the device to the Tasmota registry on the dictator (210):
-   `instance/tasmota-devices.yaml` (copy from `.example`):
+   `instance/tasmota-devices.yaml` (copy from `config-examples/tasmota-devices.example.yaml`):
    ```yaml
    plug_g11:
      device_id: plug_g11
