@@ -100,6 +100,34 @@ can't make the standby publish. Unit name overridable via `RELAY_COORD_UNIT` in 
 Covered by sudoers (`systemctl ha-*`). Rollback for the whole Phase-B publish path is unchanged
 (`systemctl stop ha-relay-coordinator` + `mosquitto_pub -r -n -t home/edge/<node>/relay`).
 
+## Bringing up a new peer → record-keeping elevation (ADR-0018)
+A new (or rebuilt) box becomes a *trustworthy record-keeper* only after it holds the full
+**config-of-record + data-of-record (hot tier AND parquet archive)** — not just after it has run a while.
+This is a gated, idempotent, one-command step. **It is part of provisioning, not an afterthought** — the
+2026-06-25 incident was exactly this step being skipped (210 promoted to dictator with ~1.5 d of archive
+while `.245` held since January; the dashboard silently served truncated history).
+
+1. Sync config + data and assert eligibility, FROM an existing record-keeper (the current dictator, or
+   whoever holds the deepest archive):
+   ```
+   failover/provision-peer.sh --from <source-host>             # full: config + hot + archive + HARD GATE
+   failover/provision-peer.sh --from <source-host> --data-only # when THIS box's config is already authoritative
+   ```
+   Stages: config-of-record (`sync-standby`) → hot (`reconcile-history --once`) → archive
+   (`reconcile-parquet --once`, **row-level** keyed `device_id,ts,metric`) → **HARD GATE** (archive parity
+   vs source). Exit 0 = *record-keeping eligible*; exit 1 = **not trusted as dictator-of-record**.
+2. Confirm cluster-wide: `failover/cluster-doctor.sh` — the **Archive completeness (ADR-0018)** check must
+   PASS (both boxes' parquet archives converged) alongside config-completeness + hot convergence.
+3. The archive merge is **bidirectional and lossless**: each box keeps the rows the other lacks (the union),
+   so running it also backfills the *source* with anything unique to the new box. Re-running is a safe no-op.
+
+*One-off precedent (2026-06-25):* `provision-peer.sh --from 192.168.0.245 --data-only --yes` on 210 (already
+dictator, config authoritative, archive thin) → both boxes converged to 8,777,107 rows, earliest 2026-01-07,
+gate PASS. The demote/promote step was omitted (210 was already the live dictator).
+
+*Ongoing:* `reconcile-parquet.sh --loop` (VIP-gated, slow cadence) keeps archives convergent between
+provisionings; parquet only diverges when a swap straddles a daily compaction boundary.
+
 ## Notes / still-TODO before go-live
 - **Cluster-RPC** (`/cluster/status|demote|claim` + MQTT heartbeat) is the 210-side code task; until it
   lands, fencing/health use SSH `systemctl is-active`/`stop` (already wired in the scripts).

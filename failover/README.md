@@ -78,6 +78,13 @@ these are secrets)** every ~30 min:
 - `keepalived.245.conf`, `keepalived.210.conf` — the two VRRP configs (templated; real IPs via deploy).
 - `notify.sh` — single notify script, dispatches on `$1` = master|backup|fault (fence + start/stop).
 - `sync-standby.sh` — pull token + policy 210→.245 (runs from a systemd timer on .245).
+- `reconcile-history.sh` — hot-tier (today's sqlite) bidirectional row-merge across boxes (ADR-0016).
+- `reconcile-parquet.sh` — cold-tier parquet **archive** bidirectional row-merge keyed `device_id,ts,metric`
+  (ADR-0018); `--once`/`--loop`/`--list`/`--merge`. The deep-reconcile ADR-0016 deferred.
+- `provision-peer.sh` — bring a box up as a peer + **elevate to record-keeping** (config→hot→archive→HARD
+  GATE); `--from <src>` `[--data-only]`. The 2026-06-25 archive-seeding gap, made a one-command gated step.
+- `cluster-doctor.sh` — read-only cross-cluster invariant + completeness checker (config, hot convergence,
+  **archive completeness**). Run after any failover / before trusting a box as dictator-of-record.
 - `healthcheck.sh` — track_script body (controller + Midea reachable).
 - `deploy.sh` — idempotent installer (place config + scripts, enable keepalived) — run per box.
 - `failover-runbook.md` — operate/test/failback procedures.
