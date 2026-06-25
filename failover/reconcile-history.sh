@@ -30,8 +30,11 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && p
 : "${RECONCILE_I_MIN_S:=120}"        # lower clamp (no BLE/scp thrash, never < reconcile duration)
 : "${RECONCILE_I_MAX_S:=900}"        # upper clamp = LOSS BUDGET (the one human input) ∧ ≤ hot WINDOW
 : "${RECONCILE_MODE:=shadow}"        # shadow = compute+log proposed (active fixed); active = drive from proposed
-RLOG=/var/log/ha-reconcile.log
-SHADOWLOG=/var/log/ha-reconcile-tuning.log
+# Logs live under instance/ (visko-writable): the service runs as User=visko and CANNOT write /var/log.
+# The shadow-tuning log especially must persist reliably — the week-long review reads it. Override via env.
+: "${RECONCILE_LOG:=$REPO/instance/ha-reconcile.log}"
+: "${RECONCILE_SHADOW_LOG:=$REPO/instance/ha-reconcile-tuning.log}"
+RLOG="$RECONCILE_LOG"; SHADOWLOG="$RECONCILE_SHADOW_LOG"
 case "$HOT_DB" in /*) DB="$HOT_DB";; *) DB="$REPO/$HOT_DB";; esac   # absolute or repo-relative
 
 log(){ printf '%s reconcile %s\n' "$(date -Is)" "$*" | tee -a "$RLOG" 2>/dev/null || true; }
