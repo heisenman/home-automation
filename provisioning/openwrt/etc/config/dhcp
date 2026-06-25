@@ -1,0 +1,59 @@
+# OpenWRT /etc/config/dhcp — DRAFT pre-stage for the R7800. dnsmasq = LAN DHCP + DNS.
+# Air-gap posture: serve the LAN only, resolve LAN names locally, no internet upstream.
+#
+# Address plan on 192.168.0.0/24 (gateway .1 = the router):
+#   .1            router
+#   .100–.149     dynamic DHCP pool (50 leases)
+#   .150–.199     static infra / edge nodes (assign via `config host` below)
+#   .200          VIP (VRRP floating, NEVER in the pool, NEVER a static lease — keepalived owns it)
+#   .210          ha-dev (dictator)        .245  fileserver (warm standby)
+# So the pool (.100–.149) is disjoint from .200/.210/.245 — the VIP can never collide with a lease.
+
+config dnsmasq
+	option domainneeded '1'
+	option localise_queries '1'
+	option rebind_protection '1'
+	option local '/lan/'
+	option domain 'lan'
+	option expandhosts '1'
+	option authoritative '1'
+	option readethers '1'
+	option leasefile '/tmp/dhcp.leases'
+	option localservice '1'
+	# AIR-GAP: with WAN disabled there is no upstream resolver. Uncomment to make that explicit:
+	#option noresolv '1'
+
+config dhcp 'lan'
+	option interface 'lan'
+	option start '100'
+	option limit '50'                  # .100–.149
+	option leasetime '12h'
+	list dhcp_option '6,192.168.0.1'   # DNS = the router (LAN-only resolver)
+	list dhcp_option '3,192.168.0.1'   # gateway
+
+config dhcp 'wan'
+	option interface 'wan'
+	option ignore '1'
+
+config odhcpd 'odhcpd'
+	option maindhcp '0'
+	option leasefile '/tmp/hosts/odhcpd'
+	option loglevel '4'
+
+# ── static leases + names (MACs are SECRET → fill at flash time, never commit) ─────
+# Pinning the servers means they keep their IPs even if they DHCP, and `expandhosts` gives every host a
+# resolvable <name>.lan. The VIP is added as a plain hostname (not a lease) so `ha-vip.lan` resolves.
+config host
+	option name 'ha-dev'
+	option ip '192.168.0.210'
+	option mac '__MAC_210__'
+
+config host
+	option name 'fileserver'
+	option ip '192.168.0.245'
+	option mac '__MAC_245__'
+
+# ha-vip.lan -> .200 (resolve only; the address itself floats via VRRP). Also add to /etc/hosts:
+#   192.168.0.200  ha-vip ha-vip.lan
+# Edge nodes (S3 north, C6 south, …) get static leases here once their MACs are filled in at flash time,
+# in the .150–.199 band — keep them OFF wifi-isolation (./wireless) so they reach the VIP.

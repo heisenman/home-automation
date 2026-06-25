@@ -1,0 +1,35 @@
+# OpenWRT /etc/config/firewall — DRAFT pre-stage for the R7800.
+# The HA devices live on ONE trusted L2 segment (br-lan), so intra-LAN traffic — SMB to .245, MQTT 1883
+# to the broker, OTA http, NTP, API 8123/8443, and keepalived VRRP multicast (224.0.0.18) — is all within
+# the `lan` zone and just works (zone input/forward = ACCEPT). Nothing here narrows the LAN; broker auth +
+# ACL come later WITH the air-gap cutover (theme D, `broker-auth-posture`), not in the router.
+#
+# Air-gap END STATE: WAN is disabled in ./network, so the `wan` zone below is inert (kept so a
+# transitional uplink only needs ./network uncommented — no firewall edit to get a working NAT router).
+
+config defaults
+	option syn_flood '1'
+	option input 'ACCEPT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+
+config zone
+	option name 'lan'
+	list network 'lan'
+	option input 'ACCEPT'
+	option output 'ACCEPT'
+	option forward 'ACCEPT'
+
+config zone
+	option name 'wan'
+	list network 'wan'
+	list network 'wan6'
+	option input 'REJECT'
+	option output 'ACCEPT'
+	option forward 'REJECT'
+	option masq '1'
+	option mtu_fix '1'
+
+config forwarding
+	option src 'lan'
+	option dest 'wan'

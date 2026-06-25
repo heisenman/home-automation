@@ -1,0 +1,47 @@
+# OpenWRT /etc/config/wireless — DRAFT pre-stage for the R7800 (2 radios: 2.4GHz + 5GHz).
+# Edge nodes + wifi clients reconnect with ZERO reconfig if the SSID + passphrase MATCH the current AP
+# (existing 2.4GHz SSID = `CTWap_24g`). That makes the cutover fast: flash, apply, devices rejoin.
+#
+# CRITICAL for `vip-unreachable-from-wifi`: every wifi-iface is `option network 'lan'` (bridged into
+# br-lan) AND `option isolate '0'` (AP isolation OFF). That is what lets a wifi STA ARP/reach the .200
+# VIP and other LAN hosts. Do NOT set isolate '1' or put wifi on a separate network/VLAN.
+#
+# `option path` is hardware-specific — DO NOT hand-write it. After flashing, read the real paths the
+# device generated (`uci show wireless | grep path`) and paste them in, or just edit the device's own
+# auto-generated /etc/config/wireless and only change ssid/key/network/isolate/disabled.
+
+config wifi-device 'radio0'
+	option type 'mac80211'
+	option path '__RADIO0_PATH__'      # e.g. platform/soc/.../mmc... — read from the flashed device
+	option band '2g'
+	option channel 'auto'
+	option htmode 'HT20'
+	option country '__CC__'            # set your regulatory domain, e.g. US
+	option disabled '0'
+
+config wifi-iface 'wifinet0'
+	option device 'radio0'
+	option mode 'ap'
+	option network 'lan'               # bridged -> VIP reachable from wifi
+	option ssid 'CTWap_24g'            # MATCH the current 2.4GHz SSID exactly (edge nodes rejoin)
+	option encryption 'psk2'
+	option key '__WIFI_PSK__'          # SECRET — inject at flash time, never commit
+	option isolate '0'                 # AP isolation OFF (required for VIP-from-wifi)
+
+config wifi-device 'radio1'
+	option type 'mac80211'
+	option path '__RADIO1_PATH__'
+	option band '5g'
+	option channel 'auto'
+	option htmode 'VHT80'
+	option country '__CC__'
+	option disabled '0'
+
+config wifi-iface 'wifinet1'
+	option device 'radio1'
+	option mode 'ap'
+	option network 'lan'
+	option ssid 'CTWap_5g'            # set to the current 5GHz SSID (or keep clients on 2.4 only)
+	option encryption 'psk2'
+	option key '__WIFI_PSK__'
+	option isolate '0'

@@ -1,0 +1,47 @@
+# OpenWRT /etc/config/network — DRAFT pre-stage for the Netgear R7800 (ipq806x, DSA).
+# Target: the air-gapped HA network's router. Keeps 192.168.0.0/24 so NOTHING re-addresses (the .245
+# fileserver + SMB clients, .210, the .200 VIP, and all edge nodes keep their IPs through the cutover).
+#
+# KEY DESIGN — single bridged L2 segment (br-lan = LAN ports + both wifi radios), NO VLAN split of the HA
+# devices. This is the fix for `vip-unreachable-from-wifi`: with wifi and wired on one bridge and AP
+# isolation OFF (see ./wireless), ARP + keepalived's gratuitous-ARP for the floating VIP .200 cross the
+# bridge, so wifi edge nodes/clients follow a dictator failover. A VLAN/L3 split would re-break exactly
+# that, so the trusted HA devices stay on one segment by design.
+
+config interface 'loopback'
+	option device 'lo'
+	option proto 'static'
+	option ipaddr '127.0.0.1'
+	option netmask '255.0.0.0'
+
+config globals 'globals'
+	option packet_steering '1'
+
+config device
+	option name 'br-lan'
+	option type 'bridge'
+	list ports 'lan1'
+	list ports 'lan2'
+	list ports 'lan3'
+	list ports 'lan4'
+	# the two wifi radios join br-lan via option network 'lan' in ./wireless
+
+config interface 'lan'
+	option device 'br-lan'
+	option proto 'static'
+	option ipaddr '192.168.0.1'        # MUST match the current router's LAN IP = every host's gateway
+	option netmask '255.255.255.0'
+	option ip6assign '60'
+	# NB: .200 (VIP, VRRP-managed) / .210 / .245 are reserved out of the DHCP pool in ./dhcp — the router
+	# must never claim .200 and never hand it out.
+
+# ── WAN ───────────────────────────────────────────────────────────────────────────
+# Air-gapped END STATE = no uplink: leave WAN DISABLED (commented). For a TRANSITIONAL uplink (keep
+# internet during/right after cutover, pull it later), uncomment these two and set the wan zone in
+# ./firewall back to reject+masq. SMB/fileserver traffic is intra-LAN and is unaffected either way.
+#config interface 'wan'
+#	option device 'wan'
+#	option proto 'dhcp'
+#config interface 'wan6'
+#	option device 'wan'
+#	option proto 'dhcpv6'

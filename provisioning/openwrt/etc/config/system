@@ -1,0 +1,20 @@
+# OpenWRT /etc/config/system — DRAFT pre-stage for the R7800.
+# NTP in an air gap: the R7800 has NO battery-backed RTC, so after a power loss its clock starts wrong
+# and there's no internet NTP to fix it. Plan: a host with a good/holdover clock (the dictator .210, or
+# .245) is the LAN time source; the router both PEERS it and SERVES NTP to the edge nodes. TLS/cert
+# validity (ADR-0017) and signed-command freshness depend on sane time, so this matters — it's tracked in
+# the reachability matrix (`network-init-tooling`, segments × {VIP,broker,OTA,NTP,API}).
+
+config system
+	option hostname 'ha-router'
+	option timezone '__TZ__'           # POSIX TZ string, e.g. 'EST5EDT,M3.2.0,M11.1.0'
+	option zonename '__ZONE__'         # e.g. 'America/New_York'
+	option log_size '64'
+
+config timeserver 'ntp'
+	option enabled '1'
+	option enable_server '1'           # serve NTP to the LAN (router = LAN time anchor for edge nodes)
+	list server '192.168.0.210'        # peer the dictator as the upstream time source
+	list server '192.168.0.245'        # and the standby as a backup source
+	# NO internet pool servers here — air gap. If a transitional WAN uplink is kept, you MAY add
+	# 'option use_dhcp 0' + a couple of pool.ntp.org servers until the gap is final.
