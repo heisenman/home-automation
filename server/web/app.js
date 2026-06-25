@@ -124,7 +124,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v22 (2026-06-24) retire-vs-hide";
+const BUILD = "v23 retire-vs-hide (parser fix)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -511,6 +511,14 @@ function Sensors({ sensors, isAdmin, onEdit, onChange }) {
     try { await adminSend("PUT", `/api/v1/devices/${id}/meta`, { [field]: false }); } catch {}
     await onChange(); loadManaged();
   };
+  // Render one restore-list (hidden or retired) as tap-to-restore chips. Kept FLAT (single map, no nested
+  // ternary-in-template) — the previous inline nesting broke the browser's module parser at load.
+  const restoreList = (label, rows, field) =>
+    rows.length === 0
+      ? html`<span class="note">no ${label} devices</span>`
+      : html`<span class="note">${label} — tap to restore:</span> ${rows.map((h) => html`
+          <span class=${"trace-chip" + (field === "retired" ? " retired" : "")}
+            onClick=${() => restore(h.device_id, field)}>${h.name || prettyName(h.device_id)} ↺</span>`)}`;
 
   return html`
     <div class="sensors-wrap">
@@ -527,15 +535,8 @@ function Sensors({ sensors, isAdmin, onEdit, onChange }) {
       ${isAdmin && html`<div class="hidden-ctl">
         ${managed == null
           ? html`<button class="btn sm ghost" onClick=${loadManaged}>manage hidden / retired</button>`
-          : html`
-            <div class="mgmt-row">${managed.hidden.length === 0
-              ? html`<span class="note">no hidden devices</span>`
-              : html`<span class="note">hidden — tap to restore:</span> ${managed.hidden.map((h) => html`
-                  <span class="trace-chip" onClick=${() => restore(h.device_id, "hidden")}>${h.name || prettyName(h.device_id)} ↺</span>`)}</div>
-            <div class="mgmt-row">${managed.retired.length === 0
-              ? html`<span class="note">no retired devices</span>`
-              : html`<span class="note">retired (archived) — tap to restore:</span> ${managed.retired.map((h) => html`
-                  <span class="trace-chip retired" onClick=${() => restore(h.device_id, "retired")}>${h.name || prettyName(h.device_id)} ↺</span>`)}</div>`}
+          : html`<div class="mgmt-row">${restoreList("hidden", managed.hidden, "hidden")}</div>
+              <div class="mgmt-row">${restoreList("retired", managed.retired, "retired")}</div>`}
       </div>`}
     </div>`;
 }
