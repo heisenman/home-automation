@@ -112,6 +112,17 @@ reconcile_once(){
     fi
   done 3<<<"$union"        # read on FD 3 so ssh/scp in the body can't steal the loop's stdin
   log "parquet reconcile pass complete ($(printf '%s\n' "$union" | grep -c . ) partition(s))"
+  # ADR-0004 manifest: the merges above rewrote/added partitions, so manifest.json is now stale on BOTH
+  # boxes. Rebuild it in the SAME pass — otherwise ha-verify-hashes false-alarms MISMATCH/MISSING on a
+  # correct archive (the seam found 2026-06-26, post-ADR-0018-seed). Non-fatal: a missing tool or an
+  # out-of-date peer just self-corrects on the next pass. Read-only verify is asserted in cluster-doctor.
+  local REBUILD="tools/rebuild_parquet_manifest.py"
+  if [ -f "$REPO/$REBUILD" ]; then
+    "$PYBIN" "$REPO/$REBUILD" --parquet-dir "$PQ" >/dev/null 2>&1 \
+      && log "manifest rebuilt (local)" || log "manifest rebuild (local) failed — self-corrects next pass"
+  fi
+  RSH "cd '$REMOTE_REPO' && [ -f '$REBUILD' ] && venv/bin/python3 '$REBUILD' --parquet-dir '$PARQUET_DIR' >/dev/null 2>&1" \
+    && log "manifest rebuilt (peer $PEER_HOST)" || log "manifest rebuild (peer) skipped/failed — self-corrects next pass"
 }
 
 case "${1:---once}" in

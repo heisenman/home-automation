@@ -209,6 +209,22 @@ else
   wn "both boxes not reachable — skipping archive completeness gate"
 fi
 
+# ---- archive manifest integrity (ADR-0004): the SHA-256 manifest must match the partitions on disk ----
+# A reconcile/seed (ADR-0018) rewrites parquet partitions; reconcile-parquet rebuilds the manifest in the
+# same pass. Assert here that each box's manifest is consistent — a stale manifest makes ha-verify-hashes
+# false-alarm corruption on a correct archive (the seam found 2026-06-26). Read-only: verifies, never rebuilds.
+hdr "Archive manifest integrity (ADR-0004)"
+for h in "$PRIMARY" "$STANDBY"; do
+  [ "${REACH[$h]}" = yes ] || { wn "$h unreachable — skipping manifest check"; continue; }
+  mout=$(on "$h" "$REPO_REMOTE/venv/bin/python3 $REPO_REMOTE/tools/verify_hashes.py --parquet-dir $REPO_REMOTE/instance/db/parquet"); mrc=$?
+  msum=$(printf '%s\n' "$mout" | sed -n 's/.*Result: //p' | head -1)
+  case "$mrc" in
+    0) ok "$h parquet manifest consistent (${msum:-ok})" ;;
+    2) wn "$h parquet manifest absent — box not yet compacted/seeded (ok for a fresh box)" ;;
+    *) no "$h parquet manifest STALE/mismatch (${msum:-?}) — a reconcile rewrote partitions without refreshing it; run tools/rebuild_parquet_manifest.py --parquet-dir instance/db/parquet on $h" ;;
+  esac
+done
+
 # ---- verdict ----
 hdr "Verdict"
 printf '  %d pass, %d warn, %d FAIL\n' "$pass" "$warn" "$fail"
