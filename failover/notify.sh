@@ -3,13 +3,13 @@
 # holder / MASTER) ever runs the controller.
 #   keepalived calls: notify.sh <INSTANCE|GROUP> <name> <STATE> [priority]   (STATE in $3)
 #   manual test:      notify.sh MASTER     (STATE in $1)
-# MASTER  -> FENCE the peer (stop its controller), verify secrets, start OUR controller.
-# BACKUP  -> stop OUR controller (step down — this is the Core-Rule auto-demote path under preempt).
-# FAULT   -> stop OUR controller (we're unfit).
+# MASTER  -> FENCE the peer (stop its controller), verify secrets, start OUR controller + relay-coordinator.
+# BACKUP  -> stop OUR controller + relay-coordinator (step down — Core-Rule auto-demote path under preempt).
+# FAULT   -> stop OUR controller + relay-coordinator (we're unfit).
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && pwd)"
 [ -f "$REPO/instance/cluster.env" ] && . "$REPO/instance/cluster.env"
-: "${CONTROLLER_UNIT:=ha-controller}"; : "${PEER_HOST:=}"; : "${CLUSTER_KEY:=$HOME/.ssh/id_cluster}"
+: "${CONTROLLER_UNIT:=ha-controller}"; : "${RELAY_COORD_UNIT:=ha-relay-coordinator}"; : "${PEER_HOST:=}"; : "${CLUSTER_KEY:=$HOME/.ssh/id_cluster}"
 : "${VIP:=192.168.0.200}"; : "${BACKUP_GRACE:=4}"   # see BACKUP branch — startup-transient suppression
 LOG=/var/log/ha-failover.log
 STATE="${3:-${1:-}}"
@@ -19,6 +19,18 @@ peer_ssh(){ ssh -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=5 -o Strict
 # ADR-0015 #9: restart ha-api so its control plane re-evaluates the VIP gate (mounts on the dictator,
 # stays read-only on the standby). Best-effort, active-only, never blocks the VRRP transition.
 api_remount(){ systemctl is-active --quiet ha-api && { sudo systemctl restart ha-api 2>/dev/null && log "ha-api restarted ($1) — control plane re-evaluates VIP gate" || log "ha-api restart skipped/failed (non-fatal)"; }; return 0; }
+# ADR-0015 Phase B: bind ha-relay-coordinator to VRRP role so ONLY the dictator signs+publishes relay
+# allowlists (one-writer invariant, like the controller). MASTER (re)starts it AFTER the edge-mapper recompute
+# so it re-evaluates coverage from THIS box's reach; demotion/fault stops it. Best-effort, non-blocking; clean
+# noop where the unit isn't installed. The unit is also HA_VIP-guarded as an independent backstop.
+relay_coord(){ # $1=start|stop  $2=state-label
+  systemctl cat "$RELAY_COORD_UNIT" >/dev/null 2>&1 || { log "$RELAY_COORD_UNIT not installed — skipping ($2)"; return 0; }
+  case "$1" in
+    start) sudo systemctl restart "$RELAY_COORD_UNIT" 2>/dev/null && log "$RELAY_COORD_UNIT (re)started ($2) — re-evaluating relay allowlists from local reach" || log "$RELAY_COORD_UNIT start skipped/failed (non-fatal)";;
+    stop)  sudo systemctl stop "$RELAY_COORD_UNIT" 2>/dev/null && log "$RELAY_COORD_UNIT stopped ($2) — standby never publishes" || log "$RELAY_COORD_UNIT already stopped/absent";;
+  esac
+  return 0
+}
 
 case "$STATE" in
   MASTER)
@@ -37,6 +49,7 @@ case "$STATE" in
     if systemctl is-active --quiet ha-edge-mapper; then
       sudo systemctl restart ha-edge-mapper 2>/dev/null && log "edge-mapper restarted — recomputing coverage from local reach" || log "edge-mapper restart skipped/failed (non-fatal)"
     fi
+    relay_coord start MASTER   # this box now signs+publishes relay allowlists (re-eval after coverage recompute)
     api_remount MASTER   # mount the control plane now that this node holds the VIP
     ;;
   BACKUP)
@@ -52,12 +65,14 @@ case "$STATE" in
     fi
     log "no VIP after ${BACKUP_GRACE}s grace -> genuine demotion; stopping controller (yield to primary)"
     if sudo systemctl stop "$CONTROLLER_UNIT" 2>/dev/null; then log "controller STOPPED"; else log "controller already stopped"; fi
+    relay_coord stop BACKUP   # stop publishing relay allowlists — only the dictator may
     api_remount BACKUP   # unmount the control plane — we no longer hold the VIP
     ;;
   FAULT)
     # Health check failed: we are genuinely unfit. Stop immediately — no grace (don't keep actuating while broken).
     log "becoming FAULT -> stop controller immediately (unfit)"
     if sudo systemctl stop "$CONTROLLER_UNIT" 2>/dev/null; then log "controller STOPPED"; else log "controller already stopped"; fi
+    relay_coord stop FAULT   # stop publishing relay allowlists — we're unfit
     api_remount FAULT    # unmount the control plane — we're unfit
     ;;
   *)

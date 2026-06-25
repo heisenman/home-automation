@@ -88,6 +88,18 @@ Three hardening tweaks applied after the live test. None change the Core Rule; a
    Also run the standby's own publisher: `sudo systemctl enable --now ha-cluster-heartbeat`.
    Rollback: `sudo rm /etc/mosquitto/conf.d/cluster-bridge.conf && sudo systemctl restart mosquitto`.
 
+## Phase-B relay coordinator binding (2026-06-24)
+`notify.sh` also binds **`ha-relay-coordinator`** (ADR-0015 Phase B) to the VRRP role, same one-writer
+invariant as the controller — **only the dictator signs+publishes edge relay allowlists**:
+- **MASTER** → (re)start it *after* the `ha-edge-mapper` recompute, so it re-evaluates coverage from the new
+  dictator's own reach. (`restart` starts it if the VIP-guard had parked it on the old standby.)
+- **BACKUP / FAULT** → stop it (a standby must never publish).
+Best-effort + non-blocking (never holds up the VRRP transition); a clean noop on a box where the unit
+isn't installed. The unit is **also** `HA_VIP`-guarded as an independent backstop, so a missed notify still
+can't make the standby publish. Unit name overridable via `RELAY_COORD_UNIT` in `cluster.env`.
+Covered by sudoers (`systemctl ha-*`). Rollback for the whole Phase-B publish path is unchanged
+(`systemctl stop ha-relay-coordinator` + `mosquitto_pub -r -n -t home/edge/<node>/relay`).
+
 ## Notes / still-TODO before go-live
 - **Cluster-RPC** (`/cluster/status|demote|claim` + MQTT heartbeat) is the 210-side code task; until it
   lands, fencing/health use SSH `systemctl is-active`/`stop` (already wired in the scripts).
