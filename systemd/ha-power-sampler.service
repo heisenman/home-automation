@@ -1,0 +1,14 @@
+# Layer-1 power/idle sampler (docs/power-optimization.md §3.1). Oneshot, fired by ha-power-sampler.timer.
+# Runs as root because RAPL energy_uj is 0400 (PLATYPUS CVE-2020-8694). Reads cumulative counters and
+# appends one CSV delta row to /var/log/ha-power/samples.csv — near-zero footprint (recorded in sampler_ms).
+[Unit]
+Description=HA power/idle Layer-1 sampler (cumulative-counter delta -> CSV)
+Documentation=file:///home/visko/home_automation/docs/power-optimization.md
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /home/visko/home_automation/tools/power_sample.py
+Nice=19
+IOSchedulingClass=idle
+# tiny footprint; keep it off the critical path
+CPUSchedulingPolicy=idle

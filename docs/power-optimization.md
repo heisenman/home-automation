@@ -121,7 +121,10 @@ interval's behaviour with no continuous polling:
 - `loadavg`, `/sys/class/hwmon` **temps**, top-1 process by CPU (single `ps` snapshot).
 - **Self-cost line:** the sampler reads its *own* RAPL delta around its run so the report can state "the
   profiler cost X mW-avg / Y CPU-seconds/day" and subtract/acknowledge it.
-Storage: append-only CSV under `instance/profiling/`, `logrotate`-managed; ~a few KB/day.
+Storage: append-only CSV at `/var/log/ha-power/samples.csv` (+ `state.json` for the prev-cumulative
+deltas), root-owned; ~a few KB/day (logrotate to be added at productization). **LIVE since 2026-06-25**
+(`tools/power_sample.py` + `systemd/ha-power-sampler.{service,timer}`, 5-min `OnUnitActiveSec`, `Nice=19`/
+`idle` sched so it never touches the control path).
 
 ### 3.2 Layer 2 — transient-event capture (near-free, catches what 5-min sampling misses)
 - **BSD process accounting (`acct`/`psacct`):** the kernel writes one record per **process exit** (command,
@@ -181,8 +184,8 @@ capability-gated). This is the artifact the next bring-up reads.
 
 ## 5. Phases, owners, decisions
 
-**Phase 0 (now, no gate):** stand up the **Layer-1 sampler** (no installs, root timer) so the 7–15 day
-window starts collecting immediately. *(dev)*
+**Phase 0 ✅ DONE (2026-06-25):** Layer-1 sampler live (no installs, root timer); the 7–15 day window is
+**collecting now**. First live read: package ~11.8 W under active load, ~74–96% C2. *(dev)*
 **Phase 1 (campaign, days 0–15):** Layers 2–3 tools installed; A/B the 🟡 levers; collect. *(dev)*
 **Phase 2 (Hugh window):** the 🔴 BIOS items (CPPC, idle-control) at a console; re-measure. *(Hugh + dev)*
 **Phase 3:** write `power-tune.sh` + fold winners into provisioning + draft the image. *(dev, ops review)*
@@ -202,4 +205,5 @@ window starts collecting immediately. *(dev)*
 | Date | Issue / observation | Mechanism | Mitigation | Measured Δ | Reversible | In image | Applies to |
 |------|---------------------|-----------|------------|------------|-----------|----------|-----------|
 | 2026-06-25 | Baseline captured (see §1) | — | — | ~95% C2 lifetime; pkg-W TBD (RAPL root) | — | — | this box |
+| 2026-06-25 | Phase 0 sampler live | systemd timer reads RAPL/C-state/IRQ deltas every 5 min | n/a (measurement) | first read pkg ~11.8 W (active load); idle TBD over window | yes (`systemctl disable`) | yes (units belong in image) | all (capability-gated on RAPL) |
 | _(campaign findings land here)_ | | | | | | | |

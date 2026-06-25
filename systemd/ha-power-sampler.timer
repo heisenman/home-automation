@@ -1,0 +1,15 @@
+# Fires the Layer-1 sampler every ~5 min. AccuracySec coalesces the wake with other timers so the box
+# wakes once for several jobs (the very thing the campaign optimizes for). Persistent=false: a missed
+# fire (box off) just resumes next interval; no catch-up storm.
+[Unit]
+Description=Run the HA power/idle sampler every 5 min
+Documentation=file:///home/visko/home_automation/docs/power-optimization.md
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=5min
+AccuracySec=30s
+RandomizedDelaySec=15s
+
+[Install]
+WantedBy=timers.target
