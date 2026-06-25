@@ -188,8 +188,38 @@ CONTROL_POLICY = Path(os.environ.get("HA_CONTROL_POLICY", "instance/control_poli
 CONTROL_SECRETS = Path(os.environ.get("HA_CONTROL_SECRETS", "instance/control_secrets.yaml"))
 MIDEA_DEVICE_ENV = Path(os.environ.get("HA_MIDEA_DEVICE_ENV", "instance/midea-device.env"))
 CONTROL_DB = Path(os.environ.get("HA_CONTROL_DB", "instance/db/control.db"))
+AUTH_KEY_PATH = Path(os.environ.get("HA_AUTH_KEY", "instance/auth_key"))   # R9 JWT signing key (gitignored, 0600)
 DEVICES_REGISTRY = Path(os.environ.get("HA_DEVICES", "instance/devices.yaml"))   # sensor registry (add-device flow)
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"   # server/web — the no-build PWA
+
+
+def _make_auth_router(legacy_ok, signing_key):
+    """R9 (ADR-0017) auth endpoints: exchange a valid credential for a short-lived HS256 JWT, and refresh.
+    `legacy_ok(cred) -> bool` validates the SHA-derived API token (== the legacy bearer; the master never
+    crosses the wire — the client sends its hash). Mounted only with the control plane (master present)."""
+    from fastapi import APIRouter, Body, Header, HTTPException
+    from server.api import auth_tokens as auth
+
+    router = APIRouter(tags=["auth"])
+
+    @router.post("/auth/login")
+    async def login(body: dict = Body(default={}), authorization: str | None = Header(default=None)):
+        # credential = the SHA-derived API token, from the Authorization bearer OR body {token|password}
+        cred = authorization or (body or {}).get("token") or (body or {}).get("password")
+        if not cred or not legacy_ok(cred):
+            raise HTTPException(status_code=401, detail="invalid credential")
+        tok = auth.mint_token("admin", signing_key)        # legacy credential == admin
+        return {"token": tok, "role": "admin", "exp": auth.verify_token(tok, signing_key)["exp"]}
+
+    @router.post("/auth/refresh")
+    async def refresh(authorization: str | None = Header(default=None)):
+        role = auth.bearer_role(authorization, signing_key)
+        if not role:
+            raise HTTPException(status_code=401, detail="invalid or expired token")
+        tok = auth.mint_token(role, signing_key)           # same role, fresh expiry
+        return {"token": tok, "role": role, "exp": auth.verify_token(tok, signing_key)["exp"]}
+
+    return router
 
 
 def _mount_control(app: FastAPI) -> None:
@@ -232,7 +262,18 @@ def _mount_control(app: FastAPI) -> None:
             master, control_registry=CONTROL_REGISTRY, node_secrets_lut=NODE_SECRETS_LUT,
             control_policy=CONTROL_POLICY, control_secrets=CONTROL_SECRETS,
             midea_device_env=MIDEA_DEVICE_ENV, broker=broker, port=port)
-        api_authz = make_api_token_verifier(master)
+        # R9 (ADR-0017) dual-verify: accept a valid HS256 JWT OR the legacy SHA bearer (= admin) during the
+        # transition. The routers stay admin-gated (back-compat, safe) but now an admin JWT also satisfies
+        # them; /auth/login mints one. Per-route operator/viewer gating is a follow-up (needs the route
+        # matrix + a decision on gating the currently-open reads). Signing key is separate from the master.
+        from server.api import auth_tokens as auth
+        legacy_ok = make_api_token_verifier(master)
+        signing_key = auth.load_or_create_key(AUTH_KEY_PATH)
+
+        def api_authz(authorization):                       # bool gate the routers already expect (admin)
+            return auth.role_allows(auth.resolve_role(authorization, signing_key, legacy_ok), "admin")
+
+        app.include_router(_make_auth_router(legacy_ok, signing_key))
         app.include_router(make_router(issuer, make_confirm_verifier(master), api_authz))
         # the manual-override + control-state router (writes control.db, read by the controller each tick)
         app.include_router(make_override_router(api_authz, CONTROL_DB, device_ids=set(registry)))

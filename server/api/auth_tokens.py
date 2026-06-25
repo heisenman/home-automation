@@ -90,6 +90,18 @@ def bearer_role(authorization: str | None, signing_key: str, *, now: float | Non
         return None
 
 
+def resolve_role(authorization: str | None, signing_key: str, legacy_ok, *, now: float | None = None) -> str | None:
+    """Dual-verify (R9 transition): the role of a valid HS256 JWT, else 'admin' if the LEGACY SHA bearer is
+    valid (`legacy_ok(authorization) -> bool`), else None. Lets JWT + legacy clients coexist; the legacy
+    static bearer maps to admin until the PWA moves and it is deprecated. Pure (legacy_ok is injected)."""
+    r = bearer_role(authorization, signing_key, now=now)
+    if r is not None:
+        return r
+    if legacy_ok(authorization):
+        return "admin"
+    return None
+
+
 def load_or_create_key(path) -> str:
     """The HS256 signing key (instance/auth_key), separate from the master. Created (0600) if absent.
     Rotation = delete/overwrite this file + restart (all live tokens then fail verify)."""

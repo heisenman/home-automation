@@ -65,8 +65,13 @@ air-gap cutover (ROADMAP theme B/D). This ADR is the **HTTP** plane only.
   parts on a single box. Revisit if we later need HTTP/2 or multi-service fronting.
 
 ## Implementation slices
-1. **`auth_tokens.py` + tests** (this commit) — pure JWT mint/verify/roles/rotation, no wiring.
-2. `gen_tls.py` + HTTPS serving on :8443 (gated deploy; needs Hugh's cert-trust pick).
-3. `/auth/login` + `/auth/refresh` + dual-verify; role-gate routers (back-compat).
-4. PWA: login via `/auth/login`, `crypto.subtle`, flip web-push on over HTTPS.
-5. Deprecate the legacy static bearer; fold cert/key into `dictator-files.manifest`.
+1. **DONE** — `auth_tokens.py` + tests: pure JWT mint/verify/roles/rotation + `resolve_role` dual-verify.
+2. **DONE (LIVE on 210)** — `gen_tls.py` + HTTPS:8443 (self-signed, Hugh's pick); cert/VAPID folded into
+   `dictator-files.manifest`.
+3. **PARTIAL** — `/auth/login` + `/auth/refresh` + dual-verify wired in `main.py` (a valid HS256 JWT OR the
+   legacy SHA bearer; legacy = admin). Routers stay **admin-gated** (back-compat; an admin JWT now satisfies
+   them). *Remaining:* thread a min-role through the router factories for the operator/viewer split — needs
+   the per-route role matrix + a decision on whether the currently-OPEN reads get gated behind `viewer`.
+4. PWA: login via `/auth/login`, use `crypto.subtle` on HTTPS (keep the JS-SHA fallback for plain :8123).
+   *(Web-push flip is DROPPED — see [air-gap-notify.md](../decisions/air-gap-notify.md); alerts ride MQTT.)*
+5. Deprecate the legacy static bearer (after the PWA moves to `/auth/login`).
