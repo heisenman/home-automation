@@ -59,6 +59,16 @@ _UNITS: dict[str, str] = {
     "pressure_hpa": "hPa",
     "radon_bqm3": "Bq/m3",
     "rssi_dbm": "dBm",
+    # WiFi smart-plug / energy meter (Tasmota CSE7766 etc. via tasmota_bridge)
+    "power_w": "W",
+    "apparent_va": "VA",
+    "power_factor": "",
+    "voltage_v": "V",
+    "current_a": "A",
+    "energy_kwh": "kWh",
+    "energy_today_kwh": "kWh",
+    "relay_on": "",
+    "wifi_rssi_dbm": "dBm",
 }
 
 
