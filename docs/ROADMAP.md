@@ -51,7 +51,14 @@ never run a real failover drill on the 210↔245 pair**.
 **Open questions:** (a) acceptable RTO? (b) is hot.db divergence acceptable on takeover, or do we want a
 tighter replication cadence than 30 min? (c) does `.245` stay the standby long-term or is it temporary?
 
-**ops review:** _(pending)_
+**ops review (ops, 2026-06-25):** Agree A is #1 (no gate, highest payoff, builds on tonight). **Open-q (c)
+is already ANSWERED by Hugh:** `.245` is his **critical fileserver + a TEMPORARY stand-in** until a
+dedicated 2nd box is bought — never a long-term dictator, host is hands-off (see memory
+`feedback-245-fileserver-not-a-target`). So do the **lightweight A now** — config parity (✓), cross-box
+doctor-green, and a *reversible mechanism-proving* drill — but **don't over-invest in `.245`-specific
+standby tuning**; the real standby is the future dedicated box (ties straight into theme F's tuned image).
+**Flag:** a drill that actuates the Midea *from* `.245` makes the fileserver briefly the controller —
+needs **Hugh's explicit OK + a window** before we run it on `.245`.
 
 ---
 
@@ -72,7 +79,9 @@ current router; (4) re-validate VIP-from-wifi + edge nodes; (5) then fold in bro
 **Open questions:** maintenance-window timing; rollback plan if the air-gap breaks something Hugh relies
 on (the `.245` fileserver is critical).
 
-**ops review:** _(pending)_
+**ops review (ops, 2026-06-25):** Agree — keystone, ops-led + Hugh hands-on. The rollback concern is
+right and non-negotiable: the cutover must **not** disrupt the `.245` fileserver's network/SMB clients.
+Folding broker-auth (D) into the same window is the correct single-coordinated-step move.
 
 ---
 
@@ -90,7 +99,10 @@ PWA add-device form to it; (4) smoke-test gate (decodes? command round-trips wit
 **Open questions:** trait set for the first new device class beyond Midea/SwitchBot? broker ACL only
 matters once auth is on (theme D / B) — until then it's a no-op append.
 
-**ops review:** _(pending)_
+**ops review (ops, 2026-06-25):** Agree. Note phase-2 (relay-assign hook) is now essentially **free** —
+Phase B is live, so a new meter added to the registry is **auto-picked-up by the coordinator** once a node
+hears it (it enters the rate graph → an allowlist); no extra wiring. So the real remaining work is the
+**registry-append backend** (phase 1) + wiring the PWA form (phase 3). Good split.
 
 ---
 
@@ -106,7 +118,10 @@ A set of Phase-8 items, several gated, several that ride *with* the OpenWRT cuto
 - **`sudo-hardening-210`** (gated) — narrow sudoers to ha-services, drop the broad bootstrap grant. **Do
   LAST** — remaining setup still needs sudo.
 
-**ops review:** _(pending)_
+**ops review (ops, 2026-06-25):** Agree the clustering + "sudo-hardening LAST". **Prioritize `tls-r9-auth`**
+(READY, no gate): it unblocks the already-BUILT `pwa-web-push` (the 🔔 toggle is dark without HTTPS/secure-
+context) — finishing a shipped-but-dormant feature is high ROI. The gated rest correctly ride the OpenWRT
+cutover (B). Worth confirming with Hugh whether TLS uses self-signed-on-LAN now vs waiting for the air-gap.
 
 ---
 
@@ -130,7 +145,13 @@ iGPU/graphical-target/apt-timer hygiene wins; RAPL measurable as root). Successo
 (2) Hugh BIOS window (CPPC, idle-control) → (3) `provisioning/power-tune.sh` (detect-and-adapt) + fold into
 provisioning → (4) reference image + ledger.
 
-**ops review:** _(pending — relevant: this generalizes your lean-base profile into a tuned image for the future dedicated box)_
+**ops review (ops, 2026-06-25):** Strong endorse — especially the *"profiler must not defeat its own
+purpose"* discipline (cumulative-counter deltas over high-freq polling + self-cost accounting) and the
+capability-gated `power-tune.sh` (detect-then-adapt with graceful fallback). This is the right successor to
+my footprint pass, and its **real payoff is theme A's future dedicated standby box** — same hardware, boots
+already-tuned. Layer-1 sampler (zero installs) is a clean start-now; CSV under `instance/profiling/` on the
+live dictator is fine (small + logrotate'd). One ask: keep the heartbeat-cadence relax (§2.5) decided in
+theme A, not here — it's the one lever that touches failover detection.
 
 ---
 
