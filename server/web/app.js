@@ -75,8 +75,18 @@ function sha256hex(str) {
 const _SHA_OK = sha256hex("abc") === "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad";
 
 async function deriveToken(master) {
+  const msg = "ha-api:" + master;
+  // R9: in a secure context (HTTPS:8443) use the native WebCrypto digest — audited + fast. Plain HTTP
+  // (:8123, kept for healthcheck/local tools) has no crypto.subtle, so fall back to the pure-JS SHA-256.
+  // Both yield the identical SHA-256("ha-api:"+master) bearer, so the server verifies either the same way.
+  if (window.isSecureContext && window.crypto && crypto.subtle) {
+    try {
+      const buf = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(msg));
+      return [...new Uint8Array(buf)].map((b) => b.toString(16).padStart(2, "0")).join("");
+    } catch { /* fall through to the JS implementation */ }
+  }
   if (!_SHA_OK) throw new Error("SHA-256 self-test failed (report this)");
-  return sha256hex("ha-api:" + master);
+  return sha256hex(msg);
 }
 
 // ── api helpers ──────────────────────────────────────────────────────────────
@@ -124,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v26 scenes + add-device (sensor+actuator)";
+const BUILD = "v27 crypto.subtle on HTTPS";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
