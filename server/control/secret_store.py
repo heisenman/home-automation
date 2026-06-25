@@ -82,8 +82,10 @@ def save_lut(path: str | Path, passphrase: str, lut: dict) -> None:
     token = Fernet(_key(passphrase, salt)).encrypt(json.dumps(lut).encode())
     p = Path(path)
     p.parent.mkdir(parents=True, exist_ok=True)
-    p.write_text(json.dumps({"salt": salt.hex(), "data": token.decode()}))
-    os.chmod(p, 0o600)
+    tmp = p.with_suffix(p.suffix + ".tmp")          # atomic: write tmp then rename, so a crash mid-write
+    tmp.write_text(json.dumps({"salt": salt.hex(), "data": token.decode()}))   # can't corrupt the live LUT
+    os.chmod(tmp, 0o600)
+    tmp.replace(p)
 
 
 # ── software confirm token (sensitive-action second factor) ──────────────────────

@@ -33,6 +33,32 @@ def test_actuator_append_preserves_version_and_header(tmp_path):
     assert (tmp_path / "control.yaml.bak").exists()
 
 
+def test_enroll_node_atomic_and_non_destructive(tmp_path):
+    from server.control import secret_store as ss
+    from server.device_registry import handle_enroll_node
+    enc = tmp_path / "node_secrets.enc"
+    master = "test-master"
+    ss.save_lut(enc, master, {"c6-bench": {"mac": "AA:BB:CC:DD:EE:01", "cmd_secret": "existing", "created": 1}})
+    code, p = handle_enroll_node(enc, master, {"node_id": "s3-attic", "mac": "aa:bb:cc:dd:ee:99"})
+    assert code == 201 and len(p["cmd_secret"]) == 64 and p["secrets_h"].startswith("#define HA_CMD_SECRET")
+    lut = ss.load_lut(enc, master)
+    assert set(lut) == {"c6-bench", "s3-attic"}
+    assert lut["c6-bench"]["cmd_secret"] == "existing"          # existing node untouched
+    assert lut["s3-attic"]["mac"] == "AA:BB:CC:DD:EE:99"        # normalised
+    assert (tmp_path / "node_secrets.enc.bak").exists()
+    assert handle_enroll_node(enc, master, {"node_id": "c6-bench"})[0] == 400          # dup
+    assert handle_enroll_node(enc, master, {"node_id": "Bad Node"})[0] == 400          # bad slug
+    assert handle_enroll_node(enc, master, {"node_id": "ok", "mac": "nope"})[0] == 400  # bad mac
+    assert handle_enroll_node(enc, "WRONG", {"node_id": "x"})[0] == 500                 # wrong master -> no overwrite
+
+
+def test_slug_allows_hyphen(tmp_path):
+    from server.device_registry import validate_new_device
+    entry, err = validate_new_device({"mac": "AA:BB:CC:DD:EE:05", "device_id": "meter-den",
+                                      "device_type": "t", "area": "den"}, {})
+    assert err is None and entry["device_id"] == "meter-den"
+
+
 def test_actuator_rejects_bad_trait_dup_and_missing(tmp_path):
     f = _seed_control(tmp_path)
     assert handle_add_actuator(f, {"device_id": "x", "node": "n", "area": "a", "traits": {"frobnicate": {}}})[0] == 400

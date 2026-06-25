@@ -329,19 +329,20 @@ def make_device_meta_router(api_authz, control_db):
     return router
 
 
-def make_registry_router(api_authz, devices_path, control_path=None):
+def make_registry_router(api_authz, devices_path, control_path=None, node_secrets_path=None, master=None):
     """Admin-gated device registration (the add-device flow, ADR-0002 trait registry):
       POST /api/v1/devices          -> append a SENSOR to devices.yaml
       POST /api/v1/control-devices  -> append an ACTUATOR to control.yaml (its command secret is derived
-                                       from the owning node's enrolled cmd_secret; enrolling a NEW node is
-                                       a separate, more sensitive step). Omitted if control_path is None.
+                                       from the owning node's enrolled cmd_secret). Omitted if control_path None.
+      POST /api/v1/nodes            -> enrol a NEW node (mint cmd_secret, re-encrypt node_secrets.enc,
+                                       return the secret + secrets.h). Omitted unless node_secrets_path+master.
     Separate from the control.db overlay router above."""
     from pathlib import Path
 
     from fastapi import APIRouter, Body, Depends, Header, HTTPException
     from fastapi.responses import JSONResponse
 
-    from server.device_registry import handle_add_actuator, handle_add_device
+    from server.device_registry import handle_add_actuator, handle_add_device, handle_enroll_node
 
     router = APIRouter(prefix="/api/v1", tags=["devices"])
 
@@ -359,6 +360,12 @@ def make_registry_router(api_authz, devices_path, control_path=None):
         @router.post("/control-devices", dependencies=[Depends(require_admin)])
         async def add_actuator(body: dict = Body(...)):
             code, payload = handle_add_actuator(Path(control_path), body)
+            return JSONResponse(status_code=code, content=payload)
+
+    if node_secrets_path is not None and master is not None:
+        @router.post("/nodes", dependencies=[Depends(require_admin)])
+        async def enroll_node(body: dict = Body(...)):
+            code, payload = handle_enroll_node(Path(node_secrets_path), master, body)
             return JSONResponse(status_code=code, content=payload)
 
     return router

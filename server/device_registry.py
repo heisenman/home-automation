@@ -18,7 +18,7 @@ from typing import Any
 import yaml
 
 MAC_RE = re.compile(r"^([0-9A-F]{2}:){5}[0-9A-F]{2}$")
-SLUG_RE = re.compile(r"^[a-z0-9_]+$")
+SLUG_RE = re.compile(r"^[a-z0-9_-]+$")   # allow hyphens — real node ids use them (c6-bench, s3-crawlspace)
 
 
 def load_devices(path: Path) -> dict[str, dict]:
@@ -150,6 +150,55 @@ def append_control_device(path: Path, entry: dict[str, Any]) -> None:
     device_id = e.pop("device_id")
     raw.setdefault("devices", {})[device_id] = e
     _write_yaml_preserving(path, raw)
+
+
+def handle_enroll_node(node_secrets_path: Path, master: str, body: dict[str, Any]) -> tuple[int, dict]:
+    """Enroll a NEW node: mint its cmd_secret + mqtt creds, atomically re-encrypt node_secrets.enc (keep a
+    .bak), and VERIFY the round-trip decrypt — rolling back on any failure so a corrupt write can never
+    report success (this LUT gates ALL node command auth). Returns the secret + a secrets.h snippet for the
+    operator to flash. (Hugh authorised API enrolment 2026-06-25; was console-only before.)"""
+    import secrets as pysecrets
+    import time as _time
+
+    from server.control import secret_store as ss
+    b = body or {}
+    node_id = str(b.get("node_id", "")).strip()
+    if not SLUG_RE.match(node_id):
+        return 400, {"status": "bad-request", "reason": "node_id must be a slug [a-z0-9_]"}
+    mac = str(b.get("mac", "")).strip().upper()
+    if mac and not MAC_RE.match(mac):
+        return 400, {"status": "bad-request", "reason": "mac (optional) must be AA:BB:CC:DD:EE:FF"}
+    try:
+        lut = ss.load_lut(node_secrets_path, master)
+    except ValueError as e:
+        return 500, {"status": "error", "reason": str(e)}
+    if node_id in lut:
+        return 400, {"status": "bad-request", "reason": f"node '{node_id}' already enrolled"}
+    cmd_secret = pysecrets.token_hex(32)
+    lut[node_id] = {"mac": mac, "cmd_secret": cmd_secret, "mqtt_user": node_id,
+                    "mqtt_pass": pysecrets.token_hex(16), "created": int(_time.time())}
+    p = Path(node_secrets_path)
+    bak = p.with_suffix(p.suffix + ".bak")
+    if p.exists():
+        bak.write_bytes(p.read_bytes())
+    ss.save_lut(p, master, lut)                       # atomic (tmp+rename)
+    try:                                               # never report success on a corrupt write
+        if ss.load_lut(p, master).get(node_id, {}).get("cmd_secret") != cmd_secret:
+            raise ValueError("verify mismatch")
+    except Exception:
+        if bak.exists():
+            p.write_bytes(bak.read_bytes())            # roll back to the pre-write LUT
+        return 500, {"status": "error", "reason": "enrolment failed round-trip verification; rolled back"}
+    return 201, {
+        "status": "enrolled",
+        "node_id": node_id,
+        "cmd_secret": cmd_secret,
+        "secrets_h": f'#define HA_CMD_SECRET "{cmd_secret}"',
+        "note": ("Node enrolled in node_secrets.enc. Bake the secrets_h line into the node's secrets.h, "
+                 "build + flash, then add its device(s) via POST /api/v1/control-devices with node='" +
+                 node_id + "'. mqtt creds are stored for the air-gap broker-auth cutover (broker is anon "
+                 "until then). Keep this secret out of git."),
+    }
 
 
 def handle_add_actuator(path: Path, body: dict[str, Any]) -> tuple[int, dict]:
