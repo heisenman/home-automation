@@ -124,7 +124,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v23 retire-vs-hide (parser fix)";
+const BUILD = "v24 add-device";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -751,6 +751,57 @@ function DeviceMetaModal({ device, onClose, onSaved }) {
     </div>`;
 }
 
+function AddDeviceModal({ onClose, onSaved }) {
+  const [mac, setMac] = useState("");
+  const [deviceId, setDeviceId] = useState("");
+  const [deviceType, setDeviceType] = useState("");
+  const [area, setArea] = useState("");
+  const [notes, setNotes] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [done, setDone] = useState(null);
+  const save = async () => {
+    setBusy(true); setErr("");
+    try {
+      const body = { mac: mac.trim(), device_id: deviceId.trim(),
+                     device_type: deviceType.trim(), area: area.trim() };
+      if (notes.trim()) body.notes = notes.trim();
+      setDone(await adminSend("POST", "/api/v1/devices", body));
+    } catch (e) { setErr(String(e.message)); setBusy(false); }
+  };
+  const form = html`
+    <input value=${mac} placeholder="MAC — e.g. AA:BB:CC:DD:EE:FF"
+      onInput=${(e) => setMac(e.target.value.toUpperCase())} />
+    <input value=${deviceId} placeholder="device_id slug — e.g. meter_living_room"
+      onInput=${(e) => setDeviceId(e.target.value)} />
+    <input value=${deviceType} placeholder="device_type — e.g. switchbot_meter_pro, aranet_radon_plus"
+      onInput=${(e) => setDeviceType(e.target.value)} />
+    <input value=${area} placeholder="area slug — e.g. living_room"
+      onInput=${(e) => setArea(e.target.value)} />
+    <input value=${notes} placeholder="notes (optional)" onInput=${(e) => setNotes(e.target.value)} />
+    ${err && html`<div class="err">${err}</div>`}
+    <div class="modal-actions">
+      <button class="btn ghost" onClick=${onClose}>Cancel</button>
+      <button class="btn primary" disabled=${busy} onClick=${save}>${busy ? "Adding…" : "Add"}</button>
+    </div>`;
+  const success = html`
+    <p class="note">✅ Registered <b>${done && done.device_id}</b> (${done && done.mac}).</p>
+    <p class="note">It won't report until the scanner reloads the registry — run on the dictator:</p>
+    <p class="note"><code>${done && done.reload_cmd}</code></p>
+    <p class="note">Then verify: <code>python3 tools/device_smoke_test.py ${done && done.device_id}</code></p>
+    <div class="modal-actions">
+      <button class="btn primary" onClick=${() => { onSaved(); onClose(); }}>Done</button>
+    </div>`;
+  return html`
+    <div class="modal-bg" onClick=${onClose}>
+      <div class="modal" onClick=${(e) => e.stopPropagation()}>
+        <h3>Add a sensor</h3>
+        <p class="note">Appends to the device registry (devices.yaml). Sensor devices only for now.</p>
+        ${done ? success : form}
+      </div>
+    </div>`;
+}
+
 function AdminModal({ onClose, onUnlock }) {
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
@@ -836,6 +887,7 @@ function App() {
   const [showAdmin, setShowAdmin] = useState(false);
   const [tempUnit, setTempUnit] = useState(tempPref());
   const [editDevice, setEditDevice] = useState(null);   // R8 edit modal target
+  const [showAdd, setShowAdd] = useState(false);        // add-device modal
   const onEdit = (d) => (isAdmin ? setEditDevice(d) : setShowAdmin(true));
 
   // weather lane catalog (locations + metrics) — fetched once for the graph builder
@@ -880,6 +932,7 @@ function App() {
         <${NotifyToggle} />
         ${isAdmin
           ? html`<span class="admin-on" title="Admin unlocked">🔓 Admin</span>
+                 <button class="btn sm ghost" onClick=${() => setShowAdd(true)}>+ Device</button>
                  <button class="btn sm ghost" onClick=${lock}>Lock</button>`
           : html`<button class="btn sm" onClick=${() => setShowAdmin(true)}>🔒 Admin</button>`}
       </div>
@@ -901,6 +954,7 @@ function App() {
         onUnlock=${() => setIsAdmin(true)} />`}
       ${editDevice && html`<${DeviceMetaModal} device=${editDevice}
         onClose=${() => setEditDevice(null)} onSaved=${refresh} />`}
+      ${showAdd && html`<${AddDeviceModal} onClose=${() => setShowAdd(false)} onSaved=${refresh} />`}
     </div>
     </${UnitsCtx.Provider}>`;
 }

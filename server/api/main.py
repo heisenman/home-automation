@@ -144,6 +144,7 @@ CONTROL_POLICY = Path(os.environ.get("HA_CONTROL_POLICY", "instance/control_poli
 CONTROL_SECRETS = Path(os.environ.get("HA_CONTROL_SECRETS", "instance/control_secrets.yaml"))
 MIDEA_DEVICE_ENV = Path(os.environ.get("HA_MIDEA_DEVICE_ENV", "instance/midea-device.env"))
 CONTROL_DB = Path(os.environ.get("HA_CONTROL_DB", "instance/db/control.db"))
+DEVICES_REGISTRY = Path(os.environ.get("HA_DEVICES", "instance/devices.yaml"))   # sensor registry (add-device flow)
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"   # server/web — the no-build PWA
 
 
@@ -176,7 +177,8 @@ def _mount_control(app: FastAPI) -> None:
         import yaml
         from server.control.bootstrap import build_issuer
         from server.control.registry import check_secrets_present
-        from server.api.control import make_device_meta_router, make_override_router, make_router
+        from server.api.control import (make_device_meta_router, make_override_router,
+                                         make_registry_router, make_router)
 
         broker = os.environ.get("HA_BROKER", "localhost")
         port = int(os.environ.get("HA_BROKER_PORT", "1883"))
@@ -191,6 +193,7 @@ def _mount_control(app: FastAPI) -> None:
         # the manual-override + control-state router (writes control.db, read by the controller each tick)
         app.include_router(make_override_router(api_authz, CONTROL_DB, device_ids=set(registry)))
         app.include_router(make_device_meta_router(api_authz, CONTROL_DB))   # R8 friendly-name/room/hide
+        app.include_router(make_registry_router(api_authz, DEVICES_REGISTRY))  # add-device: append sensor to devices.yaml
         app.state.control_registry = registry      # device_id -> DeviceCtl (traits for manual-control UI)
         missing = check_secrets_present(registry, issuer.secrets)
         log.info("control plane MOUNTED — %d device(s), %d controllable; broker %s:%s%s",

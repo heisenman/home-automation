@@ -269,6 +269,32 @@ def make_device_meta_router(api_authz, control_db):
     return router
 
 
+def make_registry_router(api_authz, devices_path):
+    """Admin-gated SENSOR registration (POST /api/v1/devices) — appends to devices.yaml (the add-device
+    flow, ADR-0002 trait registry). Separate from the control.db overlay router above. Sensor-only for
+    now; actuator enroll (node_secrets + control.yaml) is a follow-on slice."""
+    from pathlib import Path
+
+    from fastapi import APIRouter, Body, Depends, Header, HTTPException
+    from fastapi.responses import JSONResponse
+
+    from server.device_registry import handle_add_device
+
+    router = APIRouter(prefix="/api/v1/devices", tags=["devices"])
+
+    def require_admin(authorization: str | None = Header(default=None)):
+        if api_authz is None or not api_authz(authorization):
+            raise HTTPException(status_code=401, detail="unauthorized",
+                                headers={"WWW-Authenticate": "Bearer"})
+
+    @router.post("", dependencies=[Depends(require_admin)])
+    async def add_device(body: dict = Body(...)):
+        code, payload = handle_add_device(Path(devices_path), body)
+        return JSONResponse(status_code=code, content=payload)
+
+    return router
+
+
 def make_override_router(api_authz, control_db, device_ids=None):
     """Admin-gated control router (prefix /control): set/clear the manual override and read the live
     control state. Writes only control.db (the controller's source of truth); same bearer as /devices."""
