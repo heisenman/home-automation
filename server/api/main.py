@@ -108,11 +108,19 @@ async def _push_alert_loop():
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("API starting — db=%s parquet=%s", DB_PATH, PARQUET_GLOB)
-    push_task = asyncio.create_task(_push_alert_loop())
+    # Background loops (web-push) must run in EXACTLY ONE instance. During the R9 TLS transition we run a
+    # second uvicorn (HTTPS:8443) sharing the app+DBs; it sets HA_API_BACKGROUND=0 so only the primary
+    # (HTTP:8123) drives the push loop — no double tickles.
+    push_task = None
+    if os.environ.get("HA_API_BACKGROUND", "1") != "0":
+        push_task = asyncio.create_task(_push_alert_loop())
+    else:
+        log.info("HA_API_BACKGROUND=0 — background loops disabled in this instance (TLS front)")
     try:
         yield
     finally:
-        push_task.cancel()
+        if push_task is not None:
+            push_task.cancel()
         log.info("API shutdown")
 
 
