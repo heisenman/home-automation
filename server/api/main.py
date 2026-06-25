@@ -63,59 +63,103 @@ _deep_query_lock = asyncio.Lock()
 
 # ── Lifespan ──────────────────────────────────────────────────────────────────
 
-async def _push_alert_loop():
-    """Web-push driver: every PUSH_POLL_S, on the VIP holder only, diff the active alerts and send a
-    payload-less tickle to every subscription when a NEW alert appears (prune dead 404/410 subs). The SW
-    fetches the alert detail itself, so we ship no payload. Skips entirely if no VAPID keyfile."""
+# Air-gap-native alert propagation (replaces vendor Web Push, decided 2026-06-25). Web Push is a dead end
+# for the air-gapped end state: the browser subscribes against, and the server delivers via, the vendor
+# cloud (Google FCM / Mozilla) — unreachable once the network is air-gapped; and the service worker won't
+# even register under the self-signed cert without a local CA. So alerts ride the system's OWN bus: MQTT.
+# We publish the active alert set RETAINED to home/_alerts (state, for panels/displays that connect any
+# time) plus a per-NEW-alert event to home/_alert/new (edge-triggered, for a LAN notifier — e.g. a
+# self-hosted ntfy bridge or an MCU panel). All LAN-only, zero cloud. See docs/decisions/air-gap-notify.md.
+ALERTS_TOPIC = "home/_alerts"          # retained snapshot of the current alert set
+ALERT_EVENT_TOPIC = "home/_alert/new"  # non-retained, one publish per newly-appeared alert
+
+
+def _alert_mqtt_connect():
+    """Best-effort paho client to the local broker for alert propagation. None if paho/broker unavailable
+    (the API still serves; alerts just aren't bused until the broker is reachable). loop_start() handles
+    reconnection in the background; publish() is thread-safe."""
+    try:
+        import paho.mqtt.client as mqtt
+        from server.util.mqtt_creds import apply_credentials
+        c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        apply_credentials(c)
+        c.connect(os.environ.get("HA_BROKER", "localhost"),
+                  int(os.environ.get("HA_BROKER_PORT", "1883")), 60)
+        c.loop_start()
+        return c
+    except Exception:
+        log.warning("alert MQTT connect failed — alerts not bused this cycle (will retry)", exc_info=True)
+        return None
+
+
+async def _alert_loop():
+    """Every PUSH_POLL_S, on the VIP holder only, publish the active alert set to MQTT (retained snapshot +
+    per-new-alert events) so air-gap-native LAN consumers get system events with no cloud dependency. The
+    legacy Web-Push tickle is kept as a DEPRECATED no-op (0 subscriptions; dies at air-gap) — see header."""
+    import json as _json
     import time
     from server.api import webpush
     from server.control import control_store as store
     vip = os.environ.get("HA_VIP", "")
+    client = _alert_mqtt_connect()
     last_keys: set = set()
     while True:
         await asyncio.sleep(PUSH_POLL_S)
         try:
-            v = _load_vapid()
-            if not v:
-                continue
-            if vip:                                  # only the dictator pushes (one-controller invariant)
+            if vip:                                  # only the dictator propagates (one-writer invariant)
                 from server.cluster.state import vip_held
                 if not vip_held(vip):
                     last_keys = set()
                     continue
-            alerts = await asyncio.to_thread(_build_current_alerts, time.time())
+            if client is None:                       # retry the broker connection
+                client = _alert_mqtt_connect()
+            now = time.time()
+            alerts = await asyncio.to_thread(_build_current_alerts, now)
             keyed = {webpush.alert_key(a): a for a in alerts}
             new = [k for k in keyed if k not in last_keys]
+
+            # (1) AIR-GAP-NATIVE: retained snapshot + edge events on MQTT
+            if client is not None:
+                client.publish(ALERTS_TOPIC, _json.dumps({"schema": 1, "ts": now, "alerts": alerts}),
+                               qos=0, retain=True)
+                for k in new:
+                    client.publish(ALERT_EVENT_TOPIC, _json.dumps({"schema": 1, "ts": now, "alert": keyed[k]}),
+                                   qos=0, retain=False)
+            if new:
+                log.info("alerts: %d active, %d new -> MQTT %s", len(alerts), len(new), ALERTS_TOPIC)
+
+            # (2) DEPRECATED legacy Web Push (vendor cloud; incompatible with the air gap). No-op unless a
+            # VAPID key + live subscriptions exist; retained only until the PWA notifier is fully retired.
+            v = _load_vapid()
+            if v and new:
+                cc = _control_conn()
+                subs = store.all_push_subs(cc) if cc is not None else []
+                if cc is not None:
+                    cc.close()
+                for s in subs:
+                    status = await asyncio.to_thread(webpush.send_tickle, s["endpoint"], v)
+                    if status in (404, 410):
+                        c2 = _control_conn()
+                        if c2 is not None:
+                            store.remove_push_sub(c2, s["endpoint"])
+                            c2.close()
+
             last_keys = set(keyed)
-            if not new:
-                continue
-            cc = _control_conn()
-            subs = store.all_push_subs(cc) if cc is not None else []
-            if cc is not None:
-                cc.close()
-            for s in subs:
-                status = await asyncio.to_thread(webpush.send_tickle, s["endpoint"], v)
-                if status in (404, 410):             # subscription expired — drop it
-                    c2 = _control_conn()
-                    if c2 is not None:
-                        store.remove_push_sub(c2, s["endpoint"])
-                        c2.close()
-            log.info("web-push: %d new alert(s) -> tickled %d subscription(s)", len(new), len(subs))
         except Exception:
-            log.exception("web-push loop iteration failed (continuing)")
+            log.exception("alert loop iteration failed (continuing)")
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     log.info("API starting — db=%s parquet=%s", DB_PATH, PARQUET_GLOB)
-    # Background loops (web-push) must run in EXACTLY ONE instance. During the R9 TLS transition we run a
-    # second uvicorn (HTTPS:8443) sharing the app+DBs; it sets HA_API_BACKGROUND=0 so only the primary
-    # (HTTP:8123) drives the push loop — no double tickles.
+    # The background alert loop (MQTT alert propagation; legacy web-push no-op) must run in EXACTLY ONE
+    # instance. Two uvicorns share the app+DBs (HTTP:8123 + HTTPS:8443); the gated one sets
+    # HA_API_BACKGROUND=0 so only one drives the loop. It also VIP-gates internally (dictator only).
     push_task = None
     if os.environ.get("HA_API_BACKGROUND", "1") != "0":
-        push_task = asyncio.create_task(_push_alert_loop())
+        push_task = asyncio.create_task(_alert_loop())
     else:
-        log.info("HA_API_BACKGROUND=0 — background loops disabled in this instance (TLS front)")
+        log.info("HA_API_BACKGROUND=0 — background loops disabled in this instance")
     try:
         yield
     finally:
