@@ -117,6 +117,23 @@ Both are ready the moment the hardware is in hand; no software blocker.
 
 ---
 
+## F. Power/idle optimization + box productization  ·  owner: **dev** (ops review, Hugh for BIOS)  ·  gate: partial (BIOS items)
+**Goal:** maximize deep-idle residency under HA constraints, then turn the findings into a **reproducible
+procedure** — a tuned install image + hardware-detecting bring-up directives + a living results ledger —
+so box #2…#N boot already-tuned. Full plan: **`docs/power-optimization.md`**.
+
+**Current state:** baseline profiled (AMD Ryzen Embedded R2514; already ~95% C2; `amd_pstate`/CPPC off;
+iGPU/graphical-target/apt-timer hygiene wins; RAPL measurable as root). Successor to ops's
+`os-service-optimization` footprint pass (power/energy focus vs RAM/service-count).
+
+**Phases:** (0) start the zero-install Layer-1 counter sampler now → (1) 7–15 day cost-aware campaign →
+(2) Hugh BIOS window (CPPC, idle-control) → (3) `provisioning/power-tune.sh` (detect-and-adapt) + fold into
+provisioning → (4) reference image + ledger.
+
+**ops review:** _(pending — relevant: this generalizes your lean-base profile into a tuned image for the future dedicated box)_
+
+---
+
 ## Recommended sequence (the critical path)
 1. **A1–A3 (failover drill)** next — no gate, highest reliability payoff, builds on tonight. *(dev+ops)*
 2. **C (add-device backend)** in parallel where dev/ops capacity allows — independent of A. *(dev+ops)*
