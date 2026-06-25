@@ -1,6 +1,48 @@
 # Follow-ups & clarifications for Hugh
 
-## ✅ CHECKPOINT 2026-06-25 — AUTHORITATIVE current state (supersedes everything below)
+## ✅ CHECKPOINT 2026-06-25 (PM, ADR-0018) — AUTHORITATIVE current state (supersedes everything below)
+Verified against the live cluster + source this date. Repo `eafa369`.
+
+**SHIPPED + VERIFIED LIVE this session (210 dictator / .245 warm standby):**
+- **Node provisioning → record-keeping elevation (ADR-0018) — LIVE.** Triggered by a user report (dashboard
+  graphs flat across every time range). Root cause: **210 was elevated to dictator (~06-24) holding only
+  ~1.5 d of parquet archive** while `.245` held the full history since 2026-01-07 — the cutover seeded
+  hot+config but never the archive (the deep-reconcile ADR-0016 had deferred). **No data was lost.** Built +
+  ran the fix as a reusable, gated procedure (Hugh: "build the process, then run the one-off"):
+  - `failover/reconcile-parquet.sh` — ROW-LEVEL parquet deep-reconcile, dedup keyed `(device_id,ts,metric)`
+    (ADR-0007 idempotency), atomic per-partition rewrite, bidirectional over id_cluster. Matches the
+    compactor's `zstd/6/100k` + sorted for column locality (a snappy-default bug bloated the archive
+    ~1.5–3.7× before the fix; now a merged partition is *smaller* than the original).
+  - `failover/provision-peer.sh` — config-of-record → hot → archive → **HARD GATE** (archive parity vs
+    source). `--data-only` for re-provisioning a box whose config is already authoritative.
+  - `cluster-doctor` "Archive completeness (ADR-0018)" gate — both dictator-capable boxes' archives must
+    converge or it FAILs.
+  - **One-off result:** `provision-peer --from .245 --data-only` on 210 → both boxes converged to
+    **8,777,107 rows, earliest 2026-01-07**, gate PASS, `cluster-doctor` **18 pass / 0 warn / 0 FAIL**. The
+    union recovered **26,128 June rows unique to 210** → pushed onto `.245` too (rsync would have dropped
+    them). Dashboard deep history restored (7d/30d/180d ranges verified at the API).
+  - **Hard gate proved itself:** it caught a partial first run (an `ssh`-swallows-stdin loop bug merged only
+    January) and refused to certify the short archive. Bug fixed; gate worked as designed.
+  - **Parquet hash manifest (ADR-0004) reconciled:** the reconcile rewrote partitions, leaving `manifest.json`
+    stale → `ha-verify-hashes` would false-FAIL. dev built `tools/rebuild_parquet_manifest.py`; rebuilt + in
+    sync on **both** 210 and `.245`.
+
+**ACTUALLY OPEN / NEXT (this session):**
+1. **`parquet-manifest-wiring`** (dev owns, acked) — auto-rebuild the hash manifest after a reconcile on BOTH
+   boxes (push rewrites the peer's partitions → 210 self-fixed but `.245` had to be rebuilt by hand) +
+   `cluster-doctor` manifest-consistency assertion + `--no-push` no-op cleanup in provision-peer.
+2. **Archive de-bloat** — existing partitions on both boxes are correct-but-bloated (snappy, ~86 MB); they
+   **self-heal to compact zstd on the next reconcile** (no action needed). Forcing a re-compress now is
+   optional churn.
+3. **Optional VIP-gated `reconcile-parquet.sh --loop`** ongoing deep-reconcile service — deferred (parquet
+   diverges only on a compaction-straddling swap; low urgency).
+4. **Chart axis polish (PWA)** — `AdaptiveChart` scales its x-axis to the data extent, not the requested
+   window; anchoring it to `[start,end]` would make range buttons visibly responsive even with sparse data.
+   Nice-to-have, no longer pressing now that the data is there.
+
+---
+
+## ✅ CHECKPOINT 2026-06-25 (AM) — current state
 Verified against the live cluster + source this date. Repo `801545f`.
 
 **SHIPPED + VERIFIED LIVE today (210 dictator / .245 warm standby):**

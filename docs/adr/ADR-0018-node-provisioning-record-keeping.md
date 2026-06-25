@@ -1,9 +1,16 @@
 # ADR-0018 — Node provisioning & elevation to record-keeping status
 
 **Date:** 2026-06-25
-**Status:** Proposed — board `adr-node-provisioning` (co-owned ops+dev), depends on `dictator-archive-backfill`.
-Promotes the parquet **deep-reconcile** that [ADR-0016](ADR-0016-failover-history-reconciliation.md) deferred
-into a load-bearing, gated mechanism. Builds on [ADR-0007](ADR-0007-device-history-sync.md) (idempotent
+**Status:** **IMPLEMENTED & LIVE (2026-06-25)** — `failover/reconcile-parquet.sh` (row-level deep-reconcile,
+zstd/6/100k + sort to match the compactor), `failover/provision-peer.sh` (config→hot→archive→HARD GATE), and
+the `cluster-doctor` "Archive completeness" gate are shipped + deployed on 210/.245. **Proven by the one-off:**
+210 elevated to record-keeping from `.245` — both boxes converged to **8,777,107 rows, earliest 2026-01-07**,
+gate PASS, `cluster-doctor` 18 pass / 0 warn / 0 FAIL. The bidirectional union recovered 26,128 June rows
+unique to 210 (rsync would have dropped them). **Deferred follow-on:** `parquet-manifest-wiring` (dev) —
+auto-rebuild the ADR-0004 hash manifest after a reconcile on BOTH boxes (the push rewrites the peer's
+partitions) + a `cluster-doctor` manifest-consistency assertion; and the optional VIP-gated `--loop` ongoing
+service. Promotes the parquet **deep-reconcile** that [ADR-0016](ADR-0016-failover-history-reconciliation.md)
+deferred into a load-bearing, gated mechanism. Builds on [ADR-0007](ADR-0007-device-history-sync.md) (idempotent
 ingestion — the merge key), [ADR-0006](ADR-0006-storage-two-tier-sqlite-parquet.md) (hot/parquet tiers),
 the `failover/` control plane (`sync-standby.sh`, `reconcile-history.sh`, `cluster-doctor.sh`,
 `dictator-files.manifest`), and the 2026-06-24 cutover-incident hardening that produced the manifest.
