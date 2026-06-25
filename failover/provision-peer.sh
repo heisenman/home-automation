@@ -81,16 +81,16 @@ PEER_HOST="$FROM" bash "$HERE/reconcile-parquet.sh" --once && ok "archive deep-r
 # Eligible only if THIS box's archive now covers the source's: earliest reading no later, and row count
 # within tolerance (after a union merge they should match; tolerance absorbs in-flight compaction).
 say "stage 4 — HARD GATE: archive completeness vs $FROM"
-read_stats(){ # $1 = where ("local" | "remote"); echoes "rows|earliest"
-  local pyexpr='
-import glob,duckdb,sys
-f=glob.glob(sys.argv[1]+"/**/*.parquet",recursive=True)
-f=[x for x in f if "/year=0/" not in x]
-if not f: print("0|"); raise SystemExit
-r=duckdb.connect().execute(f"SELECT COUNT(*),MIN(ts) FROM read_parquet({f!r},union_by_name=true)").fetchone()
-print(f"{r[0]}|{r[1] or \"\"}")'
+read_stats(){ # $1 = where ("local" | "remote"); echoes "rows|earliest" (no f-string backslashes: py<3.12-safe)
+  local pyexpr='import glob,duckdb,sys
+fs=[x for x in glob.glob(sys.argv[1]+"/**/*.parquet",recursive=True) if "/year=0/" not in x]
+if not fs:
+    print("0|")
+else:
+    r=duckdb.connect().execute("SELECT COUNT(*),MIN(ts) FROM read_parquet("+repr(fs)+",union_by_name=true)").fetchone()
+    print(str(r[0])+"|"+(r[1] or ""))'
   if [ "$1" = local ]; then "$PYBIN" -c "$pyexpr" "$REPO/$PARQUET_DIR"
-  else RSH "$REMOTE_REPO/venv/bin/python -c '$pyexpr' '$REMOTE_REPO/$PARQUET_DIR'"; fi
+  else RSH "$REMOTE_REPO/venv/bin/python3 -c '$pyexpr' '$REMOTE_REPO/$PARQUET_DIR'"; fi
 }
 LS="$(read_stats local)";  l_rows="${LS%%|*}"; l_min="${LS#*|}"
 RS="$(read_stats remote)"; r_rows="${RS%%|*}"; r_min="${RS#*|}"
