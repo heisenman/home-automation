@@ -141,7 +141,11 @@ deltas), root-owned; ~a few KB/day (logrotate to be added at productization). **
 
 ### 3.4 Tooling cost
 Installs needed (one-time, while apt still reachable pre-air-gap): `sysstat`, `acct`, `powertop`,
-`linux-cpupower`, `nvme-cli`. All are dormant except when invoked. The Layer-1 sampler itself needs **no
+`linux-cpupower`, `nvme-cli`. All are dormant except when invoked. **DONE 2026-06-25:** `acct` + `sysstat`
++ `powertop` installed; **`acct.service` enabled** (Layer-2 transient capture live — `sudo lastcomm`);
+**sysstat's polling collector timers DISABLED** (`sysstat-collect/summary/rotate`) so we keep `sar`/
+`iostat`/`mpstat` on-demand without adding periodic wakeups (cost-aware). *(For the image/`power-tune.sh`:
+install the set, `enable --now acct.service`, `disable --now sysstat-collect.timer sysstat-summary.timer`.)* The Layer-1 sampler itself needs **no
 packages** (pure `/sys` + `/proc` reads + a root RAPL read) — so it can start **tonight** and collect the
 full window even before the deep-dive tools land.
 
@@ -186,7 +190,9 @@ capability-gated). This is the artifact the next bring-up reads.
 
 **Phase 0 ✅ DONE (2026-06-25):** Layer-1 sampler live (no installs, root timer); the 7–15 day window is
 **collecting now**. First live read: package ~11.8 W under active load, ~74–96% C2. *(dev)*
-**Phase 1 (campaign, days 0–15):** Layers 2–3 tools installed; A/B the 🟡 levers; collect. *(dev)*
+**Phase 1 (campaign, days 0–15):** Layer-2 transient capture **LIVE (2026-06-25, `acct`)** + Layer-3 tools
+installed (powertop/sysstat on-demand). Remaining: threshold-triggered burst sampling (sampler tweak) +
+A/B the 🟡 levers (most need the Hugh BIOS window). Collecting. *(dev)*
 **Phase 2 (Hugh window):** the 🔴 BIOS items (CPPC, idle-control) at a console; re-measure. *(Hugh + dev)*
 **Phase 3:** write `power-tune.sh` + fold winners into provisioning + draft the image. *(dev, ops review)*
 **Phase 4:** capture the reference image; ledger reflects gains. *(dev + ops)*
@@ -206,4 +212,5 @@ capability-gated). This is the artifact the next bring-up reads.
 |------|---------------------|-----------|------------|------------|-----------|----------|-----------|
 | 2026-06-25 | Baseline captured (see §1) | — | — | ~95% C2 lifetime; pkg-W TBD (RAPL root) | — | — | this box |
 | 2026-06-25 | Phase 0 sampler live | systemd timer reads RAPL/C-state/IRQ deltas every 5 min | n/a (measurement) | first read pkg ~11.8 W (active load); idle TBD over window | yes (`systemctl disable`) | yes (units belong in image) | all (capability-gated on RAPL) |
+| 2026-06-25 | Phase 1 transient capture | `acct` process accounting (event-driven, per process-exit) | enabled `acct.service`; installed powertop/sysstat (on-demand); disabled sysstat pollers | n/a (measurement); ~0 added wakeups | yes (`systemctl disable acct`) | yes (image installs+enables it) | all |
 | _(campaign findings land here)_ | | | | | | | |
