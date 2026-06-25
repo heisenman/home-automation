@@ -164,8 +164,8 @@ theme A, not here — it's the one lever that touches failover detection.
 5. **E** whenever hardware lands.
 
 ## Decisions needed from Hugh
-- [x] Open the **OpenWRT** gate, and when? → **Hugh (2026-06-25):** new router = **Netgear Nighthawk X4S**, expected **~2 weeks (≈2026-07-09)**. *"Nothing to do until then unless we download a compatible OpenWRT image and start modifying it?"* → **dev/ops: yes — pre-staging now is worth it** (build/download + pre-configure the image offline so the cutover is fast; board `openwrt-prestage`). **Caveat:** confirm the exact hardware revision first — "Nighthawk X4S" usually = Netgear **R7800** (well-supported, ipq806x), but flashing the wrong rev bricks it, so verify model/rev before downloading firmware.
-- [ ] Confirm **broker-auth** plan = stay anon now, auth at the air-gap cutover (the recommendation)?
+- [x] Open the **OpenWRT** gate, and when? → **Hugh (2026-06-25):** new router = **Netgear Nighthawk X4S**, expected **~2 weeks (≈2026-07-09)**. *"Nothing to do until then unless we download a compatible OpenWRT image and start modifying it?"* → **dev/ops: yes — pre-staging now is worth it** (build/download + pre-configure the image offline so the cutover is fast; board `openwrt-prestage`). **Model CONFIRMED by Hugh (2026-06-25): Netgear R7800** (Qualcomm `ipq806x`, OpenWRT profile `netgear_r7800` — well-supported) → STEP 0 cleared, pre-staging can proceed (board `openwrt-prestage`).
+- [x] Confirm **broker-auth** plan? → **Hugh (2026-06-25):** **Confirmed — stay anonymous until the air gap is created**, then add auth + ACL as part of that cutover (rides with theme B / OpenWRT).
 - [x] **secure-boot-210** + **sudo-hardening-210** → **Hugh (2026-06-25):** schedule for the **Phase-8 pass or sooner**.
 - [x] Is **`.245`** the long-term standby? → **Hugh (2026-06-25):** **No** — temporary; no present visibility on the real long-term standby box yet. → reinforces lightweight theme A + theme-F future-box framing.
 - [ ] Acceptable **failover RTO** + hot.db divergence on takeover (theme A open questions)?
