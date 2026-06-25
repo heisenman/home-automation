@@ -1,5 +1,42 @@
 # Follow-ups & clarifications for Hugh
 
+## ✅ CHECKPOINT 2026-06-25 — AUTHORITATIVE current state (supersedes everything below)
+Verified against the live cluster + source this date. Repo `801545f`.
+
+**SHIPPED + VERIFIED LIVE today (210 dictator / .245 warm standby):**
+- **R9 API security (ADR-0017) — mechanism LIVE.** HTTPS:8443 (`ha-api-tls`, self-signed SAN incl VIP),
+  `/auth/login`+`/auth/refresh`+dual-verify (JWT-or-legacy, admin-gated), PWA `crypto.subtle`. `:8123`
+  untouched (healthcheck-safe). cert+VAPID synced in `dictator-files.manifest`. **DEFERRED to post-air-gap
+  (Hugh):** operator/viewer per-route split, legacy-bearer deprecation, JWT-login PWA adoption, local-CA.
+  Reads stay OPEN on the LAN.
+- **Notifications: vendor Web Push DROPPED → MQTT + self-hosted ntfy (E2E verified).** SW won't register on
+  a self-signed cert (needs local-CA) + Web Push needs FCM/Mozilla cloud = air-gap-fatal. Now: alert engine
+  publishes `home/_alerts` (retained) + `home/_alert/new` (edge) on the dictator; `ha-ntfy-bridge` → self-
+  hosted `ntfy:8095` → phone (smoke test reached ntfy HTTP 200). In-app banner kept (confirmed firing on
+  the master-bath disconnect). See [air-gap-notify.md](decisions/air-gap-notify.md).
+- **Failover HISTORY RECONCILIATION (ADR-0016) — LIVE + verified.** `reconcile-history.sh` bidirectional
+  windowed `hot.db` merge over id_cluster SSH; `ha-reconcile-history` VIP-gated 15-min proactive loop +
+  `notify.sh` MASTER/BACKUP hook; cluster-doctor convergence check. Live proof: bidirectional merge +
+  **convergence Δ0** (primary=standby=14691). Shadow tuner logs a proposed adaptive interval (15 min stays
+  fixed). **Closes the data-plane gap — the gate before trusting operational failover.**
+- **House scenes (Home/Away/Sleep)** LIVE (ADR-0011 addendum); **phase-b-notify-failover** DONE (notify.sh
+  binds ha-relay-coordinator to VRRP role); **openwrt-prestage** DONE (R7800 offline image+config+runbook,
+  single-bridge design fixes vip-from-wifi); **add-device-flow** DONE (dev: sensor/actuator/node-enroll).
+
+**ACTUALLY OPEN / NEXT:**
+1. **Reconcile shadow-tuning review — SCHEDULED 2026-07-02** (cloud routine `trig_01WsViJjLPtMsu3i93qqKCk4`,
+   reminder only — runs LAN-side). Read `instance/ha-reconcile-tuning.log`; sane → flip `RECONCILE_MODE=active`
+   on 210+.245; weird → revisit tuner (ADR-0016).
+2. **Failover DRILL** (dev harness, `failover-drill`) — now meaningful for the data plane; seize→release→
+   confirm zero history hole = the live end-to-end proof. Gated on Hugh OK + window.
+3. **OpenWRT cutover** (theme B, router ETA ~2026-07-09, Hugh + window) — prestage READY; clears
+   `vip-unreachable-from-wifi` + `broker-auth-posture` + `network-init-tooling`.
+4. **Deferred (post-air-gap):** the R9 role/legacy/PWA-JWT items above; **notify-HA** (ntfy+bridge on the
+   standby); web-push remnant cleanup; **parquet deep-reconcile** (ADR-0016 deferred lift, device-buffer
+   deadline-bounded).
+
+---
+
 ## ✅ RECONCILED 2026-06-23 — AUTHORITATIVE current state (everything below is historical log)
 Reconciliation after the firmware items below were found stale (node had moved past them). Verified
 against the live system + source on this date.

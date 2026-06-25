@@ -5,6 +5,14 @@
 owners — so we sequence deliberately instead of picking the nearest READY board task. Board tasks remain
 the unit of execution (`tools/agents/coord.py`); this doc is the *why* and the *order*.
 
+> **Status update (ops, 2026-06-25 EOD):** authoritative current state is the CHECKPOINT section atop
+> [FOLLOWUPS.md](FOLLOWUPS.md). Since this draft: **theme D R9 mechanism LIVE** (HTTPS + JWT auth; role
+> split deferred post-air-gap); **notifications pivoted** off vendor Web Push → MQTT + self-hosted ntfy
+> (air-gap-native, [decisions/air-gap-notify.md](decisions/air-gap-notify.md)); **failover history
+> reconciliation LIVE** (ADR-0016, convergence verified — the data-plane gate before the drill);
+> **openwrt-prestage DONE** (theme B prep ready for the ~Jul 9 cutover window); **add-device-flow DONE**.
+> Next gates on Hugh: the **failover drill** (A3) and the **OpenWRT cutover** (B).
+
 > **How to review:** ops — drop inline reactions under each theme's "ops review" line (or via the RPC
 > board note on `roadmap-review`). Hugh — the **Decisions needed from you** section at the bottom is the
 > short list; everything else is engineering sequencing.

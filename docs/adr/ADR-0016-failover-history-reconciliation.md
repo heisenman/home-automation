@@ -1,7 +1,11 @@
 # ADR-0016 — Sensor-history reconciliation across a dictator failover
 
 **Date:** 2026-06-24
-**Status:** Accepted (2026-06-24, Hugh) — spun out of [ADR-0015](ADR-0015-edge-relay-coverage-assignment.md) decision #8
+**Status:** **IMPLEMENTED & LIVE (2026-06-25)** — `reconcile-history.sh` + `ha-reconcile-history` (VIP-gated
+15-min proactive loop) + `notify.sh` MASTER/BACKUP hook + cluster-doctor convergence check, all deployed on
+210/.245; verified live (bidirectional merge, convergence Δ0). Adaptive interval in shadow mode (review
+2026-07-02). Parquet deep-reconcile still deferred (device-buffer deadline-bounded). Accepted 2026-06-24 —
+spun out of [ADR-0015](ADR-0015-edge-relay-coverage-assignment.md) decision #8
 ("history reconciliation → its own ADR; reconcile-on-promotion over the cluster back-channel"). Builds on
 [ADR-0007](ADR-0007-device-history-sync.md) (idempotent ingestion), [ADR-0009](ADR-0009-history-continuity.md)
 (continuity), [ADR-0006](ADR-0006-storage-two-tier-sqlite-parquet.md) (hot.db/parquet), and the failover
