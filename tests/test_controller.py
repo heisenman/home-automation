@@ -127,5 +127,37 @@ def test_disabled_policy_is_skipped():
         assert iss.calls == []                              # disabled -> no automation
 
 
+def test_sleep_scene_parks_a_running_device():
+    # device ON + RH 60 (rule would keep it ON), but Sleep scene forces OFF
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make(tmp, STATUS_ON)
+        conn = sqlite3.connect(db)
+        pol = store.get_policy(conn, "dehumidifier_office")
+        pol["scenes"] = {"Sleep": {"off": True}}
+        store.set_policy(conn, "dehumidifier_office", pol)
+        store.set_scene(conn, "Sleep")
+        conn.close()
+        ctrl.inject_reading("meter_pro_living_room", 60.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        assert iss.calls and iss.calls[-1]["args"] == {"on": False}
+        rows = store.recent_log(sqlite3.connect(db), "dehumidifier_office")
+        assert rows[0]["source"] == "scene", rows[0]
+
+
+def test_away_scene_relaxes_thresholds():
+    # RH 50: ON under Home (>=44), but Away relaxes to on_above 60 -> stays OFF (deadband/below)
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make(tmp, STATUS_ON.replace("running = True", "running = False"))
+        conn = sqlite3.connect(db)
+        pol = store.get_policy(conn, "dehumidifier_office")
+        pol["scenes"] = {"Away": {"on_above": 60, "off_below": 55}}
+        store.set_policy(conn, "dehumidifier_office", pol)
+        store.set_scene(conn, "Away")
+        conn.close()
+        ctrl.inject_reading("meter_pro_living_room", 50.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        assert iss.calls == []                              # relaxed -> no turn-on at RH 50
+
+
 if __name__ == "__main__":
     run_module(globals())

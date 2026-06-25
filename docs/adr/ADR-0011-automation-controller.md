@@ -76,3 +76,25 @@ multi-device policies, a UI for overrides.
 + Automation rides the existing signed/ACL path (no new trust surface). + Control law is pluggable, so
 the dehumidifier's external-sensor quirk doesn't contaminate the design. + Auditable + fail-safe.
 − A new long-running service to own (state: overrides, min-cycle timers, control_log).
+
+## Addendum — house scenes (Home/Away/Sleep), 2026-06-24 (board `schedules-modes-scenes`)
+
+Whole-house occupancy **scenes** the user flips from the PWA topbar. One global value in `control.db`
+(`house_scene`, single row, default `Home`); the controller reads it every tick and folds each device's
+matching profile into the effective policy via the pure `automation.apply_scene()`.
+
+- **Per-device profiles** live in the policy as `"scenes": {"<name>": <patch>}`. A patch may force the
+  device **off** (`{"off": true}`) and/or **relax/tighten** the hysteresis thresholds
+  (`on_above`/`off_below`/`min_on_min`/`min_off_min`). `Home` (and any device with no profile) = base
+  policy unchanged, so the feature is **opt-in and changes nothing until configured**.
+- **Precedence:** inserted as a new layer **between manual override and schedule** — an explicit human
+  override still beats the ambient scene; safety still beats everything. New decision source `scene`.
+- **API:** `GET /api/v1/house` (open read — scene + canonical list) for the selector; `POST
+  /control/house/scene` (admin) to set it; per-device profiles edit through the existing
+  `PUT /control/{id}/policy` (`scenes` key, validated). The view-model surfaces the active scene's effect
+  per device so the card shows "Away: relaxed / Sleep: parked".
+- **Failover:** `house_scene` rides the existing `sync-standby` snapshot, so the scene survives a dictator
+  swap. **Distinct from** the power `mode.py` (Normal/Conserve/Emergency), which is a separate concern.
+- This delivers the deferred "schedule windows with profiles / a UI for overrides" item above. Time-of-day
+  **auto-scene** switching (a house schedule writing `house_scene`) is a clean future extension — the row
+  is already the single write point; deferred to avoid manual-vs-auto pin arbitration with one actuator.

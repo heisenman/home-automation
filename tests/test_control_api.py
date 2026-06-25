@@ -104,5 +104,56 @@ def test_router_requires_admin_bearer():
     assert r.status_code == 200 and r.json()["status"] == "ok", (r.status_code, r.text)
 
 
+# ── house scene API (Home/Away/Sleep) ────────────────────────────────────────────
+def _ctrl_db():
+    import sqlite3
+    from server.control import control_store as store
+    c = sqlite3.connect(":memory:")
+    store.ensure_schema(c)
+    store.seed_policy(c, "dehumidifier_office",
+                      {"enabled": True, "control": {"on_above": 44, "off_below": 40}})
+    return c
+
+
+def test_set_scene_accepts_canonical_and_rejects_unknown():
+    c = _ctrl_db()
+    code, body = C.handle_set_scene(c, {"scene": "Away"})
+    assert code == 200 and body["scene"] == "Away" and "Home" in body["scenes"], body
+    code, body = C.handle_set_scene(c, {"scene": "Vacation"})
+    assert code == 400, body
+
+
+def test_policy_update_accepts_valid_scenes_map():
+    c = _ctrl_db()
+    patch = {"scenes": {"Away": {"on_above": 60, "off_below": 55}, "Sleep": {"off": True}}}
+    code, body = C.handle_policy_update(c, "dehumidifier_office", patch, {"dehumidifier_office"})
+    assert code == 200 and body["policy"]["scenes"]["Sleep"]["off"] is True, body
+
+
+def test_policy_update_rejects_bad_scene_name_and_deadband():
+    c = _ctrl_db()
+    code, _ = C.handle_policy_update(c, "dehumidifier_office",
+                                     {"scenes": {"Nope": {"off": True}}}, {"dehumidifier_office"})
+    assert code == 400
+    code, _ = C.handle_policy_update(c, "dehumidifier_office",
+                                     {"scenes": {"Away": {"on_above": 50, "off_below": 55}}},
+                                     {"dehumidifier_office"})
+    assert code == 400          # on_above must exceed off_below
+    code, _ = C.handle_policy_update(c, "dehumidifier_office",
+                                     {"scenes": {"Away": {"bogus": 1}}}, {"dehumidifier_office"})
+    assert code == 400          # unknown key
+
+
+def test_read_control_state_surfaces_active_scene():
+    c = _ctrl_db()
+    C.handle_policy_update(c, "dehumidifier_office",
+                           {"scenes": {"Sleep": {"off": True}}}, {"dehumidifier_office"})
+    C.handle_set_scene(c, {"scene": "Sleep"})
+    import time
+    st = C.read_control_state(c, "dehumidifier_office", time.time())
+    assert st["scene"] == "Sleep"
+    assert st["scene_active"]["off"] is True and st["scene_active"]["scene"] == "Sleep", st
+
+
 if __name__ == "__main__":
     run_module(globals())

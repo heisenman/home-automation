@@ -40,6 +40,7 @@ body {
 .hist-src { font-weight: 700; text-transform: uppercase; font-size: 10px; padding: 1px 5px; border-radius: 4px; background: var(--panel-2); flex: none; }
 .src-safety { color: var(--bad); } .src-override { color: var(--override); }
 .src-rule { color: var(--ok); } .src-schedule { color: var(--accent); } .src-default { color: var(--muted); }
+.src-scene { color: var(--accent); }
 .hist-reason { color: var(--muted); }
 .dot { width: 9px; height: 9px; border-radius: 50%; background: var(--disabled); }
 .dot.live { background: var(--ok); box-shadow: 0 0 0 3px rgba(52,211,153,.18); }
@@ -53,6 +54,20 @@ body {
 .btn.ghost { background: transparent; }
 .btn:disabled { opacity: .45; cursor: not-allowed; }
 .btn.sm { padding: 6px 10px; font-size: 13px; }
+.btn.scene-on { background: var(--accent); border-color: var(--accent); color: #04121f; font-weight: 600; }
+
+/* ── house scene selector (Home/Away/Sleep) ──────────────── */
+.scene-sel { display: inline-flex; gap: 4px; }
+.scene-sel .btn.sm { padding: 5px 9px; }
+.scene-note { font-size: 11px; color: var(--muted); margin-left: 4px; }
+.scene-chip {
+  font-size: 11px; font-weight: 600; color: var(--accent);
+  background: rgba(74,163,255,.12); border: 1px solid var(--accent);
+  border-radius: 20px; padding: 1px 8px;
+}
+.scene-thresh { gap: 12px; margin-top: 6px; }
+.scene-thresh .inline { display: inline-flex; align-items: center; gap: 4px; font-size: 12px; color: var(--muted); }
+.scene-thresh .inline input { width: 56px; }
 
 /* ── device card ─────────────────────────────────────────── */
 .card {

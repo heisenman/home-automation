@@ -124,7 +124,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v24 add-device";
+const BUILD = "v25 scenes + add-device";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -222,9 +222,23 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
   const [onAbove, setOnAbove] = useState(c.on_above ?? "");
   const [offBelow, setOffBelow] = useState(c.off_below ?? "");
   const [quiet, setQuiet] = useState("");
+  const [scenes, setScenes] = useState(vm.scenes || {});   // {Away:{...}, Sleep:{...}}
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [flash, setFlash] = useState("");
+
+  // per-device scene profiles. Home is the neutral base (no profile); Away/Sleep can park the device or
+  // relax its thresholds. behavior ∈ base | off | custom, derived from the stored profile.
+  const EDITABLE_SCENES = ["Away", "Sleep"];
+  const behaviorOf = (p) => (!p || !Object.keys(p).length ? "base" : p.off ? "off" : "custom");
+  const setBehavior = (name, b) => setScenes((s) => {
+    const next = { ...s };
+    if (b === "base") delete next[name];
+    else if (b === "off") next[name] = { off: true };
+    else next[name] = { on_above: Number(onAbove) || 55, off_below: Number(offBelow) || 50 };
+    return next;
+  });
+  const setSceneField = (name, k, v) => setScenes((s) => ({ ...s, [name]: { ...s[name], [k]: v } }));
 
   // candidate sources = trusted sensors that actually report humidity. Keep the current source in the
   // list even if it's momentarily offline/absent, so saving never silently drops it.
@@ -245,6 +259,14 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
     if (source) patch.source_sensor = source;
     patch.fallback_sensors = fallbacks;
     if (quiet.trim()) patch.schedule = [{ when: quiet.trim(), policy: "off" }];
+    // normalize scene profiles: drop empties, coerce thresholds to numbers
+    const sc = {};
+    for (const [name, p] of Object.entries(scenes)) {
+      if (!p || !Object.keys(p).length) continue;
+      if (p.off) sc[name] = { off: true };
+      else sc[name] = { on_above: Number(p.on_above), off_below: Number(p.off_below) };
+    }
+    patch.scenes = sc;
     try {
       await adminSend("PUT", `/control/${vm.device_id}/policy`, patch);
       setFlash("saved"); await onChange();
@@ -294,6 +316,27 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
       <div class="field"><label>Quiet window</label>
         <input type="text" placeholder="22:00-07:00 (optional)" value=${quiet}
           onInput=${(e) => setQuiet(e.target.value)} /></div>
+      <div class="divider"></div>
+      <div class="field"><label>Scene behavior</label>
+        <p class="note">What each whole-house scene does to this device (Home = the settings above).</p></div>
+      ${EDITABLE_SCENES.map((name) => {
+        const p = scenes[name] || {};
+        const b = behaviorOf(p);
+        return html`<div class="field" key=${name}>
+          <label>${SCENE_ICON[name] || ""} ${name}</label>
+          <select value=${b} onChange=${(e) => setBehavior(name, e.target.value)}>
+            <option value="base">same as Home</option>
+            <option value="off">turn off (park it)</option>
+            <option value="custom">custom thresholds</option>
+          </select>
+          ${b === "custom" && html`<div class="controls scene-thresh">
+            <label class="inline">ON ≥<input type="number" value=${p.on_above ?? ""}
+              onInput=${(e) => setSceneField(name, "on_above", e.target.value)} />%</label>
+            <label class="inline">OFF <<input type="number" value=${p.off_below ?? ""}
+              onInput=${(e) => setSceneField(name, "off_below", e.target.value)} />%</label>
+          </div>`}
+        </div>`;
+      })}
       <div class="controls">
         <button class="btn sm primary" disabled=${busy} onClick=${save}>Save</button>
         <button class="btn sm ghost" disabled=${busy} onClick=${() => setOpen(false)}>Close</button>
@@ -377,6 +420,13 @@ function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit }) {
       <div class="state-row">
         <span class="pill ${running ? "on" : "off"}">${running == null ? "?" : running ? "RUNNING" : "IDLE"}</span>
         ${vm.control.enabled === false && html`<span class="note">automation off</span>`}
+        ${(() => {
+          const sa = vm.scene_active;
+          if (!sa || sa.scene === "Home" || !sa.patch) return null;
+          const what = sa.off ? "parked" : "relaxed";
+          return html`<span class="scene-chip" title="Active scene affecting this device"
+            >${SCENE_ICON[sa.scene] || ""} ${sa.scene}: ${what}</span>`;
+        })()}
       </div>
       <div class="readings">
         <div class="reading">
@@ -857,6 +907,32 @@ function AlertsBanner({ alerts }) {
 
 // ── notifications toggle (Web Push) ──────────────────────────────────────────
 // Subscribes this browser to background alert notifications. Payload-less: the SW fetches the alerts.
+const SCENE_ICON = { Home: "🏠", Away: "🚪", Sleep: "🌙" };
+function SceneSelector({ isAdmin, onNeedAdmin, onChange }) {
+  // Whole-house scene (Home/Away/Sleep). Reads /api/v1/house (open); setting is admin-gated. The active
+  // scene relaxes/parks each device per its policy `scenes` map — the effect lands on the next control tick.
+  const [house, setHouse] = useState(null);     // {scene, scenes, set_ts}
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => getJSON("/api/v1/house").then(setHouse).catch(() => {}), []);
+  useEffect(() => { load(); const t = setInterval(load, 15000); return () => clearInterval(t); }, [load]);
+  if (!house || !(house.scenes || []).length) return null;
+  const pick = async (scene) => {
+    if (scene === house.scene || busy) return;
+    if (!isAdmin) { onNeedAdmin && onNeedAdmin(); return; }
+    setBusy(true);
+    try {
+      const r = await adminSend("POST", "/control/house/scene", { scene });
+      setHouse((h) => ({ ...h, scene: r.scene, set_ts: r.set_ts }));
+      onChange && onChange();
+    } catch (e) { alert("Scene: " + e.message); }
+    setBusy(false);
+  };
+  return html`<div class="scene-sel" title="Whole-house scene — relaxes or parks devices per their policy">
+    ${house.scenes.map((s) => html`<button class="btn sm ${s === house.scene ? "scene-on" : "ghost"}"
+        key=${s} disabled=${busy} onClick=${() => pick(s)} title=${s}>${SCENE_ICON[s] || ""} ${s}</button>`)}
+  </div>`;
+}
+
 function NotifyToggle() {
   const [state, setState] = useState("default");   // unsupported|denied|subscribed|default
   const [busy, setBusy] = useState(false);
@@ -928,6 +1004,7 @@ function App() {
         <h1>Home Automation</h1>
         <span class="build">${BUILD}</span>
         <div class="spacer"></div>
+        <${SceneSelector} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} onChange=${refresh} />
         <button class="btn sm ghost" onClick=${toggleUnit} title="temperature unit">°${tempUnit}</button>
         <${NotifyToggle} />
         ${isAdmin

@@ -62,5 +62,22 @@ def test_control_log_append_and_recent_order():
     assert rows[0]["desired"] == 0 and rows[1]["desired"] == 1
 
 
+# ── house scene (Home/Away/Sleep) ────────────────────────────────────────────────
+def test_house_scene_defaults_to_home_until_set():
+    c = _db()
+    assert S.get_scene(c) == "Home"
+    assert S.get_scene_full(c) == {"scene": "Home", "set_ts": None}
+
+
+def test_house_scene_set_get_roundtrip_and_single_row():
+    c = _db()
+    S.set_scene(c, "Away")
+    assert S.get_scene(c) == "Away"
+    S.set_scene(c, "Sleep")                                        # upsert, not a second row
+    assert S.get_scene(c) == "Sleep"
+    assert S.get_scene_full(c)["set_ts"] is not None
+    assert c.execute("SELECT COUNT(*) FROM house_scene").fetchone()[0] == 1
+
+
 if __name__ == "__main__":
     run_module(globals())

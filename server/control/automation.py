@@ -8,10 +8,17 @@ PolicyStore.evaluate + the issuer (so automation rides the same signed/ACL path 
 
 Precedence stack (highest wins):
     1. SAFETY / interlocks   tank_full|error -> force OFF (immediate)
-    2. MANUAL override (TTL)  off | boost_on, expiring
-    3. SCHEDULE              an "off" time-window (passed in precomputed as schedule_off)
-    4. CONTROL rule          pluggable strategy (hysteresis | setpoint)
-    5. DEFAULT               safe resting state
+    2. MANUAL override (TTL)  off | boost_on, expiring  (an explicit human tap beats the ambient scene)
+    3. HOUSE SCENE           the active Home/Away/Sleep scene's per-device patch may force OFF
+                             (passed in precomputed as scene_off) and/or relax the rule thresholds
+    4. SCHEDULE              an "off" time-window (passed in precomputed as schedule_off)
+    5. CONTROL rule          pluggable strategy (hysteresis | setpoint)
+    6. DEFAULT               safe resting state
+
+House scenes (distinct from the power `mode.py` Normal/Conserve/Emergency) are a whole-house occupancy
+preset — Home/Away/Sleep — that the user flips from the PWA. Each device's policy may carry a `scenes`
+map; `apply_scene()` folds the active scene's patch into the effective policy before resolve() runs, so
+"Away" can relax the dehumidifier's thresholds (run less, save energy) and "Sleep" can park it (quiet).
 
 Compressor cycle gating is then applied to any transition:
     - turning ON  -> blocked until min_off elapsed since last off (restart protection; ALL layers)
@@ -108,19 +115,25 @@ def _gate(policy: Policy, now: float, state: DeviceState, want: bool, source: st
 
 
 def resolve(policy: Policy, now: float, sensor: Reading | None, state: DeviceState,
-            override: Override | None = None, schedule_off: bool = False) -> Resolution:
-    """Resolve the desired actuator state for one device at time `now`."""
+            override: Override | None = None, schedule_off: bool = False,
+            scene_off: bool = False, scene: str | None = None) -> Resolution:
+    """Resolve the desired actuator state for one device at time `now`. `scene_off` is precomputed by the
+    caller from the active house scene's per-device patch (see apply_scene); `scene` is its name, used only
+    to make the decision reason legible."""
     # 1. safety / interlocks
     if state.interlocks:
         return _gate(policy, now, state, False, "safety",
                      f"interlock {','.join(state.interlocks)} -> OFF")
-    # 2. manual override
+    # 2. manual override (an explicit human tap beats the ambient scene)
     if override is not None and override.active(now):
         if override.action == "off":
             return _gate(policy, now, state, False, "override", _exp("override OFF", override, now))
         if override.action == "boost_on":
             return _gate(policy, now, state, True, "override", _exp("override BOOST-ON", override, now))
-    # 3. schedule
+    # 3. house scene -> OFF (e.g. Away/Sleep parks the device)
+    if scene_off:
+        return _gate(policy, now, state, False, "scene", f"{scene or 'scene'} -> OFF")
+    # 4. schedule
     if schedule_off:
         return _gate(policy, now, state, False, "schedule", "schedule window -> OFF")
     # 4. control rule
@@ -164,3 +177,31 @@ def schedule_off_now(schedule: list, tod_min: int) -> bool:
         if entry.get("policy") == "off" and in_window(tod_min, entry.get("when", "")):
             return True
     return False
+
+
+# ── house scenes (Home/Away/Sleep) ────────────────────────────────────────────────
+# The canonical whole-house scenes. "Home" is the neutral default (no patch); a device with no `scenes`
+# map, or a scene with an empty patch, behaves exactly as its base policy. Kept here (the pure module) so
+# the resolver, the policy validator, and the set-scene API all agree on the same set.
+HOUSE_SCENES = ("Home", "Away", "Sleep")
+DEFAULT_SCENE = "Home"
+_SCENE_CONTROL_KEYS = ("on_above", "off_below", "min_on_min", "min_off_min")
+
+
+def apply_scene(pol: dict, scene: str | None) -> tuple[dict, bool]:
+    """Fold the active house scene's per-device patch into a policy dict (pure).
+
+    A device's policy may carry `"scenes": {"<name>": <patch>}`. The active scene's patch can:
+      - force the device off for the duration of the scene: `{"off": true}`  -> returns scene_off=True
+      - relax/tighten the hysteresis rule: any of on_above/off_below/min_on_min/min_off_min override
+        the base `control` block (so "Away" can let RH drift higher to save energy).
+    Returns (effective_policy, scene_off). No matching scene / empty patch -> (pol unchanged, False)."""
+    patch = ((pol.get("scenes") or {}).get(scene) if scene else None) or {}
+    if not patch:
+        return pol, False
+    scene_off = bool(patch.get("off"))
+    over = {k: patch[k] for k in _SCENE_CONTROL_KEYS if k in patch}
+    if not over:
+        return pol, scene_off
+    eff = {**pol, "control": {**(pol.get("control") or {}), **over}}
+    return eff, scene_off

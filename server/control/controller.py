@@ -19,7 +19,8 @@ from pathlib import Path
 
 from server.comms import events as ev
 from server.control import bootstrap, control_store as store
-from server.control.automation import DeviceState, Override, Policy, Reading, resolve, schedule_off_now
+from server.control.automation import (
+    DEFAULT_SCENE, DeviceState, Override, Policy, Reading, apply_scene, resolve, schedule_off_now)
 from server.control.secret_store import available_master
 
 log = logging.getLogger("ha.controller")
@@ -97,14 +98,15 @@ class Controller:
         tod = lt.tm_hour * 60 + lt.tm_min
         conn = self._conn()
         try:
+            scene = store.get_scene(conn, DEFAULT_SCENE)        # whole-house Home/Away/Sleep
             for device_id, pol in store.all_policies(conn).items():
                 if not pol.get("enabled", True):
                     continue
-                self._tick_device(conn, device_id, pol, now, tod, dry_run)
+                self._tick_device(conn, device_id, pol, now, tod, scene, dry_run)
         finally:
             conn.close()
 
-    def _tick_device(self, conn, device_id, pol, now, tod, dry_run):
+    def _tick_device(self, conn, device_id, pol, now, tod, scene, dry_run):
         drv = self.drivers.get(device_id)
         if drv is None:
             return
@@ -124,7 +126,9 @@ class Controller:
         last_on, last_off = store.get_cycle(conn, device_id)
         dev_state = DeviceState(running=bool(st.get("running")), interlocks=tuple(interlocks),
                                 last_on_ts=last_on, last_off_ts=last_off)
-        policy = Policy.from_dict(pol)
+        # fold the active house scene into the effective policy (relaxed thresholds and/or force-off)
+        eff_pol, scene_off = apply_scene(pol, scene)
+        policy = Policy.from_dict(eff_pol)
         sensor, used_id, via_fallback = self._pick_source(pol, policy.sensor_stale_s, now)
         if sensor is not None and (now - sensor.ts) > policy.sensor_stale_s:
             self._emit(device_id, "ble-adv", ev.STALE, f"{used_id} stale")
@@ -132,7 +136,7 @@ class Controller:
         override = Override(ov[0], ov[1]) if ov else None
         sched_off = schedule_off_now(pol.get("schedule"), tod)
 
-        res = resolve(policy, now, sensor, dev_state, override, sched_off)
+        res = resolve(policy, now, sensor, dev_state, override, sched_off, scene_off, scene)
         reason = res.reason + (f" (via fallback {used_id})" if via_fallback and res.source == "rule" else "")
         status = "noop"
         if res.act and not dry_run:

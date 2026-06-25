@@ -808,6 +808,22 @@ def _build_current_alerts(now: float) -> list[dict]:
             cc.close()
 
 
+@app.get("/api/v1/house", include_in_schema=True)
+def house_state():
+    """The active whole-house scene (Home/Away/Sleep) + the canonical scene list. Read-only/open (like
+    the device-meta read) so the dashboard can render the scene selector without a bearer; SETTING the
+    scene is admin-gated (POST /control/house/scene)."""
+    from server.control import control_store as store
+    from server.control.automation import HOUSE_SCENES
+    cc = _control_conn()
+    if cc is None:
+        return {"scene": "Home", "set_ts": None, "scenes": list(HOUSE_SCENES)}
+    try:
+        return {**store.get_scene_full(cc), "scenes": list(HOUSE_SCENES)}
+    finally:
+        cc.close()
+
+
 @app.get("/api/v1/alerts", include_in_schema=True)
 def alerts():
     """Active alerts (low battery / unreachable / tank-full / override-expiring). Read-only; the single

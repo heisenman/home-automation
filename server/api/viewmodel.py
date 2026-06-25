@@ -216,6 +216,11 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         "recent_decisions": [{"ts": r["ts"], "source": r["source"], "reason": r["reason"],
                               "acted": r["acted"]} for r in (snap.get("recent_log") or [])[:8]],
         "override": snap["override"],
+        # house scene (Home/Away/Sleep): the active scene, this device's scene profiles (for the editor),
+        # and what the active scene currently does to this device (parks it / relaxed thresholds).
+        "scene": snap.get("scene"),
+        "scenes": policy.get("scenes") or {},
+        "scene_active": snap.get("scene_active"),
         "last_decision": ({"source": last["source"], "reason": last["reason"], "ts": last["ts"]}
                           if last else None),
         "health": health,

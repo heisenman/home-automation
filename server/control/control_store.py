@@ -42,6 +42,12 @@ CREATE TABLE IF NOT EXISTS device_calibration (
 -- payload push; the current payload-less tickle only needs `endpoint`.
 CREATE TABLE IF NOT EXISTS push_subscription (
     endpoint TEXT PRIMARY KEY, p256dh TEXT, auth TEXT, created_ts TEXT NOT NULL);
+-- house_scene: the whole-house occupancy scene (Home/Away/Sleep) the user flips from the PWA. A single
+-- row (id=1). The controller reads it every tick and folds each device's matching scene patch into the
+-- effective policy (automation.apply_scene). Lives in control.db so it rides the sync-standby snapshot
+-- and survives a dictator failover. Distinct from the power mode.py (Normal/Conserve/Emergency).
+CREATE TABLE IF NOT EXISTS house_scene (
+    id INTEGER PRIMARY KEY CHECK (id=1), scene TEXT NOT NULL, set_ts TEXT);
 """
 
 
@@ -203,3 +209,23 @@ def remove_push_sub(conn, endpoint: str) -> None:
 def all_push_subs(conn) -> list[dict]:
     return [{"endpoint": e, "p256dh": p, "auth": a}
             for e, p, a in conn.execute("SELECT endpoint, p256dh, auth FROM push_subscription")]
+
+
+# ── house scene (Home/Away/Sleep) ─────────────────────────────────────────────────
+def get_scene(conn, default: str = "Home") -> str:
+    """The active whole-house scene; `default` when none has been set yet (fresh install)."""
+    r = conn.execute("SELECT scene FROM house_scene WHERE id=1").fetchone()
+    return r[0] if r else default
+
+
+def get_scene_full(conn, default: str = "Home") -> dict:
+    """The active scene + when it was set (for the read view-model). set_ts is None until first set."""
+    r = conn.execute("SELECT scene, set_ts FROM house_scene WHERE id=1").fetchone()
+    return {"scene": r[0], "set_ts": r[1]} if r else {"scene": default, "set_ts": None}
+
+
+def set_scene(conn, scene: str) -> None:
+    conn.execute("""INSERT INTO house_scene(id, scene, set_ts) VALUES(1,?,?)
+                    ON CONFLICT(id) DO UPDATE SET scene=excluded.scene, set_ts=excluded.set_ts""",
+                 (scene, _now_iso()))
+    conn.commit()

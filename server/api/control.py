@@ -93,9 +93,10 @@ def handle_override(conn, device_id: str, body: dict[str, Any], now: float,
 
 
 def read_control_state(conn, device_id: str, now: float) -> dict:
-    """Compose a device's live control snapshot (policy + active override + recent decisions) from
-    control.db. Pure; shared by the admin GET and the display view-model (BFF)."""
+    """Compose a device's live control snapshot (policy + active override + active house scene + recent
+    decisions) from control.db. Pure; shared by the admin GET and the display view-model (BFF)."""
     from server.control import control_store as store
+    from server.control.automation import apply_scene
     ov = store.get_override(conn, device_id, now)
     override = None
     if ov:
@@ -103,13 +104,67 @@ def read_control_state(conn, device_id: str, now: float) -> dict:
         override = {"action": action, "expiry": expiry,
                     "expires_in_min": None if expiry is None else max(0.0, (expiry - now) / 60.0)}
     log_rows = store.recent_log(conn, device_id, limit=10)
+    pol = store.get_policy(conn, device_id)
+    scene = store.get_scene(conn)
+    # what the active scene does to THIS device right now (so the UI can show "Away: relaxed / parks it")
+    scene_active = None
+    if pol is not None:
+        eff, scene_off = apply_scene(pol, scene)
+        patch = (pol.get("scenes") or {}).get(scene) or {}
+        scene_active = {"scene": scene, "off": scene_off,
+                        "control": eff.get("control") if eff is not pol else None,
+                        "patch": patch or None}
     return {
         "device_id": device_id,
-        "policy": store.get_policy(conn, device_id),
+        "policy": pol,
         "override": override,
+        "scene": scene,
+        "scene_active": scene_active,
         "last_decision": log_rows[0] if log_rows else None,
         "recent_log": log_rows,
     }
+
+
+# ── House scene (Home/Away/Sleep) ────────────────────────────────────────────────
+from server.control.automation import HOUSE_SCENES                       # noqa: E402
+
+_SCENE_NUM_KEYS = ("on_above", "off_below", "min_on_min", "min_off_min")
+_SCENE_KEYS = {"off", *_SCENE_NUM_KEYS}
+
+
+def handle_set_scene(conn, body: dict[str, Any]) -> tuple[int, dict]:
+    """Set the whole-house scene (one global row in control.db). The controller reads it every tick and
+    folds each device's matching scene patch into the effective policy. Pure (no HTTP framework)."""
+    from server.control import control_store as store
+    scene = (body or {}).get("scene")
+    if scene not in HOUSE_SCENES:
+        return 400, {"status": "bad-request", "reason": f"scene must be one of {list(HOUSE_SCENES)}"}
+    store.set_scene(conn, scene)
+    return 200, {"status": "ok", **store.get_scene_full(conn), "scenes": list(HOUSE_SCENES)}
+
+
+def _validate_scenes(sc, bad):
+    """Validate a policy `scenes` map: {scene_name: {off?: bool, on_above?/off_below?/min_*?: num}}.
+    Returns None if OK, else the (code, body) tuple from `bad`."""
+    if not isinstance(sc, dict):
+        return bad("scenes must be an object")
+    for name, prof in sc.items():
+        if name not in HOUSE_SCENES:
+            return bad(f"scene name must be one of {list(HOUSE_SCENES)}")
+        if not isinstance(prof, dict):
+            return bad(f"scene {name!r} must be an object")
+        extra = set(prof) - _SCENE_KEYS
+        if extra:
+            return bad(f"scene {name!r} has unknown keys {sorted(extra)}")
+        if "off" in prof and not isinstance(prof["off"], bool):
+            return bad(f"scene {name!r}.off must be a boolean")
+        for k in _SCENE_NUM_KEYS:
+            if k in prof and not _is_num(prof[k]):
+                return bad(f"scene {name!r}.{k} must be a number")
+        if ("on_above" in prof and "off_below" in prof
+                and float(prof["on_above"]) <= float(prof["off_below"])):
+            return bad(f"scene {name!r}: on_above must be strictly greater than off_below")
+    return None
 
 
 # ── Policy editing (app-mutable settings) ────────────────────────────────────────
@@ -180,6 +235,11 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
             if e.get("policy") not in ("off", "auto"):
                 return bad("each schedule entry needs policy='off'|'auto'")
         pol["schedule"] = sched
+    if "scenes" in patch:
+        err = _validate_scenes(patch["scenes"], bad)
+        if err is not None:
+            return err
+        pol["scenes"] = patch["scenes"]
 
     store.set_policy(conn, device_id, pol)
     return 200, {"status": "ok", "device_id": device_id, "policy": pol}
@@ -324,6 +384,26 @@ def make_override_router(api_authz, control_db, device_ids=None):
         # 200 only if the admin bearer is valid (the dependency 401s otherwise). Lets the UI confirm a
         # password actually worked at login instead of discovering it on the first failed command.
         return JSONResponse(status_code=200, content={"ok": True})
+
+    @router.post("/house/scene", dependencies=[Depends(require_admin)])
+    async def post_house_scene(body: dict = Body(...)):
+        # set the whole-house scene (Home/Away/Sleep). Two path segments after /control, so it never
+        # collides with the single-segment /control/{device_id} route.
+        c = _conn()
+        try:
+            code, payload = handle_set_scene(c, body)
+        finally:
+            c.close()
+        return JSONResponse(status_code=code, content=payload)
+
+    @router.get("/house/scene", dependencies=[Depends(require_admin)])
+    async def get_house_scene():
+        c = _conn()
+        try:
+            return JSONResponse(status_code=200,
+                                content={**store.get_scene_full(c), "scenes": list(HOUSE_SCENES)})
+        finally:
+            c.close()
 
     @router.post("/{device_id}/override", dependencies=[Depends(require_admin)])
     async def post_override(device_id: str, body: dict = Body(...)):
