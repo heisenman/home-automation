@@ -22,3 +22,11 @@ instance/control.yaml         | critical | sync
 instance/control_secrets.yaml | critical | sync
 instance/midea-device.env     | critical | sync
 instance/mqtt.env             | optional | local
+# R9 (ADR-0017) HTTPS + web-push. SYNC (not local) on purpose: same cert + VAPID key on both boxes means
+# a failover keeps the SAME self-signed cert (the browser's one-time trust survives) AND — decisive — the
+# SAME VAPID key, because a push subscription is bound to the server key; a different key on the promoted
+# standby would silently break every existing subscription. Optional = web-push/HTTPS degrade only; the
+# plain :8123 + control/actuation are unaffected if absent. push_subscription rows ride control.db's snapshot.
+instance/tls/server.crt       | optional | sync
+instance/tls/server.key       | optional | sync
+instance/vapid.json           | optional | sync
