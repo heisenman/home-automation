@@ -83,7 +83,9 @@ portability**. Tier: **🟢 bring-up directive** (safe default, bake into image)
 ### 2.5 Services & timers  🟢
 - **Mask pointless-wakeup timers** for a deliberately-updated/air-gapped box: `apt-daily.timer`,
   `apt-daily-upgrade.timer`, `man-db.timer`. *(Updates become a deliberate maintenance action, not a
-  background wake.)* *Reversible:* unmask. *HA check:* none — these are housekeeping.
+  background wake.)* *Reversible:* unmask. *HA check:* none — these are housekeeping. **DONE 2026-06-25**
+  (Hugh confirmed deliberately-updated): masked all three (→ `/dev/null`); manual `apt` unaffected.
+  *(image/`power-tune.sh`: `systemctl mask --now apt-daily.timer apt-daily-upgrade.timer man-db.timer`.)*
 - **`default.target = multi-user.target`** (drop the graphical hull). *Reversible:* `set-default graphical`.
 - **Coalesce timer wakeups:** add `AccuracySec=` (e.g. 1min) + `RandomizedDelaySec=` to our `ha-*` timers
   and the OS housekeeping timers so several firings share one wake. *HA check:* fine for compactor/weather/
@@ -234,4 +236,5 @@ A/B the 🟡 levers (most need the Hugh BIOS window). Collecting. *(dev)*
 | 2026-06-25 | Baseline captured (see §1) | — | — | ~95% C2 lifetime; pkg-W TBD (RAPL root) | — | — | this box |
 | 2026-06-25 | Phase 0 sampler live | systemd timer reads RAPL/C-state/IRQ deltas every 5 min | n/a (measurement) | first read pkg ~11.8 W (active load); idle TBD over window | yes (`systemctl disable`) | yes (units belong in image) | all (capability-gated on RAPL) |
 | 2026-06-25 | Phase 1 transient capture | `acct` process accounting (event-driven, per process-exit) | enabled `acct.service`; installed powertop/sysstat (on-demand); disabled sysstat pollers | n/a (measurement); ~0 added wakeups | yes (`systemctl disable acct`) | yes (image installs+enables it) | all |
+| 2026-06-25 | apt/man-db wakeup timers fire on an idle box | masked `apt-daily`/`apt-daily-upgrade`/`man-db` timers (Hugh: deliberately-updated) | removes their periodic wakeups | small (fewer wakes/day); ✅ applied | yes (`unmask`) | yes (power-tune.sh) | all |
 | _(campaign findings land here)_ | | | | | | | |
