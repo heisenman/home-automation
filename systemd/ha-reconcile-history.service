@@ -1,0 +1,26 @@
+[Unit]
+# ADR-0016 — proactive sensor-history reconciliation. Runs the bidirectional windowed hot.db merge on a
+# cadence (default 15 min) so the standby stays within ~one interval of current — cutting data loss on a
+# sudden primary death (incl. disk loss), not just on a clean swap. VIP-gated INTERNALLY: only the dictator
+# pushes live data; the loop is a near-noop on the standby. Plus a SHADOW tuner that logs a proposed
+# adaptive interval without applying it (review after a week → promote). On-transition catch-up is wired
+# separately in notify.sh. Same id_cluster SSH channel as sync-standby; never the device bus / git.
+Description=HA proactive history reconciliation (ADR-0016; VIP-gated, shadow-tuned)
+After=network-online.target ha-writer.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=visko
+WorkingDirectory=/home/visko/home_automation
+Environment=VIP=192.168.0.200
+Environment=PYTHONUNBUFFERED=1
+EnvironmentFile=-/home/visko/home_automation/instance/cluster.env
+EnvironmentFile=-/home/visko/home_automation/instance/reconcile-tuning.env
+ExecStart=/home/visko/home_automation/failover/reconcile-history.sh --loop
+Restart=always
+RestartSec=30
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

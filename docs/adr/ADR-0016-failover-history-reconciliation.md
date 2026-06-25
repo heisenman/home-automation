@@ -89,3 +89,30 @@ for the oldest slice of the gap → cross-box parquet reconcile must run *before
 `failover/reconcile-history.sh` (bash, `id_cluster`, mirrors `sync-standby.sh` structure) + a `notify.sh`
 hook on MASTER/BACKUP (best-effort, async) + a `cluster-doctor` convergence check. Gated/manual first run,
 validated on `.245` against a synthetic gap before wiring into the live transition path.
+
+## Addendum — proactive periodic reconcile + measured-adaptive interval (2026-06-25, Hugh)
+Two refinements landed with the implementation (`adr-history-reconciliation`):
+
+1. **Proactive periodic reconcile, not transition-only.** Transition-only reconcile can't run on a *real*
+   failover (the dead primary is unreachable on promotion) and only heals on fail-back — *and only if the
+   dead box's disk survived*. So `reconcile-history.sh --loop` (service `ha-reconcile-history`, **VIP-gated**:
+   only the dictator pushes) runs the same bidirectional windowed merge on a cadence (default **15 min**),
+   keeping the standby within ~one interval of current. A sudden death — including **disk loss** of the
+   failed node — then costs at most one interval. The `notify.sh` MASTER/BACKUP hook stays as the immediate
+   catch-up. This is *not* the per-reading continuous replication rejected above — it's a cheap periodic
+   batch merge bounded by the same hot-tier WINDOW.
+   - *Why not device-pull for the gap:* the SwitchBot GATT path drains the **full** buffer per meter (no
+     partial-window read), runs ~3–5 min across the fleet sequentially, and is partial (the `02`-NAK meters
+     and Aranet are unrecoverable). Cross-box reconcile closes the same gap in **sub-second, complete**. So
+     reconcile is the recovery; GATT stays the slow, partial, last-resort net it already is.
+
+2. **Measured-adaptive interval, shadow-first (don't hard-code).** The interval/window/deadline are read
+   from a seeded tuned-state (`reconcile-tuning.env`), never literals — matching how WINDOW already self-
+   tracks the compactor cutoff. A **shadow tuner** computes a *proposed* interval each cycle —
+   `clamp( max(D/δ, I_min), I_min, I_max )` where `D`=measured reconcile duration, `δ`=duty-cycle target,
+   `I_max`=**loss budget** (the one irreducible human input) ∧ ≤ hot WINDOW — and **logs it without
+   applying it** (`RECONCILE_MODE=shadow`; the active cadence stays a hard 15 min). **Action item:** review
+   `/var/log/ha-reconcile-tuning.log` after ~1 week → weird data = revisit; sane data = flip
+   `RECONCILE_MODE=active` to let the proposed value drive the cadence. A `cluster-doctor` red flag fires if
+   measured `D` approaches `I_max/2` (the cheap path can't keep pace). The device-pull rebuild estimate and
+   the per-model buffer-depth deadline get the same measure→bound treatment when promoted.

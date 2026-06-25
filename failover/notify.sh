@@ -31,6 +31,15 @@ relay_coord(){ # $1=start|stop  $2=state-label
   esac
   return 0
 }
+# ADR-0016: reconcile sensor history with the peer over the cluster back-channel after a role change — the
+# new dictator backfills the hole from the (now-reachable) peer; the demoted box hands over its last rows.
+# ASYNC + best-effort: a dead peer is fine (idempotent merge, self-corrects on the next proactive pass) and
+# this must NEVER block the VRRP transition — control failover cannot wait on data-plane catch-up.
+reconcile_history(){ # $1=state-label
+  [ -x "$REPO/failover/reconcile-history.sh" ] || return 0
+  ( "$REPO/failover/reconcile-history.sh" --once >/dev/null 2>&1 && log "history reconcile fired ($1)" || true ) &
+  return 0
+}
 
 case "$STATE" in
   MASTER)
@@ -51,6 +60,7 @@ case "$STATE" in
     fi
     relay_coord start MASTER   # this box now signs+publishes relay allowlists (re-eval after coverage recompute)
     api_remount MASTER   # mount the control plane now that this node holds the VIP
+    reconcile_history MASTER   # async: backfill the history hole from the peer (best-effort, non-blocking)
     ;;
   BACKUP)
     # Distinguish a GENUINE demotion (yield to primary) from the keepalived START-UP TRANSIENT: at boot
@@ -67,6 +77,7 @@ case "$STATE" in
     if sudo systemctl stop "$CONTROLLER_UNIT" 2>/dev/null; then log "controller STOPPED"; else log "controller already stopped"; fi
     relay_coord stop BACKUP   # stop publishing relay allowlists — only the dictator may
     api_remount BACKUP   # unmount the control plane — we no longer hold the VIP
+    reconcile_history BACKUP   # async: hand our last-reign rows to the new dictator (best-effort, non-blocking)
     ;;
   FAULT)
     # Health check failed: we are genuinely unfit. Stop immediately — no grace (don't keep actuating while broken).

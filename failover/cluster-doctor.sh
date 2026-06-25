@@ -149,6 +149,32 @@ else
   fi
 fi
 
+# ---- history convergence (ADR-0016): did reconcile actually merge the window across boxes? ----
+# The SETTLED part of the divergence window (older than ~1h, well past the 15-min reconcile interval) must
+# match on both boxes — the proactive loop + the notify.sh transition hook should have merged it
+# bidirectionally. The most-recent slice is excluded: the standby legitimately lags up to one interval
+# before the next proactive push, so counting it would false-alarm.
+hdr "History convergence (ADR-0016)"
+rc_cut=$(date -u -d "yesterday 00:00:00" +%Y-%m-%dT00:00:00Z 2>/dev/null || date -u -v-1d +%Y-%m-%dT00:00:00Z 2>/dev/null)
+rc_settled=$(date -u -d "1 hour ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u -v-1H +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+if [ -z "$rc_cut" ] || [ -z "$rc_settled" ]; then
+  wn "couldn't compute reconcile window bounds (date) — skipping convergence check"
+else
+  cA=$(on "$PRIMARY" "sqlite3 ~/home_automation/instance/db/hot.db \"SELECT COUNT(*) FROM readings WHERE ts>='$rc_cut' AND ts<'$rc_settled';\"")
+  cB=$(on "$STANDBY" "sqlite3 ~/home_automation/instance/db/hot.db \"SELECT COUNT(*) FROM readings WHERE ts>='$rc_cut' AND ts<'$rc_settled';\"")
+  if ! [[ "$cA" =~ ^[0-9]+$ && "$cB" =~ ^[0-9]+$ ]]; then
+    wn "couldn't read settled-window counts on both boxes (unreachable?) — skipping convergence check"
+  else
+    hi=$cA; [ "$cB" -gt "$hi" ] && hi=$cB
+    diff=$(( cA > cB ? cA - cB : cB - cA )); tol=$(( hi / 50 + 5 ))   # ~2% + small floor
+    if [ "$diff" -le "$tol" ]; then
+      ok "settled-window readings converged: primary=$cA standby=$cB (Δ$diff ≤ tol $tol)"
+    else
+      wn "settled-window readings DIVERGE: primary=$cA standby=$cB (Δ$diff > tol $tol) — reconcile-history may not be running; a failover now would leave a history hole. Check ha-reconcile-history + /var/log/ha-reconcile.log"
+    fi
+  fi
+fi
+
 # ---- verdict ----
 hdr "Verdict"
 printf '  %d pass, %d warn, %d FAIL\n' "$pass" "$warn" "$fail"
