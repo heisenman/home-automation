@@ -124,7 +124,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v25 scenes + add-device";
+const BUILD = "v26 scenes + add-device (sensor+actuator)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -801,52 +801,79 @@ function DeviceMetaModal({ device, onClose, onSaved }) {
     </div>`;
 }
 
+const KNOWN_TRAITS = ["switchable", "ranged", "setpoint", "lockable", "positionable"];
+
 function AddDeviceModal({ onClose, onSaved }) {
+  const [kind, setKind] = useState("sensor");        // sensor | actuator
   const [mac, setMac] = useState("");
   const [deviceId, setDeviceId] = useState("");
   const [deviceType, setDeviceType] = useState("");
+  const [node, setNode] = useState("");
   const [area, setArea] = useState("");
+  const [traits, setTraits] = useState([]);
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [done, setDone] = useState(null);
+  const toggleTrait = (t) => setTraits((ts) => (ts.includes(t) ? ts.filter((x) => x !== t) : [...ts, t]));
   const save = async () => {
     setBusy(true); setErr("");
     try {
-      const body = { mac: mac.trim(), device_id: deviceId.trim(),
-                     device_type: deviceType.trim(), area: area.trim() };
-      if (notes.trim()) body.notes = notes.trim();
-      setDone(await adminSend("POST", "/api/v1/devices", body));
+      let r;
+      if (kind === "sensor") {
+        const body = { mac: mac.trim(), device_id: deviceId.trim(),
+                       device_type: deviceType.trim(), area: area.trim() };
+        if (notes.trim()) body.notes = notes.trim();
+        r = await adminSend("POST", "/api/v1/devices", body);
+      } else {
+        const tr = {}; traits.forEach((t) => (tr[t] = {}));
+        r = await adminSend("POST", "/api/v1/control-devices",
+          { device_id: deviceId.trim(), node: node.trim(), area: area.trim(), traits: tr });
+      }
+      setDone(r);
     } catch (e) { setErr(String(e.message)); setBusy(false); }
   };
-  const form = html`
+  const sensorFields = html`
     <input value=${mac} placeholder="MAC — e.g. AA:BB:CC:DD:EE:FF"
       onInput=${(e) => setMac(e.target.value.toUpperCase())} />
-    <input value=${deviceId} placeholder="device_id slug — e.g. meter_living_room"
-      onInput=${(e) => setDeviceId(e.target.value)} />
     <input value=${deviceType} placeholder="device_type — e.g. switchbot_meter_pro, aranet_radon_plus"
       onInput=${(e) => setDeviceType(e.target.value)} />
-    <input value=${area} placeholder="area slug — e.g. living_room"
-      onInput=${(e) => setArea(e.target.value)} />
-    <input value=${notes} placeholder="notes (optional)" onInput=${(e) => setNotes(e.target.value)} />
+    <input value=${notes} placeholder="notes (optional)" onInput=${(e) => setNotes(e.target.value)} />`;
+  const actuatorFields = html`
+    <input value=${node} placeholder="node — the enrolled edge node, e.g. c6-bench"
+      onInput=${(e) => setNode(e.target.value)} />
+    <p class="note">Traits (ADR-0002):</p>
+    <div class="traits">${KNOWN_TRAITS.map((t) => html`
+      <label class="switch"><input type="checkbox" checked=${traits.includes(t)}
+        onChange=${() => toggleTrait(t)} /> ${t}</label>`)}</div>`;
+  const form = html`
+    <div class="seg">
+      <button class="btn sm ${kind === "sensor" ? "primary" : "ghost"}" onClick=${() => setKind("sensor")}>Sensor</button>
+      <button class="btn sm ${kind === "actuator" ? "primary" : "ghost"}" onClick=${() => setKind("actuator")}>Actuator</button>
+    </div>
+    <input value=${deviceId} placeholder=${`device_id slug — e.g. ${kind === "sensor" ? "meter_living_room" : "lamp_office"}`}
+      onInput=${(e) => setDeviceId(e.target.value)} />
+    <input value=${area} placeholder="area slug — e.g. living_room" onInput=${(e) => setArea(e.target.value)} />
+    ${kind === "sensor" ? sensorFields : actuatorFields}
     ${err && html`<div class="err">${err}</div>`}
     <div class="modal-actions">
       <button class="btn ghost" onClick=${onClose}>Cancel</button>
       <button class="btn primary" disabled=${busy} onClick=${save}>${busy ? "Adding…" : "Add"}</button>
     </div>`;
   const success = html`
-    <p class="note">✅ Registered <b>${done && done.device_id}</b> (${done && done.mac}).</p>
-    <p class="note">It won't report until the scanner reloads the registry — run on the dictator:</p>
+    <p class="note">✅ Registered <b>${done && done.device_id}</b>.</p>
+    <p class="note">${done && done.note}</p>
     <p class="note"><code>${done && done.reload_cmd}</code></p>
-    <p class="note">Then verify: <code>python3 tools/device_smoke_test.py ${done && done.device_id}</code></p>
     <div class="modal-actions">
       <button class="btn primary" onClick=${() => { onSaved(); onClose(); }}>Done</button>
     </div>`;
   return html`
     <div class="modal-bg" onClick=${onClose}>
       <div class="modal" onClick=${(e) => e.stopPropagation()}>
-        <h3>Add a sensor</h3>
-        <p class="note">Appends to the device registry (devices.yaml). Sensor devices only for now.</p>
+        <h3>Add a ${kind}</h3>
+        <p class="note">${kind === "actuator"
+          ? "Appends to control.yaml. The node must already be enrolled, or it won't be commandable."
+          : "Appends to the sensor registry (devices.yaml)."}</p>
         ${done ? success : form}
       </div>
     </div>`;

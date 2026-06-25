@@ -193,7 +193,7 @@ def _mount_control(app: FastAPI) -> None:
         # the manual-override + control-state router (writes control.db, read by the controller each tick)
         app.include_router(make_override_router(api_authz, CONTROL_DB, device_ids=set(registry)))
         app.include_router(make_device_meta_router(api_authz, CONTROL_DB))   # R8 friendly-name/room/hide
-        app.include_router(make_registry_router(api_authz, DEVICES_REGISTRY))  # add-device: append sensor to devices.yaml
+        app.include_router(make_registry_router(api_authz, DEVICES_REGISTRY, CONTROL_REGISTRY))  # add-device: sensor->devices.yaml, actuator->control.yaml
         app.state.control_registry = registry      # device_id -> DeviceCtl (traits for manual-control UI)
         missing = check_secrets_present(registry, issuer.secrets)
         log.info("control plane MOUNTED — %d device(s), %d controllable; broker %s:%s%s",

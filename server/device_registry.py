@@ -78,16 +78,9 @@ def _leading_comments(path: Path) -> str:
     return "".join(out)
 
 
-def append_device(path: Path, entry: dict[str, Any]) -> None:
-    """Append one validated device. Atomic (tmp+rename), keeps <file>.bak, preserves the header comment."""
-    raw: dict[str, Any] = {}
-    if path.exists():
-        with path.open() as f:
-            raw = yaml.safe_load(f) or {}
-    devices = raw.setdefault("devices", {})
-    e = dict(entry)
-    mac = e.pop("mac")
-    devices[mac] = e
+def _write_yaml_preserving(path: Path, raw: dict[str, Any]) -> None:
+    """Atomic write (tmp+rename), keep <file>.bak, preserve the file's leading comment header (safe_dump
+    would otherwise drop comments)."""
     header = _leading_comments(path)
     if path.exists():
         path.with_suffix(path.suffix + ".bak").write_bytes(path.read_bytes())
@@ -95,6 +88,91 @@ def append_device(path: Path, entry: dict[str, Any]) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     tmp.write_text((header + body) if header else body)
     tmp.replace(path)
+
+
+def append_device(path: Path, entry: dict[str, Any]) -> None:
+    """Append one validated SENSOR device (keyed by MAC). Atomic + .bak + header-preserving."""
+    raw: dict[str, Any] = {}
+    if path.exists():
+        with path.open() as f:
+            raw = yaml.safe_load(f) or {}
+    e = dict(entry)
+    mac = e.pop("mac")
+    raw.setdefault("devices", {})[mac] = e
+    _write_yaml_preserving(path, raw)
+
+
+# ── actuator (control.yaml) registration ────────────────────────────────────────────────────────────
+def load_control_devices(path: Path) -> dict[str, dict]:
+    """{device_id: {node, area, traits}} from control.yaml. Missing -> {}."""
+    if not path.exists():
+        return {}
+    with path.open() as f:
+        return (yaml.safe_load(f) or {}).get("devices") or {}
+
+
+def validate_new_actuator(body: dict[str, Any], existing: dict[str, dict]) -> tuple[dict | None, str | None]:
+    """Validate a new ACTUATOR for control.yaml. Trait names are checked against the ADR-0002 trait set.
+    Returns (entry, None) or (None, error)."""
+    from server.control import traits as traits_mod
+    b = body or {}
+    device_id = str(b.get("device_id", "")).strip()
+    if not SLUG_RE.match(device_id):
+        return None, "device_id must be a slug [a-z0-9_]"
+    if device_id in existing:
+        return None, f"device_id '{device_id}' already in control.yaml"
+    node = str(b.get("node", "")).strip()
+    if not node:
+        return None, "node required (the enrolled node that signs for this device)"
+    area = str(b.get("area", "")).strip()
+    if not SLUG_RE.match(area):
+        return None, "area must be a slug [a-z0-9_]"
+    traits = b.get("traits")
+    if not isinstance(traits, dict) or not traits:
+        return None, "traits must be a non-empty object, e.g. {\"onoff\": {}}"
+    try:
+        traits_mod.validate_device_traits(list(traits))
+    except Exception as e:  # validate_device_traits raises on unknown trait
+        return None, f"invalid traits: {e}"
+    if not all(isinstance(c, dict) or c is None for c in traits.values()):
+        return None, "each trait's config must be an object or null"
+    return {"device_id": device_id, "node": node, "area": area,
+            "traits": {t: (c or {}) for t, c in traits.items()}}, None
+
+
+def append_control_device(path: Path, entry: dict[str, Any]) -> None:
+    """Append one validated actuator to control.yaml (keyed by device_id). Atomic + .bak + header-preserving."""
+    raw: dict[str, Any] = {}
+    if path.exists():
+        with path.open() as f:
+            raw = yaml.safe_load(f) or {}
+    e = dict(entry)
+    device_id = e.pop("device_id")
+    raw.setdefault("devices", {})[device_id] = e
+    _write_yaml_preserving(path, raw)
+
+
+def handle_add_actuator(path: Path, body: dict[str, Any]) -> tuple[int, dict]:
+    """Pure: validate + append an actuator to control.yaml. The per-device command secret is derived from
+    the node's existing cmd_secret (node_secrets.enc) — so the node must already be enrolled, or the device
+    will be declared-but-uncommandable (the controller logs that loudly at boot)."""
+    existing = load_control_devices(path)
+    entry, err = validate_new_actuator(body, existing)
+    if err:
+        return 400, {"status": "bad-request", "reason": err}
+    append_control_device(path, entry)
+    return 201, {
+        "status": "registered",
+        "device_id": entry["device_id"],
+        "node": entry["node"],
+        "reload_required": True,
+        "reload_cmd": "sudo systemctl restart ha-controller ha-api",
+        "note": ("Declared in control.yaml. Its command secret is derived from node '" + entry["node"] +
+                 "'s cmd_secret — that node must already be enrolled (node_secrets.enc) or the device is "
+                 "uncommandable (the controller warns at boot). Restart ha-controller + ha-api to load it, "
+                 "then verify: python3 tools/device_smoke_test.py " + entry["device_id"] +
+                 " --command '<trait>:set:...'. Enrolling a NEW node is a separate step."),
+    }
 
 
 def handle_add_device(path: Path, body: dict[str, Any]) -> tuple[int, dict]:

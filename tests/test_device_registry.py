@@ -3,7 +3,44 @@ import textwrap
 
 from pathlib import Path
 
-from server.device_registry import handle_add_device, load_devices, validate_new_device
+from server.device_registry import (handle_add_actuator, handle_add_device, load_control_devices,
+                                     load_devices, validate_new_actuator, validate_new_device)
+
+
+def _seed_control(tmp_path: Path) -> Path:
+    f = tmp_path / "control.yaml"
+    f.write_text(textwrap.dedent('''\
+        # Actuator control registry — keep header
+        version: 1
+        devices:
+          lamp_office:
+            node: c6-bench
+            area: c_office
+            traits:
+              switchable: {}
+    '''))
+    return f
+
+
+def test_actuator_append_preserves_version_and_header(tmp_path):
+    f = _seed_control(tmp_path)
+    code, p = handle_add_actuator(f, {"device_id": "lock_back", "node": "c6-bench", "area": "entry",
+                                      "traits": {"lockable": {}}})
+    assert code == 201 and p["reload_required"]
+    txt = f.read_text()
+    assert txt.startswith("# Actuator control registry") and "version: 1" in txt and "lamp_office" in txt
+    assert load_control_devices(f)["lock_back"]["node"] == "c6-bench"
+    assert (tmp_path / "control.yaml.bak").exists()
+
+
+def test_actuator_rejects_bad_trait_dup_and_missing(tmp_path):
+    f = _seed_control(tmp_path)
+    assert handle_add_actuator(f, {"device_id": "x", "node": "n", "area": "a", "traits": {"frobnicate": {}}})[0] == 400
+    assert handle_add_actuator(f, {"device_id": "lamp_office", "node": "n", "area": "a", "traits": {"switchable": {}}})[0] == 400
+    assert handle_add_actuator(f, {"device_id": "y", "node": "n", "area": "a", "traits": {}})[0] == 400
+    assert handle_add_actuator(f, {"device_id": "z", "node": "", "area": "a", "traits": {"switchable": {}}})[0] == 400
+    code, p = handle_add_actuator(f, {"device_id": "good_lamp", "node": "c6-bench", "area": "den", "traits": {"switchable": {}, "ranged": {"min": 0, "max": 100}}})
+    assert code == 201
 
 
 def _seed(tmp_path: Path) -> Path:
