@@ -20,14 +20,18 @@ breaks). See [docs/decisions/air-gap-notify.md](../../docs/decisions/air-gap-not
   exception, not the default. Android is the air-gap path.
 
 ## Install on 210 (ops-staged; run by Hugh — production write to the dictator)
-1. **ntfy server** (210 has internet now; for the air gap, vendor the .deb first):
+1. **ntfy server** (210 has internet now; for the air gap, vendor the .deb first). The GitHub
+   `latest/download/` shortcut 404s — the asset name is version-stamped, so resolve it via the API:
    ```bash
-   curl -fsSL https://github.com/binwiederhier/ntfy/releases/latest/download/ntfy_linux_amd64.deb -o /tmp/ntfy.deb
-   sudo apt install -y /tmp/ntfy.deb           # provides the ntfy binary + ntfy.service
+   ARCH=$(dpkg --print-architecture)            # amd64 on 210
+   URL=$(curl -fsSL https://api.github.com/repos/binwiederhier/ntfy/releases/latest \
+           | grep -o "https://[^\"]*_linux_${ARCH}.deb" | head -1)
+   curl -fsSL "$URL" -o /tmp/ntfy.deb
+   sudo apt-get install -y /tmp/ntfy.deb        # provides the ntfy binary + ntfy.service
    sudo install -d /var/lib/ntfy
    sudo cp provisioning/ntfy/server.yml /etc/ntfy/server.yml
    sudo systemctl enable --now ntfy
-   curl -s localhost:8095/v1/health            # {"healthy":true}
+   curl -s localhost:8095/v1/health             # {"healthy":true}
    ```
 2. **The bridge** (additive; VIP-gated; never touches the control plane):
    ```bash
