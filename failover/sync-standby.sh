@@ -17,13 +17,29 @@ if systemctl is-active --quiet "$CONTROLLER_UNIT"; then log "WE are acting dicta
 [ -n "$PEER_HOST" ] || { log "no PEER_HOST set"; exit 1; }
 mkdir -p "$REPO/instance/db"
 
-# 1. Midea token (rotates ~18h) — THE critical freshness item for being able to actuate after takeover.
-if SCP "visko@$PEER_HOST:$REMOTE_REPO/instance/midea-device.env" "$REPO/instance/midea-device.env" 2>/dev/null; then
-  chmod 600 "$REPO/instance/midea-device.env" 2>/dev/null || true; log "synced midea-device.env"
-else log "WARN: midea-device.env sync failed (peer down?)"; fi
-
-# 2. Declarative control config (if present on primary).
-SCP "visko@$PEER_HOST:$REMOTE_REPO/instance/control.yaml" "$REPO/instance/control.yaml" 2>/dev/null && log "synced control.yaml" || log "control.yaml not synced (may not exist)"
+# 1. Plain config/secret files the standby needs to RUN + ACTUATE after takeover. Driven by the shared
+#    failover/dictator-files.manifest (DRY with cluster-doctor's presence assertion) so the set can't
+#    drift. We pull every row marked `sync` — notably control_secrets.yaml + node_secrets.enc, whose
+#    absence at the 2026-06-24 cutover left the controller unable to actuate (unknown-device). The Midea
+#    token (rotates ~18h) is in that set and is THE freshness-critical one. `.master_pass` is deliberately
+#    NOT here (disposition=preposition — root trust, never sent over the wire; cluster-doctor asserts it).
+#    DBs (control.db/mesh.db) get a consistent sqlite snapshot below, not a raw scp.
+MANIFEST="$HERE/dictator-files.manifest"
+if [ -f "$MANIFEST" ]; then
+  while read -r rel; do
+    [ -n "$rel" ] || continue
+    if SCP "visko@$PEER_HOST:$REMOTE_REPO/$rel" "$REPO/$rel" 2>/dev/null; then
+      chmod 600 "$REPO/$rel" 2>/dev/null || true; log "synced $rel"
+    else log "WARN: $rel sync failed (peer down or absent on primary)"; fi
+  done < <(awk -F'|' '/^[[:space:]]*#/ || NF<3 {next}
+                      {gsub(/^[[:space:]]+|[[:space:]]+$/,"",$1); gsub(/^[[:space:]]+|[[:space:]]+$/,"",$3)
+                       if ($3=="sync") print $1}' "$MANIFEST")
+else
+  log "WARN: $MANIFEST missing — falling back to midea-device.env + control.yaml only"
+  SCP "visko@$PEER_HOST:$REMOTE_REPO/instance/midea-device.env" "$REPO/instance/midea-device.env" 2>/dev/null \
+    && { chmod 600 "$REPO/instance/midea-device.env" 2>/dev/null || true; log "synced midea-device.env"; } || log "WARN: midea-device.env sync failed"
+  SCP "visko@$PEER_HOST:$REMOTE_REPO/instance/control.yaml" "$REPO/instance/control.yaml" 2>/dev/null && log "synced control.yaml" || log "control.yaml not synced"
+fi
 
 # Consistent sqlite snapshot of a remote DB -> local (falls back to raw copy if sqlite3 is absent).
 sync_db(){   # $1 = relative path under instance/db

@@ -4,6 +4,7 @@ and can't drift between the two entry points.
 """
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 import yaml
@@ -11,8 +12,11 @@ import yaml
 from server.control.issuer import CommandIssuer, MqttTransport, RoutingTransport
 from server.control.midea_driver import MideaTransport, load_drivers_from_env
 from server.control.policy import PolicyStore
-from server.control.registry import load_control_registry, load_secrets, secrets_from_lut
+from server.control.registry import (check_secrets_present, load_control_registry, load_secrets,
+                                      secrets_from_lut)
 from server.control.secret_store import load_lut
+
+log = logging.getLogger("ha.control.bootstrap")
 
 
 def parse_env_file(path: Path) -> dict:
@@ -46,4 +50,13 @@ def build_issuer(master: str, *, control_registry: Path, node_secrets_lut: Path,
     else:
         transport = default_tr
     issuer = CommandIssuer(registry=registry, secrets=secrets, policy=policy, transport=transport)
+    # Loudly flag declared-but-uncommandable devices at BOOT, so a missing secret surfaces here and not
+    # silently as "unknown-device" the first time something tries to actuate (the 2026-06-24 cutover
+    # incident: control_secrets.yaml was never copied, so the Midea couldn't be driven). cluster-doctor
+    # asserts the file is present on-box; this asserts the loaded config can actually command each device.
+    missing = check_secrets_present(registry, secrets)
+    if missing:
+        log.warning("CONTROL: %d/%d declared device(s) have NO command secret and CANNOT be actuated "
+                    "(unknown-device): %s — check instance/control_secrets.yaml / node enrollment",
+                    len(missing), len(registry), ", ".join(sorted(missing)))
     return issuer, registry, midea_drivers

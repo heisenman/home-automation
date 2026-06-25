@@ -13,6 +13,7 @@ VIP="${VIP:-192.168.0.200}"
 BROKER="${BROKER:-$VIP}"
 HEARTBEAT_FRESH="${HEARTBEAT_FRESH:-12}"
 KEY="${CLUSTER_KEY:-}"
+REPO_REMOTE="${REPO_REMOTE:-/home/visko/home_automation}"
 SSH(){ ssh ${KEY:+-i "$KEY"} -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=accept-new "$@"; }
 on(){ local h="$1"; shift; SSH "visko@$h" "$@" 2>/dev/null; }
 
@@ -89,6 +90,27 @@ else no "VIP $VIP:1883 NOT reachable from this host's segment"; fi
 if [ "${REACH[$PRIMARY]}" = yes ] && [ "${REACH[$STANDBY]}" = yes ]; then
   on "$PRIMARY" "ssh -i ~/.ssh/id_cluster -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new visko@$STANDBY true" \
      && ok "cluster SSH $PRIMARY -> $STANDBY (fence/sync path)" || wn "cluster SSH $PRIMARY -> $STANDBY failed (id_cluster?)"
+fi
+
+# ---- dictator config completeness (the 2026-06-24 control_secrets.yaml gap) ----
+# Every dictator-CAPABLE box (primary AND standby) must hold the full critical config/secret set, or a
+# promote/takeover boots a controller that can't actuate (issuer -> unknown-device). Source of truth is
+# failover/dictator-files.manifest; here we assert PRESENCE + non-empty on each reachable box.
+hdr "Dictator config completeness"
+MANIFEST="$(dirname "$0")/dictator-files.manifest"
+if [ ! -f "$MANIFEST" ]; then
+  wn "no dictator-files.manifest beside cluster-doctor — skipping config-completeness check"
+else
+  mapfile -t crit_files < <(awk -F'|' '/^[[:space:]]*#/ || NF<3 {next}
+                                       {gsub(/^[[:space:]]+|[[:space:]]+$/,"",$1); gsub(/^[[:space:]]+|[[:space:]]+$/,"",$2)
+                                        if ($2=="critical") print $1}' "$MANIFEST")
+  for h in "$PRIMARY" "$STANDBY"; do
+    [ "${REACH[$h]}" = yes ] || { wn "$h unreachable — can't audit dictator config"; continue; }
+    miss=""
+    for f in "${crit_files[@]}"; do on "$h" "test -s $REPO_REMOTE/$f" || miss="$miss $f"; done
+    if [ -z "$miss" ]; then ok "$h has all ${#crit_files[@]} critical dictator files"
+    else no "$h MISSING critical dictator file(s):$miss — a promote/takeover here can't actuate (unknown-device)"; fi
+  done
 fi
 
 # ---- history-reconcile deadline (ADR-0016): standby divergence gap vs the device-pull net ----

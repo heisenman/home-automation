@@ -1,0 +1,24 @@
+# Canonical set of files the dictator MUST have to RUN + ACTUATE. Single source of truth, read by:
+#   - sync-standby.sh   : which plain config/secret files to replicate primary -> warm standby
+#   - cluster-doctor.sh : presence assertion (a dictator-capable box missing a critical file FAILs)
+#
+# This file exists because of the 2026-06-24 cutover incident: control_secrets.yaml was never
+# sneakernet'd to 210, so the controller booted, decided OFF, but couldn't ACTUATE the Midea
+# (issuer returned unknown-device) until a real state change exposed the gap. Enumerating the set
+# here — and asserting it — means a future failover/rebuild can't silently lose control again.
+#
+# One row per file:  relpath | criticality | disposition
+#   criticality:  critical = control/actuation breaks without it   | optional = degrade-only
+#   disposition:  sync        = replicated standby<-primary by sync-standby (mutates on the primary)
+#                 preposition = must already exist on BOTH boxes; NEVER sent over the wire (root trust)
+#                 local       = box-local, not replicated (e.g. creds for a box-local broker)
+#
+# NOTE: the live state DBs (instance/db/control.db, mesh.db) are NOT listed here — they need a
+# consistent sqlite snapshot and keep their bespoke handling in sync-standby.sh.
+
+instance/.master_pass         | critical | preposition
+instance/node_secrets.enc     | critical | sync
+instance/control.yaml         | critical | sync
+instance/control_secrets.yaml | critical | sync
+instance/midea-device.env     | critical | sync
+instance/mqtt.env             | optional | local
