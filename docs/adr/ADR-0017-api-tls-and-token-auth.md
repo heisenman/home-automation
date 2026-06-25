@@ -68,10 +68,18 @@ air-gap cutover (ROADMAP theme B/D). This ADR is the **HTTP** plane only.
 1. **DONE** — `auth_tokens.py` + tests: pure JWT mint/verify/roles/rotation + `resolve_role` dual-verify.
 2. **DONE (LIVE on 210)** — `gen_tls.py` + HTTPS:8443 (self-signed, Hugh's pick); cert/VAPID folded into
    `dictator-files.manifest`.
-3. **PARTIAL** — `/auth/login` + `/auth/refresh` + dual-verify wired in `main.py` (a valid HS256 JWT OR the
-   legacy SHA bearer; legacy = admin). Routers stay **admin-gated** (back-compat; an admin JWT now satisfies
-   them). *Remaining:* thread a min-role through the router factories for the operator/viewer split — needs
-   the per-route role matrix + a decision on whether the currently-OPEN reads get gated behind `viewer`.
-4. PWA: login via `/auth/login`, use `crypto.subtle` on HTTPS (keep the JS-SHA fallback for plain :8123).
-   *(Web-push flip is DROPPED — see [air-gap-notify.md](../decisions/air-gap-notify.md); alerts ride MQTT.)*
-5. Deprecate the legacy static bearer (after the PWA moves to `/auth/login`).
+3. **DONE (mechanism)** — `/auth/login` + `/auth/refresh` + dual-verify wired in `main.py` (a valid HS256
+   JWT OR the legacy SHA bearer; legacy = admin). Routers stay **admin-gated** (back-compat; an admin JWT
+   now satisfies them).
+   - **operator/viewer per-route split: DEFERRED to post-air-gap** (Hugh, 2026-06-25). Reads stay **OPEN on
+     the LAN** (no `viewer` gate); the operator/admin split is low-value on a single-admin trusted LAN —
+     revisit when the air-gap network + a multi-user/off-LAN posture make roles meaningful.
+4. **DONE (mechanism)** — PWA uses `crypto.subtle` on HTTPS (JS-SHA fallback kept for plain :8123).
+   *Remaining (pairs with deploying the auth routes):* call `/auth/login` to hold a JWT instead of the raw
+   SHA bearer + refresh before expiry. *(Web-push flip DROPPED — alerts ride MQTT; see
+   [air-gap-notify.md](../decisions/air-gap-notify.md).)*
+5. Deprecate the legacy static bearer — **post-air-gap**, after the PWA moves to `/auth/login`.
+
+**Net status:** the R9 TLS + token *mechanism* is complete and back-compatible; role differentiation and
+legacy-bearer removal are deliberately deferred to the air-gap cutover. Deploys (auth routes + MQTT alert
+bus) ride the next `ha-api-tls` restart.
