@@ -70,8 +70,9 @@ con.execute(f"""
       ) AS rn
       FROM read_parquet({inputs!r}, union_by_name=true)
     ) WHERE rn = 1
-  ) TO '{tmp}' (FORMAT parquet);
-""")
+    ORDER BY device_id, metric, ts
+  ) TO '{tmp}' (FORMAT parquet, COMPRESSION zstd, COMPRESSION_LEVEL 6, ROW_GROUP_SIZE 100000);
+""")  # match server/storage/compactor.py (zstd/6/100k) + sort for column locality so a merge doesn't bloat the archive
 os.replace(tmp, out)                       # atomic within the same dir
 print(con.execute(f"SELECT COUNT(*) FROM read_parquet(['{out}'])").fetchone()[0])
 PY
