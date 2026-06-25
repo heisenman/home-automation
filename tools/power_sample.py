@@ -28,6 +28,11 @@ import time
 OUT_DIR = os.environ.get("HA_POWER_DIR", "/var/log/ha-power")
 CSV_PATH = os.path.join(OUT_DIR, "samples.csv")
 STATE_PATH = os.path.join(OUT_DIR, "state.json")
+EVENTS_PATH = os.path.join(OUT_DIR, "events.log")
+# Spike-attribution thresholds: an interval over EITHER captures what was running (feeds the emergent-event
+# hunt + the recompile-candidate shortlist — see docs §2.7). Tunable; defaults sized to idle ~6W / ~4% busy.
+SPIKE_BUSY_PCT = float(os.environ.get("HA_POWER_BUSY_PCT", "50"))
+SPIKE_PKG_W = float(os.environ.get("HA_POWER_W", "15"))
 RAPL = "/sys/class/powercap/intel-rapl:0"
 IRQS = {"LOC": "irq_loc", "CAL": "irq_cal", "RES": "irq_res"}   # plus NIC + xhci matched by substring
 COLUMNS = ["ts", "interval_s", "pkg_w", "c1_pct", "c2_pct", "cpu_busy_pct", "load1", "temp_c",
@@ -135,6 +140,22 @@ def top_proc():
     return "-", 0.0
 
 
+def capture_spike(reason: str, metrics: dict):
+    """Append a what-was-running snapshot when an interval is unusually busy/hot. The top-CPU processes
+    here are the raw material for the recompile-candidate shortlist (compute-bound + not dispatched)."""
+    try:
+        r = subprocess.run(["ps", "-eo", "pcpu,pmem,comm", "--sort=-pcpu", "--no-headers"],
+                           capture_output=True, text=True, timeout=5)
+        top = "; ".join(ln.strip() for ln in r.stdout.splitlines()[:8])
+    except Exception:
+        top = "(ps failed)"
+    line = (f"{metrics.get('ts')} SPIKE [{reason}] busy={metrics.get('cpu_busy_pct')}% "
+            f"pkgW={metrics.get('pkg_w')} c2={metrics.get('c2_pct')}% load1={metrics.get('load1')} "
+            f"irq_cal/s={metrics.get('irq_cal_ps')} | top: {top}\n")
+    with open(EVENTS_PATH, "a") as f:
+        f.write(line)
+
+
 def main():
     t0 = time.time()
     os.makedirs(OUT_DIR, exist_ok=True)
@@ -196,6 +217,16 @@ def main():
                      "cpu_busy_pct": busy, "irq_loc_ps": ips("irq_loc"), "irq_cal_ps": ips("irq_cal"),
                      "irq_res_ps": ips("irq_res"), "irq_nic_ps": ips("irq_nic"),
                      "irq_xhci_ps": ips("irq_xhci")})
+        try:                                  # spike-attribution: capture what ran if unusually busy/hot
+            spk = []
+            if busy != "" and float(busy) >= SPIKE_BUSY_PCT:
+                spk.append(f"busy>={SPIKE_BUSY_PCT}")
+            if pw != "" and float(pw) >= SPIKE_PKG_W:
+                spk.append(f"pkgW>={SPIKE_PKG_W}")
+            if spk:
+                capture_spike(",".join(spk), base)
+        except (TypeError, ValueError):
+            pass
         row(base, "")
 
     with open(STATE_PATH, "w") as f:

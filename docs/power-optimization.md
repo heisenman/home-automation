@@ -94,6 +94,27 @@ portability**. Tier: **🟢 bring-up directive** (safe default, bake into image)
   failover detection latency — measure both.*
 - Carry forward ops's `ipvsadm` disable (already done) into the image base.
 
+### 2.7 Source-compilation / `-march=znver1` — assessment (mostly NO; measure-first)  🟡
+Debian amd64 builds for the **baseline x86-64 (SSE2)** target; this R2514 has `avx2/fma/aes/sha_ni/bmi`
+unused by generic static builds. Tempting to `-march=znver1` source-rebuild. Honest verdict:
+- **For the POWER goal: ~zero benefit.** `-march` speeds code *per unit work*; it does not change C-state
+  residency. Measured: ~95% C2 at ~6 W idle; the active ~5% is mostly I/O-wait/syscalls, not SIMD compute.
+  The power levers are firmware/cpufreq/idle (§2.1–2.4), not compilation.
+- **The libraries that matter already runtime-dispatch:** glibc (ifunc `memcpy`/`str*`), OpenSSL (CPUID →
+  AES-NI/AVX2), zstd/zlib-ng — they pick the AVX2/AES path at runtime regardless of build target. Recompiling
+  them buys ≈ nothing.
+- **Genuine (small) candidates** = compute-bound AND *not* runtime-dispatched: **PGO/LTO CPython** (Debian's
+  isn't fully PGO/BOLT) for the Python services' active bursts; maybe **pyarrow/parquet** compression on
+  compaction. Both only matter in the active ~5% → tiny absolute energy.
+- **Kernel:** the real from-source lever is **config** (trim drivers, `amd_pstate`, idle/tickless), not
+  `-march` (marginal). Prefer boot-params + stock kernel until data justifies a custom build.
+- **Cost:** source builds drop out of `apt` security updates (real regression pre-air-gap) + high effort.
+  Whole-OS rebuild (Gentoo/Clear-Linux style) is NOT justified for single-digit-% gains on a 95%-idle box.
+- **DECISION — measure-first:** the campaign (sampler + `acct`) identifies which processes actually consume
+  CPU. A part is a recompile candidate only if it is (a) compute-bound in the data AND (b) not already
+  runtime-dispatched. The day-7 report emits that shortlist; we targeted-rebuild only those, treating it as
+  active-energy tuning, not idle/power. (Spike-attribution added to the sampler §3.2 feeds this.)
+
 ### 2.6 Peripherals  🟢/🟡
 - 🟢 Keep USB autosuspend `auto`. **Exception to verify:** the on-board BLE radio (xhci) must **not**
   autosuspend mid-scan — confirm the scan keeps it active (it should, as an open HCI socket). Pin it
