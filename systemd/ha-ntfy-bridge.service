@@ -1,0 +1,29 @@
+[Unit]
+# MQTT -> ntfy bridge: turns home/_alert/new events into self-hosted ntfy push (air-gap-native phone
+# notifications; replaces vendor Web Push). VIP-gated internally — only the dictator notifies. Runs on 210
+# alongside the broker + the API alert loop. See docs/decisions/air-gap-notify.md.
+Description=HA alert bridge — MQTT home/_alert/new -> self-hosted ntfy
+After=network-online.target mosquitto.service ntfy.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=visko
+WorkingDirectory=/home/visko/home_automation
+Environment=HA_BROKER=localhost
+Environment=HA_VIP=192.168.0.200
+Environment=NTFY_URL=http://localhost:8095
+Environment=NTFY_TOPIC=ha-alerts
+# NTFY_TOKEN optional (if the ntfy server requires auth to publish); keep secrets out of git -> set via
+# an EnvironmentFile on the box, not here.
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+EnvironmentFile=-/home/visko/home_automation/instance/ntfy.env
+ExecStart=/home/visko/home_automation/venv/bin/python3 -m server.notify.ntfy_bridge
+Restart=always
+RestartSec=10
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+
+[Install]
+WantedBy=multi-user.target

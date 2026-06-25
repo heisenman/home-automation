@@ -1,0 +1,22 @@
+# Self-hosted ntfy server config for the HA LAN (air-gap-native phone notifications).
+# Install to /etc/ntfy/server.yml on 210. ntfy ships its own systemd unit (ntfy.service).
+# Docs: https://docs.ntfy.sh/config/
+
+# Listen on a high port (8090 is OTA; use 8095). Phones + the bridge reach this over the LAN.
+listen-http: ":8095"
+
+# Base URL the server advertises (used in links / the web UI). Use the VIP so it follows the dictator if
+# ntfy is later made HA; for the v1 single-instance-on-210 deploy, 210's IP also works.
+base-url: "http://192.168.0.200:8095"
+
+# Where ntfy keeps its message cache + attachments (survives restarts; lets a phone catch up after offline).
+cache-file: "/var/lib/ntfy/cache.db"
+cache-duration: "12h"
+
+# LAN trust posture (matches the broker's anonymous-on-LAN stance until the air-gap auth cutover, theme D):
+# anyone on the LAN may read/write. Tighten to token-auth here when broker-auth lands.
+auth-default-access: "read-write"
+
+# No upstream / no vendor relay — fully local. (Leave upstream-base-url UNSET: that is ntfy.sh's cloud
+# relay for iOS APNs; using it would re-introduce a cloud dependency we are explicitly avoiding.)
+behind-proxy: false
