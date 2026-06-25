@@ -27,6 +27,10 @@ BROKER="${BROKER:-$VIP}"
 CONTROLLER_UNIT="${CONTROLLER_UNIT:-ha-controller}"
 KEY="${CLUSTER_KEY:-$HOME/.ssh/id_cluster}"
 TIMEOUT="${DRILL_TIMEOUT:-45}"
+RTO_BUDGET_S="${RTO_BUDGET_S:-600}"   # acceptable control-outage ceiling (Hugh 2026-06-25: 10 min for the
+                                      # current thermal load). Future: derive from the strictest actuator's
+                                      # max_control_outage_s (a per-device trait set in the PWA). The drill
+                                      # PASS/FAILs the MEASURED failover time against this.
 REPO_REMOTE="${REPO_REMOTE:-/home/visko/home_automation}"
 MODE="dry-run"; ACTUATE=0
 for a in "$@"; do case "$a" in
@@ -134,7 +138,9 @@ hdr "5. Fail back (start keepalived on $CUR_MASTER; it preempts)"; run_on "$CUR_
 t_back=$(wait_until "vip->master" 'vip_on "$CUR_MASTER"') && ok "VIP reclaimed by $CUR_MASTER in ${t_back}s" || no "$CUR_MASTER did NOT reclaim VIP"
 t_demote=$(wait_until "ctl<-target" '[ "$(state_on "$TARGET" "$CONTROLLER_UNIT")" != active ]') && ok "$TARGET auto-demoted in ${t_demote}s" || no "$TARGET did NOT auto-demote"
 hdr "6. Verify + timings"; "$HERE/cluster-doctor.sh" >/dev/null 2>&1 && ok "cluster-doctor HEALTHY post-drill" || wn "cluster-doctor not green post-drill — investigate"
-echo "  RTO (failover): VIP ${t_vip:-?}s / controller ${t_ctl:-?}s ; failback: VIP ${t_back:-?}s / demote ${t_demote:-?}s"
+rto=$(( ${t_vip:-0} + ${t_ctl:-0} ))   # induce->controller-up (sequential waits) = the control outage
+[ "$rto" -le "$RTO_BUDGET_S" ] && ok "failover RTO ~${rto}s within budget ${RTO_BUDGET_S}s" || no "failover RTO ~${rto}s EXCEEDS budget ${RTO_BUDGET_S}s (tighten VRRP/heartbeat timing)"
+echo "  RTO (failover): VIP ${t_vip:-?}s + controller ${t_ctl:-?}s = ~${rto}s (budget ${RTO_BUDGET_S}s) ; failback: VIP ${t_back:-?}s / demote ${t_demote:-?}s"
 hdr "Verdict"; printf '  %d pass, %d warn, %d FAIL\n' "$pass" "$warn" "$fail"
 [ "$fail" -eq 0 ] && echo "  => DRILL PASSED" || echo "  => DRILL HAD FAILURES (see above)"
 trap - EXIT; restore

@@ -51,5 +51,10 @@ know our actual RTO. The drill does **not** implement failover (keepalived + `no
 
 ## Open follow-ups
 - Wire the `--actuate` proof into the script (currently manual via `device_smoke_test.py`).
-- Decide acceptable RTO + whether 30-min `sync-standby` cadence is tight enough (ROADMAP A open-qs;
-  partially answered by the live ADR-0016 divergence-gap check, now PASS at 0d).
+- **RTO budget = 600s** (Hugh 2026-06-25, 10 min). The drill now PASS/FAILs the measured failover time
+  against `RTO_BUDGET_S` (default 600). RTO is an *outcome* of the VRRP/heartbeat timings, so it's the
+  **budget** that's configurable, not a raw timer. **Future (theme C / add-device-flow):** per-actuator
+  **`max_control_outage_s`** trait, editable in the PWA device flow → cluster budget = strictest (min)
+  across actuators. With one thermal load today, 600s.
+- hot.db divergence is RPO (data-loss), distinct from RTO; cluster-doctor shows 0d — non-issue now.
+- Decide whether the 30-min `sync-standby` cadence is tight enough once a stricter actuator exists.
