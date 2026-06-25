@@ -175,6 +175,40 @@ else
   fi
 fi
 
+# ---- archive completeness (ADR-0018): the parquet ARCHIVE must converge, not just the hot tier ----
+# Record-keeping HARD GATE. The hot-tier checks above cover ~today; this asserts the months-deep parquet
+# archive matches across dictator-capable boxes. A box elevated to dictator WITHOUT the archive (the
+# 2026-06-25 incident: 210 had ~1.5 d while .245 held since January) serves a truncated record-of-truth.
+# After reconcile-parquet they must converge; a material shortfall on either box FAILs.
+hdr "Archive completeness (ADR-0018)"
+arch_stats(){ # $1=host -> "rows|earliest" from that box's parquet archive (via its venv duckdb)
+  local pyexpr='import glob,duckdb,sys
+f=[x for x in glob.glob(sys.argv[1]+"/**/*.parquet",recursive=True) if "/year=0/" not in x]
+print(("0|") if not f else "{}|{}".format(*duckdb.connect().execute(f"SELECT COUNT(*),MIN(ts) FROM read_parquet({f!r},union_by_name=true)").fetchone()).replace("None",""))'
+  on "$1" "$REPO_REMOTE/venv/bin/python3 -c '$pyexpr' '$REPO_REMOTE/instance/db/parquet'"
+}
+if [ "${REACH[$PRIMARY]}" = yes ] && [ "${REACH[$STANDBY]}" = yes ]; then
+  pStat=$(arch_stats "$PRIMARY"); sStat=$(arch_stats "$STANDBY")
+  pRows="${pStat%%|*}"; pMin="${pStat#*|}"; sRows="${sStat%%|*}"; sMin="${sStat#*|}"
+  if ! [[ "$pRows" =~ ^[0-9]+$ && "$sRows" =~ ^[0-9]+$ ]]; then
+    wn "couldn't read parquet archive stats on both boxes (duckdb/venv missing?) — skipping archive gate"
+  else
+    hi=$pRows; [ "$sRows" -gt "$hi" ] && hi=$sRows
+    tol=$(( hi / 100 + 50 ))                         # ~1% + floor (absorbs in-flight compaction)
+    diff=$(( pRows > sRows ? pRows - sRows : sRows - pRows ))
+    echo "  primary=$PRIMARY rows=$pRows earliest=${pMin:-none} | standby=$STANDBY rows=$sRows earliest=${sMin:-none}"
+    if [ "$diff" -le "$tol" ]; then ok "parquet archives converged (Δ$diff ≤ tol $tol rows)"
+    else no "parquet archives DIVERGE (Δ$diff > tol $tol) — a box is missing archive the peer holds. Run failover/reconcile-parquet.sh --once (or provision-peer). A failover to the thin box now serves truncated history."; fi
+    # depth: neither dictator-capable box should be materially shallower than the other
+    if [ -n "$pMin" ] && [ -n "$sMin" ] && [ "$pMin" != "$sMin" ]; then
+      shallow=$PRIMARY; deep=$sMin; [ "$pMin" \> "$sMin" ] || { shallow=$STANDBY; deep=$pMin; }
+      wn "archive DEPTH differs: earliest primary=$pMin standby=$sMin — $shallow is shallower (deepest=$deep). reconcile-parquet to seed the gap."
+    fi
+  fi
+else
+  wn "both boxes not reachable — skipping archive completeness gate"
+fi
+
 # ---- verdict ----
 hdr "Verdict"
 printf '  %d pass, %d warn, %d FAIL\n' "$pass" "$warn" "$fail"
