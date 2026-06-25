@@ -1,10 +1,16 @@
 # ADR-0010 — Command & Control Protocol (Authenticated Directives)
 
 **Date:** 2026-06-21
-**Status:** Accepted — **fully implemented** (reconciled 2026-06-23). Server-side + protocol built;
-**broker auth/ACL cutover done** (2026-06-21); **node-side enforcement live** in firmware `v9-bankts`
-(signed-directive verify + GATT-write lockdown + OTA host-pin + image-hash verify). Remaining: per-node
-nonce/counter for the 60s ts-replay window (deferred).
+**Status:** Accepted — **fully implemented** (reconciled 2026-06-23; replay-nonce added 2026-06-25).
+Server-side + protocol built; **broker auth/ACL cutover done** (2026-06-21); **node-side enforcement
+live** in firmware `v9-bankts` (signed-directive verify + GATT-write lockdown + OTA host-pin +
+image-hash verify). **Per-node anti-replay now CLOSED:** the firmware freshness window (300 s for
+gatt/history, 86400 s for ota — not the 60 s an early docstring claimed) is paired with a per-node
+**monotonic `(ts, seq)`** guard, persisted in NVS (namespace `ha_cmd`): a node acts on a signed command
+only if its `(ts, seq)` is strictly newer than the last it acted on, so a captured command can't be
+replayed inside the window. `ts` is server-stamped (monotonic regardless of node clock drift) so the
+scheme self-heals across a dictator rebuild; `seq` (added by `tools/edge_sign.py`) orders commands within
+one second. Shipped firmware `v11-nonce` (C6) / `v14-nonce` (S3) / `v10-nonce` (C3-fork).
 
 ## Decision
 

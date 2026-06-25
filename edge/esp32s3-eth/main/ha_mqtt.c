@@ -14,6 +14,7 @@
 #include "cJSON.h"
 #include <time.h>
 #include "mbedtls/md.h"
+#include "nvs.h"
 #if __has_include("secrets.h")
 #include "secrets.h"
 #endif
@@ -28,7 +29,7 @@
 #endif
 
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v13-relay" // bump to prove an OTA swapped the running image
+#define HA_FW_VERSION "v14-nonce" // bump to prove an OTA swapped the running image
 #endif
 
 static const char *TAG = "ha_mqtt";
@@ -66,6 +67,33 @@ static bool cmd_sig_ok(const char *p, const char *sig_hex) {
     unsigned char diff = 0;                       // constant-time compare
     for (int i = 0; i < 64; i++) diff |= (unsigned char)(hex[i] ^ sig_hex[i]);
     return diff == 0;
+}
+
+// Per-node monotonic (ts,seq) anti-replay (ADR-0010). We act on a signed command only if its (ts,seq)
+// is STRICTLY greater than the last one we acted on, and persist the high-water mark in NVS so a reboot
+// can't reopen the replay window. ts is SERVER-stamped, so the comparison is monotonic regardless of
+// THIS node's clock drift (the freshness window is the only clock-sensitive gate) — and it self-heals
+// after a dictator rebuild because wall-clock only advances. seq orders commands within one second.
+static long s_repl_ts  = -1;
+static int  s_repl_seq = -1;
+static bool s_repl_loaded;
+static void replay_load(void) {
+    if (s_repl_loaded) return;
+    s_repl_loaded = true;
+    nvs_handle_t h;
+    if (nvs_open("ha_cmd", NVS_READONLY, &h) != ESP_OK) return;   // namespace absent on first boot
+    int64_t v; int32_t q;
+    if (nvs_get_i64(h, "last_ts",  &v) == ESP_OK) s_repl_ts  = (long)v;
+    if (nvs_get_i32(h, "last_seq", &q) == ESP_OK) s_repl_seq = (int)q;
+    nvs_close(h);
+}
+static void replay_store(long ts, int seq) {
+    nvs_handle_t h;
+    if (nvs_open("ha_cmd", NVS_READWRITE, &h) != ESP_OK) return;
+    nvs_set_i64(h, "last_ts",  (int64_t)ts);
+    nvs_set_i32(h, "last_seq", (int32_t)seq);
+    nvs_commit(h);
+    nvs_close(h);
 }
 
 // Dispatch a verified command object (op/mac/steps/url). Caller owns the cJSON.
@@ -129,6 +157,18 @@ static void handle_cmd(const char *data, int len) {
                 ha_mqtt_log("cmd rejected: stale (dt=%lds win=%lds)", dt, window);
                 cJSON_Delete(inner); cJSON_Delete(root); return;
             }
+            // Monotonic (ts,seq) anti-replay: within the window, refuse anything not STRICTLY newer than
+            // the last command we acted on — closes the replay gap the time-window alone leaves open.
+            long mts = (long)ts->valuedouble;
+            const cJSON *sq = cJSON_GetObjectItem(inner, "seq");
+            int mseq = cJSON_IsNumber(sq) ? (int)sq->valuedouble : 0;
+            replay_load();
+            if (s_repl_ts >= 0 && (mts < s_repl_ts || (mts == s_repl_ts && mseq <= s_repl_seq))) {
+                ha_mqtt_log("cmd rejected: replay (ts=%ld seq=%d <= seen ts=%ld seq=%d)",
+                            mts, mseq, s_repl_ts, s_repl_seq);
+                cJSON_Delete(inner); cJSON_Delete(root); return;
+            }
+            s_repl_ts = mts; s_repl_seq = mseq; replay_store(mts, mseq);
         }
         cmd = inner;
     } else {
