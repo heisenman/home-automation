@@ -1,8 +1,11 @@
 [Unit]
 # R9 (ADR-0017) TLS front for ha-api: a SECOND uvicorn serving the SAME app over HTTPS on :8443, alongside
 # the existing plain-HTTP :8123 (additive — nothing breaks during the transition). Self-signed cert from
-# tools/gen_tls.py. HA_API_BACKGROUND=0 so the web-push loop runs ONLY in the primary HTTP instance (no
-# double tickles). Once clients move to HTTPS, the plain :8123 instance can be retired/redirected.
+# tools/gen_tls.py. This TLS instance DRIVES the web-push send loop (background enabled): it starts fresh
+# so it loads the VAPID key on boot, whereas the long-running HTTP:8123 instance cached "no VAPID" before
+# the key existed and would only pick it up on a restart — which we avoid (a restart can blip
+# healthcheck.sh → spurious failover). The HTTP instance is gated OFF (HA_API_BACKGROUND=0) so there is
+# exactly ONE sender. Once clients move to HTTPS, the plain :8123 instance can be retired/redirected.
 Description=HA API (HTTPS/TLS front, R9) — uvicorn :8443
 After=network-online.target ha-api.service
 Wants=network-online.target
@@ -18,7 +21,7 @@ Environment=HOME=/home/visko/home_automation/instance
 Environment=HA_BIND_HOST=0.0.0.0
 Environment=HA_MASTER_PASS_FILE=/home/visko/home_automation/instance/.master_pass
 Environment=HA_VIP=192.168.0.200
-Environment=HA_API_BACKGROUND=0
+# background loops (web-push) RUN here — this is the sole sender (see header). Default (unset) = enabled.
 EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
 ExecStart=/home/visko/home_automation/venv/bin/python3 -m uvicorn server.api.main:app \
   --host ${HA_BIND_HOST} --port 8443 \

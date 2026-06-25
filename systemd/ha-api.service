@@ -21,6 +21,11 @@ Environment=HA_BIND_HOST=0.0.0.0
 # node-secret LUT; mqtt.env carries the dictator broker creds the issuer's MqttTransport authenticates
 # with. Both gitignored under instance/. Absent → control router simply isn't mounted (reads still work).
 Environment=HA_MASTER_PASS_FILE=/home/visko/home_automation/instance/.master_pass
+# Web-push send loop (R9): the HTTPS:8443 front (ha-api-tls) drives it — it loads the VAPID key fresh on
+# start. This HTTP instance is gated OFF so there's exactly ONE sender (no double tickle) AND so we never
+# have to restart this live API just to pick up VAPID (a restart can blip healthcheck.sh → spurious
+# failover). On 210 this is applied via a no-restart drop-in today; baked here for future installs.
+Environment=HA_API_BACKGROUND=0
 EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
 ExecStart=/home/visko/home_automation/venv/bin/python3 \
     -m uvicorn server.api.main:app \
