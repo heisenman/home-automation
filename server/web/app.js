@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v27 crypto.subtle on HTTPS";
+const BUILD = "v28 scene-threshold validation";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -249,6 +249,22 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
     return next;
   });
   const setSceneField = (name, k, v) => setScenes((s) => ({ ...s, [name]: { ...s[name], [k]: v } }));
+  // Client-side scene validation — mirror the server rule (ON strictly > OFF, both filled) so an invalid
+  // custom threshold is caught HERE with a clear message, instead of a small inline 400 after Save that
+  // reads like a no-op. Returns "" when the scene is fine (base / park-off / valid custom).
+  const sceneIssue = (name) => {
+    const p = scenes[name];
+    if (!p || p.off || !Object.keys(p).length) return "";
+    const on = Number(p.on_above), off = Number(p.off_below);
+    if (p.on_above === "" || p.off_below === "" || p.on_above == null || p.off_below == null
+        || !Number.isFinite(on) || !Number.isFinite(off)) return "enter both ON and OFF";
+    if (on <= off) return `ON (${on}) must be above OFF (${off})`;
+    return "";
+  };
+  const firstSceneIssue = () => {
+    for (const name of EDITABLE_SCENES) { const m = sceneIssue(name); if (m) return `${name}: ${m}`; }
+    return "";
+  };
 
   // candidate sources = trusted sensors that actually report humidity. Keep the current source in the
   // list even if it's momentarily offline/absent, so saving never silently drops it.
@@ -261,6 +277,8 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
 
   const save = async () => {
     if (!isAdmin) return onNeedAdmin();
+    const sIssue = firstSceneIssue();
+    if (sIssue) { setErr(sIssue); setFlash(""); return; }   // never POST an invalid scene threshold
     setBusy(true); setErr(""); setFlash("");
     const patch = {
       enabled,
@@ -328,7 +346,8 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
           onInput=${(e) => setQuiet(e.target.value)} /></div>
       <div class="divider"></div>
       <div class="field"><label>Scene behavior</label>
-        <p class="note">What each whole-house scene does to this device (Home = the settings above).</p></div>
+        <p class="note">What each whole-house scene does to this device (Home = the settings above). Takes
+          effect only while the whole-house scene is set to that name.</p></div>
       ${EDITABLE_SCENES.map((name) => {
         const p = scenes[name] || {};
         const b = behaviorOf(p);
@@ -345,10 +364,11 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
             <label class="inline">OFF <<input type="number" value=${p.off_below ?? ""}
               onInput=${(e) => setSceneField(name, "off_below", e.target.value)} />%</label>
           </div>`}
+          ${b === "custom" && sceneIssue(name) && html`<span class="err sm">⚠ ${sceneIssue(name)}</span>`}
         </div>`;
       })}
       <div class="controls">
-        <button class="btn sm primary" disabled=${busy} onClick=${save}>Save</button>
+        <button class="btn sm primary" disabled=${busy || !!firstSceneIssue()} onClick=${save}>Save</button>
         <button class="btn sm ghost" disabled=${busy} onClick=${() => setOpen(false)}>Close</button>
         ${flash && html`<span class="ok-flash">${flash}</span>`}
         ${err && html`<span class="err">${err}</span>`}
