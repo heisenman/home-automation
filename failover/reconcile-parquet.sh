@@ -39,7 +39,9 @@ RLOG="$RECONCILE_LOG"
 case "$PARQUET_DIR" in /*) PQ="$PARQUET_DIR";; *) PQ="$REPO/$PARQUET_DIR";; esac
 
 log(){ printf '%s reconcile-parquet %s\n' "$(date -Is)" "$*" | tee -a "$RLOG" 2>/dev/null || true; }
-RSH(){ ssh -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "visko@$PEER_HOST" "$@"; }
+# -n (stdin from /dev/null) is REQUIRED: RSH is called inside the partition while-read loop below, and a
+# bare ssh would consume the loop's stdin and process only the first partition (the 2026-06-25 bug).
+RSH(){ ssh -n -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "visko@$PEER_HOST" "$@"; }
 SCP(){ scp -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$@"; }
 
 # list local partition files as relpaths under the parquet root (e.g. year=2026/month=03/2026-03.parquet),
@@ -86,7 +88,7 @@ reconcile_once(){
   peers="$(RSH "cd $REMOTE_REPO && bash failover/reconcile-parquet.sh --list" 2>/dev/null || true)"
   union="$(printf '%s\n%s\n' "$locals" "$peers" | sed '/^$/d' | sort -u)"
   [ -n "$union" ] || { log "no partitions on either box — nothing to reconcile"; return 0; }
-  while IFS= read -r rel; do
+  while IFS= read -r rel <&3; do
     [ -n "$rel" ] || continue
     # PULL: bring the peer's copy of this partition over and row-merge it into ours.
     if printf '%s\n' "$peers" | grep -qxF "$rel"; then
@@ -107,7 +109,7 @@ reconcile_once(){
         log "push: $rel scp->peer failed (ok — self-corrects next pass)"
       fi
     fi
-  done <<<"$union"
+  done 3<<<"$union"        # read on FD 3 so ssh/scp in the body can't steal the loop's stdin
   log "parquet reconcile pass complete ($(printf '%s\n' "$union" | grep -c . ) partition(s))"
 }
 
