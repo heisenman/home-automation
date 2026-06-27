@@ -1,6 +1,34 @@
 # Follow-ups & clarifications for Hugh
 
-## ✅ CHECKPOINT 2026-06-25 (PM, ADR-0018) — AUTHORITATIVE current state (supersedes everything below)
+## ✅ CHECKPOINT 2026-06-27 — AUTHORITATIVE current state (supersedes everything below)
+Verified against the live cluster + bus this date.
+
+**SHIPPED + LIVE this session:**
+- **First air purifier fully integrated — Levoit Vital 200S (LAP-V201S) → local ESPHome.** Reflashed its
+  onboard **ESP32-C3-SOLO-1** in place (no added hardware), cloud severed (VeSync gone; OEM firmware backed
+  up off-git at `~/levoit-v201s-oem-backup.bin`). Live on the bus as `levoit-office` (IP `.252`): **reads**
+  PM2.5/AQI/CADR/filter%/fan/modes/MCU-version, **writes** fan on/off + speed (proven end-to-end:
+  MQTT→ESPHome→TLV→UART→MCU). Recovery via OTA + fallback AP — never needs reopening. Recipe + MQTT topic
+  map committed at [provisioning/levoit/](../provisioning/levoit/README.md). Key facts: component
+  `github://tuct/levoit` `model: VITAL200S`; MCU UART `tx=GPIO19/rx=GPIO18` (≠ flash pads); MQTT broker
+  **`.210` not the VIP** (vip-unreachable-from-wifi); **beachhead-first** flash strategy (WiFi+OTA proven
+  before adding the unproven UART component).
+- **Tasmota bridge landing zone** (`server/ingest/tasmota_bridge.py`, ADR-pending) shipped earlier this
+  session @566ca20 for the incoming SONOFF S31 (G11 wall-power meter → power campaign, then a purifier plug).
+
+**HANDED TO DEV (board `levoit-integration`) — the integration half:**
+1. **Prove publishing:** ESPHome→canonical bridge (mirror `tasmota_bridge.py`) → `home/office/levoit_office/state`
+   → `hot.db`; add purifier metric units to `writer._UNITS`; registry entry.
+2. **Control on the web app:** PWA purifier card (PM2.5/AQI/filter + fan/mode control via `…/command`).
+3. **Automations:** PM2.5-threshold → fan (like the dehumidifier on humidity).
+
+**ALSO OPEN (purifier program):** map Auto/Sleep mode control; SONOFF S31 intake (flash Tasmota, install
+`ha-tasmota-bridge`); other purifiers — Winix C545 (harder, added-ESP) + 5510 (smart plug). UART adapter
+note: add `visko` to `dialout` on the desktop to stop the per-replug `chmod 666 /dev/ttyUSB0` dance.
+
+---
+
+## ✅ CHECKPOINT 2026-06-25 (PM, ADR-0018) — current state
 Verified against the live cluster + source this date. Repo `eafa369`.
 
 **SHIPPED + VERIFIED LIVE this session (210 dictator / .245 warm standby):**
