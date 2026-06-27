@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v29 air-purifier sensor (PM2.5/AQI/fan/filter)";
+const BUILD = "v30 air-purifier control (fan + PM2.5 auto)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -435,10 +435,21 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
 }
 
 // ── device card ──────────────────────────────────────────────────────────────
+// control-metric display map (the loop's input reading): RH for dehumidifiers, PM2.5 for purifiers.
+const CTRL_METRIC = {
+  humidity_pct: { unit: "%", label: "control RH", round: 1 },
+  pm25_ugm3: { unit: "µg/m³", label: "PM2.5", round: 0 },
+};
+
 function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit }) {
   const running = vm.running;
-  const s = vm.sensor, o = vm.onboard, d = vm.last_decision;
+  const s = vm.sensor, o = vm.onboard, d = vm.last_decision, act = vm.actuator || {};
   const ageStale = vm.health === "stale";   // the BFF already derives staleness; mirror it on the age
+  const cm = vm.control.metric || "humidity_pct";
+  const CM = CTRL_METRIC[cm] || { unit: "", label: cm, round: 1 };
+  const ranged = vm.control.strategy === "threshold_ranged";
+  const cval = s ? (s[cm] != null ? s[cm] : s.value) : null;
+  const fmtC = (v) => (v == null ? "—" : (CM.round ? round1(v) : Math.round(v)) + CM.unit);
   return html`
     <div class="card health-${vm.health}">
       <div class="card-head">
@@ -460,27 +471,41 @@ function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit }) {
       </div>
       <div class="readings">
         <div class="reading">
-          <div class="v">${s ? round1(s.humidity_pct) + "%" : "—"}</div>
-          <div class="k">control RH · <span class=${ageStale ? "age-stale" : "age-fresh"}>${
+          <div class="v">${fmtC(cval)}</div>
+          <div class="k">${CM.label} · <span class=${ageStale ? "age-stale" : "age-fresh"}>${
             s ? fmtAge(s.age_s) : "no data"}</span></div>
           <div class="k">from ${vm.control.source_sensor || "—"}</div>
         </div>
-        <div class="reading muted">
-          <div class="v">${o ? round1(o.humidity_pct) + "%" : "—"}</div>
-          <div class="k">onboard (not used)</div>
-        </div>
-        <div class="reading muted">
-          <div class="v">${vm.control.on_above ?? "—"}/${vm.control.off_below ?? "—"}</div>
-          <div class="k">on/off thresholds</div>
-        </div>
+        ${ranged ? html`
+          <div class="reading">
+            <div class="v">${act.fan_on === 0 ? "off" : (act.fan_speed != null ? "speed " + Math.round(act.fan_speed) : "—")}</div>
+            <div class="k">fan</div>
+          </div>
+          <div class="reading muted">
+            <div class="v">auto</div>
+            <div class="k">speed ↔ ${CM.label}</div>
+          </div>` : html`
+          <div class="reading muted">
+            <div class="v">${o ? round1(o.humidity_pct) + "%" : "—"}</div>
+            <div class="k">onboard (not used)</div>
+          </div>
+          <div class="reading muted">
+            <div class="v">${vm.control.on_above ?? "—"}/${vm.control.off_below ?? "—"}</div>
+            <div class="k">on/off thresholds</div>
+          </div>`}
       </div>
       ${d && html`<div class="reason">${d.source}: ${d.reason}</div>`}
       <${DecisionHistory} decisions=${vm.recent_decisions} />
       <${OverrideControls} id=${vm.device_id} override=${vm.override} isAdmin=${isAdmin}
         onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
       <${ManualControl} vm=${vm} isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
-      <${SettingsPanel} vm=${vm} sensors=${sensors} isAdmin=${isAdmin}
-        onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
+      ${ranged
+        ? html`<div class="settings"><div class="divider"></div><p class="note">Auto: fan speed steps with
+            ${CM.label} — ${(vm.control.bands || []).map((b, i, a) =>
+              (b.max == null ? "≥" + (a[i - 1] ? a[i - 1].max : 0) : "<" + b.max) + "→" + b.level).join(", ")}.
+            Use Manual control to set speed, the override buttons to force on/off.</p></div>`
+        : html`<${SettingsPanel} vm=${vm} sensors=${sensors} isAdmin=${isAdmin}
+            onChange=${onChange} onNeedAdmin=${onNeedAdmin} />`}
     </div>`;
 }
 

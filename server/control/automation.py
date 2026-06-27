@@ -42,6 +42,7 @@ class DeviceState:
     interlocks: tuple = ()          # active interlock names, e.g. ("tank_full",)
     last_on_ts: float | None = None
     last_off_ts: float | None = None
+    level: int | None = None        # current ranged level (fan speed), for speed-stepping devices
 
 
 @dataclass(frozen=True)
@@ -55,13 +56,14 @@ class Override:
 
 @dataclass(frozen=True)
 class Policy:
-    strategy: str = "hysteresis"    # "hysteresis" (external/own sensor) | "setpoint" (trust device)
+    strategy: str = "hysteresis"    # "hysteresis" | "setpoint" | "threshold_ranged" (sensor band -> fan speed)
     on_above: float = 55.0
     off_below: float = 50.0
     min_on_s: float = 600.0
     min_off_s: float = 300.0
     default_running: bool = False
     sensor_stale_s: float = 600.0
+    bands: tuple = ()               # threshold_ranged: ({"max": float|None, "level": int}, ...) ascending
 
     @classmethod
     def from_dict(cls, d: dict) -> "Policy":
@@ -75,6 +77,7 @@ class Policy:
             min_off_s=float(c.get("min_off_min", 5)) * 60.0,
             default_running=bool((d.get("defaults", {}) or {}).get("running", False)),
             sensor_stale_s=float(d.get("sensor_stale_min", 10)) * 60.0,
+            bands=tuple(c.get("bands", ()) or ()),
         )
 
 
@@ -84,6 +87,17 @@ class Resolution:
     act: bool              # True = issue a command (running differs from current and is allowed)
     source: str            # which layer decided: safety|override|schedule|rule|default
     reason: str
+    level: int | None = None   # ranged target (fan speed) for threshold_ranged; None = no speed command
+
+
+def _level_for(value: float, bands) -> int:
+    """Map a sensor value to a fan level via ascending bands ({"max": upper|None, "level": N}).
+    The first band whose `max` exceeds value wins; a band with max=None is the catch-all top."""
+    for b in bands:
+        mx = b.get("max")
+        if mx is None or value < float(mx):
+            return int(b["level"])
+    return int(bands[-1]["level"]) if bands else 1
 
 
 _IMMEDIATE_OFF = ("safety", "override")   # layers allowed to turn off bypassing min-on
@@ -140,6 +154,17 @@ def resolve(policy: Policy, now: float, sensor: Reading | None, state: DeviceSta
     if policy.strategy == "setpoint":
         # trust the device's own loop: keep it powered, it self-regulates to its target.
         return _gate(policy, now, state, True, "rule", "setpoint strategy -> device self-regulates")
+    if policy.strategy == "threshold_ranged":
+        # sensor band -> fan speed (e.g. PM2.5 -> purifier level). Fan runs always-on at the computed
+        # level; no compressor cycle gating (it's a fan). Act only when the level needs to change.
+        if sensor is None or (now - sensor.ts) > policy.sensor_stale_s:
+            return Resolution(state.running, False, "default", "sensor stale/missing -> hold",
+                              level=state.level)
+        lvl = _level_for(sensor.value, policy.bands)
+        if state.running and state.level == lvl:
+            return Resolution(True, False, "rule", f"sensor {sensor.value:.0f} -> speed {lvl} (no-op)",
+                              level=lvl)
+        return Resolution(True, True, "rule", f"sensor {sensor.value:.0f} -> speed {lvl}", level=lvl)
     if policy.strategy == "hysteresis":
         if sensor is None or (now - sensor.ts) > policy.sensor_stale_s:
             return _gate(policy, now, state, policy.default_running, "default",

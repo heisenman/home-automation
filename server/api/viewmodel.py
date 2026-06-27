@@ -134,6 +134,10 @@ def build_sensor_list(hot_conn, now: float, meta: dict | None = None,
     return out
 
 
+# control INPUT metric per strategy (the value the loop drives on). Default = RH (hysteresis/setpoint).
+_CONTROL_METRIC_BY_STRATEGY = {"threshold_ranged": "pm25_ugm3"}
+
+
 def build_display(control_conn, hot_conn, device_id: str, now: float, registry=None,
                   meta: dict | None = None) -> dict | None:
     """Compose the display view-model for one controllable device. None if it has no control policy.
@@ -147,31 +151,42 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         return None
     ctrl = policy.get("control", {}) or {}
     source_id = policy.get("source_sensor")
+    # the metric this device controls on: PM2.5 for speed-stepping purifiers, RH (default) for dehumidifiers.
+    metric = _CONTROL_METRIC_BY_STRATEGY.get(ctrl.get("strategy"), "humidity_pct")
 
-    # the authoritative reading that DRIVES the loop (a trusted meter, not the device's own sensor)
+    def _latest_any(dev, m):                      # newest at either trust level (auth=1 sensor, =0 self-report)
+        return _latest(hot_conn, dev, m, 1) or _latest(hot_conn, dev, m, 0) if hot_conn is not None else None
+
+    # the authoritative reading that DRIVES the loop. Carries both the metric-named key (back-compat for
+    # the dehumidifier card) and a generic value/metric so a purifier card can render the same shape.
     sensor = None
     if source_id and hot_conn is not None:
-        sv = _latest(hot_conn, source_id, "humidity_pct", 1)
+        sv = _latest(hot_conn, source_id, metric, 1)
         if sv:
-            sensor = {"device_id": source_id, "humidity_pct": sv[0], "ts": sv[1],
-                      "age_s": _age_s(sv[1], now)}
+            sensor = {"device_id": source_id, metric: sv[0], "value": sv[0], "metric": metric,
+                      "ts": sv[1], "age_s": _age_s(sv[1], now)}
 
-    # the device's OWN reading (non-authoritative — runs ~9-15% low; shown, never trusted for control)
+    # the device's OWN non-authoritative reading (dehumidifier: onboard RH runs low; purifier: self-sourced
+    # PM2.5 is authoritative, so this is typically None — there is no separate untrusted onboard sensor).
     onboard = None
     if hot_conn is not None:
-        ov = _latest(hot_conn, device_id, "humidity_pct", 0)
+        ov = _latest(hot_conn, device_id, metric, 0)
         if ov:
-            onboard = {"humidity_pct": ov[0], "ts": ov[1]}
+            onboard = {metric: ov[0], "value": ov[0], "metric": metric, "ts": ov[1]}
 
-    # current actuator telemetry (device setpoint + fan), published non-authoritative by the controller
+    # current actuator telemetry (device setpoint + fan on/off + fan level). The controller demotes Midea
+    # self-reports to auth=0; the Levoit bridge publishes auth=1 — so read at either level.
     actuator = {}
     if hot_conn is not None:
         tv = _latest(hot_conn, device_id, "target_humidity_pct", 0)
-        fv = _latest(hot_conn, device_id, "fan_speed", 0)
+        fv = _latest_any(device_id, "fan_speed")
+        fo = _latest_any(device_id, "fan_on")
         if tv:
             actuator["target_pct"] = tv[0]
         if fv:
             actuator["fan_speed"] = fv[0]
+        if fo:
+            actuator["fan_on"] = fo[0]
 
     # command capabilities (traits + ranges) so the UI can render manual controls
     traits = None
@@ -204,8 +219,10 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         "control": {
             "enabled": bool(policy.get("enabled", True)),
             "strategy": ctrl.get("strategy", "hysteresis"),
+            "metric": metric,                          # which sensor metric drives the loop (RH | pm25_ugm3)
             "on_above": ctrl.get("on_above"),
             "off_below": ctrl.get("off_below"),
+            "bands": ctrl.get("bands"),                # threshold_ranged: sensor band -> fan speed
             "source_sensor": source_id,
             "fallback_sensors": policy.get("fallback_sensors") or [],
         },
