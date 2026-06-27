@@ -1,0 +1,34 @@
+[Unit]
+Description=Home Automation — Levoit/ESPHome Bridge (air purifier → canonical /state)
+After=mosquitto.service network.target
+Wants=mosquitto.service
+
+[Service]
+Type=simple
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+Environment=HA_BROKER=localhost
+Environment=HA_BROKER_PORT=1883
+# Broker auth cutover: dictator MQTT creds (gitignored, optional via '-'; latent on anon broker)
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+ExecStart=/home/visko/home_automation/venv/bin/python3 \
+    -m server.ingest.levoit_bridge \
+    --registry instance/levoit-devices.yaml \
+    --broker ${HA_BROKER} \
+    --broker-port ${HA_BROKER_PORT}
+Restart=on-failure
+RestartSec=10
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/visko/home_automation/instance
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-levoit-bridge
+
+[Install]
+WantedBy=multi-user.target

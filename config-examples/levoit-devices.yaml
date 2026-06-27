@@ -1,0 +1,7 @@
+# Example registry for server/ingest/levoit_bridge.py (the ESPHome air-purifier bridge).
+# Copy to instance/levoit-devices.yaml and edit. Key = ESPHome node name (MQTT topic prefix).
+# See provisioning/levoit/README.md for the device recipe + live topic map.
+levoit-office:
+  device_id: levoit_office     # canonical id used in home/<area>/<device_id>/state + hot.db
+  area: office
+  device_type: air_purifier

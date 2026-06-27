@@ -69,6 +69,14 @@ _UNITS: dict[str, str] = {
     "energy_today_kwh": "kWh",
     "relay_on": "",
     "wifi_rssi_dbm": "dBm",
+    # Air purifier (Levoit Vital 200S, local ESPHome via levoit_bridge)
+    "pm25_ugm3": "ug/m3",
+    "aqi": "",
+    "cadr": "m3/h",
+    "filter_life_pct": "%",
+    "fan_on": "",
+    "fan_speed": "",
+    "filter_low": "",
 }
 
 
