@@ -12,9 +12,11 @@ writer already ingests —
 
 so the purifier needs no writer or dashboard change (same UNIQUE(device_id,ts,metric) idempotency).
 
-Because ESPHome emits entities independently (and republishes unchanged values on its own cadence), the bridge
-keeps the latest value of every mapped metric per device and emits a FULL snapshot whenever any value actually
-changes — giving a complete retained canonical state without re-writing unchanged metrics every interval.
+Because ESPHome emits entities independently, the bridge keeps the latest value of every mapped metric per
+device and emits a FULL snapshot (a) immediately whenever any value actually changes (low latency), and
+(b) on a periodic HEARTBEAT even when nothing changes — so the canonical /state and hot.db stay fresh like a
+meter reporting on cadence. Without the heartbeat a steady purifier goes silent and trips the 30-min
+'unreachable' staleness alert (the 2026-06-27 false alarm), since ESPHome only republishes some entities on change.
 
 Config (instance/levoit-devices.yaml) maps an ESPHome node name (the MQTT topic prefix) -> our identity:
 
@@ -34,6 +36,8 @@ import json
 import logging
 import os
 import sys
+import threading
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
@@ -105,12 +109,15 @@ def load_registry(path: Path) -> dict[str, dict]:
 
 
 class LevoitBridge:
-    def __init__(self, registry: dict[str, dict], client: mqtt.Client):
+    def __init__(self, registry: dict[str, dict], client: mqtt.Client, heartbeat_s: float = 300.0):
         self._registry = registry                      # esphome name -> identity
+        self._by_devid = {r["device_id"]: r for r in registry.values()}   # device_id -> identity
         self._mqtt = client
+        self._heartbeat_s = heartbeat_s
         self._state: dict[str, dict[str, float]] = {}   # device_id -> {metric: value} (accumulated)
         self._online: dict[str, bool] = {}
         self._unknown: set[str] = set()
+        self._lock = threading.Lock()
 
     def on_connect(self, client, userdata, flags, rc, properties=None):
         if rc != 0:
@@ -147,11 +154,13 @@ class LevoitBridge:
         if value is None:
             return
 
-        cur = self._state.setdefault(device_id, {})
-        if cur.get(metric) == value:
-            return                                      # unchanged — skip (avoid re-writing on ESPHome republish)
-        cur[metric] = value
-        self._emit(reg, device_id, cur)
+        with self._lock:
+            cur = self._state.setdefault(device_id, {})
+            if cur.get(metric) == value:
+                return                                  # unchanged — skip (avoid re-writing on ESPHome republish)
+            cur[metric] = value
+            snapshot = dict(cur)
+        self._emit(reg, device_id, snapshot)            # immediate emit on a real change (low latency)
 
     def _emit(self, reg: dict, device_id: str, metrics: dict[str, float]):
         out_topic = f"home/{reg['area']}/{device_id}/state"
@@ -168,12 +177,37 @@ class LevoitBridge:
         self._mqtt.publish(out_topic, json.dumps(out), qos=1, retain=True)
         log.debug("emit %s %s", out_topic, metrics)
 
+    def start_heartbeat(self):
+        if self._heartbeat_s and self._heartbeat_s > 0:
+            threading.Thread(target=self._heartbeat_loop, name="levoit-heartbeat", daemon=True).start()
+            log.info("heartbeat: re-emitting each device snapshot every %.0fs (keeps hot.db fresh so the "
+                     "freshness alert doesn't false-fire when values are steady)", self._heartbeat_s)
+
+    def _heartbeat_loop(self):
+        # ESPHome republishes some entities only on change, so a steady purifier can go silent for >30min
+        # and trip the 'unreachable' staleness alert (the 2026-06-27 false alarm). Periodically re-emit the
+        # current snapshot so the canonical /state (and hot.db) stays fresh, like a meter reporting on cadence.
+        while True:
+            time.sleep(self._heartbeat_s)
+            with self._lock:
+                items = [(did, dict(m)) for did, m in self._state.items() if m]
+            for did, metrics in items:
+                reg = self._by_devid.get(did)
+                if reg:
+                    self._emit(reg, did, metrics)
+            if items:
+                log.debug("heartbeat re-emitted %d device snapshot(s)", len(items))
+
 
 def main() -> None:
     p = argparse.ArgumentParser(description="ESPHome (Levoit) → canonical-topic bridge")
     p.add_argument("--registry", default="instance/levoit-devices.yaml", type=Path)
     p.add_argument("--broker", default=BROKER_HOST)
     p.add_argument("--broker-port", default=BROKER_PORT, type=int)
+    p.add_argument("--heartbeat-s", type=float,
+                   default=float(os.environ.get("HA_LEVOIT_HEARTBEAT_S", "300")),
+                   help="re-emit each device snapshot every N seconds so its freshness signal never goes "
+                        "stale (must stay well under the 1800s 'unreachable' alert; 0 disables)")
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = p.parse_args()
 
@@ -185,10 +219,11 @@ def main() -> None:
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     apply_credentials(client)
-    bridge = LevoitBridge(registry, client)
+    bridge = LevoitBridge(registry, client, heartbeat_s=args.heartbeat_s)
     client.on_connect = bridge.on_connect
     client.on_message = bridge.on_message
     client.connect(args.broker, args.broker_port, keepalive=60)
+    bridge.start_heartbeat()
     client.loop_forever()
 
 
