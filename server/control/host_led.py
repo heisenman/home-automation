@@ -8,6 +8,13 @@ trusted local driver, like Midea/Levoit); the issuer already authorized it.
 
 Trait: indicator {on} -> host-leds.sh on|off, reported {"on": <bool>} (optimistic — the script is fire-and-
 report; sysfs has no meaningful ack).
+
+BEST-EFFORT / hardware-dependent: this controls whatever /sys/class/leds exposes, but some NIC port LEDs
+are PHY/hardware-driven and ignore the LED-class brightness. On the G11 (Realtek RTL8125 / r8169, kernel
+6.12, 2026-06) writing brightness=0 does NOT darken the physical link LED — so host night-mode is a no-op
+there (tape the LED if it matters). Kept as a ready hook: it'll work as-is the moment a kernel/driver update
+makes those LEDs software-controllable, or on a box whose LEDs already honor the LED class. Revisit if that
+changes (Hugh: maybe ~2027 H1).
 """
 from __future__ import annotations
 
