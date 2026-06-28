@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 
+from server.control.host_led import HostLedTransport
 from server.control.issuer import CommandIssuer, MqttTransport, RoutingTransport
 from server.control.levoit_driver import LevoitMqttTransport, load_levoit_devices
 from server.control.midea_driver import MideaTransport, load_drivers_from_env
@@ -56,6 +57,11 @@ def build_issuer(master: str, *, control_registry: Path, node_secrets_lut: Path,
     if levoit_devices:
         lt = LevoitMqttTransport(levoit_devices, broker=broker, port=port)
         overrides.update({d: lt for d in levoit_devices})
+    # host indicator LEDs: device_id host_* -> HostLedTransport (runs tools/host-leds.sh locally via sudo).
+    host_led_ids = [d for d in registry if d.startswith("host_")]
+    if host_led_ids:
+        ht = HostLedTransport(host_led_ids)
+        overrides.update({d: ht for d in host_led_ids})
     transport = RoutingTransport(default_tr, overrides) if overrides else default_tr
     issuer = CommandIssuer(registry=registry, secrets=secrets, policy=policy, transport=transport)
     # Loudly flag declared-but-uncommandable devices at BOOT, so a missing secret surfaces here and not

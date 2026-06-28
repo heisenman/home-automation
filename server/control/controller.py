@@ -20,7 +20,8 @@ from pathlib import Path
 from server.comms import events as ev
 from server.control import bootstrap, control_store as store
 from server.control.automation import (
-    DEFAULT_SCENE, DeviceState, Override, Policy, Reading, apply_scene, resolve, schedule_off_now)
+    DEFAULT_SCENE, DeviceState, Override, Policy, Reading, apply_scene, in_window, resolve,
+    schedule_off_now)
 from server.control.secret_store import available_master
 
 log = logging.getLogger("ha.controller")
@@ -68,6 +69,7 @@ class Controller:
         self.mqtt = mqtt_client
         self.readings: dict[str, Reading] = {}  # sensor device_id -> latest control Reading
         self.telemetry: dict[str, dict] = {}    # device_id -> {running, fan, ts} for driverless MQTT devices
+        self._night_active = False               # night-mode edge state (dusk->LEDs off, dawn->on)
         self._lock = threading.Lock()
 
     def _conn(self):
@@ -143,8 +145,35 @@ class Controller:
                 if not pol.get("enabled", True):
                     continue
                 self._tick_device(conn, device_id, pol, now, tod, scene, dry_run)
+            self._apply_night_mode(conn, tod, dry_run)          # LED night mode (all indicator devices)
         finally:
             conn.close()
+
+    def _apply_night_mode(self, conn, tod, dry_run):
+        """Edge-triggered LED night mode: at dusk (entering the window) set every indicator-capable device's
+        LED OFF; at dawn (leaving) set it ON. Between edges it does nothing, so manual LED toggles are free
+        during the day. Disabled -> never touches LEDs. Reuses the schedule in_window helper."""
+        nm = store.get_setting(conn, "night_mode") or {}
+        if not nm.get("enabled"):
+            self._night_active = False
+            return
+        try:
+            night = in_window(tod, nm.get("window") or "22:00-07:00")
+        except Exception:
+            return                                              # malformed window -> ignore
+        if night == self._night_active:
+            return                                              # no dusk/dawn edge
+        self._night_active = night
+        want_on = not night
+        for device_id, ctl in self.registry.items():
+            if "indicator" not in (getattr(ctl, "traits_cfg", {}) or {}):
+                continue
+            if dry_run:
+                continue
+            r = self.issuer.issue(device_id=device_id, trait="indicator", action="set", args={"on": want_on})
+            store.append_log(conn, device_id, want_on, "night",
+                             f"night-mode -> LED {'on' if want_on else 'off'}", True, r.status)
+            log.info("night-mode: %s LED -> %s (%s)", device_id, "on" if want_on else "off", r.status)
 
     def _tick_device(self, conn, device_id, pol, now, tod, scene, dry_run):
         drv = self.drivers.get(device_id)

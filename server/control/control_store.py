@@ -48,6 +48,10 @@ CREATE TABLE IF NOT EXISTS push_subscription (
 -- and survives a dictator failover. Distinct from the power mode.py (Normal/Conserve/Emergency).
 CREATE TABLE IF NOT EXISTS house_scene (
     id INTEGER PRIMARY KEY CHECK (id=1), scene TEXT NOT NULL, set_ts TEXT);
+-- house_setting: small JSON key/value for whole-house settings beyond the scene (e.g. night_mode LED
+-- config {enabled, window}). Single row per key; rides the standby snapshot like house_scene.
+CREATE TABLE IF NOT EXISTS house_setting (
+    key TEXT PRIMARY KEY, json TEXT NOT NULL, set_ts TEXT);
 """
 
 
@@ -228,4 +232,17 @@ def set_scene(conn, scene: str) -> None:
     conn.execute("""INSERT INTO house_scene(id, scene, set_ts) VALUES(1,?,?)
                     ON CONFLICT(id) DO UPDATE SET scene=excluded.scene, set_ts=excluded.set_ts""",
                  (scene, _now_iso()))
+    conn.commit()
+
+
+def get_setting(conn, key: str, default=None):
+    """A whole-house JSON setting (e.g. 'night_mode'); `default` when unset."""
+    r = conn.execute("SELECT json FROM house_setting WHERE key=?", (key,)).fetchone()
+    return json.loads(r[0]) if r else default
+
+
+def set_setting(conn, key: str, value) -> None:
+    conn.execute("""INSERT INTO house_setting(key, json, set_ts) VALUES(?,?,?)
+                    ON CONFLICT(key) DO UPDATE SET json=excluded.json, set_ts=excluded.set_ts""",
+                 (key, json.dumps(value), _now_iso()))
     conn.commit()

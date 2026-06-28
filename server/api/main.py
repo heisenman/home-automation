@@ -905,7 +905,9 @@ def house_state():
     if cc is None:
         return {"scene": "Home", "set_ts": None, "scenes": list(HOUSE_SCENES)}
     try:
-        return {**store.get_scene_full(cc), "scenes": list(HOUSE_SCENES)}
+        from server.api.control import NIGHT_MODE_DEFAULT
+        return {**store.get_scene_full(cc), "scenes": list(HOUSE_SCENES),
+                "night_mode": store.get_setting(cc, "night_mode") or NIGHT_MODE_DEFAULT}
     finally:
         cc.close()
 

@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v33 LED indicator: manual toggle (night mode WIP)";
+const BUILD = "v34 LED night mode (time-of-day) + manual toggle";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -1114,6 +1114,31 @@ function SceneSelector({ isAdmin, onNeedAdmin, onChange }) {
   </div>`;
 }
 
+function NightMode({ isAdmin, onNeedAdmin }) {
+  // Global LED night mode: turns every indicator-capable device's LED off during the window (on after).
+  // Reads /api/v1/house (open); setting is admin-gated (PUT /control/house/night-mode).
+  const [nm, setNm] = useState(null);          // {enabled, window}
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => getJSON("/api/v1/house")
+    .then((h) => setNm(h.night_mode || { enabled: false, window: "22:00-07:00" })).catch(() => {}), []);
+  useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
+  if (!nm) return null;
+  const save = async (next) => {
+    if (!isAdmin) { onNeedAdmin && onNeedAdmin(); return; }
+    setBusy(true);
+    try { const r = await adminSend("PUT", "/control/house/night-mode", next); setNm(r.night_mode); }
+    catch (e) { alert("Night mode: " + e.message); }
+    setBusy(false);
+  };
+  return html`<div class="scene-sel" title="LED night mode — turns device LEDs off during the window">
+    <button class="btn sm ${nm.enabled ? "scene-on" : "ghost"}" disabled=${busy}
+        onClick=${() => save({ enabled: !nm.enabled, window: nm.window })}>🌙 LEDs ${nm.enabled ? "On" : "Off"}</button>
+    ${nm.enabled && html`<input type="text" value=${nm.window} disabled=${busy} style="width:9em"
+        title="LEDs off during this window (HH:MM-HH:MM, may wrap midnight)"
+        onChange=${(e) => save({ enabled: true, window: e.target.value.trim() })} />`}
+  </div>`;
+}
+
 function NotifyToggle() {
   const [state, setState] = useState("default");   // unsupported|denied|subscribed|default
   const [busy, setBusy] = useState(false);
@@ -1186,6 +1211,7 @@ function App() {
         <span class="build">${BUILD}</span>
         <div class="spacer"></div>
         <${SceneSelector} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} onChange=${refresh} />
+        <${NightMode} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} />
         <button class="btn sm ghost" onClick=${toggleUnit} title="temperature unit">°${tempUnit}</button>
         <${NotifyToggle} />
         ${isAdmin

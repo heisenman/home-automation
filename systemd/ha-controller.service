@@ -19,7 +19,9 @@ ExecStart=/home/visko/home_automation/venv/bin/python3 -m server.control.control
 Restart=on-failure
 RestartSec=10
 
-NoNewPrivileges=yes
+# NoNewPrivileges relaxed to allow the narrow sudo helper for host LED night-mode (tools/host-leds.sh,
+# /etc/sudoers.d/ha-host-leds restricts it to that one script). See board led-night-mode.
+NoNewPrivileges=no
 ProtectSystem=strict
 ProtectHome=read-only
 ReadWritePaths=/home/visko/home_automation/instance

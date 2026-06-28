@@ -143,6 +143,24 @@ def handle_set_scene(conn, body: dict[str, Any]) -> tuple[int, dict]:
     return 200, {"status": "ok", **store.get_scene_full(conn), "scenes": list(HOUSE_SCENES)}
 
 
+NIGHT_MODE_DEFAULT = {"enabled": False, "window": "22:00-07:00"}
+
+
+def handle_set_night_mode(conn, body: dict[str, Any]) -> tuple[int, dict]:
+    """Set the global LED night-mode config {enabled, window:'HH:MM-HH:MM'}. The controller turns every
+    indicator-capable device's LED off on entering the window, on when leaving. Pure (no HTTP framework)."""
+    from server.control import control_store as store
+    b = body or {}
+    enabled, window = b.get("enabled", False), b.get("window", "22:00-07:00")
+    if not isinstance(enabled, bool):
+        return 400, {"status": "bad-request", "reason": "enabled must be a boolean"}
+    if not isinstance(window, str) or not _WINDOW_RE.match(window):
+        return 400, {"status": "bad-request", "reason": "window must be 'HH:MM-HH:MM'"}
+    cfg = {"enabled": enabled, "window": window}
+    store.set_setting(conn, "night_mode", cfg)
+    return 200, {"status": "ok", "night_mode": cfg}
+
+
 def _validate_scenes(sc, bad):
     """Validate a policy `scenes` map: {scene_name: {off?: bool, on_above?/off_below?/min_*?: num}}.
     Returns None if OK, else the (code, body) tuple from `bad`."""
@@ -445,6 +463,24 @@ def make_override_router(api_authz, control_db, device_ids=None):
                                 content={**store.get_scene_full(c), "scenes": list(HOUSE_SCENES)})
         finally:
             c.close()
+
+    @router.get("/house/night-mode", dependencies=[Depends(require_admin)])
+    async def get_night_mode():
+        c = _conn()
+        try:
+            return JSONResponse(status_code=200,
+                                content={"night_mode": store.get_setting(c, "night_mode") or NIGHT_MODE_DEFAULT})
+        finally:
+            c.close()
+
+    @router.put("/house/night-mode", dependencies=[Depends(require_admin)])
+    async def put_night_mode(body: dict = Body(...)):
+        c = _conn()
+        try:
+            code, payload = handle_set_night_mode(c, body)
+        finally:
+            c.close()
+        return JSONResponse(status_code=code, content=payload)
 
     @router.post("/{device_id}/override", dependencies=[Depends(require_admin)])
     async def post_override(device_id: str, body: dict = Body(...)):
