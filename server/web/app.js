@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v31 air-purifier automation panel (PM2.5 band editor)";
+const BUILD = "v32 air-purifier: selectable air-quality control source (PM2.5/AQI)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -435,25 +435,42 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
 }
 
 // ── device card ──────────────────────────────────────────────────────────────
-// control-metric display map (the loop's input reading): RH for dehumidifiers, PM2.5 for purifiers.
+// control-metric display map (the loop's input reading): RH for dehumidifiers, air quality for purifiers.
 const CTRL_METRIC = {
   humidity_pct: { unit: "%", label: "control RH", round: 1 },
   pm25_ugm3: { unit: "µg/m³", label: "PM2.5", round: 0 },
+  aqi: { unit: "", label: "AQI", round: 0 },
 };
 
-// automation editor for threshold_ranged devices (purifier): enable + edit the sensor->speed band cutoffs.
+// Selectable air-quality control sources for threshold_ranged devices. EXPANDABLE: add an entry here
+// (+ server _ALLOWED_CONTROL_METRICS + writer._UNITS) to offer a new metric. `cuts` = sensible default
+// band cutoffs in that metric's units (speeds stay 1..N); switching metric resets cutoffs to these.
+const AIR_QUALITY_METRICS = [
+  { key: "pm25_ugm3", label: "PM2.5", unit: "µg/m³", cuts: [12, 35, 55] },
+  { key: "aqi", label: "AQI", unit: "", cuts: [2, 3, 4] },
+];
+
+// automation editor for threshold_ranged devices (purifier): pick the air-quality source + edit the
+// sensor->speed band cutoffs + enable/disable.
 function RangedSettings({ vm, isAdmin, onChange, onNeedAdmin }) {
   const c = vm.control || {};
-  const CM = CTRL_METRIC[c.metric] || { unit: "", label: c.metric };
   const bands = c.bands || [];
   const speeds = bands.map((b) => b.level);
   const [open, setOpen] = useState(false);
   const [enabled, setEnabled] = useState(c.enabled !== false);
+  const [metric, setMetric] = useState(c.metric || "pm25_ugm3");
   const [cuts, setCuts] = useState(bands.filter((b) => b.max != null).map((b) => b.max));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [flash, setFlash] = useState("");
 
+  const sel = AIR_QUALITY_METRICS.find((m) => m.key === metric) || AIR_QUALITY_METRICS[0];
+  // switching the control source resets the cutoffs to that metric's defaults (PM2.5 µg/m³ ≠ AQI 1-5).
+  const changeMetric = (key) => {
+    setMetric(key);
+    const m = AIR_QUALITY_METRICS.find((x) => x.key === key);
+    if (m) setCuts(m.cuts.slice());
+  };
   const setCut = (i, v) => setCuts((cs) => cs.map((x, j) => (j === i ? v : x)));
   const issue = () => {
     for (let i = 0; i < cuts.length; i++) {
@@ -470,7 +487,7 @@ function RangedSettings({ vm, isAdmin, onChange, onNeedAdmin }) {
     setBusy(true); setErr(""); setFlash("");
     try {
       await adminSend("PUT", `/control/${vm.device_id}/policy`,
-        { enabled, control: { strategy: "threshold_ranged", bands: newBands } });
+        { enabled, control: { strategy: "threshold_ranged", metric, bands: newBands } });
       setFlash("saved"); await onChange();
     } catch (e) { setErr(String(e.message)); }
     setBusy(false);
@@ -485,16 +502,20 @@ function RangedSettings({ vm, isAdmin, onChange, onNeedAdmin }) {
       <div class="divider"></div>
       <label class="switch">
         <input type="checkbox" checked=${enabled} onChange=${(e) => setEnabled(e.target.checked)} />
-        Automation enabled (fan speed follows ${CM.label})
+        Automation enabled (fan speed follows air quality)
       </label>
-      <div class="field"><label>Fan speed by ${CM.label}</label>
+      <div class="field"><label>Control source</label>
+        <select value=${metric} onChange=${(e) => changeMetric(e.target.value)}>
+          ${AIR_QUALITY_METRICS.map((m) => html`<option value=${m.key}>${m.label}${m.unit ? ` (${m.unit})` : ""}</option>`)}
+        </select></div>
+      <div class="field"><label>Fan speed by ${sel.label}</label>
         ${cuts.map((v, i) => html`
           <div class="controls" key=${i}>
             <span class="note">Speed ${speeds[i]} below</span>
             <input type="number" value=${v} onInput=${(e) => setCut(i, e.target.value)} />
-            <span class="note">${CM.unit}</span>
+            <span class="note">${sel.unit || sel.label}</span>
           </div>`)}
-        <p class="note">Speed ${speeds[speeds.length - 1]} when above ${cuts.length ? cuts[cuts.length - 1] : "—"} ${CM.unit}.</p>
+        <p class="note">Speed ${speeds[speeds.length - 1]} when above ${cuts.length ? cuts[cuts.length - 1] : "—"} ${sel.unit}.</p>
       </div>
       ${issue() && html`<span class="err sm">⚠ ${issue()}</span>`}
       <div class="controls">

@@ -39,8 +39,8 @@ DEFAULT_POLICY = {
 # first-run defaults for the Levoit purifier (Hugh 2026-06-27: PM2.5 speed-stepping, self-sourced).
 LEVOIT_POLICY = {
     "enabled": True,
-    "source_sensor": "levoit_office",            # self-sourced PM2.5 (its own bridged reading)
-    "control": {"strategy": "threshold_ranged",
+    "source_sensor": "levoit_office",            # self-sourced air-quality (its own bridged reading)
+    "control": {"strategy": "threshold_ranged", "metric": "pm25_ugm3",
                 "bands": [{"max": 12, "level": 1}, {"max": 35, "level": 2},
                           {"max": 55, "level": 3}, {"max": None, "level": 4}]},
     "schedule": [],
@@ -48,9 +48,15 @@ LEVOIT_POLICY = {
     "sensor_stale_min": 15,
 }
 
-# control INPUT metric per device_type (the value the resolver consumes). Default = RH (dehumidifier).
-CONTROL_METRIC = {"air_purifier": "pm25_ugm3"}
+# Which sensor metric the loop drives on. The policy may name it explicitly (control.metric — e.g. an
+# air-quality device choosing pm25_ugm3 vs aqi); otherwise it defaults by strategy. Default = RH.
+_DEFAULT_METRIC_BY_STRATEGY = {"threshold_ranged": "pm25_ugm3"}
 DEFAULT_CONTROL_METRIC = "humidity_pct"
+
+
+def control_metric(pol: dict) -> str:
+    c = (pol or {}).get("control", {}) or {}
+    return c.get("metric") or _DEFAULT_METRIC_BY_STRATEGY.get(c.get("strategy"), DEFAULT_CONTROL_METRIC)
 
 
 class Controller:
@@ -79,12 +85,13 @@ class Controller:
         if not did:
             return
         metrics = p.get("metrics") or {}
-        # control input: the metric this device_type drives on (RH for dehumidifier, PM2.5 for purifier)
-        metric = CONTROL_METRIC.get(p.get("device_type") or "", DEFAULT_CONTROL_METRIC)
-        val = metrics.get(metric)
-        if val is not None:
+        # store ALL numeric metrics for this source + a receive ts; _pick_source extracts whichever metric
+        # the consuming device's policy selects (humidity_pct, pm25_ugm3, aqi, …) at tick time.
+        nums = {k: float(v) for k, v in metrics.items()
+                if isinstance(v, (int, float)) and not isinstance(v, bool)}
+        if nums:
             with self._lock:
-                self.readings[did] = Reading(float(val), time.time())
+                self.readings[did] = {"m": nums, "ts": time.time()}
         # actuator telemetry for driverless MQTT devices (e.g. Levoit) that have no local-driver status()
         fan_on, fan_speed = metrics.get("fan_on"), metrics.get("fan_speed")
         if fan_on is not None or fan_speed is not None:
@@ -95,15 +102,16 @@ class Controller:
                     "ts": time.time(),
                 }
 
-    def inject_reading(self, sensor_id: str, value: float, ts: float):
-        """Test/seed hook."""
+    def inject_reading(self, sensor_id: str, value: float, ts: float, metric: str = "humidity_pct"):
+        """Test/seed hook. Stores `value` under `metric` (default RH, matching the dehumidifier)."""
         with self._lock:
-            self.readings[sensor_id] = Reading(value, ts)
+            self.readings[sensor_id] = {"m": {metric: value}, "ts": ts}
 
     def _pick_source(self, pol, stale_s, now):
-        """Pick the control input: the FIRST FRESH reading across [source_sensor] + fallback_sensors.
-        If none are fresh, return the first one seen (possibly stale) so the resolver fail-safes to
-        default. Returns (reading|None, used_id|None, via_fallback)."""
+        """Pick the control input: the FIRST FRESH reading of the policy's control metric across
+        [source_sensor] + fallback_sensors. If none are fresh, return the first one seen (possibly stale)
+        so the resolver fail-safes to default. Returns (Reading|None, used_id|None, via_fallback)."""
+        metric = control_metric(pol)
         primary = pol.get("source_sensor")
         order = [primary, *(pol.get("fallback_sensors") or [])]
         first = None
@@ -111,12 +119,13 @@ class Controller:
             for sid in order:
                 if not sid:
                     continue
-                r = self.readings.get(sid)
-                if r is None:
-                    continue
+                rec = self.readings.get(sid)
+                if rec is None or metric not in rec["m"]:
+                    continue                              # this source doesn't carry the control metric
+                r = Reading(rec["m"][metric], rec["ts"])
                 if first is None:
                     first = (r, sid)
-                if (now - r.ts) <= stale_s:
+                if (now - rec["ts"]) <= stale_s:
                     return r, sid, sid != primary
         if first:
             return first[0], first[1], first[1] != primary

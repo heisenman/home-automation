@@ -1,6 +1,6 @@
 // Service worker — caches the app SHELL only (so the UI loads offline), never the API.
 // Live device state always goes to the network; if the box is unreachable the app shows last-known.
-const CACHE = "ha-shell-v29";   // v29: air-purifier automation panel
+const CACHE = "ha-shell-v30";   // v30: selectable air-quality control source
 const SHELL = [
   "/app/", "/app/index.html", "/app/app.js", "/app/push.js", "/app/styles.css",
   "/app/vendor/preact-htm.standalone.module.js", "/app/manifest.webmanifest", "/app/icon.svg",

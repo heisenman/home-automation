@@ -169,6 +169,9 @@ def _validate_scenes(sc, bad):
 
 # ── Policy editing (app-mutable settings) ────────────────────────────────────────
 _ALLOWED_STRATEGIES = ("hysteresis", "setpoint", "threshold_ranged")
+# Sensor metrics a control loop may drive on. Expandable — add a metric here (+ a UI entry in
+# app.js AIR_QUALITY_METRICS + a writer._UNITS entry) to offer it as a selectable control source.
+_ALLOWED_CONTROL_METRICS = ("humidity_pct", "pm25_ugm3", "aqi")
 _WINDOW_RE = re.compile(r"^\d{1,2}:\d{2}-\d{1,2}:\d{2}$")
 
 
@@ -214,11 +217,13 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
         if not isinstance(cp, dict):
             return bad("control must be an object")
         c = dict(pol.get("control", {}))
-        for k in ("strategy", "on_above", "off_below", "min_on_min", "min_off_min"):
+        for k in ("strategy", "metric", "on_above", "off_below", "min_on_min", "min_off_min"):
             if k in cp:
                 c[k] = cp[k]
         if c.get("strategy") not in _ALLOWED_STRATEGIES:
             return bad(f"strategy must be one of {_ALLOWED_STRATEGIES}")
+        if "metric" in c and c["metric"] not in _ALLOWED_CONTROL_METRICS:
+            return bad(f"control.metric must be one of {_ALLOWED_CONTROL_METRICS}")
         for k in ("on_above", "off_below", "min_on_min", "min_off_min"):
             if k in c and not _is_num(c[k]):
                 return bad(f"control.{k} must be a number")

@@ -151,8 +151,9 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         return None
     ctrl = policy.get("control", {}) or {}
     source_id = policy.get("source_sensor")
-    # the metric this device controls on: PM2.5 for speed-stepping purifiers, RH (default) for dehumidifiers.
-    metric = _CONTROL_METRIC_BY_STRATEGY.get(ctrl.get("strategy"), "humidity_pct")
+    # the metric this device controls on: an explicit control.metric (e.g. air-quality pm25_ugm3 vs aqi)
+    # wins; otherwise default by strategy (threshold_ranged -> PM2.5, hysteresis/setpoint -> RH).
+    metric = ctrl.get("metric") or _CONTROL_METRIC_BY_STRATEGY.get(ctrl.get("strategy"), "humidity_pct")
 
     def _latest_any(dev, m):                      # newest at either trust level (auth=1 sensor, =0 self-report)
         return _latest(hot_conn, dev, m, 1) or _latest(hot_conn, dev, m, 0) if hot_conn is not None else None
