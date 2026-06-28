@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v34 LED night mode (time-of-day) + manual toggle";
+const BUILD = "v35 LED night mode: native time pickers (touch-friendly)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -1130,12 +1130,18 @@ function NightMode({ isAdmin, onNeedAdmin }) {
     catch (e) { alert("Night mode: " + e.message); }
     setBusy(false);
   };
+  // window is "HH:MM-HH:MM"; split into two native time pickers (touch-friendly — no typing).
+  const [from, to] = (nm.window || "22:00-07:00").split("-");
   return html`<div class="scene-sel" title="LED night mode — turns device LEDs off during the window">
     <button class="btn sm ${nm.enabled ? "scene-on" : "ghost"}" disabled=${busy}
         onClick=${() => save({ enabled: !nm.enabled, window: nm.window })}>🌙 LEDs ${nm.enabled ? "On" : "Off"}</button>
-    ${nm.enabled && html`<input type="text" value=${nm.window} disabled=${busy} style="width:9em"
-        title="LEDs off during this window (HH:MM-HH:MM, may wrap midnight)"
-        onChange=${(e) => save({ enabled: true, window: e.target.value.trim() })} />`}
+    ${nm.enabled && html`<span class="nm-window">
+      <input type="time" class="nm-time" value=${from} disabled=${busy} title="LEDs off from"
+        onChange=${(e) => e.target.value && save({ enabled: true, window: `${e.target.value}-${to}` })} />
+      <span class="note">–</span>
+      <input type="time" class="nm-time" value=${to} disabled=${busy} title="LEDs off until"
+        onChange=${(e) => e.target.value && save({ enabled: true, window: `${from}-${e.target.value}` })} />
+    </span>`}
   </div>`;
 }
 

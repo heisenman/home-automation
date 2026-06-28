@@ -1,6 +1,6 @@
 // Service worker — caches the app SHELL only (so the UI loads offline), never the API.
 // Live device state always goes to the network; if the box is unreachable the app shows last-known.
-const CACHE = "ha-shell-v31";   // v31: LED night mode
+const CACHE = "ha-shell-v32";   // v32: night-mode time pickers
 const SHELL = [
   "/app/", "/app/index.html", "/app/app.js", "/app/push.js", "/app/styles.css",
   "/app/vendor/preact-htm.standalone.module.js", "/app/manifest.webmanifest", "/app/icon.svg",
