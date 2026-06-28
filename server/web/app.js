@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v30 air-purifier control (fan + PM2.5 auto)";
+const BUILD = "v31 air-purifier automation panel (PM2.5 band editor)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -441,6 +441,71 @@ const CTRL_METRIC = {
   pm25_ugm3: { unit: "µg/m³", label: "PM2.5", round: 0 },
 };
 
+// automation editor for threshold_ranged devices (purifier): enable + edit the sensor->speed band cutoffs.
+function RangedSettings({ vm, isAdmin, onChange, onNeedAdmin }) {
+  const c = vm.control || {};
+  const CM = CTRL_METRIC[c.metric] || { unit: "", label: c.metric };
+  const bands = c.bands || [];
+  const speeds = bands.map((b) => b.level);
+  const [open, setOpen] = useState(false);
+  const [enabled, setEnabled] = useState(c.enabled !== false);
+  const [cuts, setCuts] = useState(bands.filter((b) => b.max != null).map((b) => b.max));
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const [flash, setFlash] = useState("");
+
+  const setCut = (i, v) => setCuts((cs) => cs.map((x, j) => (j === i ? v : x)));
+  const issue = () => {
+    for (let i = 0; i < cuts.length; i++) {
+      if (cuts[i] === "" || !Number.isFinite(Number(cuts[i]))) return "enter all thresholds";
+      if (i && Number(cuts[i]) <= Number(cuts[i - 1])) return "thresholds must increase";
+    }
+    return "";
+  };
+  const save = async () => {
+    if (!isAdmin) return onNeedAdmin();
+    const m = issue(); if (m) { setErr(m); setFlash(""); return; }
+    const newBands = cuts.map((mx, i) => ({ max: Number(mx), level: speeds[i] }))
+      .concat([{ max: null, level: speeds[speeds.length - 1] }]);
+    setBusy(true); setErr(""); setFlash("");
+    try {
+      await adminSend("PUT", `/control/${vm.device_id}/policy`,
+        { enabled, control: { strategy: "threshold_ranged", bands: newBands } });
+      setFlash("saved"); await onChange();
+    } catch (e) { setErr(String(e.message)); }
+    setBusy(false);
+  };
+
+  if (!open) {
+    return html`<div class="settings"><button class="btn sm ghost"
+        onClick=${() => setOpen(true)}>⚙ Automation</button></div>`;
+  }
+  return html`
+    <div class="settings">
+      <div class="divider"></div>
+      <label class="switch">
+        <input type="checkbox" checked=${enabled} onChange=${(e) => setEnabled(e.target.checked)} />
+        Automation enabled (fan speed follows ${CM.label})
+      </label>
+      <div class="field"><label>Fan speed by ${CM.label}</label>
+        ${cuts.map((v, i) => html`
+          <div class="controls" key=${i}>
+            <span class="note">Speed ${speeds[i]} below</span>
+            <input type="number" value=${v} onInput=${(e) => setCut(i, e.target.value)} />
+            <span class="note">${CM.unit}</span>
+          </div>`)}
+        <p class="note">Speed ${speeds[speeds.length - 1]} when above ${cuts.length ? cuts[cuts.length - 1] : "—"} ${CM.unit}.</p>
+      </div>
+      ${issue() && html`<span class="err sm">⚠ ${issue()}</span>`}
+      <div class="controls">
+        <button class="btn sm primary" disabled=${busy || !!issue()} onClick=${save}>Save</button>
+        <button class="btn sm ghost" disabled=${busy} onClick=${() => setOpen(false)}>Close</button>
+        ${flash && html`<span class="ok-flash">${flash}</span>`}
+        ${err && html`<span class="err">${err}</span>`}
+      </div>
+    </div>`;
+}
+
 function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit }) {
   const running = vm.running;
   const s = vm.sensor, o = vm.onboard, d = vm.last_decision, act = vm.actuator || {};
@@ -500,10 +565,7 @@ function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit }) {
         onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
       <${ManualControl} vm=${vm} isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
       ${ranged
-        ? html`<div class="settings"><div class="divider"></div><p class="note">Auto: fan speed steps with
-            ${CM.label} — ${(vm.control.bands || []).map((b, i, a) =>
-              (b.max == null ? "≥" + (a[i - 1] ? a[i - 1].max : 0) : "<" + b.max) + "→" + b.level).join(", ")}.
-            Use Manual control to set speed, the override buttons to force on/off.</p></div>`
+        ? html`<${RangedSettings} vm=${vm} isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} />`
         : html`<${SettingsPanel} vm=${vm} sensors=${sensors} isAdmin=${isAdmin}
             onChange=${onChange} onNeedAdmin=${onNeedAdmin} />`}
     </div>`;

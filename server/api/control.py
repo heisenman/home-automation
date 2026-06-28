@@ -168,7 +168,7 @@ def _validate_scenes(sc, bad):
 
 
 # ── Policy editing (app-mutable settings) ────────────────────────────────────────
-_ALLOWED_STRATEGIES = ("hysteresis", "setpoint")
+_ALLOWED_STRATEGIES = ("hysteresis", "setpoint", "threshold_ranged")
 _WINDOW_RE = re.compile(r"^\d{1,2}:\d{2}-\d{1,2}:\d{2}$")
 
 
@@ -224,6 +224,26 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
                 return bad(f"control.{k} must be a number")
         if c.get("strategy") == "hysteresis" and float(c.get("on_above", 0)) <= float(c.get("off_below", 0)):
             return bad("on_above must be strictly greater than off_below (deadband)")
+        # threshold_ranged: sensor band -> fan speed. Validate the bands (ascending max cutoffs; the final
+        # catch-all band has max=null). Editing these is how the purifier's PM2.5->speed map is tuned.
+        if "bands" in cp:
+            bands = cp["bands"]
+            if not isinstance(bands, list) or not bands:
+                return bad("control.bands must be a non-empty list")
+            prev = None
+            for b in bands:
+                if not isinstance(b, dict) or not _is_num(b.get("level")):
+                    return bad("each band needs a numeric level")
+                mx = b.get("max")
+                if mx is not None:
+                    if not _is_num(mx):
+                        return bad("band max must be a number or null")
+                    if prev is not None and float(mx) <= float(prev):
+                        return bad("band max thresholds must strictly increase")
+                    prev = mx
+            c["bands"] = bands
+        if c.get("strategy") == "threshold_ranged" and not c.get("bands"):
+            return bad("threshold_ranged requires control.bands")
         pol["control"] = c
     if "schedule" in patch:
         sched = patch["schedule"]
