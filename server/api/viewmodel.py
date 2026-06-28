@@ -182,12 +182,15 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         tv = _latest(hot_conn, device_id, "target_humidity_pct", 0)
         fv = _latest_any(device_id, "fan_speed")
         fo = _latest_any(device_id, "fan_on")
+        led = _latest_any(device_id, "led_on")
         if tv:
             actuator["target_pct"] = tv[0]
         if fv:
             actuator["fan_speed"] = fv[0]
         if fo:
             actuator["fan_on"] = fo[0]
+        if led is not None:
+            actuator["led_on"] = bool(led[0])
 
     # command capabilities (traits + ranges) so the UI can render manual controls
     traits = None

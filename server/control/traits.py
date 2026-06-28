@@ -106,6 +106,15 @@ _TRAITS: dict[str, Trait] = {
         sensitive_actions=frozenset(),
         safe_state=lambda cfg: {"level": int(cfg.get("safe_level", cfg.get("min", 0)))},
     ),
+    # an indicator/status LED (e.g. a purifier's panel light, a host's NIC LEDs). Boolean on/off, same
+    # shape as switchable but a DISTINCT trait so a device can carry BOTH a power switch (switchable) and an
+    # LED (indicator) without their command mappings colliding. Driven manually + by night mode.
+    "indicator": Trait(
+        name="indicator", state_keys=("on",),
+        actions={"set": _switchable_set},
+        sensitive_actions=frozenset(),
+        safe_state=lambda cfg: {"on": bool(cfg.get("safe_on", False))},
+    ),
     "positionable": Trait(
         name="positionable", state_keys=("position",),
         actions={"set": _positionable_set},

@@ -82,6 +82,7 @@ _METRIC_MAP: dict[str, tuple[str, callable]] = {
     "fan/fan/state":                    ("fan_on", _onoff),
     "fan/fan/speed_level/state":        ("fan_speed", _num),
     "binary_sensor/filter_low/state":   ("filter_low", _onoff),
+    "switch/display/state":             ("led_on", _onoff),     # panel LED (indicator trait target)
 }
 
 

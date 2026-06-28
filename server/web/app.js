@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v32 air-purifier: selectable air-quality control source (PM2.5/AQI)";
+const BUILD = "v33 LED indicator: manual toggle (night mode WIP)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -380,13 +380,13 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
 function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
   const traits = vm.traits || {};
   const act = vm.actuator || {};
-  const sp = traits.setpoint, rg = traits.ranged;
+  const sp = traits.setpoint, rg = traits.ranged, ind = traits.indicator;
   const [open, setOpen] = useState(false);
   const [target, setTarget] = useState(act.target_pct ?? (sp && sp.safe_value) ?? "");
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
 
-  if (!sp && !rg) return null;                          // device exposes no manual functions
+  if (!sp && !rg && !ind) return null;                 // device exposes no manual functions
 
   const cmd = async (trait, args, tag) => {
     if (!isAdmin) return onNeedAdmin();
@@ -429,6 +429,16 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
           ${act.fan_speed != null && html`<span class="note">now: ${act.fan_speed}</span>`}
         </div>`;
       })()}
+      ${ind && html`
+        <div class="field"><label>LED / panel light</label>
+          <div class="controls">
+            <button class="btn sm" disabled=${busy === "led"}
+              onClick=${() => cmd("indicator", { on: true }, "led")}>On</button>
+            <button class="btn sm" disabled=${busy === "led"}
+              onClick=${() => cmd("indicator", { on: false }, "led")}>Off</button>
+          </div>
+          ${act.led_on != null && html`<span class="note">now: ${act.led_on ? "on" : "off"}</span>`}
+        </div>`}
       ${err && html`<span class="err">${err}</span>`}
       <div class="controls"><button class="btn sm ghost" onClick=${() => setOpen(false)}>Close</button></div>
     </div>`;

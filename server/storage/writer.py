@@ -77,6 +77,7 @@ _UNITS: dict[str, str] = {
     "fan_on": "",
     "fan_speed": "",
     "filter_low": "",
+    "led_on": "",
 }
 
 

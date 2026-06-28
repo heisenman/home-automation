@@ -32,6 +32,9 @@ _TRAIT_MAP = {
                    "fan/fan/state",             lambda s: s.strip().upper() == "ON"),
     "ranged":     ("level", "fan/fan/speed_level/command", lambda v: str(int(v)),
                    "fan/fan/speed_level/state", lambda s: int(float(s))),
+    # the panel LED is ESPHome's `display` switch
+    "indicator":  ("on",    "switch/display/command",      lambda v: "ON" if v else "OFF",
+                   "switch/display/state",      lambda s: s.strip().upper() == "ON"),
 }
 
 
