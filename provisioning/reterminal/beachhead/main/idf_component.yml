@@ -1,0 +1,5 @@
+## Managed components for the beachhead. esp-mqtt + esp_https_ota are in IDF core.
+dependencies:
+  idf: ">=5.3"
+  espressif/esp_wifi_remote: "1.*"   # WiFi API on P4, radio on the C6
+  espressif/esp_hosted: "2.*"        # SDIO transport to the C6 slave
