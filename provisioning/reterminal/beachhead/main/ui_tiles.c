@@ -27,12 +27,16 @@ struct card_ref {
     const char *hkey, *hlabel, *hunit;   // headline metric (point into the static FMT table)
     int hprec;
     lv_obj_t *hval;                       // the headline label widget
+    char name[40];                        // display name (for the detail overlay)
+    char room[28];
+    char *detail;                         // heap: all metrics, one per line (freed on re-render)
 };
 #define MAX_CARDS 48
 static struct card_ref s_cards[MAX_CARDS];
 static int s_ncards;
 static bool s_started;
 static QueueHandle_t s_state_q;    // MQTT state payloads (char*) -> state_task (LVGL off the mqtt stack)
+static lv_obj_t *s_detail, *s_detail_title, *s_detail_body;   // tap-to-open detail overlay
 
 // metric key -> friendly label + unit + decimal places. Order = display priority.
 struct mfmt { const char *key, *label, *unit; int prec; };
@@ -79,6 +83,23 @@ static double metric_of(cJSON *metrics, const char *key, bool *present)
     cJSON *v = cJSON_GetObjectItem(metrics, key);
     *present = cJSON_IsNumber(v);
     return *present ? v->valuedouble : 0.0;
+}
+
+// ---- tap-to-open detail overlay ----
+static void detail_close_cb(lv_event_t *e) { (void)e; lv_obj_add_flag(s_detail, LV_OBJ_FLAG_HIDDEN); }
+
+static void card_clicked_cb(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (idx < 0 || idx >= s_ncards || !s_detail) return;
+    struct card_ref *c = &s_cards[idx];
+    ESP_LOGI(TAG, "tap -> card %d (%s)", idx, c->id);   // validates touch coords hit the right card
+    lv_label_set_text(s_detail_title, c->name[0] ? c->name : c->id);
+    char body[420];
+    snprintf(body, sizeof(body), "%s\n\n%s", c->room, c->detail ? c->detail : "");
+    lv_label_set_text(s_detail_body, body);
+    lv_obj_clear_flag(s_detail, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_move_foreground(s_detail);
 }
 
 static void card_for(cJSON *e)
@@ -130,13 +151,27 @@ static void card_for(cJSON *e)
         lv_obj_set_style_text_font(h, &lv_font_montserrat_28, 0);
         lv_obj_set_style_text_color(h, lv_color_hex(stale ? 0x94a3b8 : 0xffffff), 0);
         lv_obj_set_style_pad_top(h, 4, 0);
-        // register for live MQTT patching of the headline metric
+        // register for live MQTT patching + tap-to-detail
         if (s_ncards < MAX_CARDS && cJSON_IsString(jid)) {
+            int idx = s_ncards;
             struct card_ref *cr = &s_cards[s_ncards++];
             snprintf(cr->id, sizeof(cr->id), "%s", jid->valuestring);
             cr->hkey = FMT[headline].key; cr->hlabel = FMT[headline].label;
             cr->hunit = FMT[headline].unit; cr->hprec = FMT[headline].prec;
             cr->hval = h;
+            snprintf(cr->name, sizeof(cr->name), "%s", name);
+            snprintf(cr->room, sizeof(cr->room), "%s", room);
+            char det[400]; size_t o = 0;                 // full detail: every known metric, one per line
+            for (unsigned i = 0; i < NFMT; i++) {
+                bool pp; double vv = metric_of(metrics, FMT[i].key, &pp);
+                if (!pp) continue;
+                o += snprintf(det + o, sizeof(det) - o, "%s%s: %.*f %s",
+                              o ? "\n" : "", FMT[i].label, FMT[i].prec, vv, FMT[i].unit);
+                if (o >= sizeof(det) - 24) break;
+            }
+            cr->detail = strdup(det);
+            lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
+            lv_obj_add_event_cb(card, card_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)idx);
         }
     }
 
@@ -163,6 +198,7 @@ static void card_for(cJSON *e)
 static void render(cJSON *sensors)
 {
     if (!lvgl_port_lock(0)) return;
+    for (int i = 0; i < s_ncards; i++) { free(s_cards[i].detail); s_cards[i].detail = NULL; }
     lv_obj_clean(s_grid);
     s_ncards = 0;                     // registry rebuilt from scratch each fetch
     int n = 0;
@@ -271,6 +307,31 @@ void ui_tiles_start(const char *sensors_url)
     lv_obj_set_style_pad_row(s_grid, 10, 0);
     lv_obj_set_style_pad_column(s_grid, 10, 0);
     lv_obj_set_flex_flow(s_grid, LV_FLEX_FLOW_ROW_WRAP);
+
+    // tap-to-open detail overlay on the top layer (modal; hidden until a tap)
+    s_detail = lv_obj_create(lv_layer_top());
+    lv_obj_set_size(s_detail, lv_pct(100), lv_pct(100));
+    lv_obj_set_style_bg_color(s_detail, lv_color_hex(0x0b1021), 0);
+    lv_obj_set_style_bg_opa(s_detail, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(s_detail, 0, 0);
+    lv_obj_set_style_radius(s_detail, 0, 0);
+    lv_obj_set_style_pad_all(s_detail, 36, 0);
+    lv_obj_set_flex_flow(s_detail, LV_FLEX_FLOW_COLUMN);
+    lv_obj_add_flag(s_detail, LV_OBJ_FLAG_HIDDEN);
+    lv_obj_add_flag(s_detail, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_detail, detail_close_cb, LV_EVENT_CLICKED, NULL);
+
+    s_detail_title = lv_label_create(s_detail);
+    lv_obj_set_style_text_font(s_detail_title, &lv_font_montserrat_28, 0);
+    lv_obj_set_style_text_color(s_detail_title, lv_color_hex(0xffffff), 0);
+    lv_obj_t *hint = lv_label_create(s_detail);
+    lv_label_set_text(hint, "tap anywhere to close");
+    lv_obj_set_style_text_color(hint, lv_color_hex(0x64748b), 0);
+    lv_obj_set_style_pad_bottom(hint, 14, 0);
+    s_detail_body = lv_label_create(s_detail);
+    lv_obj_set_style_text_font(s_detail_body, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_detail_body, lv_color_hex(0xcbd5e1), 0);
+
     lvgl_port_unlock();
 
     s_state_q = xQueueCreate(24, sizeof(char *));   // MQTT state payloads
