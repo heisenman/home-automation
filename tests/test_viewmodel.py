@@ -247,5 +247,54 @@ def test_sensor_list_empty_without_hot():
     assert V.build_sensor_list(None, now) == []
 
 
+# ── shared UI spec (ADR-0019 merge) ──────────────────────────────────────────────
+def test_metric_catalog_shape():
+    """Every catalog entry carries the full render contract the two renderers depend on."""
+    for key, spec in V.METRIC_CATALOG.items():
+        assert set(spec) == {"label", "unit", "color", "precision", "graph"}, key
+        assert isinstance(spec["label"], str) and spec["label"]
+        assert isinstance(spec["precision"], int) and spec["precision"] >= 0
+        assert isinstance(spec["graph"], bool)
+
+
+def test_metric_spec_default_for_unknown():
+    s = V.metric_spec("no_such_metric")
+    assert s["key"] == "no_such_metric" and s["graph"] is False and s["label"] == "no_such_metric"
+    known = V.metric_spec("temperature_c")
+    assert known["key"] == "temperature_c" and known["unit"] == "°C" and known["graph"] is True
+
+
+def test_ui_metric_catalog_matches_pwa_graphable_contract():
+    """The catalog order + keys must equal the PWA's baked-in GRAPHABLE fallback (server/web/app.js)
+    so the refactor is a byte-for-byte swap. If GRAPHABLE changes, update METRIC_CATALOG in lockstep."""
+    cat = V.ui_metric_catalog()
+    assert [c["key"] for c in cat] == [
+        "temperature_c", "humidity_pct", "dewpoint_c", "co2_ppm",
+        "radon_bqm3", "pressure_hpa", "pm25_ugm3", "aqi"]
+    for c in cat:
+        assert {"key", "label", "unit", "color", "precision", "graph"} <= set(c)
+        assert c["graph"] is True
+
+
+def test_sensor_graphs_filtered_and_ordered():
+    """sensor_graphs = present graphable metrics in catalog order (== PWA GRAPHABLE.filter(present))."""
+    g = V.sensor_graphs({"humidity_pct": 50.0, "temperature_c": 21.0, "battery_pct": 90})
+    assert [x["key"] for x in g] == ["temperature_c", "humidity_pct"]   # catalog order; battery not graphable
+    assert V.sensor_graphs({}) == []
+
+
+def test_build_sensor_list_emits_graphs_field():
+    now, iso = _now_and_iso()
+    with tempfile.TemporaryDirectory() as tmp:
+        hc = _hot(tmp, iso, iso)
+        W._insert_readings(hc, {"schema": 1, "device_id": "meter_both", "device_type": "switchbot_meter",
+                                "area": "den", "transport": "ble-adv", "ts": iso,
+                                "metrics": {"temperature_c": 25.0, "humidity_pct": 50.0}})
+        both = next(s for s in V.build_sensor_list(hc, now + 5) if s["device_id"] == "meter_both")
+        keys = [g["key"] for g in both["graphs"]]
+        assert keys == ["temperature_c", "humidity_pct", "dewpoint_c"]   # derived dewpoint is graphable too
+        assert all({"label", "unit", "color"} <= set(g) for g in both["graphs"])
+
+
 if __name__ == "__main__":
     run_module(globals())

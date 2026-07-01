@@ -660,11 +660,14 @@ function ExpandedSensor({ s, range, isAdmin, onEdit, onClose }) {
   const unit = useTemp();
   const [series, setSeries] = useState(null);
   const [err, setErr] = useState("");
+  // Shared UI spec (ADR-0019): the server authors the graphable-metric list (label/unit/color).
+  // Fall back to the baked-in catalog only if the server field is absent (old server / offline).
+  const graphList = s.graphs || GRAPHABLE.filter((g) => m[g.key] != null);
   useEffect(() => {
     let alive = true; setSeries(null); setErr("");
     (async () => {
       try {
-        const keys = GRAPHABLE.filter((g) => m[g.key] != null).map((g) => g.key);
+        const keys = graphList.map((g) => g.key);
         const out = {};
         for (const k of keys) out[k] = await fetchReadingsRange(s.device_id, k, range.start, range.end);
         if (alive) setSeries(out);
@@ -683,7 +686,7 @@ function ExpandedSensor({ s, range, isAdmin, onEdit, onClose }) {
       <div class="charts">
         ${err && html`<div class="err">${err}</div>`}
         ${series == null && !err && html`<div class="note">loading…</div>`}
-        ${series && GRAPHABLE.filter((g) => series[g.key]).map((g) => html`
+        ${series && graphList.filter((g) => series[g.key]).map((g) => html`
           <div class="chart-block" key=${g.key}>
             <div class="chart-label">${g.label}</div>
             <${AdaptiveChart} traces=${[{ label: g.label, color: g.color, unit: g.unit, metric: g.key, points: series[g.key] }]} />

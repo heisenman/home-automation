@@ -862,7 +862,7 @@ def sensor_list():
     """All trusted sensors with latest values per metric (one call for the dashboard). Read-only."""
     import time
 
-    from server.api.viewmodel import build_sensor_list
+    from server.api.viewmodel import build_sensor_list, ui_metric_catalog
     from server.control import control_store as store
     hc = _hot_conn() if DB_PATH.exists() else None
     cc = _control_conn()
@@ -875,7 +875,9 @@ def sensor_list():
             hc.close()
         if cc is not None:
             cc.close()
-    return {"sensors": sensors}
+    # `metrics` = shared UI spec catalog (ADR-0019): both the PWA and the D1001 panel render
+    # from it. Additive/top-level — existing clients read `.sensors` and ignore the extra key.
+    return {"sensors": sensors, "metrics": ui_metric_catalog()}
 
 
 def _build_current_alerts(now: float) -> list[dict]:

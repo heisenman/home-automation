@@ -34,6 +34,43 @@ def _age_s(ts_iso: str | None, now: float) -> float | None:
         return None
 
 
+# ── shared UI spec (ADR-0019 merge) ──────────────────────────────────────────────
+# The SINGLE source of metric-presentation truth. Both renderers — the PWA (server/web
+# /app.js) and the D1001 LVGL panel — render from this instead of hardcoding label/unit/
+# color/precision client-side (the PWA's old `GRAPHABLE` constant). Order is the render
+# order for value rows + chart stacks. `graph`: include in the chart set. Keep this the
+# authoritative copy; the PWA falls back to its baked-in list only if the field is absent.
+METRIC_CATALOG: dict[str, dict] = {
+    "temperature_c": {"label": "Temperature", "unit": "°C",    "color": "#f87171", "precision": 1, "graph": True},
+    "humidity_pct":  {"label": "Humidity",    "unit": "%RH",   "color": "#4aa3ff", "precision": 1, "graph": True},
+    "dewpoint_c":    {"label": "Dew point",   "unit": "°C",    "color": "#22d3ee", "precision": 1, "graph": True},
+    "co2_ppm":       {"label": "CO₂",         "unit": "ppm",   "color": "#fbbf24", "precision": 0, "graph": True},
+    "radon_bqm3":    {"label": "Radon",       "unit": "Bq",    "color": "#a78bfa", "precision": 0, "graph": True},
+    "pressure_hpa":  {"label": "Pressure",    "unit": "hPa",   "color": "#34d399", "precision": 0, "graph": True},
+    "pm25_ugm3":     {"label": "PM2.5",       "unit": "µg/m³", "color": "#fb7185", "precision": 0, "graph": True},
+    "aqi":           {"label": "AQI",         "unit": "",      "color": "#fbbf24", "precision": 0, "graph": True},
+}
+
+
+def metric_spec(metric: str) -> dict:
+    """Presentation spec for a metric ({key,label,unit,color,precision,graph}). Unknown -> minimal default."""
+    s = METRIC_CATALOG.get(metric)
+    if s is None:
+        return {"key": metric, "label": metric, "unit": "", "color": "#94a3b8", "precision": 1, "graph": False}
+    return {"key": metric, **s}
+
+
+def ui_metric_catalog() -> list[dict]:
+    """The full ordered metric catalog as a flat list (top-level `metrics` on /api/v1/sensors)."""
+    return [metric_spec(k) for k in METRIC_CATALOG]
+
+
+def sensor_graphs(metrics: dict) -> list[dict]:
+    """The ordered graphable-metric spec list for the metrics a sensor actually reports. This is the
+    server-authored equivalent of the PWA's `GRAPHABLE.filter(present)` — both renderers consume it."""
+    return [metric_spec(k) for k, s in METRIC_CATALOG.items() if s["graph"] and metrics.get(k) is not None]
+
+
 def _latest(hot, device_id: str, metric: str, authoritative: int):
     """Most recent (value, ts) for a metric at the given trust level, or None."""
     r = hot.execute(
@@ -130,6 +167,7 @@ def build_sensor_list(hot_conn, now: float, meta: dict | None = None,
         e["name"] = m.get("name") or None           # UI falls back to a prettified device_id
         e["room"] = m.get("room") or e["area"]      # overlay room wins; else the registry area
         e["age_s"] = _age_s(e["ts"], now)
+        e["graphs"] = sensor_graphs(e["metrics"])    # shared UI spec: which metrics graph, +unit/color/label
     out.sort(key=lambda e: (e["room"], e["device_id"]))
     return out
 
