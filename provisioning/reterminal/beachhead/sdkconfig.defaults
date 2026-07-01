@@ -47,6 +47,9 @@ CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 # LVGL renders RGB565 to match the JD9365 DPI panel; draw buffers live in PSRAM.
 CONFIG_LV_COLOR_DEPTH_16=y
 CONFIG_LV_MEM_SIZE_KILOBYTES=64
+# Fonts for the tile UI (headline values + titles); default is 14 only.
+CONFIG_LV_FONT_MONTSERRAT_20=y
+CONFIG_LV_FONT_MONTSERRAT_28=y
 # NB: do NOT force SPIRAM_MALLOC_ALWAYSINTERNAL — it starves internal DRAM during
 # WiFi/esp-hosted bring-up (crashes before WiFi connects). The DPI panel already
 # allocates its framebuffer from PSRAM; RESERVE_INTERNAL=32768 keeps DMA headroom.

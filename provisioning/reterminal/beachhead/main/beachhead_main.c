@@ -33,9 +33,10 @@
 #include "esp_https_ota.h"
 #include "esp_http_client.h"
 #include "bsp_display.h"
+#include "ui_tiles.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v9-disp"
+#define APP_BUILD_TAG "v10-tiles"
 static const char *TAG = "beachhead";
 
 #define T_STATUS "d1001-beachhead/status"
@@ -136,6 +137,7 @@ static void display_task(void *pv)
     if (err == ESP_OK) {
         snprintf(m, sizeof(m), "{\"display\":\"online\",\"panel\":\"jd9365\",\"res\":\"800x1280\",\"build\":\"%s\"}", APP_BUILD_TAG);
         ESP_LOGW(TAG, ">>> DISPLAY ONLINE <<<");
+        ui_tiles_start(BFF_BASE_URL "/api/v1/sensors");   // server-backed tiles from the BFF
     } else {
         snprintf(m, sizeof(m), "{\"display\":\"failed\",\"err\":\"%s\",\"build\":\"%s\"}", esp_err_to_name(err), APP_BUILD_TAG);
         ESP_LOGE(TAG, "display init failed: %s (device stays live on the bus)", esp_err_to_name(err));
