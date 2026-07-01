@@ -1138,8 +1138,10 @@ def device_summary(
 @app.get("/devices/{device_id}/readings")
 async def device_readings(
     device_id: str,
-    start: str = Query(..., description="ISO 8601 UTC, e.g. 2026-06-01T00:00:00Z"),
-    end: str = Query(..., description="ISO 8601 UTC, e.g. 2026-06-19T23:59:59Z"),
+    start: Optional[str] = Query(default=None, description="ISO 8601 UTC, e.g. 2026-06-01T00:00:00Z"),
+    end: Optional[str] = Query(default=None, description="ISO 8601 UTC, e.g. 2026-06-19T23:59:59Z"),
+    hours: Optional[float] = Query(default=None, gt=0, le=8760,
+                                   description="server-computed window: last N hours (clockless clients)"),
     metric: Optional[str] = Query(default=None),
     limit: int = Query(default=10000, ge=1, le=MAX_DEEP_ROWS),
 ):
@@ -1147,7 +1149,15 @@ async def device_readings(
     Raw readings over a time range. Hot tier via sqlite3; Parquet archive via DuckDB's
     native reader (no sqlite_scan extension → works offline, no network/extension dir).
     Bounded by MAX_DEEP_ROWS and serialised to prevent concurrent heavy queries.
+
+    `hours` (or omitting start/end) makes the SERVER compute the window from its own clock —
+    for clockless clients like the D1001 panel (air-gapped, no NTP). Default window = 72h.
     """
+    if hours is not None or not start or not end:
+        h = hours if hours is not None else 72.0
+        now = datetime.now(timezone.utc)
+        end = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+        start = (now - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")
     if metric == "dewpoint_c":                  # derived metric: compute from paired temp + RH
         return await _dewpoint_readings(device_id, start, end, limit)
     async with _deep_query_lock:
