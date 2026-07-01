@@ -54,6 +54,8 @@ static esp_lcd_panel_handle_t   s_panel;
 static esp_lcd_panel_io_handle_t s_io;
 static lv_display_t *s_disp;
 static bool s_ready;
+static bool s_screen_on = true;   // tracks sleep/wake for the back-button toggle
+static int  s_brightness = 80;    // last non-zero backlight %, restored on wake
 
 static esp_err_t i2c_bus(int port, int scl, int sda, i2c_master_bus_handle_t *out)
 {
@@ -82,6 +84,7 @@ esp_err_t bsp_display_brightness(int percent)
 {
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
+    if (percent > 0) s_brightness = percent;   // remember user level for wake
     uint32_t duty = (1023 * percent) / 100;
     ESP_RETURN_ON_ERROR(ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CH, duty), TAG, "duty");
     return ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CH);
@@ -234,7 +237,37 @@ void bsp_display_off(void)
         esp_io_expander_set_level(io_expander, EXP_LCD_BL_EN, 0);
         esp_io_expander_set_level(io_expander, EXP_LCD_PWR_EN, 0);
     }
+    s_screen_on = false;
 }
+
+// --- Back-button screen toggle (keeps the panel rail powered => instant, no re-init) ---
+void bsp_display_sleep(void)
+{
+    if (!s_ready || !s_screen_on) return;
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CH, 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CH);
+    if (io_expander) esp_io_expander_set_level(io_expander, EXP_LCD_BL_EN, 0);  // backlight rail off
+    if (s_panel) esp_lcd_panel_disp_on_off(s_panel, false);   // DSI display off; rail (PWR_EN) stays up
+    s_screen_on = false;
+    ESP_LOGI(TAG, "screen -> sleep");
+}
+
+void bsp_display_wake(void)
+{
+    if (!s_ready || s_screen_on) return;
+    if (io_expander) esp_io_expander_set_level(io_expander, EXP_LCD_BL_EN, 1);  // backlight rail on
+    if (s_panel) esp_lcd_panel_disp_on_off(s_panel, true);
+    bsp_display_brightness(s_brightness);   // restore last level
+    s_screen_on = true;
+    ESP_LOGI(TAG, "screen -> wake");
+}
+
+void bsp_display_toggle(void)
+{
+    if (s_screen_on) bsp_display_sleep(); else bsp_display_wake();
+}
+
+bool bsp_display_is_on(void) { return s_ready && s_screen_on; }
 
 bool bsp_display_ready(void) { return s_ready; }
 

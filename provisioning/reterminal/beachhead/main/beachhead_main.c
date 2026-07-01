@@ -32,11 +32,13 @@
 #include "esp_ota_ops.h"
 #include "esp_https_ota.h"
 #include "esp_http_client.h"
+#include "driver/gpio.h"
 #include "bsp_display.h"
 #include "ui_tiles.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v17-cmd"
+#define APP_BUILD_TAG "v18-btn"
+#define BSP_BUTTON_IN  GPIO_NUM_3     // back-of-device button, active-low w/ pull-up
 static const char *TAG = "beachhead";
 
 #define T_STATUS "d1001-beachhead/status"
@@ -115,6 +117,40 @@ static void publish_status(void)
 static void heartbeat_task(void *pv)
 {
     for (;;) { publish_status(); vTaskDelay(pdMS_TO_TICKS(15000)); }
+}
+
+// Back button (GPIO3, active-low): short-press toggles the screen on/off. A tiny
+// debounced poll task — no button component (zero deps, no API-version churn).
+// Toggle is a no-op until the display has been brought up (cmd/display on).
+static void button_task(void *pv)
+{
+    gpio_config_t io = {
+        .pin_bit_mask = 1ULL << BSP_BUTTON_IN,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+    int prev = 1;                       // released (pull-up high)
+    for (;;) {
+        int lvl = gpio_get_level(BSP_BUTTON_IN);
+        if (prev == 1 && lvl == 0) {    // high->low = press edge
+            vTaskDelay(pdMS_TO_TICKS(30));                 // debounce settle
+            if (gpio_get_level(BSP_BUTTON_IN) == 0) {      // still down = real press
+                if (bsp_display_ready()) {
+                    bsp_display_toggle();
+                    if (s_client && s_mqtt_up)
+                        esp_mqtt_client_publish(s_client, T_ACK,
+                            bsp_display_is_on() ? "button:screen-on" : "button:screen-off", 0, 0, 0);
+                }
+                // wait for release so a held button = one toggle
+                while (gpio_get_level(BSP_BUTTON_IN) == 0) vTaskDelay(pdMS_TO_TICKS(20));
+            }
+        }
+        prev = lvl;
+        vTaskDelay(pdMS_TO_TICKS(30));
+    }
 }
 
 // Bring up the panel on demand (triggered by cmd/display "on"), NOT at boot, so
@@ -312,6 +348,7 @@ void app_main(void)
     ESP_LOGI(TAG, "WiFi up — starting MQTT");
     start_mqtt();
     xTaskCreate(heartbeat_task, "hb", 4096, NULL, 3, NULL);
+    xTaskCreate(button_task, "btn", 3072, NULL, 3, NULL);   // back-button screen toggle
     // Display is NOT started here — trigger it over MQTT with cmd/display "on"
     // once the device is confirmed live, so a failed bring-up can't brick boot.
 }
