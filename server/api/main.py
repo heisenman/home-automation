@@ -270,11 +270,17 @@ def _mount_control(app: FastAPI) -> None:
         legacy_ok = make_api_token_verifier(master)
         signing_key = auth.load_or_create_key(AUTH_KEY_PATH)
 
-        def api_authz(authorization):                       # bool gate the routers already expect (admin)
-            return auth.role_allows(auth.resolve_role(authorization, signing_key, legacy_ok), "admin")
+        # R9 role gates (ADR-0017 hierarchy viewer<operator<admin). ADMIN: config/registry/override
+        # mutations. OPERATOR: may only *request* device commands (the server still authorises via policy
+        # and signs) — the scoped role a wall panel holds (ADR-0019), so a compromised panel can operate
+        # devices but cannot change config, calibrate, override, or enroll nodes. Admin ⊇ operator.
+        def _gate(need):
+            return lambda authz: auth.role_allows(auth.resolve_role(authz, signing_key, legacy_ok), need)
+        api_authz = _gate("admin")
+        command_authz = _gate("operator")
 
         app.include_router(_make_auth_router(legacy_ok, signing_key))
-        app.include_router(make_router(issuer, make_confirm_verifier(master), api_authz))
+        app.include_router(make_router(issuer, make_confirm_verifier(master), command_authz))
         # the manual-override + control-state router (writes control.db, read by the controller each tick)
         app.include_router(make_override_router(api_authz, CONTROL_DB, device_ids=set(registry)))
         app.include_router(make_device_meta_router(api_authz, CONTROL_DB))   # R8 friendly-name/room/hide
