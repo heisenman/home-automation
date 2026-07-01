@@ -36,7 +36,7 @@
 #include "ui_tiles.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v10-tiles"
+#define APP_BUILD_TAG "v14-live"
 static const char *TAG = "beachhead";
 
 #define T_STATUS "d1001-beachhead/status"
@@ -174,6 +174,7 @@ static void ota_task(void *pv)
     if (err == ESP_OK && esp_https_ota_is_complete_data_received(h) && esp_https_ota_finish(h) == ESP_OK) {
         ESP_LOGW(TAG, ">>> OTA COMPLETE — rebooting <<<");
         ota_report("{\"ota\":\"complete\",\"action\":\"rebooting\"}");
+        bsp_display_off();               // dark the panel before reset (no flash/white during reboot)
         vTaskDelay(pdMS_TO_TICKS(800));
         esp_restart();
     } else {
@@ -193,7 +194,8 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
     case MQTT_EVENT_CONNECTED:
         s_mqtt_up = true;
         esp_mqtt_client_subscribe(e->client, "d1001-beachhead/cmd/#", 1);
-        ESP_LOGW(TAG, "MQTT connected (reconnect #%d) — subscribed cmd/#", s_mqtt_rc);
+        esp_mqtt_client_subscribe(e->client, "home/+/+/state", 0);   // live device state -> tiles
+        ESP_LOGW(TAG, "MQTT connected (reconnect #%d) — subscribed cmd/# + home/+/+/state", s_mqtt_rc);
         publish_status();
         esp_ota_mark_app_valid_cancel_rollback();
         break;
@@ -202,6 +204,12 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
         break;
     case MQTT_EVENT_DATA: {
         int tl = e->topic_len, dl = e->data_len;
+        // Live device state (high volume) -> UI. No ack/echo, no per-message log.
+        if (tl > 5 && strncmp(e->topic, "home/", 5) == 0) {
+            char *p = strndup(e->data, dl);
+            if (p) { ui_tiles_on_state(p); free(p); }
+            break;
+        }
         ESP_LOGW(TAG, "MQTT DATA topic=%.*s payload=%.*s", tl, e->topic, dl, e->data);
         esp_mqtt_client_publish(e->client, T_ACK, e->topic, tl, 0, 0);
         if (tl == (int)strlen(T_OTA) && strncmp(e->topic, T_OTA, tl) == 0) {

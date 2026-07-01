@@ -223,6 +223,19 @@ esp_err_t bsp_display_start(void)
     return ESP_OK;
 }
 
+void bsp_display_off(void)
+{
+    if (s_ready) {
+        ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CH, 0);
+        ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CH);
+        if (s_panel) esp_lcd_panel_disp_on_off(s_panel, false);
+    }
+    if (io_expander) {   // latched across a CPU reset -> panel stays dark through reboot
+        esp_io_expander_set_level(io_expander, EXP_LCD_BL_EN, 0);
+        esp_io_expander_set_level(io_expander, EXP_LCD_PWR_EN, 0);
+    }
+}
+
 bool bsp_display_ready(void) { return s_ready; }
 
 bool bsp_display_do(void (*fn)(void *user), void *user)

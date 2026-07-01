@@ -23,3 +23,9 @@ bool bsp_display_do(void (*fn)(void *user), void *user);
 
 // Convenience: set backlight brightness 0..100%.
 esp_err_t bsp_display_brightness(int percent);
+
+// Turn the panel dark cleanly (backlight PWM off + drop the expander backlight/
+// display-power rails, which stay off across a CPU reset). Call BEFORE esp_restart
+// so an OTA reboot doesn't leave the backlight latched on showing white/garbage.
+// Safe no-op if the display was never brought up.
+void bsp_display_off(void);

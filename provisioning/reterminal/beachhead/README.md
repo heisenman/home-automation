@@ -29,17 +29,20 @@ Camera stays off. Carries permanent, WiFi-toggled **remote-debug-over-MQTT** too
   (`sdio_mempool_create ... assert failed`, boot-loop). Fix: `CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y`
   (+ `CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y`) — P4 GDMA reaches PSRAM, so the pool works fine there.
 
-## Vendored components (NOT in the Espressif registry)
-The panel/touch/expander drivers are Seeed-local components (path-based, not registry packages), so they are
-**gitignored** here. Before building, copy them from the Seeed reTerminal-D1001 clone:
-```bash
-SEEED=~/reterminal-dev/reTerminal-D1001/components
-mkdir -p components
-for c in esp_lcd_jd9365_8 esp_lcd_touch_gsl3670 esp_io_expander_pca9535; do cp -r "$SEEED/$c" components/; done
-```
-Their own manifests pull the registry deps they need (`esp_lcd_touch`, `esp_io_expander`, `cmake_utilities`).
-Note: `esp_lcd_touch_gsl3670` `extern`s a global `io_expander` handle for touch-reset — `bsp_display.c`
-defines it (non-static) and treats the touch `rst_gpio_num` as an **expander pin** (12), not a real GPIO.
+## Vendored components (`components/`, NOT in the Espressif registry)
+The panel/touch/expander drivers are Seeed-local components (path-based, not registry packages). They are
+**vendored in-tree** under `components/` (originally from the Seeed reTerminal-D1001 repo) so the build is
+reproducible and our security patches are preserved. Their own manifests pull the registry deps they need
+(`esp_lcd_touch`, `esp_io_expander`, `cmake_utilities`).
+
+**Local patches applied (see the hardening action item below):**
+- `esp_lcd_touch_gsl3670.c` — fixed a stack-smash (`touch_data[24]`→`[48]` for a 44-byte read) and clamped
+  the device-reported `Finger_num` to `MAX_FINGER_NUM` in both loops. Also: this driver `extern`s a global
+  `io_expander` handle for touch-reset — `bsp_display.c` defines it (non-static) and treats the touch
+  `rst_gpio_num` as an **expander pin** (12), not a real GPIO.
+- **Known-flaky (TODO):** touch controller sometimes logs `startup_chip failed ... 0xb0 = 5a5a5a5a` + an
+  I2C pull-up warning at init — coordinates may be unreliable until that's chased down (touch reads are
+  bounded now, so it no longer crashes; wiring tap-actions is a later increment).
 
 ## Build / flash
 ```bash
@@ -92,6 +95,18 @@ mosquitto_pub -h 192.168.0.210 -t d1001-beachhead/cmd/ota -m "http://<host>:8000
 Implementation notes: `esp_log_set_vprintf` hook only **enqueues** (never publishes inline → no recursion);
 a drain task publishes; noisy components (`mqtt_client`/`transport`/`esp-tls`) forced to WARN. The OTA HTTP
 server must be reachable from the panel's subnet (open the host firewall, e.g. `sudo ufw allow 8000/tcp`).
+
+## ACTION ITEM — harden vendored components + report upstream
+The Seeed-vendored drivers (`esp_lcd_touch_gsl3670`, `esp_lcd_jd9365_8`, `esp_io_expander_pca9535`) are
+**not hardened**. We already hit a blatant one: `esp_lcd_touch_gsl3670.c` read 44 bytes into a 24-byte stack
+buffer (`touch_data[24]`) and looped on an **unbounded, device-reported finger count** into `XY_Coordinate[3]`
+/ `cinfo.x[10]` — a stack smash that crashed the panel the instant it was touched. Patched here (buffer→48,
+`Finger_num` clamped to `MAX_FINGER_NUM` in both loops).
+- **TODO (later):** run a real security/robustness review of ALL vendored imports (unchecked I2C/SPI reads,
+  device-controlled loop bounds, missing return-value checks, integer overflow in the DSI/DPI configs, etc.).
+- **Harden in-tree**, then **push findings upstream as a non-obtrusive GitHub report** (issues/PRs on the
+  Seeed reTerminal-D1001 repo + the individual component repos) so maintainers can act on them or not.
+- Keep our local patches documented (this file) until/unless upstream merges them.
 
 ## Follow-ups
 - **esp_hosted version mismatch:** host 2.12.0 vs C6 slave 2.3.0 — connects, but Espressif warns of possible

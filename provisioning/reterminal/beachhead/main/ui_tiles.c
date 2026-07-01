@@ -2,8 +2,10 @@
 #include "ui_tiles.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
 #include "esp_http_client.h"
@@ -16,6 +18,21 @@ static const char *TAG = "ui";
 
 static char s_url[192];
 static lv_obj_t *s_header, *s_grid;
+
+// Per-card registry so MQTT state updates can patch a card's headline in place.
+// Written by render() and read by ui_tiles_on_state() — both hold the LVGL lock,
+// which serializes them (render rebuilds the whole registry each fetch).
+struct card_ref {
+    char id[40];
+    const char *hkey, *hlabel, *hunit;   // headline metric (point into the static FMT table)
+    int hprec;
+    lv_obj_t *hval;                       // the headline label widget
+};
+#define MAX_CARDS 48
+static struct card_ref s_cards[MAX_CARDS];
+static int s_ncards;
+static bool s_started;
+static QueueHandle_t s_state_q;    // MQTT state payloads (char*) -> state_task (LVGL off the mqtt stack)
 
 // metric key -> friendly label + unit + decimal places. Order = display priority.
 struct mfmt { const char *key, *label, *unit; int prec; };
@@ -113,6 +130,14 @@ static void card_for(cJSON *e)
         lv_obj_set_style_text_font(h, &lv_font_montserrat_28, 0);
         lv_obj_set_style_text_color(h, lv_color_hex(stale ? 0x94a3b8 : 0xffffff), 0);
         lv_obj_set_style_pad_top(h, 4, 0);
+        // register for live MQTT patching of the headline metric
+        if (s_ncards < MAX_CARDS && cJSON_IsString(jid)) {
+            struct card_ref *cr = &s_cards[s_ncards++];
+            snprintf(cr->id, sizeof(cr->id), "%s", jid->valuestring);
+            cr->hkey = FMT[headline].key; cr->hlabel = FMT[headline].label;
+            cr->hunit = FMT[headline].unit; cr->hprec = FMT[headline].prec;
+            cr->hval = h;
+        }
     }
 
     // remaining present metrics as a compact multiline
@@ -139,6 +164,7 @@ static void render(cJSON *sensors)
 {
     if (!lvgl_port_lock(0)) return;
     lv_obj_clean(s_grid);
+    s_ncards = 0;                     // registry rebuilt from scratch each fetch
     int n = 0;
     cJSON *e;
     cJSON_ArrayForEach(e, sensors) { card_for(e); n++; }
@@ -170,9 +196,58 @@ static void ui_task(void *pv)
     }
 }
 
+// Parse one state payload and patch the matching card's headline (holds the LVGL
+// lock). Runs on state_task — NEVER on the MQTT callback stack (LVGL is too heavy
+// for it: the retained state burst would overflow the mqtt task and reboot).
+static void apply_state(const char *json)
+{
+    cJSON *root = cJSON_Parse(json);
+    if (!root) return;
+    const cJSON *jid = cJSON_GetObjectItem(root, "device_id");
+    cJSON *metrics = cJSON_GetObjectItem(root, "metrics");
+    if (cJSON_IsString(jid) && cJSON_IsObject(metrics) && lvgl_port_lock(0)) {
+        for (int i = 0; i < s_ncards; i++) {
+            if (strcmp(s_cards[i].id, jid->valuestring) != 0) continue;
+            bool p; double v = metric_of(metrics, s_cards[i].hkey, &p);
+            if (p && s_cards[i].hval) {
+                // NB: format with newlib snprintf, then lv_label_set_text — LVGL's
+                // built-in printf does NOT support %f/%.*f and would crash (desync).
+                char buf[48];
+                snprintf(buf, sizeof(buf), "%s %.*f %s",
+                         s_cards[i].hlabel, s_cards[i].hprec, v, s_cards[i].hunit);
+                lv_label_set_text(s_cards[i].hval, buf);
+            }
+            break;
+        }
+        lvgl_port_unlock();
+    }
+    cJSON_Delete(root);
+}
+
+static void state_task(void *pv)
+{
+    char *json;
+    for (;;) {
+        if (xQueueReceive(s_state_q, &json, portMAX_DELAY) == pdTRUE) {
+            apply_state(json);
+            free(json);
+        }
+    }
+}
+
+// Called from the MQTT callback: LIGHTWEIGHT — copy + enqueue only, no parse/LVGL.
+void ui_tiles_on_state(const char *json)
+{
+    if (!s_started || !s_state_q || !json) return;
+    char *copy = strdup(json);
+    if (!copy) return;
+    if (xQueueSend(s_state_q, &copy, 0) != pdTRUE) free(copy);   // drop if backed up (stale anyway)
+}
+
 void ui_tiles_start(const char *sensors_url)
 {
     strncpy(s_url, sensors_url, sizeof(s_url) - 1);
+    s_started = true;
 
     if (!lvgl_port_lock(0)) { ESP_LOGE(TAG, "lvgl lock failed"); return; }
     lv_obj_t *scr = lv_scr_act();
@@ -198,6 +273,8 @@ void ui_tiles_start(const char *sensors_url)
     lv_obj_set_flex_flow(s_grid, LV_FLEX_FLOW_ROW_WRAP);
     lvgl_port_unlock();
 
+    s_state_q = xQueueCreate(24, sizeof(char *));   // MQTT state payloads
+    xTaskCreate(state_task, "uistate", 6144, NULL, 4, NULL);
     xTaskCreate(ui_task, "ui", 8192, NULL, 4, NULL);
     ESP_LOGI(TAG, "ui_tiles started -> %s", s_url);
 }
