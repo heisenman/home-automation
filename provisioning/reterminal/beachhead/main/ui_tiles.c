@@ -23,6 +23,10 @@ static char s_url[192];       // /api/v1/sensors
 static char s_disp_url[192];  // /api/v1/displays (controllable devices)
 static lv_obj_t *s_header, *s_grid;
 
+// server-authored graph spec for a metric (from /api/v1/sensors `graphs`, ADR-0019 shared UI spec)
+#define MAX_GRAPHS 8
+struct gspec { char key[16]; char label[18]; uint32_t color; int prec; };
+
 // Per-card registry so MQTT state updates can patch a card's headline in place.
 // Written by render() and read by ui_tiles_on_state() — both hold the LVGL lock,
 // which serializes them (render rebuilds the whole registry each fetch).
@@ -34,13 +38,36 @@ struct card_ref {
     char name[40];                        // display name (for the detail overlay)
     char room[28];
     char *detail;                         // heap: all metrics, one per line (freed on re-render)
+    struct gspec graphs[MAX_GRAPHS];      // graphable metrics for this sensor (server spec)
+    int ngraph;
 };
 #define MAX_CARDS 48
 static struct card_ref s_cards[MAX_CARDS];
 static int s_ncards;
 static bool s_started;
 static QueueHandle_t s_state_q;    // MQTT state payloads (char*) -> state_task (LVGL off the mqtt stack)
-static lv_obj_t *s_detail, *s_detail_title, *s_detail_body;   // tap-to-open detail overlay
+
+// ── inline expand-below panels + 72h charts (ADR-0019 Phase A; mirrors the PWA ExpandedSensor) ──
+// Tapping a sensor tile appends a full-width panel under the grid (multiple stack; the root scrolls).
+// Each panel charts its graphable metrics over 72h from GET /devices/{id}/readings?hours=72.
+static lv_obj_t *s_expbox;         // vertical container BELOW the grid holding expansion panels
+#define GRAPH_HOURS 72
+#define GRAPH_POINTS 200
+struct expand_ref {
+    char id[40];
+    char name[40];
+    bool active;
+    uint32_t epoch;                // bumped on close/reuse; the fetch worker compares to avoid stale writes
+    lv_obj_t *panel;
+    lv_obj_t *chart[MAX_GRAPHS];
+    lv_chart_series_t *ser[MAX_GRAPHS];
+    lv_obj_t *note[MAX_GRAPHS];    // per-chart "loading…/no data" label
+    struct gspec g[MAX_GRAPHS];
+    int ngraph;
+};
+#define MAX_EXPAND 6
+static struct expand_ref s_exp[MAX_EXPAND];
+static QueueHandle_t s_chart_q;    // int slot idx -> chart_worker (readings HTTP off the click stack)
 
 // --- command path (touch an actuator -> POST /devices/<id>/command with the operator token) ---
 static char s_base[192];           // BFF base URL (http://host:port), derived from s_url
@@ -100,21 +127,154 @@ static double metric_of(cJSON *metrics, const char *key, bool *present)
     return *present ? v->valuedouble : 0.0;
 }
 
-// ---- tap-to-open detail overlay ----
-static void detail_close_cb(lv_event_t *e) { (void)e; lv_obj_add_flag(s_detail, LV_OBJ_FLAG_HIDDEN); }
+// "#rrggbb" -> 0xrrggbb (server graph color). Falls back to a neutral slate on any parse miss.
+static uint32_t parse_hex_color(const char *s)
+{
+    if (s && s[0] == '#' && strlen(s) >= 7) {
+        uint32_t v = (uint32_t)strtoul(s + 1, NULL, 16);
+        return v & 0xFFFFFF;
+    }
+    return 0x8fb4ff;
+}
+
+struct chart_req { int slot; uint32_t epoch; };   // -> chart_worker (which expansion to fill)
+
+// ---- inline expand-below panels + 72h charts (mirrors PWA ExpandedSensor) ----
+// Close an expansion: delete its panel, bump epoch (so an in-flight fetch discards its
+// result), mark the slot free. Caller MUST hold the LVGL lock.
+static void expand_free(int slot)
+{
+    struct expand_ref *x = &s_exp[slot];
+    if (!x->active) return;
+    x->active = false;
+    x->epoch++;
+    if (x->panel) lv_obj_del(x->panel);   // deletes children (charts/notes) too
+    x->panel = NULL;
+    for (int i = 0; i < MAX_GRAPHS; i++) { x->chart[i] = NULL; x->ser[i] = NULL; x->note[i] = NULL; }
+    x->ngraph = 0;
+    x->id[0] = 0;
+}
+
+static void expand_close_cb(lv_event_t *e)
+{
+    int slot = (int)(intptr_t)lv_event_get_user_data(e);
+    if (slot >= 0 && slot < MAX_EXPAND) expand_free(slot);
+}
+
+// Build the expansion panel for card `idx` and enqueue its 72h chart fetch. Runs in the
+// LVGL/click context (object creation is fine here; the HTTP fetch is deferred to a worker).
+static void expand_open(int idx)
+{
+    struct card_ref *c = &s_cards[idx];
+    // toggle: if this device is already expanded, close it instead
+    for (int i = 0; i < MAX_EXPAND; i++)
+        if (s_exp[i].active && strcmp(s_exp[i].id, c->id) == 0) { expand_free(i); return; }
+    // find a free slot
+    int slot = -1;
+    for (int i = 0; i < MAX_EXPAND; i++) if (!s_exp[i].active) { slot = i; break; }
+    if (slot < 0) { expand_free(0); slot = 0; }     // all full: recycle the oldest (slot 0)
+    struct expand_ref *x = &s_exp[slot];
+    memset(x->chart, 0, sizeof(x->chart));
+    snprintf(x->id, sizeof(x->id), "%s", c->id);
+    snprintf(x->name, sizeof(x->name), "%s", c->name[0] ? c->name : c->id);
+    x->ngraph = c->ngraph;
+    for (int i = 0; i < c->ngraph; i++) x->g[i] = c->graphs[i];
+    x->active = true;
+
+    lv_obj_t *panel = lv_obj_create(s_expbox);
+    x->panel = panel;
+    lv_obj_set_width(panel, lv_pct(100));
+    lv_obj_set_height(panel, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_color(panel, lv_color_hex(0x111834), 0);
+    lv_obj_set_style_border_width(panel, 0, 0);
+    lv_obj_set_style_radius(panel, 12, 0);
+    lv_obj_set_style_pad_all(panel, 12, 0);
+    lv_obj_set_flex_flow(panel, LV_FLEX_FLOW_COLUMN);
+    lv_obj_clear_flag(panel, LV_OBJ_FLAG_SCROLLABLE);
+
+    // header row: title (name · room)  +  Close (✕)
+    lv_obj_t *hdr = lv_obj_create(panel);
+    lv_obj_set_width(hdr, lv_pct(100));
+    lv_obj_set_height(hdr, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(hdr, 0, 0);
+    lv_obj_set_style_border_width(hdr, 0, 0);
+    lv_obj_set_style_pad_all(hdr, 0, 0);
+    lv_obj_set_flex_flow(hdr, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(hdr, LV_FLEX_ALIGN_SPACE_BETWEEN, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(hdr, LV_OBJ_FLAG_SCROLLABLE);
+
+    lv_obj_t *ttl = lv_label_create(hdr);
+    lv_label_set_text_fmt(ttl, "%s  -  %s", x->name, c->room);
+    lv_obj_set_style_text_font(ttl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(ttl, lv_color_hex(0xffffff), 0);
+
+    lv_obj_t *cls = lv_button_create(hdr);
+    lv_obj_set_size(cls, 52, 40);
+    lv_obj_set_style_bg_color(cls, lv_color_hex(0x334155), 0);
+    lv_obj_add_event_cb(cls, expand_close_cb, LV_EVENT_CLICKED, (void *)(intptr_t)slot);
+    lv_obj_t *clsl = lv_label_create(cls);
+    lv_label_set_text(clsl, LV_SYMBOL_CLOSE);
+    lv_obj_center(clsl);
+
+    // present-state line (all current metrics)
+    if (c->detail && c->detail[0]) {
+        lv_obj_t *st = lv_label_create(panel);
+        lv_label_set_text(st, c->detail);
+        lv_label_set_long_mode(st, LV_LABEL_LONG_WRAP);
+        lv_obj_set_width(st, lv_pct(100));
+        lv_obj_set_style_text_color(st, lv_color_hex(0xcbd5e1), 0);
+        lv_obj_set_style_pad_top(st, 6, 0);
+    }
+
+    if (x->ngraph == 0) {
+        lv_obj_t *none = lv_label_create(panel);
+        lv_label_set_text(none, "no graphable metrics");
+        lv_obj_set_style_text_color(none, lv_color_hex(0x64748b), 0);
+        return;
+    }
+
+    // one chart per graphable metric (empty; the worker fills them after fetching)
+    for (int i = 0; i < x->ngraph; i++) {
+        lv_obj_t *lbl = lv_label_create(panel);
+        lv_label_set_text(lbl, x->g[i].label);
+        lv_obj_set_style_text_color(lbl, lv_color_hex(x->g[i].color), 0);
+        lv_obj_set_style_pad_top(lbl, 10, 0);
+
+        lv_obj_t *ch = lv_chart_create(panel);
+        lv_obj_set_width(ch, lv_pct(100));
+        lv_obj_set_height(ch, 150);
+        lv_obj_set_style_bg_color(ch, lv_color_hex(0x0b1021), 0);
+        lv_obj_set_style_border_width(ch, 0, 0);
+        lv_obj_set_style_pad_all(ch, 4, 0);
+        lv_chart_set_type(ch, LV_CHART_TYPE_LINE);
+        lv_chart_set_update_mode(ch, LV_CHART_UPDATE_MODE_SHIFT);
+        lv_chart_set_div_line_count(ch, 3, 0);
+        lv_chart_set_point_count(ch, GRAPH_POINTS);
+        lv_obj_set_style_width(ch, 0, LV_PART_INDICATOR);     // no per-point dots (dense series)
+        lv_obj_set_style_height(ch, 0, LV_PART_INDICATOR);
+        lv_chart_series_t *ser = lv_chart_add_series(ch, lv_color_hex(x->g[i].color),
+                                                     LV_CHART_AXIS_PRIMARY_Y);
+        x->chart[i] = ch;
+        x->ser[i] = ser;
+
+        lv_obj_t *nt = lv_label_create(panel);
+        lv_label_set_text(nt, "loading…");
+        lv_obj_set_style_text_color(nt, lv_color_hex(0x64748b), 0);
+        x->note[i] = nt;
+    }
+
+    if (s_chart_q) {
+        struct chart_req rq = { .slot = slot, .epoch = x->epoch };
+        xQueueSend(s_chart_q, &rq, 0);
+    }
+}
 
 static void card_clicked_cb(lv_event_t *e)
 {
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
-    if (idx < 0 || idx >= s_ncards || !s_detail) return;
-    struct card_ref *c = &s_cards[idx];
-    ESP_LOGI(TAG, "tap -> card %d (%s)", idx, c->id);   // validates touch coords hit the right card
-    lv_label_set_text(s_detail_title, c->name[0] ? c->name : c->id);
-    char body[420];
-    snprintf(body, sizeof(body), "%s\n\n%s", c->room, c->detail ? c->detail : "");
-    lv_label_set_text(s_detail_body, body);
-    lv_obj_clear_flag(s_detail, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_move_foreground(s_detail);
+    if (idx < 0 || idx >= s_ncards) return;
+    ESP_LOGI(TAG, "tap -> card %d (%s)", idx, s_cards[idx].id);
+    expand_open(idx);
 }
 
 static void card_for(cJSON *e)
@@ -185,6 +345,26 @@ static void card_for(cJSON *e)
                 if (o >= sizeof(det) - 24) break;
             }
             cr->detail = strdup(det);
+            // server-authored graph spec (ADR-0019): which metrics to chart + label/color/precision
+            cr->ngraph = 0;
+            cJSON *graphs = cJSON_GetObjectItem(e, "graphs");
+            if (cJSON_IsArray(graphs)) {
+                cJSON *g;
+                cJSON_ArrayForEach(g, graphs) {
+                    if (cr->ngraph >= MAX_GRAPHS) break;
+                    const cJSON *gk = cJSON_GetObjectItem(g, "key");
+                    const cJSON *gl = cJSON_GetObjectItem(g, "label");
+                    const cJSON *gc = cJSON_GetObjectItem(g, "color");
+                    const cJSON *gp = cJSON_GetObjectItem(g, "precision");
+                    if (!cJSON_IsString(gk)) continue;
+                    struct gspec *gs = &cr->graphs[cr->ngraph++];
+                    snprintf(gs->key, sizeof(gs->key), "%s", gk->valuestring);
+                    snprintf(gs->label, sizeof(gs->label), "%s",
+                             cJSON_IsString(gl) ? gl->valuestring : gk->valuestring);
+                    gs->color = parse_hex_color(cJSON_IsString(gc) ? gc->valuestring : NULL);
+                    gs->prec = cJSON_IsNumber(gp) ? (int)gp->valuedouble : 0;
+                }
+            }
             lv_obj_add_flag(card, LV_OBJ_FLAG_CLICKABLE);
             lv_obj_add_event_cb(card, card_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)idx);
         }
@@ -241,6 +421,91 @@ static void cmd_worker(void *pv)
                 else { char r[40]; snprintf(r, sizeof(r), "rejected (HTTP %d)", code); lv_label_set_text(s_cmd_result, r); }
             }
             lvgl_port_unlock();
+        }
+    }
+}
+
+// ---- chart fetch worker: 72h readings per metric -> populate the expansion's charts ----
+// Runs OFF the click/LVGL stack. Fetch happens unlocked; every s_exp[] touch is under the
+// LVGL lock with an epoch re-check, so a close mid-fetch discards the result safely.
+#define CHART_SCALE 100      // ints for lv_chart; preserves 2 decimals
+
+// Populate chart #gi of slot from a fetched readings array. Holds the LVGL lock. Returns
+// false if the expansion was closed/reused (epoch mismatch) — caller stops working it.
+static bool chart_fill(int slot, uint32_t epoch, int gi, const int32_t *vals, int n,
+                       int32_t vmin, int32_t vmax)
+{
+    if (!lvgl_port_lock(0)) return false;
+    struct expand_ref *x = &s_exp[slot];
+    bool ok = x->active && x->epoch == epoch && gi < x->ngraph && x->chart[gi] && x->ser[gi];
+    if (ok) {
+        lv_obj_t *ch = x->chart[gi];
+        if (n < 1) {
+            if (x->note[gi]) lv_label_set_text(x->note[gi], "no data (72h)");
+        } else {
+            int32_t lo = vmin, hi = vmax;
+            if (lo == hi) { lo -= CHART_SCALE; hi += CHART_SCALE; }   // avoid a zero-height axis
+            lv_chart_set_range(ch, LV_CHART_AXIS_PRIMARY_Y, lo, hi);
+            lv_chart_set_point_count(ch, n);
+            for (int i = 0; i < n; i++) lv_chart_set_value_by_id(ch, x->ser[gi], i, vals[i]);
+            lv_chart_refresh(ch);
+            if (x->note[gi]) {
+                char nb[40];
+                snprintf(nb, sizeof(nb), "%.2f – %.2f  ·  %d pts",
+                         (double)vmin / CHART_SCALE, (double)vmax / CHART_SCALE, n);
+                lv_label_set_text(x->note[gi], nb);
+            }
+        }
+    }
+    lvgl_port_unlock();
+    return ok;
+}
+
+static void chart_worker(void *pv)
+{
+    struct chart_req rq;
+    static int32_t vals[GRAPH_POINTS];
+    for (;;) {
+        if (xQueueReceive(s_chart_q, &rq, portMAX_DELAY) != pdTRUE) continue;
+        // snapshot the request target under the lock (id + graph specs) so the unlocked
+        // fetch can't tear against a concurrent close/reuse
+        char id[40]; struct gspec g[MAX_GRAPHS]; int ngraph = 0;
+        if (lvgl_port_lock(0)) {
+            struct expand_ref *x = &s_exp[rq.slot];
+            if (x->active && x->epoch == rq.epoch) {
+                snprintf(id, sizeof(id), "%s", x->id);
+                ngraph = x->ngraph;
+                for (int i = 0; i < ngraph; i++) g[i] = x->g[i];
+            }
+            lvgl_port_unlock();
+        }
+        for (int i = 0; i < ngraph; i++) {
+            char url[384];
+            snprintf(url, sizeof(url), "%s/devices/%s/readings?metric=%s&hours=%d&limit=%d",
+                     s_base, id, g[i].key, GRAPH_HOURS, GRAPH_POINTS);
+            int len = 0; char *buf = http_get(url, &len);
+            int n = 0; int32_t vmin = 0, vmax = 0;
+            if (buf && len > 0) {
+                cJSON *root = cJSON_Parse(buf);
+                cJSON *arr = root ? cJSON_GetObjectItem(root, "readings") : NULL;
+                if (cJSON_IsArray(arr)) {
+                    cJSON *r;
+                    cJSON_ArrayForEach(r, arr) {
+                        if (n >= GRAPH_POINTS) break;
+                        cJSON *v = cJSON_GetObjectItem(r, "value");
+                        if (!cJSON_IsNumber(v)) continue;
+                        int32_t sv = (int32_t)(v->valuedouble * CHART_SCALE);
+                        vals[n] = sv;
+                        if (n == 0 || sv < vmin) vmin = sv;
+                        if (n == 0 || sv > vmax) vmax = sv;
+                        n++;
+                    }
+                }
+                if (root) cJSON_Delete(root);
+            }
+            if (buf) heap_caps_free(buf);
+            if (!chart_fill(rq.slot, rq.epoch, i, vals, n, vmin, vmax))
+                break;   // expansion closed mid-fetch — stop working this request
         }
     }
 }
@@ -447,39 +712,32 @@ void ui_tiles_start(const char *sensors_url)
     lv_obj_set_style_text_color(s_header, lv_color_hex(0xffffff), 0);
     lv_obj_set_style_pad_bottom(s_header, 6, 0);
 
+    // The screen itself scrolls vertically: [header] -> [tile grid] -> [expansion stack].
+    lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_AUTO);
+    lv_obj_set_scroll_dir(scr, LV_DIR_VER);
+
     s_grid = lv_obj_create(scr);
     lv_obj_set_width(s_grid, lv_pct(100));
-    lv_obj_set_flex_grow(s_grid, 1);
+    lv_obj_set_height(s_grid, LV_SIZE_CONTENT);      // size to its rows so expansions can stack below
     lv_obj_set_style_bg_opa(s_grid, 0, 0);
     lv_obj_set_style_border_width(s_grid, 0, 0);
     lv_obj_set_style_pad_all(s_grid, 0, 0);
     lv_obj_set_style_pad_row(s_grid, 10, 0);
     lv_obj_set_style_pad_column(s_grid, 10, 0);
     lv_obj_set_flex_flow(s_grid, LV_FLEX_FLOW_ROW_WRAP);
+    lv_obj_clear_flag(s_grid, LV_OBJ_FLAG_SCROLLABLE);   // the screen scrolls, not the grid
 
-    // tap-to-open detail overlay on the top layer (modal; hidden until a tap)
-    s_detail = lv_obj_create(lv_layer_top());
-    lv_obj_set_size(s_detail, lv_pct(100), lv_pct(100));
-    lv_obj_set_style_bg_color(s_detail, lv_color_hex(0x0b1021), 0);
-    lv_obj_set_style_bg_opa(s_detail, LV_OPA_COVER, 0);
-    lv_obj_set_style_border_width(s_detail, 0, 0);
-    lv_obj_set_style_radius(s_detail, 0, 0);
-    lv_obj_set_style_pad_all(s_detail, 36, 0);
-    lv_obj_set_flex_flow(s_detail, LV_FLEX_FLOW_COLUMN);
-    lv_obj_add_flag(s_detail, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_detail, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(s_detail, detail_close_cb, LV_EVENT_CLICKED, NULL);
-
-    s_detail_title = lv_label_create(s_detail);
-    lv_obj_set_style_text_font(s_detail_title, &lv_font_montserrat_28, 0);
-    lv_obj_set_style_text_color(s_detail_title, lv_color_hex(0xffffff), 0);
-    lv_obj_t *hint = lv_label_create(s_detail);
-    lv_label_set_text(hint, "tap anywhere to close");
-    lv_obj_set_style_text_color(hint, lv_color_hex(0x64748b), 0);
-    lv_obj_set_style_pad_bottom(hint, 14, 0);
-    s_detail_body = lv_label_create(s_detail);
-    lv_obj_set_style_text_font(s_detail_body, &lv_font_montserrat_20, 0);
-    lv_obj_set_style_text_color(s_detail_body, lv_color_hex(0xcbd5e1), 0);
+    // expansion stack: full-width inline panels appended below the grid (ADR-0019 Phase A)
+    s_expbox = lv_obj_create(scr);
+    lv_obj_set_width(s_expbox, lv_pct(100));
+    lv_obj_set_height(s_expbox, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(s_expbox, 0, 0);
+    lv_obj_set_style_border_width(s_expbox, 0, 0);
+    lv_obj_set_style_pad_all(s_expbox, 0, 0);
+    lv_obj_set_style_pad_top(s_expbox, 10, 0);
+    lv_obj_set_style_pad_row(s_expbox, 10, 0);
+    lv_obj_set_flex_flow(s_expbox, LV_FLEX_FLOW_COLUMN);
+    lv_obj_clear_flag(s_expbox, LV_OBJ_FLAG_SCROLLABLE);
 
     // actuator command overlay (only if we hold an operator token)
     if (HAVE_TOKEN) {
@@ -523,6 +781,8 @@ void ui_tiles_start(const char *sensors_url)
     s_state_q = xQueueCreate(24, sizeof(char *));   // MQTT state payloads
     xTaskCreate(state_task, "uistate", 6144, NULL, 4, NULL);
     xTaskCreate(ui_task, "ui", 8192, NULL, 4, NULL);
+    s_chart_q = xQueueCreate(4, sizeof(struct chart_req));   // expansion chart fetches
+    xTaskCreate(chart_worker, "uichart", 8192, NULL, 4, NULL);
     if (HAVE_TOKEN) {
         s_cmd_q = xQueueCreate(8, sizeof(struct cmd_req));
         xTaskCreate(cmd_worker, "uicmd", 6144, NULL, 4, NULL);

@@ -37,7 +37,7 @@
 #include "ui_tiles.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v18-btn"
+#define APP_BUILD_TAG "v19-charts"
 #define BSP_BUTTON_IN  GPIO_NUM_3     // back-of-device button, active-low w/ pull-up
 static const char *TAG = "beachhead";
 
