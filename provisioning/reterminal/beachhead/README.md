@@ -20,6 +20,14 @@ Camera stays off. Carries permanent, WiFi-toggled **remote-debug-over-MQTT** too
 - **Bootloader rollback now ENABLED** (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`): a future OTA that never
   reaches MQTT auto-reverts to the last good slot. `esp_ota_mark_app_valid` fires on MQTT connect.
 
+**Phase 2 tiles + control PROVEN live 2026-07-01 (v17):** server-backed sensor tiles (`/api/v1/sensors`,
+12 sensors, 10s refresh) + MQTT live-state (`home/+/+/state` -> headline ticks) + tap-to-detail overlay +
+actuator tiles (`/api/v1/displays`) with **touch->command control** (dehumidifier + Levoit toggled from the
+panel, verified HTTP 200 + device physically responded). Commands POST `/devices/<id>/command` with a scoped
+**OPERATOR JWT** (`PANEL_TOKEN`, minted by `tools/mint_panel_token.py`) — operator can command, not change
+config (server main.py role-gate). LVGL work is kept OFF the mqtt/click stacks via queues + worker tasks
+(the mqtt-callback-stack overflow lesson). `PANEL_TOKEN ""` => read-only (no control buttons).
+
 ## ⚠️ Two P4 gotchas that cost real time (remember for E1001 + every future panel)
 - **200 MHz PSRAM needs `CONFIG_IDF_EXPERIMENTAL_FEATURES=y`.** On P4, `SPIRAM_SPEED_200M` *depends on* the
   experimental flag; without it Kconfig silently falls back to the **20 MHz** default — far too slow to scan

@@ -36,7 +36,7 @@
 #include "ui_tiles.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v15-touch"
+#define APP_BUILD_TAG "v17-cmd"
 static const char *TAG = "beachhead";
 
 #define T_STATUS "d1001-beachhead/status"
