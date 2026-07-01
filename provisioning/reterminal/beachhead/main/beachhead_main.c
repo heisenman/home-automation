@@ -37,7 +37,7 @@
 #include "ui_tiles.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v19-charts"
+#define APP_BUILD_TAG "v25-actuator"
 #define BSP_BUTTON_IN  GPIO_NUM_3     // back-of-device button, active-low w/ pull-up
 static const char *TAG = "beachhead";
 
@@ -157,6 +157,7 @@ static void button_task(void *pv)
 // the net + OTA lifeline is always established first and a failed bring-up can
 // only cost a reboot back into this same good firmware — never a brick. Non-fatal.
 static volatile bool s_disp_started = false;
+static volatile bool s_auto_disp_done = false;   // one-shot: auto-boot the GUI on first MQTT connect
 static void display_task(void *pv)
 {
     if (s_disp_started) {   // idempotent: re-trigger just republishes state
@@ -187,6 +188,11 @@ static void ota_task(void *pv)
     char *url = (char *)pv;
     ESP_LOGW(TAG, "OTA: begin url=%s", url);
     ota_report("{\"ota\":\"begin\"}");
+    // Blank the panel for the whole download. Flash writes momentarily disable the cache, stalling the
+    // PSRAM-resident MIPI-DSI framebuffer fetch -> the panel STROBES while it's lit (Hugh, 2026-07-01:
+    // the flash is during flash-write, not reboot). sleep() keeps the panel powered (no re-init), just
+    // backlight+display off; wake() restores it if the OTA fails.
+    bsp_display_sleep();
     esp_http_client_config_t http = { .url = url, .timeout_ms = 30000, .keep_alive_enable = true };
     esp_https_ota_config_t cfg = { .http_config = &http };
     esp_https_ota_handle_t h = NULL;
@@ -194,7 +200,7 @@ static void ota_task(void *pv)
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "OTA: begin FAILED: %s", esp_err_to_name(err));
         char m[96]; snprintf(m, sizeof(m), "{\"ota\":\"begin_failed\",\"err\":\"%s\"}", esp_err_to_name(err));
-        ota_report(m); free(url); vTaskDelete(NULL); return;
+        ota_report(m); bsp_display_wake(); free(url); vTaskDelete(NULL); return;
     }
     ota_report("{\"ota\":\"connected\"}");
     int last = 0;
@@ -218,6 +224,7 @@ static void ota_task(void *pv)
         char m[96]; snprintf(m, sizeof(m), "{\"ota\":\"failed\",\"err\":\"%s\"}", esp_err_to_name(err));
         ota_report(m);
         esp_https_ota_abort(h);
+        bsp_display_wake();              // restore the panel (no reboot on failure)
     }
     free(url);
     vTaskDelete(NULL);
@@ -234,6 +241,15 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
         ESP_LOGW(TAG, "MQTT connected (reconnect #%d) — subscribed cmd/# + home/+/+/state", s_mqtt_rc);
         publish_status();
         esp_ota_mark_app_valid_cancel_rollback();
+        // Auto-boot the GUI now that the net + OTA lifeline is CONFIRMED live (marked valid above).
+        // The panel is reliable enough (Hugh, 2026-07-01) and predark held it dark since boot, so there
+        // is no strobe. Rollback safety is preserved: a firmware that can't reach the broker never gets
+        // here, so it never auto-brings-up — it just reboots/rolls back. cmd/display on stays as a manual
+        // retry. Idempotent (display_task guards on s_disp_started; the flag stops reconnect re-triggers).
+        if (!s_auto_disp_done) {
+            s_auto_disp_done = true;
+            xTaskCreate(display_task, "disp", 8192, NULL, 4, NULL);
+        }
         break;
     case MQTT_EVENT_DISCONNECTED:
         s_mqtt_up = false; s_mqtt_rc++;
@@ -306,6 +322,7 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
 
 void app_main(void)
 {
+    bsp_display_predark();   // FIRST: hold the panel dark across boot (kills the OTA-reboot strobe)
     s_log_q = xQueueCreate(48, sizeof(char *));
     xTaskCreate(log_drain_task, "logdrain", 4096, NULL, 4, NULL);
     s_orig_vprintf = esp_log_set_vprintf(log_vprintf);   // permanent; gated by s_debug

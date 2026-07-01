@@ -10,6 +10,12 @@
 #include "esp_err.h"
 #include "lvgl.h"
 
+// Call FIRST in app_main (before WiFi): force the panel dark at boot so the power rails
+// don't free-run through the bootloader->app window and strobe the screen (photosensitivity
+// hazard). GPIO + I2C only, no DSI/LVGL. Idempotent, non-fatal. Panel stays dark until
+// bsp_display_start() (cmd/display on).
+void bsp_display_predark(void);
+
 // Bring up power rails -> DSI -> panel -> backlight -> LVGL. Returns ESP_OK on a
 // lit, LVGL-ready panel. On any failure, logs + returns the error (never aborts).
 esp_err_t bsp_display_start(void);

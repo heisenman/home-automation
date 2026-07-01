@@ -10,6 +10,7 @@
 #include "esp_check.h"
 #include "driver/i2c_master.h"
 #include "driver/ledc.h"
+#include "driver/gpio.h"
 #include "esp_ldo_regulator.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_panel_io.h"
@@ -93,9 +94,12 @@ esp_err_t bsp_display_brightness(int percent)
 // Power the panel rails via the PCA9535 (leaving the camera OFF).
 static esp_err_t power_rails(void)
 {
-    ESP_RETURN_ON_ERROR(i2c_bus(1, I2C1_SCL, I2C1_SDA, &s_i2c1), TAG, "i2c1");
-    ESP_RETURN_ON_ERROR(esp_io_expander_new_i2c_pca9535(
-        s_i2c1, ESP_IO_EXPANDER_I2C_PCA9535_ADDRESS_000, &io_expander), TAG, "pca9535");
+    // reuse the bus/expander if bsp_display_predark() already brought them up at boot
+    if (!s_i2c1)
+        ESP_RETURN_ON_ERROR(i2c_bus(1, I2C1_SCL, I2C1_SDA, &s_i2c1), TAG, "i2c1");
+    if (!io_expander)
+        ESP_RETURN_ON_ERROR(esp_io_expander_new_i2c_pca9535(
+            s_i2c1, ESP_IO_EXPANDER_I2C_PCA9535_ADDRESS_000, &io_expander), TAG, "pca9535");
     ESP_RETURN_ON_ERROR(esp_io_expander_set_dir(io_expander, 0xffff, IO_EXPANDER_OUTPUT), TAG, "exp dir");
     esp_io_expander_set_level(io_expander, EXP_PWR_HOLD, 1);   // hold vdd_3v3
     esp_io_expander_set_level(io_expander, EXP_LCD_BL_EN, 1);  // backlight power
@@ -212,6 +216,27 @@ static void splash(void)
     lvgl_port_unlock();
 }
 
+void bsp_display_predark(void)
+{
+    // Called as the FIRST thing in app_main, before WiFi. On every boot (incl. an OTA reboot) the
+    // panel power rails would otherwise free-run through the bootloader->app window and STROBE the
+    // screen (a photosensitivity hazard). Force the backlight pin low and drive the expander's
+    // backlight + panel-power rails low immediately, holding the panel dark until an explicit
+    // cmd/display on. No DSI/LVGL — just GPIO + I2C. Non-fatal; best-effort.
+    gpio_hold_dis(LCD_BL_GPIO);         // release any cross-reset latch from bsp_display_off()
+    gpio_reset_pin(LCD_BL_GPIO);
+    gpio_set_direction(LCD_BL_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(LCD_BL_GPIO, 0);
+    if (!s_i2c1 && i2c_bus(1, I2C1_SCL, I2C1_SDA, &s_i2c1) != ESP_OK) return;
+    if (!io_expander && esp_io_expander_new_i2c_pca9535(
+            s_i2c1, ESP_IO_EXPANDER_I2C_PCA9535_ADDRESS_000, &io_expander) != ESP_OK) return;
+    esp_io_expander_set_dir(io_expander, EXP_LCD_BL_EN | EXP_LCD_PWR_EN, IO_EXPANDER_OUTPUT);
+    esp_io_expander_set_level(io_expander, EXP_LCD_BL_EN, 0);
+    esp_io_expander_set_level(io_expander, EXP_LCD_PWR_EN, 0);
+    s_screen_on = false;
+    ESP_LOGI(TAG, "predark: panel held dark across boot");
+}
+
 esp_err_t bsp_display_start(void)
 {
     ESP_RETURN_ON_ERROR(backlight_init(), TAG, "backlight");
@@ -220,7 +245,12 @@ esp_err_t bsp_display_start(void)
     ESP_RETURN_ON_ERROR(lvgl_init(), TAG, "lvgl");
     touch_init();               // non-fatal
     splash();
+    // Hold the backlight off until LVGL has flushed the splash, so the panel lights up ALREADY showing
+    // content — never the uninitialized framebuffer (the brief "bring-up flash"). predark handles the
+    // reboot-down dark; this handles the bring-up, making auto-boot visually clean end to end.
+    vTaskDelay(pdMS_TO_TICKS(200));   // let the lvgl_port task flush at least one frame
     bsp_display_brightness(80);
+    s_screen_on = true;
     s_ready = true;
     ESP_LOGI(TAG, "display ready (%dx%d)", LCD_H_RES, LCD_V_RES);
     return ESP_OK;
@@ -237,6 +267,11 @@ void bsp_display_off(void)
         esp_io_expander_set_level(io_expander, EXP_LCD_BL_EN, 0);
         esp_io_expander_set_level(io_expander, EXP_LCD_PWR_EN, 0);
     }
+    // Latch the backlight PWM pin low ACROSS the CPU reset, so nothing drives it during the
+    // bootloader window (before predark runs on the next boot) — kills the reboot-down flash.
+    gpio_set_direction(LCD_BL_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_level(LCD_BL_GPIO, 0);
+    gpio_hold_en(LCD_BL_GPIO);
     s_screen_on = false;
 }
 
