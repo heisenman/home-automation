@@ -1,9 +1,9 @@
 # ADR-0019 — Screen interface architecture (MCU display panels)
 
-**Date:** 2026-07-01
-**Status:** Proposed
+**Date:** 2026-07-01 (rev: Phase 1 connectivity proven on hardware; added §6 BLE edge-relay gateway)
+**Status:** Proposed — **Phase 1 connectivity PROVEN on real hardware 2026-07-01** (P4→C6/esp-hosted→WiFi→MQTT)
 **Extends:** ADR-0013 (presentation, API-first) · ADR-0003 (WASM firmware split) · ADR-0014 (device-control
-conventions) · ADR-0016/0018 (failover history / record-keeping nodes)
+conventions) · ADR-0015 (edge-relay coverage) · ADR-0016/0018 (failover history / record-keeping nodes)
 
 ## Context
 
@@ -93,7 +93,8 @@ can hold:
 office-d1001:
   display: {tech: lcd, color: true, touch: true, refresh: fast, w: 1280, h: 800}
   power:   always_on           # mains-capable
-  roles:   [control, recovery] # recovery-eligible (§4)
+  roles:   [control, recovery, ble_gateway]  # recovery-eligible (§4); BLE edge relay (§6)
+  antenna: external            # SMA external antenna — RF range, esp. for the BLE gateway role
 hallway-e1001:
   display: {tech: epaper, color: false, touch: false, refresh: slow, w: 800, h: 480}
   power:   deep_sleep          # ~3-month battery; wakes periodically
@@ -101,7 +102,8 @@ hallway-e1001:
   buttons: [a, b, c]           # physical buttons → mapped tile actions
 ```
 
-- **D1001** (fast color touch): full interactive tiles, live control, charts, recovery node.
+- **D1001** (fast color touch): full interactive tiles, live control, charts, recovery node, **BLE edge-relay
+  gateway (§6)** — it is also an edge node, not just a display.
 - **E1001** (slow mono ePaper, deep-sleep): status-first read-mostly rendering; physical buttons mapped to a
   few actions (scene, ack); **publishes its onboard T/H back onto the bus** as a room sensor
   (`home/<area>/<id>/state`) — a panel that is also a sensor.
@@ -146,10 +148,39 @@ best. The capability profile marks recovery eligibility (`roles: [recovery]`) ac
   model to ePaper. It is the deliberate second implementation that **validates the abstraction**: if one
   manifest drives both a P4/LVGL touch panel and an S3/ePaper display, the design holds.
 
+### 6. Panel as BLE edge-relay gateway (D1001) — the panel is also an edge node.
+
+The C6 is a **combo radio (WiFi-6 + BLE-5 + 802.15.4)**, and `esp-hosted` exposes **both WiFi and Bluetooth
+(HCI over SDIO)** to the P4 — confirmed live in the Phase-1 boot log (the C6 slave advertises `WLAN` +
+`HCI over SDIO` + `BLE`). So an always-on D1001 can, through the **single** C6, run WiFi *and* BLE
+concurrently (time-domain coexistence): the P4 **harvests BLE sensor advertisements in its room** (the
+system's existing BLE fleet — Aranet radon, SwitchBot meters) and **relays them onto the HA bus over WiFi**
+(canonical `home/<area>/<id>/state`), exactly like the existing edge relays. The P4 orchestrates; the C6
+does both radio jobs; it runs on the P4's spare core alongside the UI + data agent.
+
+This makes the panel fleet **distributed BLE coverage**: today BLE ingest comes from one USB dongle on `.245`
+(range-limited — the reason ADR-0015 edge-relay-coverage exists). A scanning panel in every room turns the
+fleet into a house-wide BLE gateway mesh feeding the same ingest pipeline — panels stop being *just*
+displays.
+
+- **NOT a dual-radio split.** The P4 has no radio of its own; the C6 is the sole transceiver. WiFi and BLE
+  *share* it via coexistence — fine for passive scan + light MQTT (the normal gateway workload), not for
+  heavy simultaneous throughput.
+- **External SMA antenna strongly recommended** for this role. The D1001's metal enclosure + LCD compromise
+  the internal antenna; relocating RF outside via SMA is the single biggest lever on BLE range/sensitivity
+  (more sensors heard, fewer coexistence collisions). It does **not** add a second radio — it's an RF
+  upgrade/relocation for the one C6 radio (typically an internal-vs-external *selection*, TBC vs schematic).
+- **Always-on only.** Continuous BLE scanning → a D1001 (mains-capable) role; the deep-sleep E1001 cannot.
+- **Validate the hosted-BT path.** BLE-over-`esp-hosted` (NimBLE ↔ HCI over SDIO) is more complex than the
+  WiFi path and is exactly where the C6 slave-firmware version mismatch (2.3 vs host 2.12) could bite — its
+  own bring-up test, after the display works.
+
 ## Consequences
 
 - The backend is **mostly reuse** — the big win. New server work: finish the per-device panel key; optionally
   a small per-panel manifest store/endpoint (`GET /api/v1/panel/<id>/manifest`) and panel registry entry.
+- Always-on panels double as **BLE edge-relay gateways** (§6) — house-wide BLE coverage (ADR-0015) through
+  the same C6 that carries their WiFi, at **zero extra hardware**.
 - Panels are **first-class MQTT clients + record nodes**, deepening system resilience (more distributed data
   copies) at near-zero backend cost.
 - The stable-host / swappable-app split bounds reflash risk and makes routine UI changes a server-side edit.
@@ -179,6 +210,9 @@ best. The capability profile marks recovery eligibility (`roles: [recovery]`) ac
   published as a sensor; deep-sleep snapshot behavior.
 - **Phase 5 — Fleet rollout.** Per-room panels; `provisioning/reterminal/` runbook; panel enrollment
   (per-device key); central manifest management.
+- **Phase 6 — BLE edge-relay bring-up (D1001, §6).** Enable BT-over-`esp-hosted` (NimBLE ↔ HCI over SDIO);
+  scan BLE sensor adverts → relay to `home/<area>/<id>/state`; validate WiFi+BLE coexistence and the C6
+  slave-firmware version; external SMA antenna fitted. Folds the panel into ADR-0015 edge-relay coverage.
 - **Future — tier (c).** ADR-0003 WASM app module for downloadable *behavior*, not just layout.
 
 **Labor:** dev is heads-down on the OpenWRT router cutover; ops + Hugh drive Phase 0–1; pull dev in for the
@@ -189,3 +223,5 @@ firmware phases once the network is settled.
 - Manifest delivery: static per-panel file vs. a small `GET /api/v1/panel/<id>/manifest` endpoint + registry.
 - On-SD archive format: append-only day logs vs. a mini two-tier (sqlite hot + parquet) mirroring ADR-0006.
 - Exactly how the reconcile tooling treats a panel archive (partial/rolling window) as a recovery source.
+- Antenna topology (§6): is the D1001 internal/external a *selection* or RX *diversity* for the single C6?
+  Confirm the external SMA port is wired to the C6 (Seeed schematic) — antennas arriving 2026-07-02.
