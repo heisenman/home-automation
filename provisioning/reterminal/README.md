@@ -32,7 +32,9 @@ and persists a batched rolling archive to SD → the panel serves charts from lo
 and acts as a distributed recovery copy below the warm standby. Spec: **high-endurance (dashcam-rated)
 microSD, ~32 GB** — years of retention + wear headroom for 24/7 batched writes; removable = a recovery win
 (readable even from a dead panel). Continuous-capture recovery is an **always-on (D1001)** role — the
-deep-sleep **E1001** can only snapshot, not capture gaplessly.
+deep-sleep **E1001** can only snapshot, not capture gaplessly. **SD-presence-gated:** the agent is always in
+the firmware but inert until a card is detected (probes at boot + on hot-insert; runs as a plain display with
+no card, no errors); recovery is opt-in by just inserting a card — no reflash to promote a panel.
 
 **Camera: disabled at firmware level** on the D1001 (never init the MIPI-CSI/SC2356 driver, rail off) —
 privacy on a wall panel. Not a software toggle.

@@ -124,6 +124,16 @@ PSRAM, flush every few seconds → large sequential writes, minimal wear). This 
 writes); the card being **physically removable** is itself a recovery win (pull it, read it in a card reader
 even from a dead panel).
 
+**SD-presence-gated — always capable, never required.** The data-agent is **always compiled into the
+firmware**, but it is **inert until a card is detected**. At boot *and* on **hot-insert** it probes the slot
+→ mounts → starts/resumes the rolling archive. With **no card present, the panel runs fully as a display/
+control surface** — no recovery, no errors, no degraded UX, no nagging. On **removal** it flushes the PSRAM
+buffer, unmounts cleanly, and continues as a plain display; on **re-insert** it remounts and resumes (archive
+is keyed so a returning/rotated card is detected and continued, not clobbered). Net effect: **recovery is
+opt-in by simply inserting a card**, and any panel — even one deployed card-less — can be promoted to a
+recovery node in the field with zero reflash. The panel surfaces its own recovery status as a first-class
+health signal (e.g. an `alert`/status tile: "recording to SD" / "no card — display only").
+
 **Honest constraint:** continuous-capture recovery belongs to **always-on panels (D1001)**. The **E1001
 deep-sleeps** for battery life and *cannot* capture the stream gaplessly — it does periodic snapshots at
 best. The capability profile marks recovery eligibility (`roles: [recovery]`) accordingly.
