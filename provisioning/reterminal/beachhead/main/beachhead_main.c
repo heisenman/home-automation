@@ -1,46 +1,208 @@
-// D1001 beachhead — prove the connectivity stack on the ESP32-P4:
-//   NVS -> netif/event -> esp_wifi (routed to the C6 over esp-hosted/SDIO)
-//   -> join CTWap_24g -> get IP -> MQTT to 192.168.0.210 -> publish "hello".
-// No display: the point of the beachhead is to prove the network path (the C6
-// link is the real unknown) BEFORE any UI. Watch `idf.py monitor` for proof of life.
+// D1001 beachhead v5-dbg — permanent, runtime-toggled REMOTE DEBUG over MQTT.
+//   Diagnostics stay compiled in forever; default OFF at boot (near-zero cost),
+//   flipped on over WiFi when needed. No serial console required.
+//
+// ALWAYS ON (cheap): retained heartbeat/health, last-will, OTA lifecycle topic.
+// GATED by debug (default off): full esp-idf log firehose -> MQTT.
+//
+// Topics (broker .210):
+//   d1001-beachhead/status     <- retained heartbeat {partition,build,ip,uptime,heap,rssi,wifi_rc,mqtt_rc,debug}
+//                                 (retained LWT "offline" on unexpected drop)
+//   d1001-beachhead/ota        <- OTA lifecycle (begin/progress/complete/fail) — ALWAYS published
+//   d1001-beachhead/log        <- full log stream, ONLY when debug on (qos0)
+//   d1001-beachhead/ack        <- command receipts
+//   d1001-beachhead/cmd/debug  -> "on"/"off" (or 1/0): toggle the log firehose (default off)
+//   d1001-beachhead/cmd/ota    -> payload = http URL of the new .bin
+//   d1001-beachhead/cmd/ping   -> (any) -> forces an immediate status publish
 #include <string.h>
+#include <stdlib.h>
+#include <stdio.h>
+#include <stdarg.h>
 #include "freertos/FreeRTOS.h"
+#include "freertos/task.h"
+#include "freertos/queue.h"
 #include "freertos/event_groups.h"
 #include "esp_log.h"
-#include "esp_wifi.h"          // esp_wifi_remote provides these symbols; radio lives on the C6
+#include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
+#include "esp_timer.h"
 #include "nvs_flash.h"
 #include "mqtt_client.h"
+#include "esp_ota_ops.h"
+#include "esp_https_ota.h"
+#include "esp_http_client.h"
 #include "secrets.h"
 
+#define APP_BUILD_TAG "v6-dbg"
 static const char *TAG = "beachhead";
+
+#define T_STATUS "d1001-beachhead/status"
+#define T_OTAST  "d1001-beachhead/ota"
+#define T_LOG    "d1001-beachhead/log"
+#define T_ACK    "d1001-beachhead/ack"
+#define T_OTA    "d1001-beachhead/cmd/ota"
+#define T_PING   "d1001-beachhead/cmd/ping"
+#define T_DEBUG  "d1001-beachhead/cmd/debug"
+
+static esp_mqtt_client_handle_t s_client = NULL;
+static volatile bool s_mqtt_up = false;
+static volatile bool s_debug = false;         // <-- diagnostic firehose, default OFF
 static EventGroupHandle_t s_evt;
 #define WIFI_CONNECTED_BIT BIT0
+static char s_ip[16] = "?";
+static volatile int s_wifi_rc = 0, s_mqtt_rc = 0;
+static QueueHandle_t s_log_q = NULL;
+static int (*s_orig_vprintf)(const char *, va_list) = NULL;
+
+// Log hook: ALWAYS writes the console; enqueues for MQTT ONLY when debug is on.
+static int log_vprintf(const char *fmt, va_list ap)
+{
+    va_list ap2; va_copy(ap2, ap);
+    int r = s_orig_vprintf ? s_orig_vprintf(fmt, ap2) : vprintf(fmt, ap2);
+    va_end(ap2);
+    if (s_debug && s_log_q) {
+        char *buf = malloc(240);
+        if (buf) {
+            int n = vsnprintf(buf, 240, fmt, ap);
+            if (n > 0) {
+                size_t l = strlen(buf);
+                while (l && (buf[l-1] == '\n' || buf[l-1] == '\r')) buf[--l] = 0;
+                if (l == 0 || xQueueSend(s_log_q, &buf, 0) != pdTRUE) free(buf);
+            } else free(buf);
+        }
+    }
+    return r;
+}
+
+static void log_drain_task(void *pv)
+{
+    char *line;
+    for (;;) {
+        if (xQueueReceive(s_log_q, &line, portMAX_DELAY) == pdTRUE) {
+            if (s_client && s_mqtt_up && s_debug) esp_mqtt_client_publish(s_client, T_LOG, line, 0, 0, 0);
+            free(line);
+        }
+    }
+}
+
+static void ota_report(const char *s)   // OTA lifecycle — always visible, independent of debug
+{
+    if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_OTAST, s, 0, 1, 0);
+}
+
+static void publish_status(void)
+{
+    if (!s_client || !s_mqtt_up) return;
+    const esp_partition_t *run = esp_ota_get_running_partition();
+    wifi_ap_record_t ap; int rssi = 0;
+    if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) rssi = ap.rssi;
+    char msg[256];
+    snprintf(msg, sizeof(msg),
+        "{\"device\":\"d1001-beachhead\",\"status\":\"online\",\"partition\":\"%s\",\"build\":\"%s\","
+        "\"ip\":\"%s\",\"uptime_s\":%lld,\"heap\":%u,\"rssi\":%d,\"wifi_rc\":%d,\"mqtt_rc\":%d,\"debug\":%s}",
+        run ? run->label : "?", APP_BUILD_TAG, s_ip,
+        esp_timer_get_time() / 1000000, (unsigned)esp_get_free_heap_size(), rssi, s_wifi_rc, s_mqtt_rc,
+        s_debug ? "true" : "false");
+    esp_mqtt_client_publish(s_client, T_STATUS, msg, 0, 1, 1);   // qos1 retained
+}
+
+static void heartbeat_task(void *pv)
+{
+    for (;;) { publish_status(); vTaskDelay(pdMS_TO_TICKS(15000)); }
+}
+
+static void ota_task(void *pv)
+{
+    char *url = (char *)pv;
+    ESP_LOGW(TAG, "OTA: begin url=%s", url);
+    ota_report("{\"ota\":\"begin\"}");
+    esp_http_client_config_t http = { .url = url, .timeout_ms = 30000, .keep_alive_enable = true };
+    esp_https_ota_config_t cfg = { .http_config = &http };
+    esp_https_ota_handle_t h = NULL;
+    esp_err_t err = esp_https_ota_begin(&cfg, &h);
+    if (err != ESP_OK) {
+        ESP_LOGE(TAG, "OTA: begin FAILED: %s", esp_err_to_name(err));
+        char m[96]; snprintf(m, sizeof(m), "{\"ota\":\"begin_failed\",\"err\":\"%s\"}", esp_err_to_name(err));
+        ota_report(m); free(url); vTaskDelete(NULL); return;
+    }
+    ota_report("{\"ota\":\"connected\"}");
+    int last = 0;
+    while (1) {
+        err = esp_https_ota_perform(h);
+        if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) break;
+        int n = esp_https_ota_get_image_len_read(h);
+        if (n - last >= 131072) {
+            char m[64]; snprintf(m, sizeof(m), "{\"ota\":\"progress\",\"bytes\":%d}", n);
+            ota_report(m); last = n;
+        }
+    }
+    if (err == ESP_OK && esp_https_ota_is_complete_data_received(h) && esp_https_ota_finish(h) == ESP_OK) {
+        ESP_LOGW(TAG, ">>> OTA COMPLETE — rebooting <<<");
+        ota_report("{\"ota\":\"complete\",\"action\":\"rebooting\"}");
+        vTaskDelay(pdMS_TO_TICKS(800));
+        esp_restart();
+    } else {
+        ESP_LOGE(TAG, "OTA: FAILED: %s", esp_err_to_name(err));
+        char m[96]; snprintf(m, sizeof(m), "{\"ota\":\"failed\",\"err\":\"%s\"}", esp_err_to_name(err));
+        ota_report(m);
+        esp_https_ota_abort(h);
+    }
+    free(url);
+    vTaskDelete(NULL);
+}
 
 static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, void *data)
 {
     esp_mqtt_event_handle_t e = (esp_mqtt_event_handle_t)data;
     switch ((esp_mqtt_event_id_t)id) {
     case MQTT_EVENT_CONNECTED:
-        ESP_LOGI(TAG, "MQTT CONNECTED to %s", MQTT_BROKER_URI);
-        esp_mqtt_client_publish(e->client, "d1001-beachhead/status",
-            "{\"device\":\"d1001-beachhead\",\"status\":\"online\","
-            "\"msg\":\"hello from ESP32-P4 via C6\"}", 0, 1, 1);
-        ESP_LOGI(TAG, ">>> BEACHHEAD SUCCESS: published hello to d1001-beachhead/status <<<");
+        s_mqtt_up = true;
+        esp_mqtt_client_subscribe(e->client, "d1001-beachhead/cmd/#", 1);
+        ESP_LOGW(TAG, "MQTT connected (reconnect #%d) — subscribed cmd/#", s_mqtt_rc);
+        publish_status();
+        esp_ota_mark_app_valid_cancel_rollback();
         break;
-    case MQTT_EVENT_DISCONNECTED: ESP_LOGW(TAG, "MQTT disconnected"); break;
-    case MQTT_EVENT_ERROR:        ESP_LOGE(TAG, "MQTT error"); break;
+    case MQTT_EVENT_DISCONNECTED:
+        s_mqtt_up = false; s_mqtt_rc++;
+        break;
+    case MQTT_EVENT_DATA: {
+        int tl = e->topic_len, dl = e->data_len;
+        ESP_LOGW(TAG, "MQTT DATA topic=%.*s payload=%.*s", tl, e->topic, dl, e->data);
+        esp_mqtt_client_publish(e->client, T_ACK, e->topic, tl, 0, 0);
+        if (tl == (int)strlen(T_OTA) && strncmp(e->topic, T_OTA, tl) == 0) {
+            char *url = strndup(e->data, dl);
+            if (url) xTaskCreate(ota_task, "ota", 8192, url, 5, NULL);
+        } else if (tl == (int)strlen(T_PING) && strncmp(e->topic, T_PING, tl) == 0) {
+            publish_status();
+        } else if (tl == (int)strlen(T_DEBUG) && strncmp(e->topic, T_DEBUG, tl) == 0) {
+            s_debug = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
+                                   e->data[0] == 't' || e->data[0] == 'T'));   // on/1/true
+            ESP_LOGW(TAG, "debug firehose -> %s", s_debug ? "ON" : "OFF");
+            publish_status();
+        }
+        break;
+    }
+    case MQTT_EVENT_ERROR: ESP_LOGE(TAG, "MQTT error"); break;
     default: break;
     }
 }
 
 static void start_mqtt(void)
 {
-    esp_mqtt_client_config_t cfg = { .broker.address.uri = MQTT_BROKER_URI };
-    esp_mqtt_client_handle_t c = esp_mqtt_client_init(&cfg);
-    esp_mqtt_client_register_event(c, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
-    esp_mqtt_client_start(c);
+    esp_mqtt_client_config_t cfg = {
+        .broker.address.uri = MQTT_BROKER_URI,
+        .credentials.client_id = "d1001-beachhead",
+        .session.keepalive = 15,
+        .session.last_will = {
+            .topic = T_STATUS,
+            .msg = "{\"device\":\"d1001-beachhead\",\"status\":\"offline\"}",
+            .qos = 1, .retain = 1,
+        },
+    };
+    s_client = esp_mqtt_client_init(&cfg);
+    esp_mqtt_client_register_event(s_client, ESP_EVENT_ANY_ID, mqtt_event_handler, NULL);
+    esp_mqtt_client_start(s_client);
 }
 
 static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, void *data)
@@ -48,18 +210,30 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     if (base == WIFI_EVENT && id == WIFI_EVENT_STA_START) {
         esp_wifi_connect();
     } else if (base == WIFI_EVENT && id == WIFI_EVENT_STA_DISCONNECTED) {
-        ESP_LOGW(TAG, "WiFi disconnected — reconnecting");
+        wifi_event_sta_disconnected_t *d = (wifi_event_sta_disconnected_t *)data;
+        s_wifi_rc++;
+        ESP_LOGW(TAG, "WiFi DISCONNECTED reason=%d (reconnect #%d)", d ? d->reason : -1, s_wifi_rc);
         esp_wifi_connect();
     } else if (base == IP_EVENT && id == IP_EVENT_STA_GOT_IP) {
         ip_event_got_ip_t *evt = (ip_event_got_ip_t *)data;
-        ESP_LOGI(TAG, "GOT IP: " IPSTR, IP2STR(&evt->ip_info.ip));
+        snprintf(s_ip, sizeof(s_ip), IPSTR, IP2STR(&evt->ip_info.ip));
+        ESP_LOGI(TAG, "GOT IP: %s", s_ip);
         xEventGroupSetBits(s_evt, WIFI_CONNECTED_BIT);
     }
 }
 
 void app_main(void)
 {
-    ESP_LOGI(TAG, "=== D1001 beachhead: ESP32-P4 + ESP32-C6 (esp-hosted/SDIO) ===");
+    s_log_q = xQueueCreate(48, sizeof(char *));
+    xTaskCreate(log_drain_task, "logdrain", 4096, NULL, 4, NULL);
+    s_orig_vprintf = esp_log_set_vprintf(log_vprintf);   // permanent; gated by s_debug
+    esp_log_level_set("mqtt_client", ESP_LOG_WARN);      // avoid log->publish->log storms when debug on
+    esp_log_level_set("transport", ESP_LOG_WARN);
+    esp_log_level_set("transport_base", ESP_LOG_WARN);
+    esp_log_level_set("esp-tls", ESP_LOG_WARN);
+    esp_log_level_set("outbox", ESP_LOG_WARN);
+
+    ESP_LOGW(TAG, "=== D1001 beachhead %s (remote-debug over MQTT; debug OFF) ===", APP_BUILD_TAG);
 
     esp_err_t r = nvs_flash_init();
     if (r == ESP_ERR_NVS_NO_FREE_PAGES || r == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -73,7 +247,7 @@ void app_main(void)
     esp_netif_create_default_wifi_sta();
 
     wifi_init_config_t cfg = WIFI_INIT_CONFIG_DEFAULT();
-    ESP_ERROR_CHECK(esp_wifi_init(&cfg));   // -> esp_wifi_remote -> C6 radio over esp-hosted
+    ESP_ERROR_CHECK(esp_wifi_init(&cfg));
 
     ESP_ERROR_CHECK(esp_event_handler_instance_register(WIFI_EVENT, ESP_EVENT_ANY_ID,
                                                         wifi_event_handler, NULL, NULL));
@@ -91,4 +265,5 @@ void app_main(void)
     xEventGroupWaitBits(s_evt, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     ESP_LOGI(TAG, "WiFi up — starting MQTT");
     start_mqtt();
+    xTaskCreate(heartbeat_task, "hb", 4096, NULL, 3, NULL);
 }

@@ -72,7 +72,7 @@ Illustrative manifest (fetched once + on change; live values ride MQTT, so this 
   "tiles": [
     {"type": "sensor",   "device": "aranet_office", "metrics": ["co2_ppm", "temperature_c", "humidity_pct"]},
     {"type": "actuator", "device": "levoit_office"},
-    {"type": "chart",    "device": "aranet_office", "metric": "co2_ppm", "window": "24h", "source": "local"},
+    {"type": "chart",    "device": "aranet_office", "metric": "co2_ppm", "window": "24h", "source": "server"},
     {"type": "scene"},
     {"type": "alert_banner"}
   ]
@@ -109,6 +109,12 @@ hallway-e1001:
   (`home/<area>/<id>/state`) — a panel that is also a sensor.
 
 ### 4. Panels as local data-recovery nodes (D1001) + async local cache.
+
+**Server-backed first; SD is a pure optional accelerator.** The panel is fully functional pulling live data
++ history from the server (BFF `/api/v1/*` + MQTT) with **no card** — a `chart` tile defaults to
+`source: server`. An inserted SD card *accelerates* history (instant/offline) and *unlocks* recovery,
+exactly like the presence-gated toggle below — but it is **never a prerequisite** for the UI. This decouples
+the panel UI from any SD-driver work, so Phase 2 (the renderer) ships without waiting on the SD subsystem.
 
 A background **data-agent task** on the P4's second core (fully decoupled from the UI thread) subscribes to
 the **full `home/+/+/state` stream** and persists it to **microSD** as a rolling archive, batched (buffer in
@@ -201,11 +207,13 @@ displays.
   above. *No hardware risk.*  ← **we are here**
 - **Phase 1 — D1001 host beachhead.** ESP-IDF image: `esp-hosted` C6 → WiFi → MQTT `.210` → **OTA proven**,
   camera disabled, display "hello". Prove connectivity + OTA *before* UI (beachhead-first, per the Levoit).
-- **Phase 2 — Renderer + manifest.** LVGL tile primitives (`sensor`/`actuator`/`scene`/`alert_banner`/
-  `chart`) driven by a fetched manifest; consume BFF view-models + MQTT deltas; signed command publish;
-  area-scoped. First real control panel.
-- **Phase 3 — Data agent + recovery node.** Background SD data agent (full-stream subscribe, batched rolling
-  archive, on-demand local history for charts); hook into reconcile tooling as a last-resort source.
+- **Phase 2 — Renderer + manifest (server-backed, SD-independent).** LVGL tile primitives
+  (`sensor`/`actuator`/`scene`/`alert_banner`/`chart`) driven by a fetched manifest; consume BFF view-models
+  + MQTT deltas; signed command publish; area-scoped. **Fully usable with no SD card** (charts fetch history
+  from the BFF). First real control panel — built now, iterated over OTA.
+- **Phase 3 — Data agent + recovery node (OPTIONAL, SD-presence-gated — not a prerequisite).** When a card is
+  present: background SD data agent (full-stream subscribe, batched rolling archive, `chart` tiles switch to
+  `source: local` for instant/offline history); hook into reconcile tooling as a last-resort source.
 - **Phase 4 — E1001 as the abstraction proof.** Same manifest/tile model on ESPHome/ePaper (S3); onboard T/H
   published as a sensor; deep-sleep snapshot behavior.
 - **Phase 5 — Fleet rollout.** Per-room panels; `provisioning/reterminal/` runbook; panel enrollment
