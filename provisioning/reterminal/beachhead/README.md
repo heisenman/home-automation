@@ -1,14 +1,45 @@
-# D1001 host beachhead (ADR-0019 Phase 1)
+# D1001 host beachhead (ADR-0019 Phase 1 + 2)
 
-ESP-IDF app that **proves the connectivity + OTA stack** on the reTerminal D1001's ESP32-P4 before any UI:
-boot → bring up the **ESP32-C6 over esp-hosted/SDIO** → join WiFi → MQTT to the dictator (`.210`). No
-display, no camera — connectivity-first (beachhead strategy). Now also carries permanent, WiFi-toggled
-**remote-debug-over-MQTT** tooling (see below).
+ESP-IDF app that **proves the connectivity + OTA stack** on the reTerminal D1001's ESP32-P4, then brings up
+the **display** on demand: boot → bring up the **ESP32-C6 over esp-hosted/SDIO** → join WiFi → MQTT to the
+dictator (`.210`), then (on the `cmd/display on` command) → **JD9365 800×1280 MIPI-DSI panel + LVGL**.
+Camera stays off. Carries permanent, WiFi-toggled **remote-debug-over-MQTT** tooling (see below).
 
 **Phase 1 PROVEN live 2026-07-01, first flash:**
 - **Connectivity** — C6 SDIO link up (`Identified slave [esp32c6]`), `GOT IP 192.168.0.8`, `MQTT CONNECTED`.
 - **OTA** — full over-the-air update proven: `ota begin→connected→progress→complete`, device flipped
   `ota_0`→`ota_1` running the new build, verified on the bus. All further iteration is wireless.
+
+**Phase 2 PROVEN live 2026-07-01 (v9-disp):** panel lit + LVGL splash rendered on real hardware.
+- **Display is COMMAND-TRIGGERED, not auto-at-boot** (`cmd/display on`). This is deliberate: WiFi/MQTT come
+  up *first* and mark the app valid, so a failed bring-up costs only one reboot back into the same good
+  firmware — never a brick. Bring-up is non-fatal (`bsp_display.c` returns errors, never aborts).
+- Lean driver path (`bsp_display.c`): PCA9535 power rails → DSI-PHY LDO(ch3,2500mV) → 2-lane DSI @1Gbps →
+  JD9365 (reset via expander) → LEDC backlight(GPIO14) → `esp_lvgl_port` DSI display. Drops the Seeed BSP's
+  esp-sr/codec/cam/IMU/RTC — app is ~1.4 MB, 66% of the 4 MB OTA slot free.
+- **Bootloader rollback now ENABLED** (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`): a future OTA that never
+  reaches MQTT auto-reverts to the last good slot. `esp_ota_mark_app_valid` fires on MQTT connect.
+
+## ⚠️ Two P4 gotchas that cost real time (remember for E1001 + every future panel)
+- **200 MHz PSRAM needs `CONFIG_IDF_EXPERIMENTAL_FEATURES=y`.** On P4, `SPIRAM_SPEED_200M` *depends on* the
+  experimental flag; without it Kconfig silently falls back to the **20 MHz** default — far too slow to scan
+  out an 800×1280 DPI framebuffer. Set BOTH `IDF_EXPERIMENTAL_FEATURES=y` and `SPIRAM_SPEED_200M=y`.
+- **esp-hosted SDIO mempool must go to PSRAM once you link LVGL.** Linking the display stack grows internal
+  `.bss`; the esp-hosted SDIO buffer pool is DMA-capable-internal by default and OOMs at boot
+  (`sdio_mempool_create ... assert failed`, boot-loop). Fix: `CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y`
+  (+ `CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y`) — P4 GDMA reaches PSRAM, so the pool works fine there.
+
+## Vendored components (NOT in the Espressif registry)
+The panel/touch/expander drivers are Seeed-local components (path-based, not registry packages), so they are
+**gitignored** here. Before building, copy them from the Seeed reTerminal-D1001 clone:
+```bash
+SEEED=~/reterminal-dev/reTerminal-D1001/components
+mkdir -p components
+for c in esp_lcd_jd9365_8 esp_lcd_touch_gsl3670 esp_io_expander_pca9535; do cp -r "$SEEED/$c" components/; done
+```
+Their own manifests pull the registry deps they need (`esp_lcd_touch`, `esp_io_expander`, `cmake_utilities`).
+Note: `esp_lcd_touch_gsl3670` `extern`s a global `io_expander` handle for touch-reset — `bsp_display.c`
+defines it (non-static) and treats the touch `rst_gpio_num` as an **expander pin** (12), not a real GPIO.
 
 ## Build / flash
 ```bash
@@ -48,6 +79,8 @@ needed. This is the reusable pattern for the whole fleet.
 | `d1001-beachhead/cmd/debug` | → | `on`/`off` — toggle the log firehose (default off) |
 | `d1001-beachhead/cmd/ota` | → | payload = http URL of the new `.bin` |
 | `d1001-beachhead/cmd/ping` | → | force an immediate status publish (poll liveness) |
+| `d1001-beachhead/cmd/display` | → | `on` — trigger display bring-up (default off; safe to retry) |
+| `d1001-beachhead/display` | ← | retained bring-up result `{display:online|failed, panel, res, err}` |
 
 ```bash
 # watch everything:
@@ -62,9 +95,12 @@ server must be reachable from the panel's subnet (open the host firewall, e.g. `
 
 ## Follow-ups
 - **esp_hosted version mismatch:** host 2.12.0 vs C6 slave 2.3.0 — connects, but Espressif warns of possible
-  RPC timeouts. Preferred fix: **pin host `esp_hosted` to ~2.3** (match the C6, no C6 reflash). Enable
-  bootloader rollback before risking a version change over OTA. Revisit if instability appears.
+  RPC timeouts. Preferred fix: **pin host `esp_hosted` to ~2.3** (match the C6, no C6 reflash). Now safer to
+  attempt: bootloader rollback is enabled (a bad OTA reverts). Revisit if instability appears.
 - **>16 MB internal-flash access unsupported** on this WinBond chip in the current driver — keep partitions
   under ~11 MB (they are); the recovery cache uses microSD, not internal flash.
-- **Next: Phase 2 — the server-backed LVGL renderer** (ADR-0019 §4 refinement): the panel UI pulls from the
-  BFF + MQTT and is **fully usable with no SD card**; the SD data-agent is an optional presence-gated add-on.
+- **DONE — bootloader rollback enabled** (`CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE`). Requires the rollback
+  bootloader, installed via a full USB flash (OTA doesn't rewrite the bootloader).
+- **Next: Phase 2 tiles — the server-backed LVGL renderer** (ADR-0019 §4): now that the panel renders, pull
+  live tiles from the BFF + MQTT (fully usable with no SD card), wire touch→signed commands, then the
+  declarative UI manifest. The SD data-agent stays an optional presence-gated add-on.

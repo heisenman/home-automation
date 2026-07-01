@@ -3,10 +3,21 @@ CONFIG_IDF_TARGET="esp32p4"
 
 # PSRAM — P4 relies on it for WiFi/LWIP buffers (from Seeed factory defaults)
 CONFIG_SPIRAM=y
+# NB: on P4, SPIRAM_SPEED_200M depends on IDF_EXPERIMENTAL_FEATURES — WITHOUT the
+# experimental flag Kconfig silently drops to the 20MHz default (too slow to scan
+# out the 800x1280 DPI framebuffer). The Seeed BSP enables it; we must too.
+CONFIG_IDF_EXPERIMENTAL_FEATURES=y
 CONFIG_SPIRAM_SPEED_200M=y
 CONFIG_SPIRAM_USE_MALLOC=y
 CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
 CONFIG_SPIRAM_MALLOC_RESERVE_INTERNAL=32768
+
+# esp-hosted: keep the SDIO transport buffer pool + hosted task stacks in
+# (DMA-capable) PSRAM. Linking the LVGL/display stack grows internal .bss and was
+# starving internal DRAM, so sdio_mempool_create() OOM'd -> boot-loop panic.
+# P4 GDMA reaches PSRAM, so the SDIO pool works fine there.
+CONFIG_ESP_HOSTED_MEMPOOL_PREFER_SPIRAM=y
+CONFIG_ESP_HOSTED_DFLT_TASK_FROM_SPIRAM=y
 
 # 32 MB flash, QIO
 CONFIG_ESPTOOLPY_FLASHSIZE_32MB=y
@@ -31,3 +42,17 @@ CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 
 # Allow plain-HTTP OTA (trusted LAN dev). Production hardening later = signed images / TLS.
 CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+
+# === Phase 2 display (LVGL + MIPI-DSI) ===
+# LVGL renders RGB565 to match the JD9365 DPI panel; draw buffers live in PSRAM.
+CONFIG_LV_COLOR_DEPTH_16=y
+CONFIG_LV_MEM_SIZE_KILOBYTES=64
+# NB: do NOT force SPIRAM_MALLOC_ALWAYSINTERNAL — it starves internal DRAM during
+# WiFi/esp-hosted bring-up (crashes before WiFi connects). The DPI panel already
+# allocates its framebuffer from PSRAM; RESERVE_INTERNAL=32768 keeps DMA headroom.
+
+# === OTA safety: roll back automatically on a bad image ===
+# App boots PENDING_VERIFY; esp_ota_mark_app_valid runs on MQTT connect. If a
+# future OTA never reaches MQTT, the bootloader reverts to the last good slot.
+# (Takes effect via this full USB reflash, which rewrites the bootloader.)
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y

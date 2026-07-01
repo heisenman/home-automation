@@ -3,3 +3,10 @@ dependencies:
   idf: ">=5.3"
   espressif/esp_wifi_remote: "1.*"   # WiFi API on P4, radio on the C6
   espressif/esp_hosted: "2.*"        # SDIO transport to the C6 slave
+
+  # --- Phase 2 display (lean set; drops esp-sr/codec/cam/IMU/RTC vs the Seeed BSP) ---
+  # The panel/touch/io-expander drivers are Seeed-vendored LOCAL components under
+  # ../components/ (not in the Espressif registry). Their own manifests pull the
+  # registry deps they need (esp_lcd_touch, esp_io_expander, cmake_utilities).
+  espressif/esp_lvgl_port: "^2"           # LVGL <-> esp_lcd glue (MIPI-DSI aware)
+  lvgl/lvgl: "^9"                         # UI toolkit

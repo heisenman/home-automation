@@ -32,9 +32,10 @@
 #include "esp_ota_ops.h"
 #include "esp_https_ota.h"
 #include "esp_http_client.h"
+#include "bsp_display.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v6-dbg"
+#define APP_BUILD_TAG "v9-disp"
 static const char *TAG = "beachhead";
 
 #define T_STATUS "d1001-beachhead/status"
@@ -44,6 +45,8 @@ static const char *TAG = "beachhead";
 #define T_OTA    "d1001-beachhead/cmd/ota"
 #define T_PING   "d1001-beachhead/cmd/ping"
 #define T_DEBUG  "d1001-beachhead/cmd/debug"
+#define T_DISP   "d1001-beachhead/display"       // <- retained display bring-up result
+#define T_DISPC  "d1001-beachhead/cmd/display"    // -> "on" triggers display bring-up (default off)
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
@@ -100,16 +103,45 @@ static void publish_status(void)
     char msg[256];
     snprintf(msg, sizeof(msg),
         "{\"device\":\"d1001-beachhead\",\"status\":\"online\",\"partition\":\"%s\",\"build\":\"%s\","
-        "\"ip\":\"%s\",\"uptime_s\":%lld,\"heap\":%u,\"rssi\":%d,\"wifi_rc\":%d,\"mqtt_rc\":%d,\"debug\":%s}",
+        "\"ip\":\"%s\",\"uptime_s\":%lld,\"heap\":%u,\"rssi\":%d,\"wifi_rc\":%d,\"mqtt_rc\":%d,"
+        "\"display\":%s,\"debug\":%s}",
         run ? run->label : "?", APP_BUILD_TAG, s_ip,
         esp_timer_get_time() / 1000000, (unsigned)esp_get_free_heap_size(), rssi, s_wifi_rc, s_mqtt_rc,
-        s_debug ? "true" : "false");
+        bsp_display_ready() ? "true" : "false", s_debug ? "true" : "false");
     esp_mqtt_client_publish(s_client, T_STATUS, msg, 0, 1, 1);   // qos1 retained
 }
 
 static void heartbeat_task(void *pv)
 {
     for (;;) { publish_status(); vTaskDelay(pdMS_TO_TICKS(15000)); }
+}
+
+// Bring up the panel on demand (triggered by cmd/display "on"), NOT at boot, so
+// the net + OTA lifeline is always established first and a failed bring-up can
+// only cost a reboot back into this same good firmware — never a brick. Non-fatal.
+static volatile bool s_disp_started = false;
+static void display_task(void *pv)
+{
+    if (s_disp_started) {   // idempotent: re-trigger just republishes state
+        if (s_client && s_mqtt_up)
+            esp_mqtt_client_publish(s_client, T_DISP,
+                bsp_display_ready() ? "{\"display\":\"online\",\"note\":\"already up\"}"
+                                    : "{\"display\":\"failed\",\"note\":\"already attempted\"}", 0, 1, 1);
+        vTaskDelete(NULL); return;
+    }
+    s_disp_started = true;
+    ESP_LOGW(TAG, "display bring-up requested — starting");
+    esp_err_t err = bsp_display_start();
+    char m[128];
+    if (err == ESP_OK) {
+        snprintf(m, sizeof(m), "{\"display\":\"online\",\"panel\":\"jd9365\",\"res\":\"800x1280\",\"build\":\"%s\"}", APP_BUILD_TAG);
+        ESP_LOGW(TAG, ">>> DISPLAY ONLINE <<<");
+    } else {
+        snprintf(m, sizeof(m), "{\"display\":\"failed\",\"err\":\"%s\",\"build\":\"%s\"}", esp_err_to_name(err), APP_BUILD_TAG);
+        ESP_LOGE(TAG, "display init failed: %s (device stays live on the bus)", esp_err_to_name(err));
+    }
+    if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_DISP, m, 0, 1, 1);  // retained
+    vTaskDelete(NULL);
 }
 
 static void ota_task(void *pv)
@@ -175,6 +207,10 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
             if (url) xTaskCreate(ota_task, "ota", 8192, url, 5, NULL);
         } else if (tl == (int)strlen(T_PING) && strncmp(e->topic, T_PING, tl) == 0) {
             publish_status();
+        } else if (tl == (int)strlen(T_DISPC) && strncmp(e->topic, T_DISPC, tl) == 0) {
+            bool on = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
+                                   e->data[0] == 't' || e->data[0] == 'T'));
+            if (on) xTaskCreate(display_task, "disp", 8192, NULL, 4, NULL);   // bring-up on demand
         } else if (tl == (int)strlen(T_DEBUG) && strncmp(e->topic, T_DEBUG, tl) == 0) {
             s_debug = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
                                    e->data[0] == 't' || e->data[0] == 'T'));   // on/1/true
@@ -266,4 +302,6 @@ void app_main(void)
     ESP_LOGI(TAG, "WiFi up — starting MQTT");
     start_mqtt();
     xTaskCreate(heartbeat_task, "hb", 4096, NULL, 3, NULL);
+    // Display is NOT started here — trigger it over MQTT with cmd/display "on"
+    // once the device is confirmed live, so a failed bring-up can't brick boot.
 }
