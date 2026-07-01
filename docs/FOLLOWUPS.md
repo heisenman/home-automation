@@ -1,32 +1,42 @@
 # Follow-ups & clarifications for Hugh
 
-## 🟡 2026-07-01 — Screen-interface architecture (ADR-0019, PROPOSED) + reTerminal D1001 intake
+## 🟢 2026-07-01 (rev-2) — reTerminal D1001 panel: Phases 1–2 + full PWA parity (A/B/C) LIVE + HW-VERIFIED
 
-**Design done, no firmware yet.** New device class: Seeed reTerminal panels as per-room control/status
-surfaces. **[ADR-0019](adr/ADR-0019-screen-interface-architecture.md)** (Proposed) drafted + committed with
-Hugh through a full Phase-0 planning session. Core decisions:
-- **Panel = "PWA-in-firmware"** — reuse the LIVE BFF (`/api/v1/display*|sensors|alerts|house`) + trait model
-  + MQTT (`home/<area>/<id>/state`, `home/_alerts`) + signed HMAC commands (`…/cmd`). Backend work is mostly
-  reuse; only new piece is finishing the half-built **per-device panel key**.
-- **Stable firmware host + swappable manifest-driven app** (tier b): fixed LVGL tile primitives; each panel
-  fetches a small **declarative UI manifest** and renders locally (panel-derived) → **change the UI without
-  reflashing**; reflash only for new tile *types*. Tier (c) = ADR-0003 WASM app module (future).
-- **Panels as local data-recovery nodes** (D1001, always-on): background data-agent on the P4 2nd core
-  subscribes to full `home/+/+/state`, batched rolling archive to **microSD** → charts from local cache
-  (instant/offline) + a distributed recovery copy below the warm standby (ties ADR-0016/0018). **E1001
-  deep-sleeps → snapshot only, not gapless.**
-- **D1001** = ESP-IDF+LVGL+esp-hosted(C6)+MQTT+OTA+SD, camera disabled. **E1001** = ESPHome/ePaper, same
-  manifest = the abstraction proof; publishes onboard T/H as a room sensor.
+**The panel is a working per-room control surface + wall app.** ADR-0019 Phases 1–2 done, plus a full
+PWA-parity + shared-spec-merge pass (Phases A/B/C). All **hardware-verified** by Hugh. Firmware
+`v25-actuator` on device **`.8`** (ota_1), committed **`1dc438a`**; OTA+rollback safe; auto-boots the GUI.
+- **Phase 1 (connectivity) + Phase 2 (renderer)** — LVGL tiles from `/api/v1/{sensors,displays}`, MQTT
+  `home/+/+/state` live-state, tap-to-detail, actuator on/off via a scoped **operator** `PANEL_TOKEN`.
+- **Phase 0 shared UI spec (MERGE)** — `viewmodel.py` `METRIC_CATALOG` is the single source of metric
+  presentation; PWA + panel both render sensor graphs from it. **Deployed on `.210`** (`ha-api`/`ha-api-tls`
+  restarted) + `GET /devices/{id}/readings?hours=N` (server-computed window for the clockless panel).
+- **Phase A** inline expand-below + 72h `lv_chart` per graphable metric. **Phase B** scene bar
+  (Home/Away/Sleep via `/api/v1/house`) + **admin lock/unlock** (LVGL keyboard → panel hashes the passphrase
+  `SHA256("ha-api:"+pass)` → `/auth/login` → admin JWT in RAM, 5-min idle auto-lock). **Phase C** actuator
+  override (`/control/{id}/override`) + hysteresis automation editor (`PUT /control/{id}/policy`),
+  admin-gated.
+- **Auto-boot the GUI** on first MQTT connect (net/OTA lifeline confirmed first → broken firmware still
+  rolls back). **Back button** toggles the screen.
+- **Strobe FULLY FIXED** — root cause (Hugh's diagnosis): SPI-flash writes disable the cache during OTA,
+  stalling the PSRAM-resident MIPI-DSI framebuffer → the lit panel strobes. Fix: **`ota_task` blanks the
+  panel for the whole download** (`bsp_display_sleep`). VERIFIED strobe-free on a v25→v25 flash.
 
-**Hardware state:** D1001 on the bench; factory firmware **imaged** (`~/reterminal-d1001-factory-backup.bin`,
-32 MB, off-git) via `provisioning/reterminal/resilient-flash-backup.sh` — **one 64 KB sector at `0x600000`
-unreadable** (marginal, not cable; encryption/secure-boot both off), zero-filled, logged; flagged as a
-device-health watch item. **Hugh action:** buy a **high-endurance ~32 GB microSD** (required for the recovery
-role); an **E1001** arrives in ~2 weeks (the second-implementation proof).
+**Hardware state:** factory firmware imaged off-git (`~/reterminal-d1001-factory-backup.bin`; one marginal
+64 KB sector `0x600000` zero-filled, health watch item). **Hugh action (still open):** buy a **high-endurance
+~32 GB microSD** (Phase 3 recovery role); an **E1001** (~2 wks out) is the abstraction proof (Phase 4).
 
-**Next:** Phase 1 = D1001 host beachhead (esp-hosted C6 → WiFi → MQTT `.210` → OTA proven, display "hello").
-dev is on the router cutover, so ops+Hugh drive Phase 0–1; pull dev in for firmware once the network settles.
-Recipe + facts: [provisioning/reterminal/](../provisioning/reterminal/README.md).
+**CURRENT OPEN / NEXT:**
+- **NEXT INITIATIVE → Phase 6: D1001 as a room BLE edge node.** Approved 2026-07-01; runbook at
+  [provisioning/reterminal/BLE-EDGE-NODE-PLAN.md](../provisioning/reterminal/BLE-EDGE-NODE-PLAN.md). Run the
+  C6 as the P4's BLE radio (HCI-over-`esp-hosted`); port `edge/esp32c6` `switchbot_decode` + observer scan;
+  relay `home/<area>/<id>/state`. **Spike 0 first** (prove NimBLE-over-hosted scans — the C6 slave already
+  advertises BLE HCI per the Phase-1 boot log). BLE load is the trigger to revisit the `esp_hosted`
+  2.12↔2.3 mismatch (Hugh chose "leave it" while WiFi-only was flawless).
+- `esp_hosted` host 2.12 vs C6 slave 2.3 mismatch — **deferred by Hugh** (stable; revisit if instability /
+  under BLE load).
+- **`vendor-harden-review`** (board) — security review of the vendored Seeed drivers (gsl3670 stack-smash
+  already patched); harden + report upstream.
+- Phase C minor polish ("majority" working); declarative manifest (tier-b); Phase 3 SD recovery node.
 
 ---
 

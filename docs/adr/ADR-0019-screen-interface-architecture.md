@@ -1,7 +1,13 @@
 # ADR-0019 — Screen interface architecture (MCU display panels)
 
-**Date:** 2026-07-01 (rev: Phase 1 connectivity proven on hardware; added §6 BLE edge-relay gateway)
-**Status:** Proposed — **Phase 1 connectivity PROVEN on real hardware 2026-07-01** (P4→C6/esp-hosted→WiFi→MQTT)
+**Date:** 2026-07-01 (rev-2: Phases 1–2 + full PWA parity A/B/C LIVE + HW-verified on D1001)
+**Status:** **Accepted — Phases 1–2 IMPLEMENTED & LIVE on the D1001** (`v25-actuator`, device `.8`, committed
+`1dc438a`). Phase 1 connectivity (P4→C6/esp-hosted→WiFi→MQTT+OTA) + Phase 2 renderer (LVGL tiles + live MQTT
+state + tap-detail + actuator control) proven on real hardware, plus a full PWA-parity + shared-spec pass:
+inline 72h charts (A), scene bar + admin lock (B), actuator override + automation editor (C), auto-boot GUI,
+back-button screen toggle, and the OTA anti-strobe fix. Shared UI spec (`METRIC_CATALOG`) deployed on `.210`.
+**Next: Phase 6 — D1001 as a BLE edge node** (§6; runbook `provisioning/reterminal/BLE-EDGE-NODE-PLAN.md`).
+Phase 3 (SD recovery) + Phase 4 (E1001) still deferred.
 **Extends:** ADR-0013 (presentation, API-first) · ADR-0003 (WASM firmware split) · ADR-0014 (device-control
 conventions) · ADR-0015 (edge-relay coverage) · ADR-0016/0018 (failover history / record-keeping nodes)
 
