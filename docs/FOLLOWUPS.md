@@ -1,5 +1,35 @@
 # Follow-ups & clarifications for Hugh
 
+## 🟡 2026-07-01 — Screen-interface architecture (ADR-0019, PROPOSED) + reTerminal D1001 intake
+
+**Design done, no firmware yet.** New device class: Seeed reTerminal panels as per-room control/status
+surfaces. **[ADR-0019](adr/ADR-0019-screen-interface-architecture.md)** (Proposed) drafted + committed with
+Hugh through a full Phase-0 planning session. Core decisions:
+- **Panel = "PWA-in-firmware"** — reuse the LIVE BFF (`/api/v1/display*|sensors|alerts|house`) + trait model
+  + MQTT (`home/<area>/<id>/state`, `home/_alerts`) + signed HMAC commands (`…/cmd`). Backend work is mostly
+  reuse; only new piece is finishing the half-built **per-device panel key**.
+- **Stable firmware host + swappable manifest-driven app** (tier b): fixed LVGL tile primitives; each panel
+  fetches a small **declarative UI manifest** and renders locally (panel-derived) → **change the UI without
+  reflashing**; reflash only for new tile *types*. Tier (c) = ADR-0003 WASM app module (future).
+- **Panels as local data-recovery nodes** (D1001, always-on): background data-agent on the P4 2nd core
+  subscribes to full `home/+/+/state`, batched rolling archive to **microSD** → charts from local cache
+  (instant/offline) + a distributed recovery copy below the warm standby (ties ADR-0016/0018). **E1001
+  deep-sleeps → snapshot only, not gapless.**
+- **D1001** = ESP-IDF+LVGL+esp-hosted(C6)+MQTT+OTA+SD, camera disabled. **E1001** = ESPHome/ePaper, same
+  manifest = the abstraction proof; publishes onboard T/H as a room sensor.
+
+**Hardware state:** D1001 on the bench; factory firmware **imaged** (`~/reterminal-d1001-factory-backup.bin`,
+32 MB, off-git) via `provisioning/reterminal/resilient-flash-backup.sh` — **one 64 KB sector at `0x600000`
+unreadable** (marginal, not cable; encryption/secure-boot both off), zero-filled, logged; flagged as a
+device-health watch item. **Hugh action:** buy a **high-endurance ~32 GB microSD** (required for the recovery
+role); an **E1001** arrives in ~2 weeks (the second-implementation proof).
+
+**Next:** Phase 1 = D1001 host beachhead (esp-hosted C6 → WiFi → MQTT `.210` → OTA proven, display "hello").
+dev is on the router cutover, so ops+Hugh drive Phase 0–1; pull dev in for firmware once the network settles.
+Recipe + facts: [provisioning/reterminal/](../provisioning/reterminal/README.md).
+
+---
+
 ## ✅ CHECKPOINT 2026-06-27 — AUTHORITATIVE current state (supersedes everything below)
 Verified against the live cluster + bus this date.
 

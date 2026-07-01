@@ -4,9 +4,11 @@ Intake reference for the Seeed reTerminal display family we're bringing onto the
 control/status panels. Home of the firmware-backup procedure (proven on the **D1001**, 2026-07-01),
 the per-device facts, and a pointer to the panel architecture project.
 
-The overall "screen interface for the HA system" architecture is **ADR-0019 (planned)** — this dir is
-the device/provisioning half; ADR-0019 is the design half. See `docs/adr/ADR-0013-presentation-architecture.md`,
-which already frames MCU panels as a first-class API-first client (BFF view-model + MQTT).
+The overall "screen interface for the HA system" architecture is **[ADR-0019](../../docs/adr/ADR-0019-screen-interface-architecture.md)**
+(Proposed, 2026-07-01) — this dir is the device/provisioning half; ADR-0019 is the design half (panel =
+"PWA-in-firmware" reusing the live BFF + trait model; stable host + swappable manifest-driven app; panels
+double as local data-recovery nodes). It builds on `docs/adr/ADR-0013-presentation-architecture.md`, which
+already frames MCU panels as a first-class API-first client (BFF view-model + MQTT).
 
 ## The devices
 
@@ -24,6 +26,14 @@ which already frames MCU panels as a first-class API-first client (BFF view-mode
 shutdown, local "offline" state). It cannot back up the servers/broker/router; true system ride-through
 is a separate core-box-UPS decision.
 
+**microSD is REQUIRED for the data-recovery role** (ADR-0019 §4). Onboard 32 MB flash is firmware/app only;
+PSRAM is volatile. A background data-agent (P4 second core) subscribes to the full `home/+/+/state` stream
+and persists a batched rolling archive to SD → the panel serves charts from local cache (instant/offline)
+and acts as a distributed recovery copy below the warm standby. Spec: **high-endurance (dashcam-rated)
+microSD, ~32 GB** — years of retention + wear headroom for 24/7 batched writes; removable = a recovery win
+(readable even from a dead panel). Continuous-capture recovery is an **always-on (D1001)** role — the
+deep-sleep **E1001** can only snapshot, not capture gaplessly.
+
 **Camera: disabled at firmware level** on the D1001 (never init the MIPI-CSI/SC2356 driver, rail off) —
 privacy on a wall panel. Not a software toggle.
 
@@ -32,6 +42,19 @@ privacy on a wall panel. Not a software toggle.
 Same discipline as the Levoit OEM backup: image the factory flash before touching it. The D1001's demo
 contains a working `esp-hosted` C6 setup we'll want as reference, plus possible Seeed calibration/NVS.
 **Keep the backup off-git** (may carry vendor creds/cal).
+
+> **Our unit's outcome (2026-07-01):** imaged to `~/reterminal-d1001-factory-backup.bin` (32 MB) with the
+> resilient reader below — **one 64 KB sector at `0x600000` was unreadable** ("Packet content transfer
+> stopped", marginal/flaky on retry, *not* a cable issue — every other region reads at full speed; Flash
+> Encryption + Secure Boot both **Disabled**). That sector is zero-filled and logged to
+> `~/d1001-backup/gaps.txt`. 99.8 % captured, incl. bootloader/partition table/NVS. Noted as a device-health
+> flag: watch for touch/boot glitches; a bad flash sector on a new unit is grounds for exchange if functional
+> problems appear.
+
+The chunked loop below is the first-try for a **healthy** device. If a chunk hits an **unreadable sector**
+(as ours did), use **`resilient-flash-backup.sh`** (this dir) — it subdivides a failing block to 64 KB and
+zero-fills only the dead sectors, capturing everything else:
+`PORT=/dev/ttyACM0 SIZE=$((32*1024*1024)) ./resilient-flash-backup.sh ~/reterminal-d1001-factory-backup.bin`
 
 ### The procedure that WORKS (D1001, 32 MB over USB-Serial/JTAG)
 
