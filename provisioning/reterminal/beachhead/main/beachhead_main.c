@@ -43,7 +43,7 @@
 #include "esp_hosted_ota.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v43-tempf"
+#define APP_BUILD_TAG "v45-power"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -130,17 +130,18 @@ static void publish_status(void)
     ha_batt_sample_t bs = {0};
     bool have_batt = (ha_battery_sample(&bs) == ESP_OK);
     if (have_batt && bsp_display_ready())              // only touch LVGL once it's initialized
-        ui_tiles_set_battery(bs.soc, bs.charging);     // panel top-bar indicator
+        ui_tiles_set_battery(bs.soc, bs.on_wall, bs.gaining);   // panel top-bar power indicator (3-state)
     char msg[380];
     snprintf(msg, sizeof(msg),
         "{\"device\":\"d1001-beachhead\",\"status\":\"online\",\"partition\":\"%s\",\"build\":\"%s\","
         "\"ip\":\"%s\",\"uptime_s\":%lld,\"heap\":%u,\"rssi\":%d,\"wifi_rc\":%d,\"mqtt_rc\":%d,"
         "\"display\":%s,\"debug\":%s,\"batt_pct\":%d,\"batt_mv\":%d,\"charging\":%s,"
-        "\"temp_dc\":%d,\"charge_en\":%s}",
+        "\"on_wall\":%s,\"gaining\":%s,\"temp_dc\":%d,\"charge_en\":%s}",
         run ? run->label : "?", APP_BUILD_TAG, s_ip,
         esp_timer_get_time() / 1000000, (unsigned)esp_get_free_heap_size(), rssi, s_wifi_rc, s_mqtt_rc,
         bsp_display_ready() ? "true" : "false", s_debug ? "true" : "false",
         have_batt ? bs.soc : -1, have_batt ? bs.batt_mv_smoothed : 0, bs.charging ? "true" : "false",
+        bs.on_wall ? "true" : "false", bs.gaining ? "true" : "false",
         bs.have_temp ? bs.temp_dc : -9999, bs.charge_en ? "true" : "false");
     esp_mqtt_client_publish(s_client, T_STATUS, msg, 0, 1, 1);   // qos1 retained
 }

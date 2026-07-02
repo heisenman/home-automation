@@ -52,7 +52,11 @@ typedef struct {
     int  batt_mv_smoothed;   // reported/smoothed battery mV
     int  usb_mv;             // USB/VSYS mV; > usb_present_mv ⇒ cable in
     int  vsys_pg;            // VSYS power-good GPIO raw level
-    bool charging;           // charge GPIO active-low (low=charging)
+    bool charging;           // charge GPIO active-low (low=charging) — charger IC's STAT pin
+    bool on_wall;            // external/USB power present (usb_mv > usb_present_mv)
+    bool gaining;            // cell is ACTUALLY gaining charge (smoothed mV rising over ~60 s).
+                             // Distinct from `charging`: on a current-limited port the STAT pin
+                             // can read "charging" while system load holds net cell current ≈ 0.
     int  soc;                // LUT %% from smoothed mV
     int  temp_dc;            // board temp deci-°C, -9999 if unavailable
     bool have_temp;

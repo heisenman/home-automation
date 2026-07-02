@@ -6,6 +6,7 @@
 #include "freertos/task.h"
 #include "freertos/semphr.h"
 #include "esp_log.h"
+#include "esp_timer.h"
 #include "driver/gpio.h"
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
@@ -44,6 +45,9 @@ static bool s_init;
 static bool s_read_en;
 static int  s_smooth_mv;
 static int  s_win[AVG_WIN], s_win_n, s_win_i;
+static int      s_trend_ref_mv;    // ~60 s-ago smoothed mV, for the "gaining" trend
+static int64_t  s_trend_ref_us;
+static bool     s_gaining;         // cell voltage rising (actively charging), see ha_battery_sample
 static i2c_master_dev_handle_t s_imu;
 static bool s_imu_ok, s_imu_tried;
 static volatile bool s_charge_en;
@@ -177,6 +181,18 @@ esp_err_t ha_battery_sample(ha_batt_sample_t *out)
     else if (on_charger)         s_smooth_mv = avg;
     else if (avg < s_smooth_mv)  s_smooth_mv = avg;   // discharging: ratchet down only
 
+    // "gaining" = the cell voltage is actually RISING over ~60 s. This is the honest
+    // "actively charging" signal: on a current-limited port the charger STAT pin can assert
+    // "charging" while system load holds net cell current ≈ 0 (voltage flat). Sampled off the
+    // smoothed mV against a ~60 s reference; only meaningful while on the charger.
+    int64_t now_us = esp_timer_get_time();
+    if (s_trend_ref_us == 0) { s_trend_ref_mv = s_smooth_mv; s_trend_ref_us = now_us; }
+    else if (now_us - s_trend_ref_us >= 60000000LL) {   // evaluate the trend each ~60 s
+        s_gaining = on_charger && (s_smooth_mv - s_trend_ref_mv >= 6);   // rose ≥6 mV ⇒ gaining
+        s_trend_ref_mv = s_smooth_mv;
+        s_trend_ref_us = now_us;
+    }
+
     int tdc = 0; bool ht = imu_temp_dc(&tdc);
     if (out) {
         out->raw_ch2 = raw2;
@@ -186,6 +202,8 @@ esp_err_t ha_battery_sample(ha_batt_sample_t *out)
         out->usb_mv = usb_mv;
         out->vsys_pg = (s_cfg.gpio_vsys_pg >= 0) ? gpio_get_level(s_cfg.gpio_vsys_pg) : -1;
         out->charging = (s_cfg.gpio_charge >= 0) && (gpio_get_level(s_cfg.gpio_charge) == 0);
+        out->on_wall = on_charger;
+        out->gaining = s_gaining;
         out->soc = lut_pct(s_smooth_mv);
         out->temp_dc = ht ? tdc : -9999;
         out->have_temp = ht;

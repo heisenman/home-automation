@@ -15,6 +15,9 @@ void ui_tiles_start(const char *sensors_url);
 // No-op if the UI isn't started or the device has no card. Safe from any task.
 void ui_tiles_on_state(const char *json_payload);
 
-// Update the top-bar battery indicator (MAX17048). pct 0..100; charging shows a
-// charge glyph. Safe from any task (takes the LVGL lock). No-op if UI not started.
-void ui_tiles_set_battery(int pct, bool charging);
+// Update the top-bar power indicator. pct 0..100. Composite 3-state:
+//   on_wall=false           → battery-level glyph          (on the cell)
+//   on_wall=1, gaining=0     → plug + battery-level         (wall power, holding)
+//   on_wall=1, gaining=1     → plug + bolt + battery-level  (actively charging — voltage rising)
+// Colour-coded (slate/red · amber · green). Safe from any task (takes the LVGL lock).
+void ui_tiles_set_battery(int pct, bool on_wall, bool gaining);

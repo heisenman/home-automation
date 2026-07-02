@@ -1039,17 +1039,33 @@ static void state_task(void *pv)
 }
 
 // Called from the MQTT callback: LIGHTWEIGHT — copy + enqueue only, no parse/LVGL.
-void ui_tiles_set_battery(int pct, bool charging)
+void ui_tiles_set_battery(int pct, bool on_wall, bool gaining)
 {
     if (pct < 0) pct = 0;
     if (pct > 100) pct = 100;
-    const char *sym = charging      ? LV_SYMBOL_CHARGE :
-                      pct >= 88     ? LV_SYMBOL_BATTERY_FULL :
-                      pct >= 63     ? LV_SYMBOL_BATTERY_3 :
-                      pct >= 38     ? LV_SYMBOL_BATTERY_2 :
-                      pct >= 13     ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
+    const char *batt = pct >= 88 ? LV_SYMBOL_BATTERY_FULL :
+                       pct >= 63 ? LV_SYMBOL_BATTERY_3 :
+                       pct >= 38 ? LV_SYMBOL_BATTERY_2 :
+                       pct >= 13 ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
+    // Composite 3-state power glyph. Plug (USB) = external power present; bolt (CHARGE) = cell
+    // voltage actually RISING (honest "charging", not just the STAT pin). So the operator tells
+    // "on battery" from "plugged but holding" from "actively charging" at a glance (colour too).
+    char txt[56]; uint32_t col;
+    if (!on_wall) {                               // running on the cell
+        snprintf(txt, sizeof(txt), "%s %d%%", batt, pct);
+        col = (pct < 15) ? 0xf87171 : 0xcbd5e1;   // red when low, else slate
+    } else if (gaining) {                         // wall power + cell voltage climbing
+        snprintf(txt, sizeof(txt), "%s%s%s %d%%", LV_SYMBOL_USB, LV_SYMBOL_CHARGE, batt, pct);
+        col = 0x22c55e;                           // green
+    } else {                                      // wall power present, but holding (not gaining)
+        snprintf(txt, sizeof(txt), "%s%s %d%%", LV_SYMBOL_USB, batt, pct);
+        col = 0xfbbf24;                           // amber
+    }
     if (lvgl_port_lock(0)) {
-        if (s_batt_lbl) lv_label_set_text_fmt(s_batt_lbl, "%s %d%%", sym, pct);
+        if (s_batt_lbl) {
+            lv_label_set_text(s_batt_lbl, txt);
+            lv_obj_set_style_text_color(s_batt_lbl, lv_color_hex(col), 0);
+        }
         lvgl_port_unlock();
     }
 }
