@@ -61,6 +61,9 @@ MODULES = [
     ("fs_ops", {"sources": ["fs_ops.c"], "component": "fs_ops"}),
     ("bat_profile", {"sources": ["bat_profile.c"], "component": None}),
     ("ha_battery", {"sources": [], "component": "ha_battery"}),
+    ("ha_gas", {"sources": ["ha_gas.c"], "component": None}),
+    ("sgp40", {"sources": [], "component": "sgp40"}),
+    ("sensirion_gas_index", {"sources": [], "component": "sensirion_gas_index"}),
 ]
 
 _SECTION_KEYWORDS = {

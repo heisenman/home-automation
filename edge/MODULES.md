@@ -23,6 +23,9 @@ which). Target = real shared IDF components (ADR-0020); today most are shared by
 | `ha_sdcard` | microSD mount (SDMMC+FAT); card VDD/LDO/slot are config | ADR-0020 | ESP32-P4 SDMMC (D1001 preset: slot 0, LDO ch4, VDD GPIO46); coexists with C6 SDIO on slot 1 | fatfs, sdmmc | **shared → [firmware/components/](../firmware/components/ha_sdcard/)** — d1001-panel |
 | `fs_ops` | SD file-ops over MQTT (ls/stat/read/write/rm/mkdir/df); worker+queue, base64, `/sdcard`-scoped | ADR-0020 | any node with a mounted FS + MQTT sink | fatfs, json, mbedtls | **shared → [firmware/components/](../firmware/components/fs_ops/)** — d1001-panel |
 | `bat_profile` | Panel glue: mount (`ha_sdcard`) + append battery telemetry CSV every 15 s + MQTT mirror | ADR-0020 | panel-local (composes `ha_sdcard`+`ha_battery`) | — | **fork (panel-local)** |
+| `sgp40` | Sensirion SGP40 VOC sensor I2C driver (measure_raw + self-test/wiring-check; RH/T compensation) | ADR-0020 | any node with an I2C bus (bus/pins injected) | driver (i2c_master) | **shared → [firmware/components/](../firmware/components/sgp40/)** — c6-bench |
+| `sensirion_gas_index` | Raw SGPxx SRAW → 0..500 VOC/NOx Index (adaptive baseline; 1 Hz) — vendored BSD-3 | ADR-0020 | any (pure math) | none (pure) | **shared (vendored) → [firmware/components/](../firmware/components/sensirion_gas_index/)** — c6-bench |
+| `ha_gas` | Node glue: I2C bus + SGP40 (`sgp40`) at 1 Hz → VOC Index (`sensirion_gas_index`) → node-local MQTT publish; dual-role alongside BLE relay; no-op-safe if unwired | ADR-0020 | c6-bench (composes `sgp40`+`sensirion_gas_index`) | — | **fork (node-local)** |
 
 ## Extraction order (ADR-0020 Stage 1)
 
