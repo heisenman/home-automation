@@ -35,11 +35,16 @@
 #include "driver/gpio.h"
 #include "bsp_display.h"
 #include "ui_tiles.h"
-#include "ble_spike.h"
+#include "ha_ble_scan.h"
+#include "esp_hosted.h"
 #include "esp_hosted_ota.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v32-battadc"
+#define APP_BUILD_TAG "v33-blerelay"
+// Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
+// decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
+// nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
+#define BLE_NODE "d1001-beachhead"
 #define BSP_BUTTON_IN  GPIO_NUM_3     // back-of-device button, active-low w/ pull-up
 static const char *TAG = "beachhead";
 
@@ -52,8 +57,8 @@ static const char *TAG = "beachhead";
 #define T_DEBUG  "d1001-beachhead/cmd/debug"
 #define T_DISP   "d1001-beachhead/display"       // <- retained display bring-up result
 #define T_DISPC  "d1001-beachhead/cmd/display"    // -> "on" triggers display bring-up (default off)
-#define T_BLEC   "d1001-beachhead/cmd/ble"        // -> "on" triggers Spike-0 BLE observer (default off)
-#define T_BLE    "d1001-beachhead/ble"            // <- BLE spike telemetry (adv counts)
+#define T_BLEC   "d1001-beachhead/cmd/ble"        // -> "on" starts the passive BLE relay (default off)
+#define T_BLE    "d1001-beachhead/ble"            // <- BLE relay telemetry (adv total / decoded / rssi)
 #define T_SLVOTA "d1001-beachhead/cmd/slaveota"   // -> URL of C6 slave app bin (network_adapter.bin)
 #define T_SLVST  "d1001-beachhead/slaveota"       // <- C6 slave-OTA result
 #define T_I2CSC  "d1001-beachhead/cmd/i2cscan"    // -> (any) probe both I2C buses (find fuel gauge)
@@ -62,7 +67,7 @@ static const char *TAG = "beachhead";
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
-static void ble_task(void *pv);         // Spike 0 BLE observer task (defined near start_mqtt)
+static void ble_task(void *pv);         // passive BLE relay task (defined near start_mqtt)
 static void slave_ota_task(void *pv);   // C6 slave-OTA task (defined near start_mqtt)
 static void i2cscan_task(void *pv);     // I2C bus scan (fuel-gauge ID) — defined near start_mqtt
 static void battdump_task(void *pv);    // 0x36 register dump (chip ID) — defined near start_mqtt
@@ -294,7 +299,7 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
         } else if (tl == (int)strlen(T_BLEC) && strncmp(e->topic, T_BLEC, tl) == 0) {
             bool on = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
                                    e->data[0] == 't' || e->data[0] == 'T'));
-            if (on) xTaskCreate(ble_task, "ble", 6144, NULL, 3, NULL);   // Spike 0, on demand
+            if (on) xTaskCreate(ble_task, "ble", 6144, NULL, 3, NULL);   // passive relay, on demand
         } else if (tl == (int)strlen(T_SLVOTA) && strncmp(e->topic, T_SLVOTA, tl) == 0) {
             char *url = strndup(e->data, dl);
             if (url) xTaskCreate(slave_ota_task, "slaveota", 8192, url, 5, NULL);   // C6 reflash
@@ -315,22 +320,78 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
     }
 }
 
-// Spike 0: bring up the BLE observer, then publish a compact telemetry line every
-// 2s (adv total / unique MACs / last RSSI / running). Own task — never blocks the
-// MQTT callback. Non-fatal: if ble_spike_start() bailed, we still publish zeros so
-// the FAIL is visible on the bus.
+// ── Platform seams for the shared ha_ble_scan observer (ADR-0020) ────────────────
+// (1) controller_init: on the panel the BLE controller lives on the C6 and is driven
+//     over esp-hosted VHCI — bring it up before NimBLE (edge nodes pass NULL / native).
+static esp_err_t panel_bt_controller_init(void)
+{
+    esp_err_t e = esp_hosted_bt_controller_init();
+    if (e != ESP_OK) { ESP_LOGE(TAG, "hosted bt_controller_init failed 0x%x", e); return e; }
+    e = esp_hosted_bt_controller_enable();
+    if (e != ESP_OK) { ESP_LOGE(TAG, "hosted bt_controller_enable failed 0x%x", e); return e; }
+    return ESP_OK;
+}
+
+// (2) on_reading sink: publish each fresh decoded meter as a canonical edge advert,
+//     home/edge/<BLE_NODE>/<macflat>/adv, byte-for-byte the shape ha_mqtt.c emits on the
+//     c3/c6/s3 nodes (schema 1, transport "ble-adv"). No ha_relay gate yet — the panel is
+//     an unmanaged extra relay for now; ADR-0015 coverage assignment comes with the peer-
+//     node migration. ts left empty: the panel has no wall-clock (no SNTP) and the edge
+//     path already tolerates ts="" (ingest stamps arrival time). Float pre-formatted to
+//     avoid any newlib nano %f dependency.
+static void panel_publish_adv(const char *mac_str, const sb_reading_t *r, int rssi, void *user)
+{
+    (void)user;
+    if (!s_client || !s_mqtt_up) return;
+
+    char mf[13]; int j = 0;                       // macflat: strip the colons
+    for (const char *p = mac_str; *p && j < 12; p++) if (*p != ':') mf[j++] = *p;
+    mf[j] = '\0';
+
+    char tbuf[16];                                // temperature, sign-safe, 1 decimal
+    int t10 = (int)(r->temperature_c * 10.0f + (r->temperature_c >= 0 ? 0.5f : -0.5f));
+    bool neg = t10 < 0; int at = neg ? -t10 : t10;
+    snprintf(tbuf, sizeof(tbuf), "%s%d.%d", neg ? "-" : "", at / 10, at % 10);
+
+    char metrics[96];
+    if (r->battery_pct >= 0)
+        snprintf(metrics, sizeof(metrics), "{\"temperature_c\":%s,\"humidity_pct\":%d,\"battery_pct\":%d}",
+                 tbuf, r->humidity_pct, r->battery_pct);
+    else
+        snprintf(metrics, sizeof(metrics), "{\"temperature_c\":%s,\"humidity_pct\":%d}",
+                 tbuf, r->humidity_pct);
+
+    char topic[80];
+    snprintf(topic, sizeof(topic), "home/edge/%s/%s/adv", BLE_NODE, mf);
+    char payload[320];
+    int n = snprintf(payload, sizeof(payload),
+        "{\"schema\":1,\"node\":\"%s\",\"mac\":\"%s\",\"device_type\":\"%s\","
+        "\"ts\":\"\",\"transport\":\"ble-adv\",\"metrics\":%s,\"meta\":{\"rssi\":%d}}",
+        BLE_NODE, mac_str, r->device_type, metrics, rssi);
+    if (n <= 0 || n >= (int)sizeof(payload)) return;
+    esp_mqtt_client_publish(s_client, topic, payload, n, 1, false);
+}
+
+// Passive BLE relay: start the shared observer (VHCI controller + adv-publish sink),
+// then publish a compact telemetry line every 2s. Own task — never blocks the MQTT
+// callback. Non-fatal: if bring-up bailed we still publish running:false so it's visible.
 static void ble_task(void *pv)
 {
-    ble_spike_start();
+    ha_ble_scan_cfg_t cfg = {
+        .controller_init = panel_bt_controller_init,   // VHCI (panel); edge passes NULL
+        .on_reading      = panel_publish_adv,
+        .user            = NULL,
+    };
+    ha_ble_scan_start(&cfg);
     for (;;) {
-        uint32_t total = 0, uniq = 0; int8_t rssi = 0;
-        ble_spike_stats(&total, &uniq, &rssi);
+        uint32_t total = 0, decoded = 0; int8_t rssi = 0;
+        ha_ble_scan_stats(&total, &decoded, &rssi);
         if (s_client && s_mqtt_up) {
             char msg[192];
             snprintf(msg, sizeof(msg),
-                     "{\"build\":\"%s\",\"running\":%s,\"adv_total\":%u,\"uniq_macs\":%u,\"last_rssi\":%d}",
-                     APP_BUILD_TAG, ble_spike_running() ? "true" : "false",
-                     (unsigned)total, (unsigned)uniq, rssi);
+                     "{\"build\":\"%s\",\"node\":\"%s\",\"running\":%s,\"adv_total\":%u,\"decoded\":%u,\"last_rssi\":%d}",
+                     APP_BUILD_TAG, BLE_NODE, ha_ble_scan_running() ? "true" : "false",
+                     (unsigned)total, (unsigned)decoded, rssi);
             esp_mqtt_client_publish(s_client, T_BLE, msg, 0, 1, 1);   // qos1 retained
         }
         vTaskDelay(pdMS_TO_TICKS(2000));
