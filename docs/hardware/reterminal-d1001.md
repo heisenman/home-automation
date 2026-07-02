@@ -63,9 +63,9 @@ not reverse-engineer from I2C scans or LLM overviews.** Guessing produced multip
   drops below the input budget (powered off / deep-idle on charger).
 
 ## Battery / rail sensing (ADC — our `ha_battery` component)
-- **Battery voltage:** ADC1 **CH2**, ×2 divider, 12-bit / 12 dB / curve-fit cali, sorted-avg.
-  *(A web/AI overview claimed GPIO7 / ADC_CHANNEL_6 — WRONG for this board; our CH2 is empirically
-  validated: tracks charge, cross-checked against the USB rail.)*
+- **Battery voltage:** net `READ_VBAT` → **P4 GPIO18** = **ADC1 CH2** (schematic-confirmed via the
+  PowerManagement hierarchical sheet). ×2 divider, 12-bit / 12 dB / curve-fit cali, sorted-avg.
+  Our `adc_ch_batt = 2` is correct. *(A web/AI overview claimed GPIO7 / ADC_CHANNEL_6 — WRONG.)*
 - **USB/VSYS rail voltage:** ADC1 **CH1**, ×2 divider. Reads ~4.8 V ⇒ the board runs at 5 V (not a
   high-voltage PD contract).
 - **Board temp:** LSM6DS3 IMU internal temp (`raw/256 + 25`).
@@ -78,12 +78,29 @@ raw bus scan; it is AUDIO, not a current monitor), **GSL3670 touch**, plus confi
 - **Full address→part reconciliation is still OPEN** (some scan addresses not yet matched to schematic
   refs — 0x18/0x25/0x4B/0x52/0x71/0x36). Resolve against `I2CTreeDiagram` before relying on any of them.
 
-## GPIO / expander map (as used by firmware today)
-- **PCA9535 @0x20** (I2C-1, owned by display BSP): pin6 = `BAT_READ_EN` (assert ADC sense divider,
-  active-high); pin10 = `CHG_ENBn` (charge enable, active-**low**).
-- P4 GPIOs: **GPIO15** = charge `STAT` (active-low), **GPIO4** = `VSYS_PG`, **GPIO3** = back button
-  (active-low), **GPIO46** = SD VDD switch (`BSP_SD_PWR_EN`).
-- SDMMC: single P4 host — SD on **slot 0** (GPIO39–44), C6 esp-hosted on **slot 1** (GPIO6–11).
+## GPIO / expander map (SCHEMATIC-CONFIRMED — PowerManagement hierarchical sheet)
+The PCA9535 @0x20 (U27) exposes `EXP_GPO0..15`; **net `EXP_GPO<n>` = port P(n/8).(n%8) = driver
+bit n** (P0.0–P0.7 = bits 0–7, P1.0–P1.7 = bits 8–15). So `EXP_GPO10` = P1.2 = physical pin 12 =
+driver `1<<10`. Power-relevant lines:
+
+| Signal (PowerManagement) | Net | Phys | `ha_battery` field | ok |
+|---|---|---|---|---|
+| `EN_BAT_CHGn` charge enable (active-low, 100k pull-down) | `EXP_GPO10` (P1.2) | pin12 | `exp_charge_en_mask=1<<10` | ✅ |
+| `EN_READ_VBAT` sense-divider enable (active-high) | `EXP_GPO6` (P0.6) | — | `exp_read_en_mask=1<<6` | ✅ |
+| `CHARGE_STATE` (STAT in, active-low) | — | GPIO15 | `gpio_charge=15` | ✅ |
+| `VSYS_PG` power-good | — | GPIO4 | `gpio_vsys_pg=4` | ✅ |
+| `READ_VBAT` battery analog | — | GPIO18 (ADC1_CH2) | `adc_ch_batt=2` | ✅ |
+| `EN_LCD_PWR` | `EXP_GPO7` | — | (display BSP) | |
+| `EN_VDD_CAM` | `EXP_GPO1` | — | | |
+| `PCIE_PWR_EN` | `EXP_GPO15` | — | | |
+| `LCD_PWM` | — | GPIO14 | (display BSP) | |
+
+**⇒ every pin in the `ha_battery` D1001 preset is verified against the schematic.** The charge-enable
+was the suspected culprit; it is wired and driven correctly. Charging is limited only by the BQ25616
+hardware (ICHG resistor + VINDPM), which firmware cannot change.
+- Other P4 GPIOs (firmware): **GPIO3** = back button (active-low), **GPIO46** = SD VDD switch.
+- SDMMC: single P4 host — SD on **slot 0**, C6 esp-hosted on **slot 1** (uses named `SDIO_CLK/CMD/D0–D3`
+  nets, NOT GPIO10 — no conflict with the charge enable).
 
 ## OPEN items (do NOT guess — read the schematic or ask)
 1. **`ILIM` / `ICHG` resistor values** → the *designed* input-current-limit and charge-current in
