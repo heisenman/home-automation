@@ -23,8 +23,12 @@ the unit of execution (`tools/agents/coord.py`); this doc is the *why* and the *
 - **210 (`ha-dev`) is the sole live dictator** since 2026-06-24: keepalived/ha-controller/ha-api/
   ha-relay-coordinator/heartbeat all active, holds VIP `.200` + host `.210`. `.245` = hands-off
   fileserver, being reshaped into the warm standby.
-- **Edge fleet:** S3 `s3-crawlspace` + C6 `c6-bench` deployed (Phase B relay-filter live); C3 fork builds,
-  no board.
+- **Edge fleet:** S3 `s3-crawlspace` (`v16-gas`) + C6 `c6-bench` (`v13-gas`) deployed (Phase B relay-filter
+  live); C3 fork builds, no board. **Both now dual-role** (BLE relay **+** a node-local SGP-40 VOC gas lane,
+  ADR-0020 shared components): `c6-bench` publishes `home/h_bedroom/hbed_c6_gas` (it was physically relocated
+  to the H bedroom as a permanent node), `s3-crawlspace` publishes `home/kitchen/s3_kitchen_gsens`. Gas
+  publishes independently of the relay gate. ⚠ `c6-bench`'s BLE relay is still the **epoch-3 `relay-none`
+  fossil** from when it fed `.245` — its H-bedroom coverage must be re-derived (see `c6-shared-migration-ota`).
 - **Just landed (2026-06-25):** `dictator-config-completeness` (config set is now enumerated, synced,
   asserted, and warned-on-boot) and `ts-replay-nonce` (per-node monotonic `(ts,seq)` anti-replay, live-
   verified on C6; S3 rollout held as `s3-nonce-ota` pending ops's S3 convergence).
