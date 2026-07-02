@@ -94,6 +94,15 @@ antenna issue — `running:false` means we never reached the radio (antenna woul
   `cmd/ble on` — PASS = `running:true` + `adv_total` climbs. Recovery if the C6 link regresses: physical C6
   UART reflash (bench/USB access on hand).
 
+**⛔ 2026-07-01 result: over-SDIO reflash is IMPOSSIBLE on this unit.** `cmd/slaveota` (on v27) transferred
+all 1,156,208 bytes (begin + every write OK) then **failed `0x106` at finalize** (`ota_end`/`activate`); C6
+never rebooted, WiFi stayed `rc:0`. Root cause (migration_guide): **slave-OTA requires slave > 2.5.X; the
+factory C6 is 2.3.0**, which predates the OTA-finalize RPC. There is no over-the-wire shortcut — the C6 must
+be flashed **serially over UART once**. Hugh has a programmer + pogo pins (hardware access OK). **→ Full
+step-by-step: [C6-SLAVE-FLASH-PROCEDURE.md](C6-SLAVE-FLASH-PROCEDURE.md).** After that one serial flash the
+slave is 2.12.9 (matched) and future updates CAN use `cmd/slaveota`. Firmware ladder now on `.8`:
+`v27-slaveota` (adds `cmd/slaveota`); the panel is fully functional, just BLE-blocked until the C6 flash.
+
 ### Spike 0 (original) — BLE-over-hosted feasibility (DO FIRST; cheap, decisive)
 On the panel beachhead (`~/reterminal-dev/d1001-beachhead`), enable NimBLE host on the P4 + the esp-hosted
 BLE transport, register a passive **observer** scan, and log any adverts received.
