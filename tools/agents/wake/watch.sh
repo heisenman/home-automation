@@ -49,3 +49,7 @@ WAKE SIGNAL PAYLOAD: $msg" \
     && log "runner finished ok" || log "runner exited nonzero (see log)"
 done
 log "subscription ended (broker down?) — systemd will restart"
+# Exit nonzero: the subscription dropping is a failure, not a clean shutdown. mosquitto_sub returns 0 when
+# the broker is unreachable at connect time, so without this the script would exit 0 and a Restart=on-failure
+# policy would never restart it (the original reboot bug). Restart=always also covers this now.
+exit 1
