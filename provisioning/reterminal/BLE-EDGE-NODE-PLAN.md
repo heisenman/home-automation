@@ -68,6 +68,32 @@ Also confirm the 1 kHz tick didn't disturb the display and WiFi/MQTT stay `rc:0`
 `esp_hosted` 2.12↔2.3 mismatch stress-test). Held for Hugh to drive (flashing a live panel + BLE sensors
 are in his space; tick change could disturb the display non-recoverably since MQTT-connect self-marks-valid).
 
+### Spike 0 HW result (2026-07-01): host PROVEN, factory C6 slave was the wall → fixed via C6 reflash
+OTA'd `v26-blespike` to `.8`; `cmd/ble on` → **`bt_controller_init failed 0x106` (ESP_ERR_NOT_SUPPORTED)**.
+Traced: `esp_hosted_bt_controller_init` → `rpc_bt_controller_init` sends a `FEATURE_BT/BT_INIT`
+feature-control RPC to the slave and returns the slave's answer. A clean reject in **6 ms** (not a timeout)
+= **the factory C6 NCP firmware (esp_hosted 2.3.0) doesn't share BT** (its `ESP_HOSTED_CP_BT` was off /
+too old). The P4 host side was 100% correct — NimBLE-over-VHCI built, inited, and asked the controller to
+come up. Display + WiFi survived the 1 kHz tick change (`display:true`, `wifi_rc:0`, `mqtt_rc:0`). NOT an
+antenna issue — `running:false` means we never reached the radio (antenna would be `running:true`+0 adverts).
+
+**The fix (chosen: build+flash now) — matched 2.12.9 C6 slave with BT sharing, flashed over SDIO:**
+- Built the slave from the vendored `managed_components/espressif__esp_hosted/slave/` project (copied to
+  off-git `~/reterminal-dev/c6-slave/`): `idf.py set-target esp32c6 && idf.py build`. Stock C6 defaults
+  already give **`ESP_HOSTED_CP_BT=y` + `CP_WIFI=y` + `BT_CONTROLLER_ONLY=y` + `BT_LE_HCI_INTERFACE_USE_RAM=y`**
+  + SDIO transport on C6 pins 18–23 (the Espressif reference wiring Seeed's factory slave was built from →
+  matched by construction). Artifact: `build/network_adapter.bin` (~1.13 MB, app-only). This also lands a
+  **matched 2.12.9 host+slave**, retiring the 2.12↔2.3 mismatch.
+- Flash mechanism = **host-driven slave-OTA over SDIO** (no rewiring, no physical C6 access). The URL one-call
+  `esp_hosted_slave_ota()` is only a deprecated decl (moved to an unvendored example); the linked API is the
+  low-level `esp_hosted_slave_ota_begin/write/end/activate`. Panel firmware **`v27-slaveota`** adds
+  `cmd/slaveota <url>`: streams the bin via `esp_http_client` in 4 KB chunks → writes to the C6's inactive
+  OTA slot → activates (C6 reboots). Uses the C6's OWN partition scheme, so a layout mismatch errors rather
+  than bricks; result on `d1001-beachhead/slaveota`.
+- **Deploy:** serve `network_adapter.bin` on `:8090`; `mosquitto_pub .../cmd/slaveota <url>`; then re-run
+  `cmd/ble on` — PASS = `running:true` + `adv_total` climbs. Recovery if the C6 link regresses: physical C6
+  UART reflash (bench/USB access on hand).
+
 ### Spike 0 (original) — BLE-over-hosted feasibility (DO FIRST; cheap, decisive)
 On the panel beachhead (`~/reterminal-dev/d1001-beachhead`), enable NimBLE host on the P4 + the esp-hosted
 BLE transport, register a passive **observer** scan, and log any adverts received.

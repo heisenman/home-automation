@@ -36,9 +36,10 @@
 #include "bsp_display.h"
 #include "ui_tiles.h"
 #include "ble_spike.h"
+#include "esp_hosted_ota.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v26-blespike"
+#define APP_BUILD_TAG "v27-slaveota"
 #define BSP_BUTTON_IN  GPIO_NUM_3     // back-of-device button, active-low w/ pull-up
 static const char *TAG = "beachhead";
 
@@ -53,10 +54,13 @@ static const char *TAG = "beachhead";
 #define T_DISPC  "d1001-beachhead/cmd/display"    // -> "on" triggers display bring-up (default off)
 #define T_BLEC   "d1001-beachhead/cmd/ble"        // -> "on" triggers Spike-0 BLE observer (default off)
 #define T_BLE    "d1001-beachhead/ble"            // <- BLE spike telemetry (adv counts)
+#define T_SLVOTA "d1001-beachhead/cmd/slaveota"   // -> URL of C6 slave app bin (network_adapter.bin)
+#define T_SLVST  "d1001-beachhead/slaveota"       // <- C6 slave-OTA result
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
-static void ble_task(void *pv);   // Spike 0 BLE observer task (defined near start_mqtt)
+static void ble_task(void *pv);         // Spike 0 BLE observer task (defined near start_mqtt)
+static void slave_ota_task(void *pv);   // C6 slave-OTA task (defined near start_mqtt)
 static volatile bool s_debug = false;         // <-- diagnostic firehose, default OFF
 static EventGroupHandle_t s_evt;
 #define WIFI_CONNECTED_BIT BIT0
@@ -281,6 +285,9 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
             bool on = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
                                    e->data[0] == 't' || e->data[0] == 'T'));
             if (on) xTaskCreate(ble_task, "ble", 6144, NULL, 3, NULL);   // Spike 0, on demand
+        } else if (tl == (int)strlen(T_SLVOTA) && strncmp(e->topic, T_SLVOTA, tl) == 0) {
+            char *url = strndup(e->data, dl);
+            if (url) xTaskCreate(slave_ota_task, "slaveota", 8192, url, 5, NULL);   // C6 reflash
         } else if (tl == (int)strlen(T_DEBUG) && strncmp(e->topic, T_DEBUG, tl) == 0) {
             s_debug = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
                                    e->data[0] == 't' || e->data[0] == 'T'));   // on/1/true
@@ -314,6 +321,65 @@ static void ble_task(void *pv)
         }
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
+}
+
+// C6 slave-OTA: the P4 fetches the matched 2.12.9 slave image (with CP_BT=y) over
+// HTTP and writes it to the C6's inactive OTA slot over the SDIO link, then reboots
+// the C6 into it. The C6's own partition scheme is used, so a layout mismatch errors
+// rather than bricks. Reboots the C6 -> WiFi/SDIO blips briefly, then re-establishes.
+#define SLV_CHUNK 4000
+static void slave_ota_task(void *pv)
+{
+    char *url = (char *)pv;
+    esp_err_t e = ESP_FAIL;
+    int total = 0, r = 0;
+    uint8_t *buf = NULL;
+    bool began = false;
+    ESP_LOGW(TAG, "C6 slave-OTA: fetching %s", url);
+    if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_SLVST, "{\"slave_ota\":\"begin\"}", 0, 1, 1);
+
+    esp_http_client_config_t hc = { .url = url, .timeout_ms = 20000 };
+    esp_http_client_handle_t cl = esp_http_client_init(&hc);
+    if (!cl) goto done;
+    if ((e = esp_http_client_open(cl, 0)) != ESP_OK) { ESP_LOGE(TAG, "http open 0x%x", e); goto cleanup; }
+    esp_http_client_fetch_headers(cl);
+
+    if ((e = esp_hosted_slave_ota_begin()) != ESP_OK) { ESP_LOGE(TAG, "slave_ota_begin 0x%x", e); goto cleanup; }
+    began = true;
+    buf = malloc(SLV_CHUNK);
+    if (!buf) { e = ESP_ERR_NO_MEM; goto cleanup; }
+
+    while ((r = esp_http_client_read(cl, (char *)buf, SLV_CHUNK)) > 0) {
+        if ((e = esp_hosted_slave_ota_write(buf, r)) != ESP_OK) {
+            ESP_LOGE(TAG, "slave_ota_write 0x%x @ %d", e, total); break;
+        }
+        total += r;
+        if ((total % 131072) < SLV_CHUNK) {
+            char pm[96]; snprintf(pm, sizeof(pm), "{\"slave_ota\":\"progress\",\"bytes\":%d}", total);
+            if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_SLVST, pm, 0, 0, 0);
+            ESP_LOGW(TAG, "C6 slave-OTA progress %d", total);
+        }
+    }
+    if (r < 0) { e = ESP_FAIL; ESP_LOGE(TAG, "http read err %d", r); }
+
+    if (e == ESP_OK && r == 0 && total > 0) {
+        if ((e = esp_hosted_slave_ota_end()) == ESP_OK) {
+            ESP_LOGW(TAG, "C6 slave-OTA end OK (%d bytes); activating — C6 will reboot", total);
+            e = esp_hosted_slave_ota_activate();   // reboots the C6 into the new slot
+        } else ESP_LOGE(TAG, "slave_ota_end 0x%x", e);
+    }
+cleanup:
+    if (buf) free(buf);
+    if (cl) { esp_http_client_close(cl); esp_http_client_cleanup(cl); }
+done:
+    (void)began;
+    { char msg[128];
+      snprintf(msg, sizeof(msg), "{\"slave_ota\":\"%s\",\"err\":\"0x%x\",\"bytes\":%d}",
+               e == ESP_OK ? "complete" : "failed", (int)e, total);
+      ESP_LOGW(TAG, "C6 slave-OTA result: %s (0x%x, %d bytes)", e == ESP_OK ? "OK" : "FAIL", (int)e, total);
+      if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_SLVST, msg, 0, 1, 1); }
+    free(url);
+    vTaskDelete(NULL);
 }
 
 static void start_mqtt(void)
