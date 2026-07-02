@@ -19,7 +19,10 @@ which). Target = real shared IDF components (ADR-0020); today most are shared by
 | `ha_ota` | Signed, host-pinned, hash-verified A/B OTA w/ rollback | — | any | app_update | shared |
 | `ha_led` | Operability LED (S3 WS2812) | — | S3 only | rmt | platform |
 | `app_main` | Orchestration: nvs → config → netif(once) → net → sntp → mqtt → ble_scan → ota-confirm | — | per-device shim | — | **drifted (2×)** |
-| `ha_battery` *(planned)* | Fuel-gauge read → `batt_pct`/`charging` in status heartbeat | — | panel-class (has battery) | i2c | **new** |
+| `ha_battery` | Gauge (ADC→SoC LUT, smoothed) + IMU board-temp + thermal-gated charge mgr **+ restart watchdog** | ADR-0020 | any (board wiring is `ha_battery_cfg_t`; `_d1001_cfg()` preset) | esp_adc, io_expander, i2c (IMU) | **shared → [firmware/components/](../firmware/components/ha_battery/)** — d1001-panel |
+| `ha_sdcard` | microSD mount (SDMMC+FAT); card VDD/LDO/slot are config | ADR-0020 | ESP32-P4 SDMMC (D1001 preset: slot 0, LDO ch4, VDD GPIO46); coexists with C6 SDIO on slot 1 | fatfs, sdmmc | **shared → [firmware/components/](../firmware/components/ha_sdcard/)** — d1001-panel |
+| `fs_ops` | SD file-ops over MQTT (ls/stat/read/write/rm/mkdir/df); worker+queue, base64, `/sdcard`-scoped | ADR-0020 | any node with a mounted FS + MQTT sink | fatfs, json, mbedtls | **shared → [firmware/components/](../firmware/components/fs_ops/)** — d1001-panel |
+| `bat_profile` | Panel glue: mount (`ha_sdcard`) + append battery telemetry CSV every 15 s + MQTT mirror | ADR-0020 | panel-local (composes `ha_sdcard`+`ha_battery`) | — | **fork (panel-local)** |
 
 ## Extraction order (ADR-0020 Stage 1)
 

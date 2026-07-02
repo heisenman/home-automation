@@ -9,44 +9,20 @@
 #pragma once
 #include "esp_err.h"
 #include <stddef.h>
+#include <stdbool.h>
 #include "lvgl.h"
+#include "esp_io_expander.h"
+#include "driver/i2c_master.h"
 
 // Diagnostic: probe both I2C buses and write ACKing 7-bit addresses to `out`
-// (e.g. "i2c0:0x40 i2c1:0x20,0x51,0x62"). Used to identify the battery fuel gauge.
+// (e.g. "i2c0:0x40 i2c1:0x20,0x51,0x62"). Used to identify I2C devices.
 void bsp_i2c_scan(char *out, size_t outlen);
 
-// Battery (D1001): NO I2C fuel gauge — ADC1 ch2 x2 divider, gated behind PCA9535 pin 6
-// (BAT_READ_EN). Fills any non-NULL out param: soc_pct 0..100 (smoothed), volts (smoothed
-// cell voltage), charging (GPIO15 active-low). Returns ESP_OK on a good read, else ESP_FAIL.
-#include <stdbool.h>
-esp_err_t bsp_battery_read(int *soc_pct, float *volts, bool *charging);
-
-// Full instantaneous battery telemetry for ADC profiling (bat_profile.c). All fields raw
-// so the discharge log can be re-fit off-line; `soc`/`batt_mv_smoothed` are the reported
-// (smoothed) values, everything else is this-instant. Returns ESP_FAIL before the ADC inits.
-typedef struct {
-    int  raw_ch2;          // trimmed-avg raw ADC counts, battery ch2
-    int  cali_mv;          // calibrated mV pre-divider (battery)
-    int  batt_mv;          // battery mV (cali x2), instantaneous
-    int  batt_mv_smoothed; // reported/smoothed battery mV
-    int  usb_mv;           // USB/VSYS mV (ch1 x2) — >~4000 ⇒ charger cable present
-    int  vsys_pg;          // GPIO4 raw level (power-good; polarity logged, not interpreted)
-    bool charging;         // GPIO15 active-low (low=charging)
-    int  soc;              // LUT %% from smoothed mV
-    int  temp_dc;          // board temp in deci-°C (LSM6DS3), -9999 if unavailable
-    bool have_temp;        // true if temp_dc is valid
-    bool charge_en;        // true if the charger is currently enabled (thermal/voltage gated)
-} bsp_batt_sample_t;
-esp_err_t bsp_battery_sample(bsp_batt_sample_t *out);
-
-// Start the thermal-gated charge manager (idempotent). Charging stays OFF until the cable is
-// present, the cell is below full, and the board temp is in a safe window. Fail-safe: no temp
-// reading ⇒ no charge. Call once after the display/expander + I2C are available.
-void bsp_battery_charge_start(void);
-
-// Diagnostic: dump key MAX17048 registers from 0x36 as hex into `out`
-// (e.g. "02=... 04=... 08=..."). VERSION (0x08)=0x001x confirms a real MAX17048.
-void bsp_battery_dump(char *out, size_t outlen);
+// This BSP owns the shared PCA9535 expander + I2C-1 bus (display rails, touch). The battery
+// component (ha_battery) needs both handles; app_main injects them into ha_battery_cfg. Valid
+// once bsp_display_predark() has run (it brings up the bus + expander at boot).
+esp_io_expander_handle_t bsp_io_expander(void);
+i2c_master_bus_handle_t  bsp_i2c1(void);
 
 // Call FIRST in app_main (before WiFi): force the panel dark at boot so the power rails
 // don't free-run through the bootloader->app window and strobe the screen (photosensitivity

@@ -57,6 +57,10 @@ MODULES = [
     ("ha_led", {"sources": ["ha_led.c"], "component": None}),
     ("ha_relay", {"sources": ["ha_relay.c"], "component": None}),
     ("display", {"sources": ["bsp_display.c", "ui_tiles.c"], "component": None}),
+    ("ha_sdcard", {"sources": [], "component": "ha_sdcard"}),
+    ("fs_ops", {"sources": ["fs_ops.c"], "component": "fs_ops"}),
+    ("bat_profile", {"sources": ["bat_profile.c"], "component": None}),
+    ("ha_battery", {"sources": [], "component": "ha_battery"}),
 ]
 
 _SECTION_KEYWORDS = {

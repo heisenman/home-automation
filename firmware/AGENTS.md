@@ -22,6 +22,9 @@ firmware/
 |--------|------|-------------|-------|
 | `switchbot_decode` | **`firmware/components/`** ✓ | **all builds** (panel + c3/c6/s3) | pure, host-tested; verbatim lift. Fork copies retired fleet-wide. |
 | `ha_ble_scan` | **`firmware/components/`** ✓ | **all builds** (panel + c3/c6/s3) | shared NimBLE observer; controller-init + publish sink + `shared_radio` duty-cycle are caller hooks/flags (native vs VHCI; WiFi coexistence). The s3 duty-cycle drift is reconciled here. Fork copies retired. |
+| `ha_sdcard` | **`firmware/components/`** ✓ | d1001-panel | microSD mount (SDMMC+FAT); board pins/power/LDO are `ha_sdcard_cfg_t`. Coexists with the C6 SDIO (shared P4 SDMMC host). |
+| `fs_ops` | **`firmware/components/`** ✓ | d1001-panel | generic SD file-ops over MQTT (ls/stat/read/write/rm/mkdir/df); device-agnostic. |
+| `ha_battery` | **`firmware/components/`** ✓ | d1001-panel | gauge (ADC→SoC) + IMU temp + thermal-gated charge + restart watchdog; board wiring is `ha_battery_cfg_t` (`_d1001_cfg()` preset), expander/I2C handles injected by the display BSP. |
 
 **Fully migrated (ADR-0020 Stage 2 complete for the BLE core).** Consumers link the shared components via
 `REQUIRES` + `EXTRA_COMPONENT_DIRS ../../firmware/components` (edge nodes) or `components/<name>` **symlinks**

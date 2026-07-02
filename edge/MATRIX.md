@@ -29,6 +29,10 @@ Which module each **real firmware build** links. Pairs with [MODULES.md](MODULES
 | `ha_led` | — | — | fork | — |
 | `ha_relay` | fork | fork | fork | — |
 | `display` | — | — | — | fork |
+| `ha_sdcard` | — | — | — | shared |
+| `fs_ops` | — | — | — | shared |
+| `bat_profile` | — | — | — | fork |
+| `ha_battery` | — | — | — | shared |
 
 <!-- /GENERATED:module-matrix -->
 

@@ -35,6 +35,7 @@
 #include "driver/gpio.h"
 #include "bsp_display.h"
 #include "bat_profile.h"
+#include "ha_battery.h"
 #include "fs_ops.h"
 #include "ui_tiles.h"
 #include "ha_ble_scan.h"
@@ -42,7 +43,7 @@
 #include "esp_hosted_ota.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v36-fsops"
+#define APP_BUILD_TAG "v37-modular"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -126,8 +127,8 @@ static void publish_status(void)
     const esp_partition_t *run = esp_ota_get_running_partition();
     wifi_ap_record_t ap; int rssi = 0;
     if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) rssi = ap.rssi;
-    bsp_batt_sample_t bs = {0};
-    bool have_batt = (bsp_battery_sample(&bs) == ESP_OK);
+    ha_batt_sample_t bs = {0};
+    bool have_batt = (ha_battery_sample(&bs) == ESP_OK);
     if (have_batt && bsp_display_ready())              // only touch LVGL once it's initialized
         ui_tiles_set_battery(bs.soc, bs.charging);     // panel top-bar indicator
     char msg[380];
@@ -486,7 +487,7 @@ static void i2cscan_task(void *pv)
 static void battdump_task(void *pv)
 {
     char res[224];
-    bsp_battery_dump(res, sizeof(res));
+    ha_battery_dump(res, sizeof(res));
     ESP_LOGW(TAG, "battdump: %s", res);
     if (s_client && s_mqtt_up) {
         char msg[288];
@@ -586,7 +587,9 @@ void app_main(void)
     xEventGroupWaitBits(s_evt, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     ESP_LOGI(TAG, "WiFi up — starting MQTT");
     start_mqtt();
-    bsp_battery_charge_start();                // FIRST sampler: creates the battery mutex + charger
+    ha_battery_cfg_t bcfg = ha_battery_d1001_cfg(bsp_io_expander(), bsp_i2c1());
+    ha_battery_init(&bcfg);                    // ADC/IMU/charge config (handles from the display BSP)
+    ha_battery_charge_start();                 // thermal-gated charger + restart watchdog
     xTaskCreate(heartbeat_task, "hb", 4096, NULL, 3, NULL);
     xTaskCreate(button_task, "btn", 3072, NULL, 3, NULL);   // back-button screen toggle
     bat_profile_start(battprofile_publish);   // mount SD + log the battery discharge curve (non-fatal)
