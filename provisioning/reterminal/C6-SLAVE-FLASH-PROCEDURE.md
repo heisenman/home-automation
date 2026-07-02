@@ -74,9 +74,13 @@ esptool.py -p /dev/ttyUSB0 --chip esp32c6 -b 460800 --before no_reset --after ha
   0x10000 network_adapter.bin
 ```
 
-### 5. Reconnect + power-cycle the whole reTerminal
-Remove the pogo pins. Power-cycle the unit (USB re-plug) so the P4 exits its bootloader and re-inits the C6.
-The panel boots `v27-slaveota`; esp_hosted should now handshake a **2.12.9** slave.
+### 5. Reconnect + reset the whole reTerminal
+Remove the pogo pins, then reset so the P4 exits its bootloader and re-inits the C6.
+**⚠️ The D1001 has an onboard battery — unplugging USB-C does NOT power it off** (the battery holds it up).
+Use the physical **RST/reset button** (or let the battery drain) for a true cold boot; a USB re-plug alone
+may only trigger a reset via the charge circuit, not a full power-down. Either way the panel boots
+`v27-slaveota` and esp_hosted handshakes the **2.12.9** slave. (Verified 2026-07-01: the C6 also re-inits
+cleanly from scratch on every `cmd/slaveota` activate-reboot, so a full cold boot isn't strictly required.)
 
 ### 6. Verify BLE (the payoff)
 ```sh
