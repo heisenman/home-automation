@@ -35,6 +35,8 @@ static const char *TAG = "disp";
 #define EXP_LCD_BL_EN    (1ULL << 7)
 #define EXP_PWR_HOLD     (1ULL << 8)   // vdd_3v3 hold
 #define EXP_TOUCH_RST    (1ULL << 12)
+#define EXP_BAT_READ_EN  (1ULL << 6)   // battery ADC sense-divider enable (active-high)
+#define EXP_BAT_CHARGE_EN (1ULL << 10) // BQ25616 /CE (active-LOW: 0=charge enabled)
 
 // MIPI-DSI / panel geometry
 #define DSI_LANES        2
@@ -133,6 +135,12 @@ static esp_err_t power_rails(void)
         ESP_RETURN_ON_ERROR(esp_io_expander_new_i2c_pca9535(
             s_i2c1, ESP_IO_EXPANDER_I2C_PCA9535_ADDRESS_000, &io_expander), TAG, "pca9535");
     ESP_RETURN_ON_ERROR(esp_io_expander_set_dir(io_expander, 0xffff, IO_EXPANDER_OUTPUT), TAG, "exp dir");
+    // The 0xffff above seizes ALL 16 expander pins as outputs at their POR latch (=1/high). Bit10 is
+    // BAT_CHARGE_EN (active-LOW) → that would DISABLE charging every display bring-up. The factory BSP
+    // re-drives these two right here (esp32_p4_re_terminal_d1001.c:1415-1416); we omitted them, which
+    // disabled the charger. Mirror the factory:
+    esp_io_expander_set_level(io_expander, EXP_BAT_READ_EN, 1);   // battery read enable on
+    esp_io_expander_set_level(io_expander, EXP_BAT_CHARGE_EN, 0); // 0 = enable battery charge
     esp_io_expander_set_level(io_expander, EXP_PWR_HOLD, 1);   // hold vdd_3v3
     esp_io_expander_set_level(io_expander, EXP_LCD_BL_EN, 1);  // backlight power
     esp_io_expander_set_level(io_expander, EXP_LCD_PWR_EN, 1); // display power

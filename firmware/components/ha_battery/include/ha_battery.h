@@ -67,6 +67,16 @@ typedef struct {
 ha_battery_cfg_t ha_battery_d1001_cfg(esp_io_expander_handle_t io_expander,
                                       i2c_master_bus_handle_t i2c_bus);
 
+// --- Charge-manager control (debug/exploration; drive /CE = EN_BAT_CHGn live) ---
+// The charge task's automated /CE handling is externally switchable so pin experiments don't fight it.
+enum { HA_CHG_AUTO = 0,  // hysteresis (resume <recharge, stop >high) + re-assert /CE each loop (default)
+       HA_CHG_HOLD = 1,  // manager does NOT touch /CE — leave it to manual cmd/exp poking
+       HA_CHG_ON   = 2,  // force /CE low (charge enabled) every loop
+       HA_CHG_OFF  = 3 };// force /CE high (charge disabled) every loop
+void ha_battery_charge_mode(int mode);
+int  ha_battery_charge_mode_get(void);
+void ha_battery_charge_reset_pulse(int ms);   // one clean /CE-high pulse of `ms`, then resume the mode
+
 esp_err_t ha_battery_init(const ha_battery_cfg_t *cfg);   // once, before sampling
 esp_err_t ha_battery_sample(ha_batt_sample_t *out);       // thread-safe (internal mutex)
 esp_err_t ha_battery_read(int *soc_pct, float *volts, bool *charging);  // convenience

@@ -51,6 +51,8 @@ static bool     s_gaining;         // cell voltage rising (actively charging), s
 static i2c_master_dev_handle_t s_imu;
 static bool s_imu_ok, s_imu_tried;
 static volatile bool s_charge_en;
+static volatile int  s_charge_mode = 0;   // HA_CHG_AUTO
+static volatile int  s_pulse_ms = 0;      // one-shot /CE reset-pulse request (ms)
 static SemaphoreHandle_t s_mtx;
 
 // LSM6DS3 registers
@@ -244,23 +246,40 @@ static void charge_set(bool en)
 // charges) + confirmed by reading the factory BSP. See docs/hardware/reterminal-d1001.md.
 static void charge_task(void *pv)
 {
-    charge_set(true);        // start enabled (factory default; the pull-down would do this anyway)
     s_charge_en = true;
     for (;;) {
+        // one-shot commanded /CE-high reset pulse (clears a latched BQ), then resume the mode
+        int pulse = s_pulse_ms;
+        if (pulse > 0) {
+            s_pulse_ms = 0;
+            charge_set(false); vTaskDelay(pdMS_TO_TICKS(pulse)); charge_set(true);
+            ESP_LOGW(TAG, "/CE reset pulse %dms", pulse);
+        }
         ha_batt_sample_t s = {0};
         if (ha_battery_sample(&s) == ESP_OK) {
-            if (s.batt_mv > s_cfg.volt_high_mv && s_charge_en) {          // full → stop
-                charge_set(false); s_charge_en = false;
-                ESP_LOGW(TAG, "batt %dmV > %dmV — charge OFF", s.batt_mv, s_cfg.volt_high_mv);
-            } else if (s.batt_mv < s_cfg.volt_recharge_mv && !s_charge_en) {   // drained → resume
-                charge_set(true); s_charge_en = true;
-                ESP_LOGW(TAG, "batt %dmV < %dmV — charge ON", s.batt_mv, s_cfg.volt_recharge_mv);
+            switch (s_charge_mode) {
+            case HA_CHG_HOLD:                       // hands off — manual cmd/exp control
+                break;
+            case HA_CHG_ON:  s_charge_en = true;  charge_set(true);  break;
+            case HA_CHG_OFF: s_charge_en = false; charge_set(false); break;
+            case HA_CHG_AUTO: default: {
+                bool prev = s_charge_en;
+                if (s.batt_mv > s_cfg.volt_high_mv)          s_charge_en = false;  // full → stop
+                else if (s.batt_mv < s_cfg.volt_recharge_mv) s_charge_en = true;   // drained → resume
+                if (s_charge_en != prev)
+                    ESP_LOGW(TAG, "charge %s (batt=%dmV)", s_charge_en ? "ON" : "OFF", s.batt_mv);
+                charge_set(s_charge_en);   // re-assert (heals a display-init stomp of the shared pin)
+                break;
             }
-            // between thresholds: leave the enable as-is (hysteresis). No pulsing, no thermal gate.
+            }
         }
         vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
+
+void ha_battery_charge_mode(int mode) { if (mode >= 0 && mode <= 3) s_charge_mode = mode; }
+int  ha_battery_charge_mode_get(void) { return s_charge_mode; }
+void ha_battery_charge_reset_pulse(int ms) { if (ms < 20) ms = 20; if (ms > 5000) ms = 5000; s_pulse_ms = ms; }
 
 void ha_battery_charge_start(void)
 {

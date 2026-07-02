@@ -34,6 +34,7 @@
 #include "esp_http_client.h"
 #include "driver/gpio.h"
 #include "bsp_display.h"
+#include "esp_io_expander.h"
 #include "bat_profile.h"
 #include "ha_battery.h"
 #include "fs_ops.h"
@@ -44,7 +45,7 @@
 #include "esp_hosted_ota.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v48-chargefix"
+#define APP_BUILD_TAG "v51-chgctl"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -72,6 +73,12 @@ static const char *TAG = "beachhead";
 #define T_FSC    "d1001-beachhead/cmd/fs"          // -> JSON SD file op (ls/stat/read/write/rm/mkdir/df)
 #define T_FS     "d1001-beachhead/fs"              // <- JSON file-op result
 #define T_PWR    "d1001-beachhead/power"           // <- power-context change (on_wall / ble_relay), retained
+#define T_SCRC   "d1001-beachhead/cmd/screen"      // -> off/on/toggle (or 0/1): control backlight+panel power
+#define T_GPIOC  "d1001-beachhead/cmd/gpio"        // -> "N" read P4 GPIO N | "N 0|1" drive it. Result -> pin
+#define T_EXPC   "d1001-beachhead/cmd/exp"         // -> "N" read PCA9535 pin N | "N 0|1" drive it. Result -> pin
+#define T_PIN    "d1001-beachhead/pin"             // <- {gpio|exp, level|set} readback for cmd/gpio + cmd/exp
+#define T_CHGC   "d1001-beachhead/cmd/charge"      // -> auto|hold|on|off | reset[ ms] | status : charge-mgr control
+#define T_CHG    "d1001-beachhead/charge"          // <- charge-manager state (mode + STAT + cell)
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
@@ -324,6 +331,63 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
             xTaskCreate(i2cscan_task, "i2cscan", 4096, NULL, 4, NULL);   // find fuel gauge
         } else if (tl == (int)strlen(T_BDUMP) && strncmp(e->topic, T_BDUMP, tl) == 0) {
             xTaskCreate(battdump_task, "battdump", 4096, NULL, 4, NULL);   // 0x36 reg dump
+        } else if (tl == (int)strlen(T_SCRC) && strncmp(e->topic, T_SCRC, tl) == 0) {
+            // screen power: off/on/toggle (or 0/1). Remote equivalent of the back button, so the
+            // panel can be darkened for debug/charge tests without physical access. No-op until display up.
+            if (bsp_display_ready()) {
+                char c0 = dl >= 1 ? e->data[0] : 't';
+                char c1 = dl >= 2 ? e->data[1] : 0;
+                if (c0 == 't' || c0 == 'T') bsp_display_toggle();                                    // toggle
+                else if ((c0=='o'||c0=='O') && (c1=='f'||c1=='F')) { if (bsp_display_is_on()) bsp_display_toggle(); }  // off
+                else if ((c0=='o'||c0=='O') && (c1=='n'||c1=='N')) { if (!bsp_display_is_on()) bsp_display_toggle(); } // on
+                else if (c0 == '0') { if (bsp_display_is_on()) bsp_display_toggle(); }
+                else if (c0 == '1') { if (!bsp_display_is_on()) bsp_display_toggle(); }
+                esp_mqtt_client_publish(e->client, T_ACK, bsp_display_is_on() ? "screen:on" : "screen:off", 0, 0, 0);
+            }
+        } else if (tl == (int)strlen(T_GPIOC) && strncmp(e->topic, T_GPIOC, tl) == 0) {
+            char b[24]; int nb = dl < 23 ? dl : 23; memcpy(b, e->data, nb); b[nb] = 0;
+            int pin = -1, val = -1; sscanf(b, "%d %d", &pin, &val);   // "N" read | "N 0|1" write
+            if (pin >= 0) {
+                char out[64];
+                if (val == 0 || val == 1) {
+                    gpio_set_direction(pin, GPIO_MODE_OUTPUT); gpio_set_level(pin, val);
+                    snprintf(out, sizeof(out), "{\"gpio\":%d,\"set\":%d}", pin, val);
+                } else snprintf(out, sizeof(out), "{\"gpio\":%d,\"level\":%d}", pin, gpio_get_level(pin));
+                esp_mqtt_client_publish(e->client, T_PIN, out, 0, 0, 0);
+            }
+        } else if (tl == (int)strlen(T_EXPC) && strncmp(e->topic, T_EXPC, tl) == 0) {
+            esp_io_expander_handle_t exp = bsp_io_expander();
+            char b[24]; int nb = dl < 23 ? dl : 23; memcpy(b, e->data, nb); b[nb] = 0;
+            int pin = -1, val = -1; sscanf(b, "%d %d", &pin, &val);   // "N" read | "N 0|1" write (PCA9535 bit)
+            if (exp && pin >= 0 && pin < 16) {
+                uint32_t mask = 1u << pin; char out[64];
+                if (val == 0 || val == 1) {
+                    esp_io_expander_set_dir(exp, mask, IO_EXPANDER_OUTPUT);
+                    esp_io_expander_set_level(exp, mask, val);
+                    snprintf(out, sizeof(out), "{\"exp\":%d,\"set\":%d}", pin, val);
+                } else {
+                    uint32_t lv = 0; esp_io_expander_get_level(exp, mask, &lv);
+                    snprintf(out, sizeof(out), "{\"exp\":%d,\"level\":%d}", pin, (lv & mask) ? 1 : 0);
+                }
+                esp_mqtt_client_publish(e->client, T_PIN, out, 0, 0, 0);
+            }
+        } else if (tl == (int)strlen(T_CHGC) && strncmp(e->topic, T_CHGC, tl) == 0) {
+            char b[24]; int nb = dl < 23 ? dl : 23; memcpy(b, e->data, nb); b[nb] = 0;
+            if      (!strncmp(b, "auto", 4)) ha_battery_charge_mode(HA_CHG_AUTO);
+            else if (!strncmp(b, "hold", 4)) ha_battery_charge_mode(HA_CHG_HOLD);
+            else if (!strncmp(b, "on",   2)) ha_battery_charge_mode(HA_CHG_ON);
+            else if (!strncmp(b, "off",  3)) ha_battery_charge_mode(HA_CHG_OFF);
+            else if (!strncmp(b, "reset",5)) { int ms = 0; sscanf(b + 5, "%d", &ms); ha_battery_charge_reset_pulse(ms > 0 ? ms : 500); }
+            // publish charge-manager state (mode + live STAT + cell) for exploration
+            ha_batt_sample_t cs = {0}; bool okc = (ha_battery_sample(&cs) == ESP_OK);
+            const char *mn[] = {"auto","hold","on","off"};
+            char out[160];
+            snprintf(out, sizeof(out),
+                "{\"mode\":\"%s\",\"charging\":%s,\"gaining\":%s,\"batt_mv\":%d,\"soc\":%d,\"charge_en\":%s}",
+                mn[ha_battery_charge_mode_get() & 3], cs.charging ? "true" : "false",
+                cs.gaining ? "true" : "false", okc ? cs.batt_mv_smoothed : -1, okc ? cs.soc : -1,
+                cs.charge_en ? "true" : "false");
+            esp_mqtt_client_publish(e->client, T_CHG, out, 0, 0, 0);
         } else if (tl == (int)strlen(T_FSC) && strncmp(e->topic, T_FSC, tl) == 0) {
             char *j = strndup(e->data, dl);
             if (j) { fs_ops_submit(j); free(j); }   // SD file op; worker copies + runs off this stack
