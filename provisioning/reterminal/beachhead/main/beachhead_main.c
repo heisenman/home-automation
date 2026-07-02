@@ -34,13 +34,15 @@
 #include "esp_http_client.h"
 #include "driver/gpio.h"
 #include "bsp_display.h"
+#include "bat_profile.h"
+#include "fs_ops.h"
 #include "ui_tiles.h"
 #include "ha_ble_scan.h"
 #include "esp_hosted.h"
 #include "esp_hosted_ota.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v33-blerelay"
+#define APP_BUILD_TAG "v36-fsops"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -64,6 +66,9 @@ static const char *TAG = "beachhead";
 #define T_I2CSC  "d1001-beachhead/cmd/i2cscan"    // -> (any) probe both I2C buses (find fuel gauge)
 #define T_I2CRES "d1001-beachhead/i2c"            // <- I2C scan result
 #define T_BDUMP  "d1001-beachhead/cmd/battdump"   // -> (any) dump 0x36 MAX17048 regs (chip ID)
+#define T_BPROF  "d1001-beachhead/battprofile"    // <- live mirror of the SD battery-profile rows
+#define T_FSC    "d1001-beachhead/cmd/fs"          // -> JSON SD file op (ls/stat/read/write/rm/mkdir/df)
+#define T_FS     "d1001-beachhead/fs"              // <- JSON file-op result
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
@@ -121,19 +126,21 @@ static void publish_status(void)
     const esp_partition_t *run = esp_ota_get_running_partition();
     wifi_ap_record_t ap; int rssi = 0;
     if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) rssi = ap.rssi;
-    int batt = -1; float bv = 0; bool bchg = false;
-    bool have_batt = (bsp_battery_read(&batt, &bv, &bchg) == ESP_OK);
+    bsp_batt_sample_t bs = {0};
+    bool have_batt = (bsp_battery_sample(&bs) == ESP_OK);
     if (have_batt && bsp_display_ready())              // only touch LVGL once it's initialized
-        ui_tiles_set_battery(batt, bchg);              // panel top-bar indicator
-    char msg[320];
+        ui_tiles_set_battery(bs.soc, bs.charging);     // panel top-bar indicator
+    char msg[380];
     snprintf(msg, sizeof(msg),
         "{\"device\":\"d1001-beachhead\",\"status\":\"online\",\"partition\":\"%s\",\"build\":\"%s\","
         "\"ip\":\"%s\",\"uptime_s\":%lld,\"heap\":%u,\"rssi\":%d,\"wifi_rc\":%d,\"mqtt_rc\":%d,"
-        "\"display\":%s,\"debug\":%s,\"batt_pct\":%d,\"batt_mv\":%d,\"charging\":%s}",
+        "\"display\":%s,\"debug\":%s,\"batt_pct\":%d,\"batt_mv\":%d,\"charging\":%s,"
+        "\"temp_dc\":%d,\"charge_en\":%s}",
         run ? run->label : "?", APP_BUILD_TAG, s_ip,
         esp_timer_get_time() / 1000000, (unsigned)esp_get_free_heap_size(), rssi, s_wifi_rc, s_mqtt_rc,
         bsp_display_ready() ? "true" : "false", s_debug ? "true" : "false",
-        have_batt ? batt : -1, have_batt ? (int)(bv * 1000) : 0, bchg ? "true" : "false");
+        have_batt ? bs.soc : -1, have_batt ? bs.batt_mv_smoothed : 0, bs.charging ? "true" : "false",
+        bs.have_temp ? bs.temp_dc : -9999, bs.charge_en ? "true" : "false");
     esp_mqtt_client_publish(s_client, T_STATUS, msg, 0, 1, 1);   // qos1 retained
 }
 
@@ -307,6 +314,9 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
             xTaskCreate(i2cscan_task, "i2cscan", 4096, NULL, 4, NULL);   // find fuel gauge
         } else if (tl == (int)strlen(T_BDUMP) && strncmp(e->topic, T_BDUMP, tl) == 0) {
             xTaskCreate(battdump_task, "battdump", 4096, NULL, 4, NULL);   // 0x36 reg dump
+        } else if (tl == (int)strlen(T_FSC) && strncmp(e->topic, T_FSC, tl) == 0) {
+            char *j = strndup(e->data, dl);
+            if (j) { fs_ops_submit(j); free(j); }   // SD file op; worker copies + runs off this stack
         } else if (tl == (int)strlen(T_DEBUG) && strncmp(e->topic, T_DEBUG, tl) == 0) {
             s_debug = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
                                    e->data[0] == 't' || e->data[0] == 'T'));   // on/1/true
@@ -520,6 +530,18 @@ static void wifi_event_handler(void *arg, esp_event_base_t base, int32_t id, voi
     }
 }
 
+// Best-effort live mirror of a battery-profile row (SD write is the source of truth).
+static void battprofile_publish(const char *json)
+{
+    if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_BPROF, json, 0, 0, 0);
+}
+
+// SD file-op result → MQTT.
+static void fs_publish(const char *json)
+{
+    if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_FS, json, 0, 0, 0);
+}
+
 void app_main(void)
 {
     bsp_display_predark();   // FIRST: hold the panel dark across boot (kills the OTA-reboot strobe)
@@ -564,8 +586,11 @@ void app_main(void)
     xEventGroupWaitBits(s_evt, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     ESP_LOGI(TAG, "WiFi up — starting MQTT");
     start_mqtt();
+    bsp_battery_charge_start();                // FIRST sampler: creates the battery mutex + charger
     xTaskCreate(heartbeat_task, "hb", 4096, NULL, 3, NULL);
     xTaskCreate(button_task, "btn", 3072, NULL, 3, NULL);   // back-button screen toggle
+    bat_profile_start(battprofile_publish);   // mount SD + log the battery discharge curve (non-fatal)
+    fs_ops_start(fs_publish);                 // SD file-ops over MQTT (cmd/fs)
     // Display is NOT started here — trigger it over MQTT with cmd/display "on"
     // once the device is confirmed live, so a failed bring-up can't brick boot.
 }

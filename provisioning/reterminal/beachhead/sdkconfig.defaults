@@ -75,3 +75,7 @@ CONFIG_ESP_HOSTED_NIMBLE_HCI_VHCI=y
 # NimBLE/VHCI controller timing wants the 1 kHz tick (the example sets this). Note:
 # this is a global tick change on top of the working display/wifi/OTA firmware.
 CONFIG_FREERTOS_HZ=1000
+
+# SD card usable with arbitrary (long) filenames
+CONFIG_FATFS_LFN_HEAP=y
+CONFIG_FATFS_MAX_LFN=255

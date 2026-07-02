@@ -6,6 +6,7 @@
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "freertos/semphr.h"
 #include "esp_log.h"
 #include "esp_check.h"
 #include "driver/i2c_master.h"
@@ -97,16 +98,53 @@ void bsp_i2c_scan(char *out, size_t outlen)
     }
 }
 
-// Battery: there is NO I2C fuel gauge on the D1001. Per Seeed's reTerminal-D1001 BSP,
-// battery voltage = ADC1 ch2 (12-bit, 12 dB atten, curve-fit cali, 16-sample sorted
-// average) × 2 (on-board divider); % via a voltage LUT; charge status = GPIO15 (low=charging).
-#define BAT_ADC_SAMPLES 16
-#define BAT_CHARGE_GPIO GPIO_NUM_15
+// Battery: there is NO I2C fuel gauge on the D1001. Per Seeed's reTerminal-D1001 BSP:
+//   * battery mV  = ADC1 ch2 (12-bit, 12 dB, curve-fit cali, 16-sample trimmed avg) x2 divider
+//   * USB/VSYS mV = ADC1 ch1 x2  (tells us when the charger cable is present)
+//   * charge state = GPIO15 (active-low: low=charging); VSYS power-good = GPIO4
+//   * CRITICAL: the battery sense divider is gated behind PCA9535 expander pin 6 (BAT_READ_EN).
+//     It MUST be driven high or ch2 reads a floating/low node — that was the "63% at full
+//     charge" bug (we never enabled it). Seeed asserts it once at init (their line 1415).
+// Reported SoC is smoothed (running avg); OFF the charger it only ratchets DOWN, so a load or
+// charge transient can't bounce the gauge upward (mirrors the vendor charge-manage task).
+#define BAT_ADC_SAMPLES  16
+#define BAT_CHARGE_GPIO  GPIO_NUM_15
+#define BAT_VSYS_PG_GPIO GPIO_NUM_4
+#define EXP_BAT_READ_EN  (1ULL << 6)     // PCA9535 pin 6: enable battery sense divider
+#define EXP_BAT_CHARGE_EN (1ULL << 10)   // PCA9535 pin 10: charge enable (ACTIVE-LOW: 0=charge)
+#define BAT_AVG_WIN      8
+// Charge policy (Seeed thresholds): only charge with the cable in, cell below full, and the
+// board temperature inside a safe window. Temp comes from the LSM6DS3 IMU (on I2C1 @0x6A).
+#define CHG_VOLT_HIGH    4150            // mV: stop charging above this
+#define CHG_TEMP_MAX_DC  430             // deci-°C: 43.0 °C ceiling
+#define CHG_TEMP_MIN_DC  20              // deci-°C:  2.0 °C floor
+#define LSM6DS3_ADDR       0x6A
+#define LSM6_REG_WHOAMI    0x0F
+#define LSM6_REG_CTRL1_XL  0x10
+#define LSM6_REG_OUT_TEMP  0x20          // OUT_TEMP_L, auto-increments to _H
 static const int s_bat_lut[21] = { 3262,3390,3467,3554,3619,3659,3686,3710,3731,3752,
                                    3774,3797,3827,3855,3880,3901,3915,3934,3958,3978,4047 };
 static adc_oneshot_unit_handle_t s_adc;
-static adc_cali_handle_t s_adc_cali_ch2;
+static adc_cali_handle_t s_adc_cali_ch2;      // battery
+static adc_cali_handle_t s_adc_cali_ch1;      // usb/vsys
 static bool s_bat_init;
+static bool s_bat_read_en;                    // expander read-enable asserted once io_expander is up
+static int  s_bat_smooth_mv;                  // reported (smoothed) battery mV; 0 = uninitialised
+static int  s_bat_win[BAT_AVG_WIN];
+static int  s_bat_win_n, s_bat_win_i;
+static i2c_master_dev_handle_t s_imu;         // LSM6DS3 on I2C1 (board temp for charge gating)
+static bool s_imu_ok, s_imu_tried;
+static volatile bool s_charge_en;             // last commanded charge-enable state
+static SemaphoreHandle_t s_bat_mtx;           // serialises bsp_battery_sample (3 caller tasks)
+
+// Assert the sense divider once the expander exists (retried each read until then). Idempotent.
+static void battery_read_enable(void)
+{
+    if (s_bat_read_en || !io_expander) return;
+    esp_io_expander_set_dir(io_expander, EXP_BAT_READ_EN, IO_EXPANDER_OUTPUT);
+    esp_io_expander_set_level(io_expander, EXP_BAT_READ_EN, 1);   // turn on battery read
+    s_bat_read_en = true;
+}
 
 static void battery_init(void)
 {
@@ -114,14 +152,16 @@ static void battery_init(void)
     adc_oneshot_unit_init_cfg_t uc = { .unit_id = ADC_UNIT_1, .ulp_mode = ADC_ULP_MODE_DISABLE };
     if (adc_oneshot_new_unit(&uc, &s_adc) != ESP_OK) { ESP_LOGW(TAG, "adc unit fail"); return; }
     adc_oneshot_chan_cfg_t cc = { .atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_12 };
-    adc_oneshot_config_channel(s_adc, ADC_CHANNEL_2, &cc);
+    adc_oneshot_config_channel(s_adc, ADC_CHANNEL_2, &cc);   // battery
+    adc_oneshot_config_channel(s_adc, ADC_CHANNEL_1, &cc);   // usb/vsys
 #if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-    adc_cali_curve_fitting_config_t fc = { .unit_id = ADC_UNIT_1, .chan = ADC_CHANNEL_2,
-                                           .atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_12 };
-    adc_cali_create_scheme_curve_fitting(&fc, &s_adc_cali_ch2);
+    adc_cali_curve_fitting_config_t fc = { .unit_id = ADC_UNIT_1, .atten = ADC_ATTEN_DB_12,
+                                           .bitwidth = ADC_BITWIDTH_12 };
+    fc.chan = ADC_CHANNEL_2; adc_cali_create_scheme_curve_fitting(&fc, &s_adc_cali_ch2);
+    fc.chan = ADC_CHANNEL_1; adc_cali_create_scheme_curve_fitting(&fc, &s_adc_cali_ch1);
 #endif
-    gpio_config_t g = { .pin_bit_mask = 1ULL << BAT_CHARGE_GPIO, .mode = GPIO_MODE_INPUT,
-                        .pull_up_en = GPIO_PULLUP_ENABLE };
+    gpio_config_t g = { .pin_bit_mask = (1ULL << BAT_CHARGE_GPIO) | (1ULL << BAT_VSYS_PG_GPIO),
+                        .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE };
     gpio_config(&g);
     s_bat_init = true;
 }
@@ -135,13 +175,11 @@ static int bat_pct(int mv)
     return 100;
 }
 
-// Returns the divider-corrected battery mV (0 on failure). soc/volts/charging optional.
-static int battery_millivolts(void)
+// Trimmed-average one ADC channel: fills *raw_out (counts) and returns calibrated mV (pre-divider).
+static int adc_read_mv(adc_channel_t ch, adc_cali_handle_t cali, int *raw_out)
 {
-    battery_init();
-    if (!s_adc) return 0;
     int raw[BAT_ADC_SAMPLES];
-    for (int i = 0; i < BAT_ADC_SAMPLES; i++) { raw[i] = 0; adc_oneshot_read(s_adc, ADC_CHANNEL_2, &raw[i]); }
+    for (int i = 0; i < BAT_ADC_SAMPLES; i++) { raw[i] = 0; adc_oneshot_read(s_adc, ch, &raw[i]); }
     for (int i = 0; i < BAT_ADC_SAMPLES - 1; i++)          // sort ascending
         for (int j = i + 1; j < BAT_ADC_SAMPLES; j++)
             if (raw[i] > raw[j]) { int t = raw[i]; raw[i] = raw[j]; raw[j] = t; }
@@ -149,30 +187,155 @@ static int battery_millivolts(void)
     for (int i = 1; i < BAT_ADC_SAMPLES - 1; i++) sum += raw[i];
     int rawavg = sum / (BAT_ADC_SAMPLES - 2), mv = rawavg;
 #if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
-    if (s_adc_cali_ch2) adc_cali_raw_to_voltage(s_adc_cali_ch2, rawavg, &mv);
+    if (cali) adc_cali_raw_to_voltage(cali, rawavg, &mv);
 #endif
-    return mv * 2;                                         // on-board voltage divider
+    if (raw_out) *raw_out = rawavg;
+    return mv;
+}
+
+// Board temperature via the LSM6DS3 IMU (I2C1 @0x6A). Minimal direct-register read — we only
+// need temperature (raw/256 + 25 °C), not the full ST driver. Enabling the accel at a low ODR
+// makes the temp register update. Returns deci-°C in *dc; false if the IMU can't be read.
+static void imu_init(void)
+{
+    if (s_imu_tried) return;
+    s_imu_tried = true;
+    if (!s_i2c1) { s_imu_tried = false; return; }   // bus not up yet — retry next call
+    i2c_device_config_t dc = { .dev_addr_length = I2C_ADDR_BIT_LEN_7,
+                               .device_address = LSM6DS3_ADDR, .scl_speed_hz = 400000 };
+    if (i2c_master_bus_add_device(s_i2c1, &dc, &s_imu) != ESP_OK) { s_imu = NULL; return; }
+    uint8_t reg = LSM6_REG_WHOAMI, who = 0;
+    if (i2c_master_transmit_receive(s_imu, &reg, 1, &who, 1, 100) != ESP_OK || who != LSM6DS3_ADDR) {
+        ESP_LOGW(TAG, "LSM6DS3 whoami=0x%02x (want 0x6A) — temp gating unavailable", who);
+        return;
+    }
+    uint8_t c1[2] = { LSM6_REG_CTRL1_XL, 0x10 };    // ODR_XL=12.5Hz, ±2g → temp sensor updates
+    i2c_master_transmit(s_imu, c1, 2, 100);
+    s_imu_ok = true;
+}
+
+static bool imu_temp_dc(int *dc)
+{
+    imu_init();
+    if (!s_imu_ok) return false;
+    uint8_t reg = LSM6_REG_OUT_TEMP, b[2] = { 0, 0 };
+    if (i2c_master_transmit_receive(s_imu, &reg, 1, b, 2, 100) != ESP_OK) return false;
+    int16_t raw = (int16_t)((b[1] << 8) | b[0]);
+    *dc = (raw * 10) / 256 + 250;                   // deci-°C = raw/256*10 + 25.0*10
+    return true;
+}
+
+esp_err_t bsp_battery_sample(bsp_batt_sample_t *out)
+{
+    battery_init();
+    if (!s_adc) return ESP_FAIL;
+    if (s_bat_mtx) xSemaphoreTake(s_bat_mtx, portMAX_DELAY);
+    battery_read_enable();
+
+    int raw2 = 0, raw1 = 0;
+    int cali_mv = adc_read_mv(ADC_CHANNEL_2, s_adc_cali_ch2, &raw2);
+    int usb_mv  = adc_read_mv(ADC_CHANNEL_1, s_adc_cali_ch1, &raw1) * 2;
+    int batt_mv = cali_mv * 2;
+    if (batt_mv <= 0) { if (s_bat_mtx) xSemaphoreGive(s_bat_mtx); return ESP_FAIL; }
+
+    // running average of the instantaneous battery mV
+    s_bat_win[s_bat_win_i] = batt_mv;
+    s_bat_win_i = (s_bat_win_i + 1) % BAT_AVG_WIN;
+    if (s_bat_win_n < BAT_AVG_WIN) s_bat_win_n++;
+    long avgsum = 0;
+    for (int i = 0; i < s_bat_win_n; i++) avgsum += s_bat_win[i];
+    int avg = (int)(avgsum / s_bat_win_n);
+
+    bool on_charger = (usb_mv > 4000);       // ch1 tells us the cable is present, not the GPIO
+    if (s_bat_smooth_mv == 0)       s_bat_smooth_mv = avg;   // first sample
+    else if (on_charger)            s_bat_smooth_mv = avg;   // track live while charging
+    else if (avg < s_bat_smooth_mv) s_bat_smooth_mv = avg;   // discharging: ratchet down only
+
+    int tdc = 0; bool ht = imu_temp_dc(&tdc);
+    if (out) {
+        out->raw_ch2         = raw2;
+        out->cali_mv         = cali_mv;
+        out->batt_mv         = batt_mv;
+        out->batt_mv_smoothed = s_bat_smooth_mv;
+        out->usb_mv          = usb_mv;
+        out->vsys_pg         = gpio_get_level(BAT_VSYS_PG_GPIO);
+        out->charging        = (gpio_get_level(BAT_CHARGE_GPIO) == 0);   // active-low
+        out->soc             = bat_pct(s_bat_smooth_mv);
+        out->temp_dc         = ht ? tdc : -9999;
+        out->have_temp       = ht;
+        out->charge_en       = s_charge_en;
+    }
+    if (s_bat_mtx) xSemaphoreGive(s_bat_mtx);
+    return ESP_OK;
+}
+
+// Thermal-gated charge manager. Charging is DISABLED by default at boot (PCA9535 pin 10 high);
+// we only enable it (drive pin 10 low) when: the charger cable is present (USB rail > 4 V), the
+// cell is below full (< CHG_VOLT_HIGH), and the board temp is inside the safe window. FAIL-SAFE:
+// no temperature reading ⇒ do NOT charge. The charger IC handles CC/CV + termination itself.
+static void charge_set(bool en)
+{
+    if (!io_expander) return;
+    esp_io_expander_set_dir(io_expander, EXP_BAT_CHARGE_EN, IO_EXPANDER_OUTPUT);
+    esp_io_expander_set_level(io_expander, EXP_BAT_CHARGE_EN, en ? 0 : 1);   // active-low
+}
+
+static void charge_task(void *pv)
+{
+    charge_set(false);            // explicit safe default until the first evaluation
+    s_charge_en = false;
+    for (;;) {
+        bsp_batt_sample_t s = {0};
+        bool ok = (bsp_battery_sample(&s) == ESP_OK);
+        bool cable   = ok && (s.usb_mv > 4000);
+        bool temp_ok = s.have_temp && (s.temp_dc >= CHG_TEMP_MIN_DC && s.temp_dc <= CHG_TEMP_MAX_DC);
+        bool room    = ok && (s.batt_mv < CHG_VOLT_HIGH);
+        bool want    = cable && temp_ok && room;
+        if (want != s_charge_en) {
+            charge_set(want);
+            s_charge_en = want;
+            ESP_LOGW(TAG, "charge %s (usb=%dmV batt=%dmV temp=%d.%d°C)", want ? "ON" : "OFF",
+                     s.usb_mv, s.batt_mv, s.have_temp ? s.temp_dc / 10 : -99,
+                     s.have_temp ? s.temp_dc % 10 : 0);
+        }
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    }
+}
+
+void bsp_battery_charge_start(void)
+{
+    static bool started;
+    if (started) return;
+    started = true;
+    if (!s_bat_mtx) s_bat_mtx = xSemaphoreCreateMutex();   // created single-threaded, before samplers
+    battery_init();                                        // create ADC1 unit ONCE here, not racily
+    xTaskCreate(charge_task, "charge", 4096, NULL, 3, NULL);
 }
 
 esp_err_t bsp_battery_read(int *soc_pct, float *volts, bool *charging)
 {
-    int mv = battery_millivolts();
-    if (mv <= 0) return ESP_FAIL;
-    if (soc_pct)  *soc_pct  = bat_pct(mv);
-    if (volts)    *volts    = mv / 1000.0f;
-    if (charging) *charging = (gpio_get_level(BAT_CHARGE_GPIO) == 0);   // active-low
+    bsp_batt_sample_t s;
+    if (bsp_battery_sample(&s) != ESP_OK) return ESP_FAIL;
+    if (soc_pct)  *soc_pct  = s.soc;
+    if (volts)    *volts    = s.batt_mv_smoothed / 1000.0f;
+    if (charging) *charging = s.charging;
     return ESP_OK;
 }
 
-// Diagnostic: poll battery mV/pct/charge a few times (values jitter if live).
+// Diagnostic: poll battery a few times (values jitter if live). Shows the raw instantaneous
+// mV + calibrated + USB rail + charge/PG so a live read tells the whole story at a glance.
 void bsp_battery_dump(char *out, size_t outlen)
 {
     if (!out || outlen == 0) return;
     size_t n = 0;
     for (int r = 0; r < 4; r++) {
-        int mv = battery_millivolts();
-        n += snprintf(out + n, n < outlen ? outlen - n : 0, "%s%dmV/%d%%/chg%d",
-                      r ? " " : "", mv, bat_pct(mv), gpio_get_level(BAT_CHARGE_GPIO) == 0);
+        bsp_batt_sample_t s = {0};
+        bsp_battery_sample(&s);
+        n += snprintf(out + n, n < outlen ? outlen - n : 0,
+                      "%sbat%dmV(raw%d)/%d%%/usb%dmV/pg%d/chg%d/t%dd%d/chgen%d",
+                      r ? " " : "", s.batt_mv, s.raw_ch2, s.soc, s.usb_mv, s.vsys_pg, s.charging,
+                      s.have_temp ? s.temp_dc / 10 : -99, s.have_temp ? s.temp_dc % 10 : 0,
+                      s.charge_en);
         vTaskDelay(pdMS_TO_TICKS(250));
     }
 }
