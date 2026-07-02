@@ -94,6 +94,37 @@ void bsp_i2c_scan(char *out, size_t outlen)
     }
 }
 
+// MAX17048-class LiPo fuel gauge @ 0x36 on I2C0. Registers (16-bit, MSB first):
+//   0x02 VCELL (78.125 µV/LSB), 0x04 SOC (/256 = %), 0x16 CRATE (signed, 0.208%/hr/LSB).
+static i2c_master_dev_handle_t s_batt;
+static esp_err_t max17048_reg(uint8_t reg, uint16_t *val)
+{
+    uint8_t rx[2];
+    esp_err_t e = i2c_master_transmit_receive(s_batt, &reg, 1, rx, 2, 100);
+    if (e == ESP_OK) *val = ((uint16_t)rx[0] << 8) | rx[1];
+    return e;
+}
+esp_err_t bsp_battery_read(int *soc_pct, float *volts, bool *charging)
+{
+    if (i2c_bus(0, I2C0_SCL, I2C0_SDA, &s_i2c0) != ESP_OK) return ESP_FAIL;
+    if (!s_batt) {
+        i2c_device_config_t dc = {
+            .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = 0x36, .scl_speed_hz = 100000,
+        };
+        if (i2c_master_bus_add_device(s_i2c0, &dc, &s_batt) != ESP_OK) return ESP_FAIL;
+    }
+    uint16_t soc, vcell, crate = 0;
+    if (max17048_reg(0x04, &soc) != ESP_OK) return ESP_FAIL;
+    if (max17048_reg(0x02, &vcell) != ESP_OK) return ESP_FAIL;
+    esp_err_t ce = max17048_reg(0x16, &crate);
+    int pct = soc >> 8;                       // integer % (high byte)
+    if (pct > 100) pct = 100;
+    if (soc_pct)  *soc_pct  = pct;
+    if (volts)    *volts    = vcell * 0.000078125f;
+    if (charging) *charging = (ce == ESP_OK) && ((int16_t)crate > 0);
+    return ESP_OK;
+}
+
 static esp_err_t backlight_init(void)
 {
     ledc_timer_config_t t = {

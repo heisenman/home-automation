@@ -3,6 +3,7 @@
 //   a scrolling grid of sensor cards on the panel, refreshing on an interval.
 //   Read-only for now; touch->signed-commands + the UI manifest come next.
 #pragma once
+#include <stdbool.h>
 
 // Take over the screen (clears the splash) and start the fetch+render loop.
 // `sensors_url` = full URL of the BFF sensors endpoint. Safe to call once, after
@@ -13,3 +14,7 @@ void ui_tiles_start(const char *sensors_url);
 // merges the device's headline metric into its card between HTTP refreshes.
 // No-op if the UI isn't started or the device has no card. Safe from any task.
 void ui_tiles_on_state(const char *json_payload);
+
+// Update the top-bar battery indicator (MAX17048). pct 0..100; charging shows a
+// charge glyph. Safe from any task (takes the LVGL lock). No-op if UI not started.
+void ui_tiles_set_battery(int pct, bool charging);

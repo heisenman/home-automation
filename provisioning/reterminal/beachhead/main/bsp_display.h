@@ -15,6 +15,12 @@
 // (e.g. "i2c0:0x40 i2c1:0x20,0x51,0x62"). Used to identify the battery fuel gauge.
 void bsp_i2c_scan(char *out, size_t outlen);
 
+// Read the MAX17048 LiPo fuel gauge (@0x36 on I2C0). Fills any non-NULL out param:
+// soc_pct 0..100, volts (cell voltage), charging (true if charge-rate positive).
+// Returns ESP_OK on a good read; ESP_FAIL if the gauge doesn't respond.
+#include <stdbool.h>
+esp_err_t bsp_battery_read(int *soc_pct, float *volts, bool *charging);
+
 // Call FIRST in app_main (before WiFi): force the panel dark at boot so the power rails
 // don't free-run through the bootloader->app window and strobe the screen (photosensitivity
 // hazard). GPIO + I2C only, no DSI/LVGL. Idempotent, non-fatal. Panel stays dark until

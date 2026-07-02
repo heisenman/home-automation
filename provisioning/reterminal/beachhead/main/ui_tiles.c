@@ -94,6 +94,7 @@ struct admin_req { int kind; char id[40]; char arg[448]; };
 static QueueHandle_t s_admin_q;
 static lv_obj_t *s_kb_ov, *s_kb_ta, *s_kb_msg;   // password keyboard overlay
 static lv_obj_t *s_toast;                        // transient status line in the top bar
+static lv_obj_t *s_batt_lbl;                     // battery indicator in the top bar
 
 // --- command path (touch an actuator -> POST /devices/<id>/command with the operator token) ---
 static char s_base[192];           // BFF base URL (http://host:port), derived from s_url
@@ -982,6 +983,21 @@ static void state_task(void *pv)
 }
 
 // Called from the MQTT callback: LIGHTWEIGHT — copy + enqueue only, no parse/LVGL.
+void ui_tiles_set_battery(int pct, bool charging)
+{
+    if (pct < 0) pct = 0;
+    if (pct > 100) pct = 100;
+    const char *sym = charging      ? LV_SYMBOL_CHARGE :
+                      pct >= 88     ? LV_SYMBOL_BATTERY_FULL :
+                      pct >= 63     ? LV_SYMBOL_BATTERY_3 :
+                      pct >= 38     ? LV_SYMBOL_BATTERY_2 :
+                      pct >= 13     ? LV_SYMBOL_BATTERY_1 : LV_SYMBOL_BATTERY_EMPTY;
+    if (lvgl_port_lock(0)) {
+        if (s_batt_lbl) lv_label_set_text_fmt(s_batt_lbl, "%s %d%%", sym, pct);
+        lvgl_port_unlock();
+    }
+}
+
 void ui_tiles_on_state(const char *json)
 {
     if (!s_started || !s_state_q || !json) return;
@@ -1035,6 +1051,12 @@ void ui_tiles_start(const char *sensors_url)
     lv_label_set_text(s_toast, "");
     lv_obj_set_style_text_color(s_toast, lv_color_hex(0x8fb4ff), 0);
     lv_obj_set_style_pad_right(s_toast, 10, 0);
+
+    s_batt_lbl = lv_label_create(s_topbar);        // battery indicator (MAX17048)
+    lv_label_set_text(s_batt_lbl, "");
+    lv_obj_set_style_text_font(s_batt_lbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(s_batt_lbl, lv_color_hex(0xcbd5e1), 0);
+    lv_obj_set_style_pad_right(s_batt_lbl, 10, 0);
 
     s_admin_btn = lv_button_create(s_topbar);      // lock/unlock gear
     lv_obj_set_height(s_admin_btn, 46);

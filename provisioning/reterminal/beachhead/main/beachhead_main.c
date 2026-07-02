@@ -39,7 +39,7 @@
 #include "esp_hosted_ota.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v28-i2cscan"
+#define APP_BUILD_TAG "v29-battery"
 #define BSP_BUTTON_IN  GPIO_NUM_3     // back-of-device button, active-low w/ pull-up
 static const char *TAG = "beachhead";
 
@@ -114,14 +114,19 @@ static void publish_status(void)
     const esp_partition_t *run = esp_ota_get_running_partition();
     wifi_ap_record_t ap; int rssi = 0;
     if (esp_wifi_sta_get_ap_info(&ap) == ESP_OK) rssi = ap.rssi;
-    char msg[256];
+    int batt = -1; float bv = 0; bool bchg = false;
+    bool have_batt = (bsp_battery_read(&batt, &bv, &bchg) == ESP_OK);
+    if (have_batt && bsp_display_ready())              // only touch LVGL once it's initialized
+        ui_tiles_set_battery(batt, bchg);              // panel top-bar indicator
+    char msg[320];
     snprintf(msg, sizeof(msg),
         "{\"device\":\"d1001-beachhead\",\"status\":\"online\",\"partition\":\"%s\",\"build\":\"%s\","
         "\"ip\":\"%s\",\"uptime_s\":%lld,\"heap\":%u,\"rssi\":%d,\"wifi_rc\":%d,\"mqtt_rc\":%d,"
-        "\"display\":%s,\"debug\":%s}",
+        "\"display\":%s,\"debug\":%s,\"batt_pct\":%d,\"batt_mv\":%d,\"charging\":%s}",
         run ? run->label : "?", APP_BUILD_TAG, s_ip,
         esp_timer_get_time() / 1000000, (unsigned)esp_get_free_heap_size(), rssi, s_wifi_rc, s_mqtt_rc,
-        bsp_display_ready() ? "true" : "false", s_debug ? "true" : "false");
+        bsp_display_ready() ? "true" : "false", s_debug ? "true" : "false",
+        have_batt ? batt : -1, have_batt ? (int)(bv * 1000) : 0, bchg ? "true" : "false");
     esp_mqtt_client_publish(s_client, T_STATUS, msg, 0, 1, 1);   // qos1 retained
 }
 
