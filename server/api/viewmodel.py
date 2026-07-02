@@ -51,6 +51,8 @@ METRIC_CATALOG: dict[str, dict] = {
     "aqi":           {"label": "AQI",         "unit": "",      "color": "#fbbf24", "precision": 0, "graph": True},
     "voc_index":     {"label": "VOC Index",   "unit": "",      "color": "#34d399", "precision": 0, "graph": True},
     "voc_raw":       {"label": "VOC (raw)",   "unit": "",      "color": "#6ee7b7", "precision": 0, "graph": True},
+    "power_w":       {"label": "Power",       "unit": "W",     "color": "#f59e0b", "precision": 0, "graph": True},
+    "energy_today_kwh": {"label": "Energy today", "unit": "kWh", "color": "#eab308", "precision": 2, "graph": True},
 }
 
 

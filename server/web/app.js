@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v36 VOC gas (SGP-40): voc_index/voc_raw in graphs + value row";
+const BUILD = "v37 S31 energy (power_w/kWh today) + VOC gas in graphs + value row";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -621,6 +621,8 @@ const GRAPHABLE = [
   { key: "aqi", unit: "", color: "#fbbf24", label: "AQI" },
   { key: "voc_index", unit: "", color: "#34d399", label: "VOC Index" },
   { key: "voc_raw", unit: "", color: "#6ee7b7", label: "VOC (raw)" },
+  { key: "power_w", unit: "W", color: "#f59e0b", label: "Power" },
+  { key: "energy_today_kwh", unit: "kWh", color: "#eab308", label: "Energy today" },
 ];
 
 // shared value row (temp respects the °F/°C pref)
@@ -635,6 +637,9 @@ function SensorVals({ m, unit }) {
     ${m.pm25_ugm3 != null && html`<span class="sv"><b>${Math.round(m.pm25_ugm3)}</b>µg/m³</span>`}
     ${m.aqi != null && html`<span class="sv"><b>${m.aqi}</b>AQI</span>`}
     ${m.voc_index != null && html`<span class="sv"><b>${m.voc_index}</b> VOC</span>`}
+    ${m.power_w != null && html`<span class="sv"><b>${Math.round(m.power_w)}</b>W</span>`}
+    ${m.energy_today_kwh != null && html`<span class="sv"><b>${round1(m.energy_today_kwh)}</b>kWh today</span>`}
+    ${m.relay_on != null && html`<span class="sv"><b>${m.relay_on ? "on" : "off"}</b> plug</span>`}
     ${m.fan_speed != null && html`<span class="sv"><b>${m.fan_on === 0 ? "off" : m.fan_speed}</b> fan</span>`}
     ${m.filter_life_pct != null && html`<span class="sv"><b>${Math.round(m.filter_life_pct)}</b>% filter${m.filter_low ? " ⚠️" : ""}</span>`}
   </div>`;
