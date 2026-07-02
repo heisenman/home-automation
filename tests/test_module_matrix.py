@@ -44,19 +44,21 @@ def test_shared_components_exist_and_are_used():
         assert "shared" in matrix[mod].values(), f"{mod} names component {comp} but no build links it shared"
 
 
-def test_edge_forks_still_present():
-    """Guards the migration state: the live edge nodes still fork switchbot_decode + ble_scan (not yet
-    migrated). This asserts we didn't silently drop their copies before the gated Stage-2 cutover."""
+def test_unmigrated_edge_nodes_still_fork():
+    """Migration-state guard: c3 + s3 are NOT yet migrated, so they still fork the BLE core. Asserts we
+    don't silently drop their copies before their gated cutover. (c6 migrated — see below.)"""
     matrix = G.build_matrix()
-    for node in ("esp32c3", "esp32c6", "esp32s3-eth"):
+    for node in ("esp32c3", "esp32s3-eth"):
         assert matrix["switchbot_decode"][node] == "fork"
         assert matrix["ble_scan"][node] == "fork"
 
 
-def test_panel_uses_shared_ble_core():
+def test_migrated_builds_use_shared_ble_core():
+    """d1001-panel (Stage 1) + esp32c6 (Stage 2, first live-node migration) link the shared components."""
     matrix = G.build_matrix()
-    assert matrix["switchbot_decode"]["d1001-panel"] == "shared"
-    assert matrix["ble_scan"]["d1001-panel"] == "shared"
+    for dev in ("d1001-panel", "esp32c6"):
+        assert matrix["switchbot_decode"][dev] == "shared"
+        assert matrix["ble_scan"][dev] == "shared"
 
 
 def test_drift_is_detected():

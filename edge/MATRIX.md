@@ -21,8 +21,8 @@ Which module each **real firmware build** links. Pairs with [MODULES.md](MODULES
 | `ha_eth` | — | — | fork | — |
 | `ha_sntp` | fork | fork | fork | — |
 | `ha_mqtt` | fork | fork | fork | — |
-| `ble_scan` | fork | fork | fork | shared |
-| `switchbot_decode` | fork | fork | fork | shared |
+| `ble_scan` | fork | shared | fork | shared |
+| `switchbot_decode` | fork | shared | fork | shared |
 | `gatt_history` | fork | fork | fork | — |
 | `gatt_exec` | fork | fork | fork | — |
 | `ha_ota` | fork | fork | fork | — |
