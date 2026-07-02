@@ -35,9 +35,10 @@
 #include "driver/gpio.h"
 #include "bsp_display.h"
 #include "ui_tiles.h"
+#include "ble_spike.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v25-actuator"
+#define APP_BUILD_TAG "v26-blespike"
 #define BSP_BUTTON_IN  GPIO_NUM_3     // back-of-device button, active-low w/ pull-up
 static const char *TAG = "beachhead";
 
@@ -50,9 +51,12 @@ static const char *TAG = "beachhead";
 #define T_DEBUG  "d1001-beachhead/cmd/debug"
 #define T_DISP   "d1001-beachhead/display"       // <- retained display bring-up result
 #define T_DISPC  "d1001-beachhead/cmd/display"    // -> "on" triggers display bring-up (default off)
+#define T_BLEC   "d1001-beachhead/cmd/ble"        // -> "on" triggers Spike-0 BLE observer (default off)
+#define T_BLE    "d1001-beachhead/ble"            // <- BLE spike telemetry (adv counts)
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
+static void ble_task(void *pv);   // Spike 0 BLE observer task (defined near start_mqtt)
 static volatile bool s_debug = false;         // <-- diagnostic firehose, default OFF
 static EventGroupHandle_t s_evt;
 #define WIFI_CONNECTED_BIT BIT0
@@ -273,6 +277,10 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
             bool on = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
                                    e->data[0] == 't' || e->data[0] == 'T'));
             if (on) xTaskCreate(display_task, "disp", 8192, NULL, 4, NULL);   // bring-up on demand
+        } else if (tl == (int)strlen(T_BLEC) && strncmp(e->topic, T_BLEC, tl) == 0) {
+            bool on = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
+                                   e->data[0] == 't' || e->data[0] == 'T'));
+            if (on) xTaskCreate(ble_task, "ble", 6144, NULL, 3, NULL);   // Spike 0, on demand
         } else if (tl == (int)strlen(T_DEBUG) && strncmp(e->topic, T_DEBUG, tl) == 0) {
             s_debug = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
                                    e->data[0] == 't' || e->data[0] == 'T'));   // on/1/true
@@ -283,6 +291,28 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
     }
     case MQTT_EVENT_ERROR: ESP_LOGE(TAG, "MQTT error"); break;
     default: break;
+    }
+}
+
+// Spike 0: bring up the BLE observer, then publish a compact telemetry line every
+// 2s (adv total / unique MACs / last RSSI / running). Own task — never blocks the
+// MQTT callback. Non-fatal: if ble_spike_start() bailed, we still publish zeros so
+// the FAIL is visible on the bus.
+static void ble_task(void *pv)
+{
+    ble_spike_start();
+    for (;;) {
+        uint32_t total = 0, uniq = 0; int8_t rssi = 0;
+        ble_spike_stats(&total, &uniq, &rssi);
+        if (s_client && s_mqtt_up) {
+            char msg[192];
+            snprintf(msg, sizeof(msg),
+                     "{\"build\":\"%s\",\"running\":%s,\"adv_total\":%u,\"uniq_macs\":%u,\"last_rssi\":%d}",
+                     APP_BUILD_TAG, ble_spike_running() ? "true" : "false",
+                     (unsigned)total, (unsigned)uniq, rssi);
+            esp_mqtt_client_publish(s_client, T_BLE, msg, 0, 1, 1);   // qos1 retained
+        }
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
 

@@ -33,7 +33,42 @@ Source: [`edge/esp32c6/`](../../edge/esp32c6/). Directly portable to the P4:
 
 ## Plan (staged; each independently OTA-able on the live panel, rollback-safe)
 
-### Spike 0 — BLE-over-hosted feasibility (DO FIRST; cheap, decisive)
+### Spike 0 — STATUS: firmware BUILT & config-proven (2026-07-01), HW-verify pending
+**The feasibility question is answered at the build/config level.** esp_hosted 2.12.9 ships
+`examples/host_nimble_bleprph_host_only_vhci` — a NimBLE **host-only** stack on the P4 with the
+controller on the co-processor over **VHCI**. That is exactly our shape. The decisive facts:
+- IDF v5.4 `components/bt/Kconfig`: `config BT_ENABLED depends on !APP_NO_BLOBS` (NOT `SOC_BT_SUPPORTED`)
+  → the host-only NimBLE stack **builds on the P4** even though the P4 has no native BT radio.
+- esp_hosted Kconfig exposes `ESP_HOSTED_ENABLE_BT_NIMBLE` + `ESP_HOSTED_NIMBLE_HCI_VHCI`, and the host
+  API exports `esp_hosted_bt_controller_init()/enable()` (host/api/src/esp_hosted_api.c).
+- **The exact sdkconfig recipe (lifted from the example, now in `beachhead/sdkconfig.defaults`):**
+  ```
+  CONFIG_BT_ENABLED=y
+  CONFIG_BT_CONTROLLER_DISABLED=y          # P4 has no controller; it lives on the C6
+  CONFIG_BT_BLUEDROID_ENABLED=n
+  CONFIG_BT_NIMBLE_ENABLED=y
+  CONFIG_BT_NIMBLE_TRANSPORT_UART=n
+  CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE=y
+  CONFIG_ESP_HOSTED_NIMBLE_HCI_VHCI=y
+  CONFIG_FREERTOS_HZ=1000                   # example sets 1kHz for VHCI/controller timing
+  ```
+  ⚠ These land ONLY via a full `sdkconfig` regen from defaults — a pre-existing `sdkconfig` with
+  `# CONFIG_BT_ENABLED is not set` overrides the defaults file. Delete `sdkconfig` + `idf.py reconfigure`
+  (verified the only delta vs the v25 config is BT/NimBLE/COEX/tick — no other reverts).
+- ⚠ Once `main/CMakeLists.txt` declares any `REQUIRES`, `main` loses its implicit "depends on every
+  component" — so all deps must be enumerated (done; `bt` + `esp_hosted` are the new ones).
+- **Firmware:** `v26-blespike` builds clean (1.61 MB, 62% free). Host init sequence (in `main/ble_spike.c`):
+  `esp_hosted_bt_controller_init()` → `_enable()` → `nimble_port_init()` → host task → on-sync passive
+  **observer** `ble_gap_disc()`. Every advert bumps counters; telemetry on `d1001-beachhead/ble`.
+  MQTT-gated (`cmd/ble on`) + non-fatal so a bad BLE bring-up can't knock the panel/OTA off the bus.
+
+**REMAINING (HW-verify — the actual PASS/FAIL gate):** OTA `v26-blespike` to `.8`, `cmd/ble on`, watch
+`d1001-beachhead/ble` — PASS = `adv_total` climbs + `uniq_macs` > 0 (adverts route host↔slave over VHCI).
+Also confirm the 1 kHz tick didn't disturb the display and WiFi/MQTT stay `rc:0` under BLE load (the
+`esp_hosted` 2.12↔2.3 mismatch stress-test). Held for Hugh to drive (flashing a live panel + BLE sensors
+are in his space; tick change could disturb the display non-recoverably since MQTT-connect self-marks-valid).
+
+### Spike 0 (original) — BLE-over-hosted feasibility (DO FIRST; cheap, decisive)
 On the panel beachhead (`~/reterminal-dev/d1001-beachhead`), enable NimBLE host on the P4 + the esp-hosted
 BLE transport, register a passive **observer** scan, and log any adverts received.
 - **Config:** `esp_hosted` BLE feature on; NimBLE host (`CONFIG_BT_ENABLED`, `CONFIG_BT_NIMBLE_ENABLED`,

@@ -59,3 +59,19 @@ CONFIG_LV_FONT_MONTSERRAT_28=y
 # future OTA never reaches MQTT, the bootloader reverts to the last good slot.
 # (Takes effect via this full USB reflash, which rewrites the bootloader.)
 CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# === Spike 0 (ADR-0019 Phase 6): NimBLE host-only over esp-hosted VHCI ===
+# The P4 has NO native BT controller (SOC_BT_SUPPORTED=n) — BT_ENABLED is gated on
+# !APP_NO_BLOBS in IDF v5.4, so the host-only NimBLE stack DOES build on the P4.
+# The controller lives on the C6 slave; HCI rides the esp-hosted SDIO link as VHCI.
+# Config lifted verbatim from esp_hosted example host_nimble_bleprph_host_only_vhci.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_CONTROLLER_DISABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=n
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_TRANSPORT_UART=n
+CONFIG_ESP_HOSTED_ENABLE_BT_NIMBLE=y
+CONFIG_ESP_HOSTED_NIMBLE_HCI_VHCI=y
+# NimBLE/VHCI controller timing wants the 1 kHz tick (the example sets this). Note:
+# this is a global tick change on top of the working display/wifi/OTA firmware.
+CONFIG_FREERTOS_HZ=1000
