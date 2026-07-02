@@ -39,7 +39,7 @@
 #include "esp_hosted_ota.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v29-battery"
+#define APP_BUILD_TAG "v32-battadc"
 #define BSP_BUTTON_IN  GPIO_NUM_3     // back-of-device button, active-low w/ pull-up
 static const char *TAG = "beachhead";
 
@@ -58,12 +58,14 @@ static const char *TAG = "beachhead";
 #define T_SLVST  "d1001-beachhead/slaveota"       // <- C6 slave-OTA result
 #define T_I2CSC  "d1001-beachhead/cmd/i2cscan"    // -> (any) probe both I2C buses (find fuel gauge)
 #define T_I2CRES "d1001-beachhead/i2c"            // <- I2C scan result
+#define T_BDUMP  "d1001-beachhead/cmd/battdump"   // -> (any) dump 0x36 MAX17048 regs (chip ID)
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
 static void ble_task(void *pv);         // Spike 0 BLE observer task (defined near start_mqtt)
 static void slave_ota_task(void *pv);   // C6 slave-OTA task (defined near start_mqtt)
 static void i2cscan_task(void *pv);     // I2C bus scan (fuel-gauge ID) — defined near start_mqtt
+static void battdump_task(void *pv);    // 0x36 register dump (chip ID) — defined near start_mqtt
 static volatile bool s_debug = false;         // <-- diagnostic firehose, default OFF
 static EventGroupHandle_t s_evt;
 #define WIFI_CONNECTED_BIT BIT0
@@ -298,6 +300,8 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
             if (url) xTaskCreate(slave_ota_task, "slaveota", 8192, url, 5, NULL);   // C6 reflash
         } else if (tl == (int)strlen(T_I2CSC) && strncmp(e->topic, T_I2CSC, tl) == 0) {
             xTaskCreate(i2cscan_task, "i2cscan", 4096, NULL, 4, NULL);   // find fuel gauge
+        } else if (tl == (int)strlen(T_BDUMP) && strncmp(e->topic, T_BDUMP, tl) == 0) {
+            xTaskCreate(battdump_task, "battdump", 4096, NULL, 4, NULL);   // 0x36 reg dump
         } else if (tl == (int)strlen(T_DEBUG) && strncmp(e->topic, T_DEBUG, tl) == 0) {
             s_debug = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
                                    e->data[0] == 't' || e->data[0] == 'T'));   // on/1/true
@@ -403,6 +407,19 @@ static void i2cscan_task(void *pv)
     if (s_client && s_mqtt_up) {
         char msg[224];
         snprintf(msg, sizeof(msg), "{\"i2c\":\"%s\"}", res);
+        esp_mqtt_client_publish(s_client, T_I2CRES, msg, 0, 1, 1);
+    }
+    vTaskDelete(NULL);
+}
+
+static void battdump_task(void *pv)
+{
+    char res[224];
+    bsp_battery_dump(res, sizeof(res));
+    ESP_LOGW(TAG, "battdump: %s", res);
+    if (s_client && s_mqtt_up) {
+        char msg[288];
+        snprintf(msg, sizeof(msg), "{\"battdump\":\"%s\"}", res);
         esp_mqtt_client_publish(s_client, T_I2CRES, msg, 0, 1, 1);
     }
     vTaskDelete(NULL);

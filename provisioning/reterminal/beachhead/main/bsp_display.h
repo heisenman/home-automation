@@ -21,6 +21,10 @@ void bsp_i2c_scan(char *out, size_t outlen);
 #include <stdbool.h>
 esp_err_t bsp_battery_read(int *soc_pct, float *volts, bool *charging);
 
+// Diagnostic: dump key MAX17048 registers from 0x36 as hex into `out`
+// (e.g. "02=... 04=... 08=..."). VERSION (0x08)=0x001x confirms a real MAX17048.
+void bsp_battery_dump(char *out, size_t outlen);
+
 // Call FIRST in app_main (before WiFi): force the panel dark at boot so the power rails
 // don't free-run through the bootloader->app window and strobe the screen (photosensitivity
 // hazard). GPIO + I2C only, no DSI/LVGL. Idempotent, non-fatal. Panel stays dark until

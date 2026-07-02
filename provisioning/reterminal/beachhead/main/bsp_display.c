@@ -11,6 +11,9 @@
 #include "driver/i2c_master.h"
 #include "driver/ledc.h"
 #include "driver/gpio.h"
+#include "esp_adc/adc_oneshot.h"
+#include "esp_adc/adc_cali.h"
+#include "esp_adc/adc_cali_scheme.h"
 #include "esp_ldo_regulator.h"
 #include "esp_lcd_mipi_dsi.h"
 #include "esp_lcd_panel_io.h"
@@ -94,35 +97,84 @@ void bsp_i2c_scan(char *out, size_t outlen)
     }
 }
 
-// MAX17048-class LiPo fuel gauge @ 0x36 on I2C0. Registers (16-bit, MSB first):
-//   0x02 VCELL (78.125 µV/LSB), 0x04 SOC (/256 = %), 0x16 CRATE (signed, 0.208%/hr/LSB).
-static i2c_master_dev_handle_t s_batt;
-static esp_err_t max17048_reg(uint8_t reg, uint16_t *val)
+// Battery: there is NO I2C fuel gauge on the D1001. Per Seeed's reTerminal-D1001 BSP,
+// battery voltage = ADC1 ch2 (12-bit, 12 dB atten, curve-fit cali, 16-sample sorted
+// average) × 2 (on-board divider); % via a voltage LUT; charge status = GPIO15 (low=charging).
+#define BAT_ADC_SAMPLES 16
+#define BAT_CHARGE_GPIO GPIO_NUM_15
+static const int s_bat_lut[21] = { 3262,3390,3467,3554,3619,3659,3686,3710,3731,3752,
+                                   3774,3797,3827,3855,3880,3901,3915,3934,3958,3978,4047 };
+static adc_oneshot_unit_handle_t s_adc;
+static adc_cali_handle_t s_adc_cali_ch2;
+static bool s_bat_init;
+
+static void battery_init(void)
 {
-    uint8_t rx[2];
-    esp_err_t e = i2c_master_transmit_receive(s_batt, &reg, 1, rx, 2, 100);
-    if (e == ESP_OK) *val = ((uint16_t)rx[0] << 8) | rx[1];
-    return e;
+    if (s_bat_init) return;
+    adc_oneshot_unit_init_cfg_t uc = { .unit_id = ADC_UNIT_1, .ulp_mode = ADC_ULP_MODE_DISABLE };
+    if (adc_oneshot_new_unit(&uc, &s_adc) != ESP_OK) { ESP_LOGW(TAG, "adc unit fail"); return; }
+    adc_oneshot_chan_cfg_t cc = { .atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_12 };
+    adc_oneshot_config_channel(s_adc, ADC_CHANNEL_2, &cc);
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    adc_cali_curve_fitting_config_t fc = { .unit_id = ADC_UNIT_1, .chan = ADC_CHANNEL_2,
+                                           .atten = ADC_ATTEN_DB_12, .bitwidth = ADC_BITWIDTH_12 };
+    adc_cali_create_scheme_curve_fitting(&fc, &s_adc_cali_ch2);
+#endif
+    gpio_config_t g = { .pin_bit_mask = 1ULL << BAT_CHARGE_GPIO, .mode = GPIO_MODE_INPUT,
+                        .pull_up_en = GPIO_PULLUP_ENABLE };
+    gpio_config(&g);
+    s_bat_init = true;
 }
+
+static int bat_pct(int mv)
+{
+    if (mv < s_bat_lut[0]) return 0;
+    for (int i = 1; i < 21; i++)
+        if (mv < s_bat_lut[i])
+            return (i - 1) * 5 + 5 * (mv - s_bat_lut[i-1]) / (s_bat_lut[i] - s_bat_lut[i-1]);
+    return 100;
+}
+
+// Returns the divider-corrected battery mV (0 on failure). soc/volts/charging optional.
+static int battery_millivolts(void)
+{
+    battery_init();
+    if (!s_adc) return 0;
+    int raw[BAT_ADC_SAMPLES];
+    for (int i = 0; i < BAT_ADC_SAMPLES; i++) { raw[i] = 0; adc_oneshot_read(s_adc, ADC_CHANNEL_2, &raw[i]); }
+    for (int i = 0; i < BAT_ADC_SAMPLES - 1; i++)          // sort ascending
+        for (int j = i + 1; j < BAT_ADC_SAMPLES; j++)
+            if (raw[i] > raw[j]) { int t = raw[i]; raw[i] = raw[j]; raw[j] = t; }
+    long sum = 0;                                          // drop min+max, average the rest
+    for (int i = 1; i < BAT_ADC_SAMPLES - 1; i++) sum += raw[i];
+    int rawavg = sum / (BAT_ADC_SAMPLES - 2), mv = rawavg;
+#if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
+    if (s_adc_cali_ch2) adc_cali_raw_to_voltage(s_adc_cali_ch2, rawavg, &mv);
+#endif
+    return mv * 2;                                         // on-board voltage divider
+}
+
 esp_err_t bsp_battery_read(int *soc_pct, float *volts, bool *charging)
 {
-    if (i2c_bus(0, I2C0_SCL, I2C0_SDA, &s_i2c0) != ESP_OK) return ESP_FAIL;
-    if (!s_batt) {
-        i2c_device_config_t dc = {
-            .dev_addr_length = I2C_ADDR_BIT_LEN_7, .device_address = 0x36, .scl_speed_hz = 100000,
-        };
-        if (i2c_master_bus_add_device(s_i2c0, &dc, &s_batt) != ESP_OK) return ESP_FAIL;
-    }
-    uint16_t soc, vcell, crate = 0;
-    if (max17048_reg(0x04, &soc) != ESP_OK) return ESP_FAIL;
-    if (max17048_reg(0x02, &vcell) != ESP_OK) return ESP_FAIL;
-    esp_err_t ce = max17048_reg(0x16, &crate);
-    int pct = soc >> 8;                       // integer % (high byte)
-    if (pct > 100) pct = 100;
-    if (soc_pct)  *soc_pct  = pct;
-    if (volts)    *volts    = vcell * 0.000078125f;
-    if (charging) *charging = (ce == ESP_OK) && ((int16_t)crate > 0);
+    int mv = battery_millivolts();
+    if (mv <= 0) return ESP_FAIL;
+    if (soc_pct)  *soc_pct  = bat_pct(mv);
+    if (volts)    *volts    = mv / 1000.0f;
+    if (charging) *charging = (gpio_get_level(BAT_CHARGE_GPIO) == 0);   // active-low
     return ESP_OK;
+}
+
+// Diagnostic: poll battery mV/pct/charge a few times (values jitter if live).
+void bsp_battery_dump(char *out, size_t outlen)
+{
+    if (!out || outlen == 0) return;
+    size_t n = 0;
+    for (int r = 0; r < 4; r++) {
+        int mv = battery_millivolts();
+        n += snprintf(out + n, n < outlen ? outlen - n : 0, "%s%dmV/%d%%/chg%d",
+                      r ? " " : "", mv, bat_pct(mv), gpio_get_level(BAT_CHARGE_GPIO) == 0);
+        vTaskDelay(pdMS_TO_TICKS(250));
+    }
 }
 
 static esp_err_t backlight_init(void)
