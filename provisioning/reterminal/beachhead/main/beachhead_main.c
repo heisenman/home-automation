@@ -39,7 +39,7 @@
 #include "esp_hosted_ota.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v27-slaveota"
+#define APP_BUILD_TAG "v28-i2cscan"
 #define BSP_BUTTON_IN  GPIO_NUM_3     // back-of-device button, active-low w/ pull-up
 static const char *TAG = "beachhead";
 
@@ -56,11 +56,14 @@ static const char *TAG = "beachhead";
 #define T_BLE    "d1001-beachhead/ble"            // <- BLE spike telemetry (adv counts)
 #define T_SLVOTA "d1001-beachhead/cmd/slaveota"   // -> URL of C6 slave app bin (network_adapter.bin)
 #define T_SLVST  "d1001-beachhead/slaveota"       // <- C6 slave-OTA result
+#define T_I2CSC  "d1001-beachhead/cmd/i2cscan"    // -> (any) probe both I2C buses (find fuel gauge)
+#define T_I2CRES "d1001-beachhead/i2c"            // <- I2C scan result
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
 static void ble_task(void *pv);         // Spike 0 BLE observer task (defined near start_mqtt)
 static void slave_ota_task(void *pv);   // C6 slave-OTA task (defined near start_mqtt)
+static void i2cscan_task(void *pv);     // I2C bus scan (fuel-gauge ID) — defined near start_mqtt
 static volatile bool s_debug = false;         // <-- diagnostic firehose, default OFF
 static EventGroupHandle_t s_evt;
 #define WIFI_CONNECTED_BIT BIT0
@@ -288,6 +291,8 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
         } else if (tl == (int)strlen(T_SLVOTA) && strncmp(e->topic, T_SLVOTA, tl) == 0) {
             char *url = strndup(e->data, dl);
             if (url) xTaskCreate(slave_ota_task, "slaveota", 8192, url, 5, NULL);   // C6 reflash
+        } else if (tl == (int)strlen(T_I2CSC) && strncmp(e->topic, T_I2CSC, tl) == 0) {
+            xTaskCreate(i2cscan_task, "i2cscan", 4096, NULL, 4, NULL);   // find fuel gauge
         } else if (tl == (int)strlen(T_DEBUG) && strncmp(e->topic, T_DEBUG, tl) == 0) {
             s_debug = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
                                    e->data[0] == 't' || e->data[0] == 'T'));   // on/1/true
@@ -379,6 +384,22 @@ done:
       ESP_LOGW(TAG, "C6 slave-OTA result: %s (0x%x, %d bytes)", e == ESP_OK ? "OK" : "FAIL", (int)e, total);
       if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_SLVST, msg, 0, 1, 1); }
     free(url);
+    vTaskDelete(NULL);
+}
+
+// I2C bus scan — probe both buses for ACKing addresses, publish the list. Own task
+// (probe can briefly stretch), never the MQTT callback. Requires the display up so
+// the I2C buses exist (auto-boots on MQTT connect anyway).
+static void i2cscan_task(void *pv)
+{
+    char res[160];
+    bsp_i2c_scan(res, sizeof(res));
+    ESP_LOGW(TAG, "I2C scan: %s", res);
+    if (s_client && s_mqtt_up) {
+        char msg[224];
+        snprintf(msg, sizeof(msg), "{\"i2c\":\"%s\"}", res);
+        esp_mqtt_client_publish(s_client, T_I2CRES, msg, 0, 1, 1);
+    }
     vTaskDelete(NULL);
 }
 

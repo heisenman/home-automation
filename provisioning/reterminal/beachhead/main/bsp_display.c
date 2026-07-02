@@ -60,11 +60,38 @@ static int  s_brightness = 80;    // last non-zero backlight %, restored on wake
 
 static esp_err_t i2c_bus(int port, int scl, int sda, i2c_master_bus_handle_t *out)
 {
+    if (*out) return ESP_OK;   // reuse: creating a bus on a busy port fails
     i2c_master_bus_config_t c = {
         .clk_source = I2C_CLK_SRC_DEFAULT,
         .i2c_port = port, .scl_io_num = scl, .sda_io_num = sda,
     };
     return i2c_new_master_bus(&c, out);
+}
+
+// Diagnostic: probe both I2C buses, list ACKing 7-bit addresses into `out`
+// (e.g. "i2c0:0x40 i2c1:0x20,0x51,0x62"). Used to identify the battery fuel gauge.
+void bsp_i2c_scan(char *out, size_t outlen)
+{
+    if (!out || outlen == 0) return;
+    out[0] = '\0';
+    size_t n = 0;
+    const int scl[2] = { I2C0_SCL, I2C1_SCL }, sda[2] = { I2C0_SDA, I2C1_SDA };
+    i2c_master_bus_handle_t *h[2] = { &s_i2c0, &s_i2c1 };
+    for (int b = 0; b < 2; b++) {
+        n += snprintf(out + n, n < outlen ? outlen - n : 0, "%si2c%d:", b ? " " : "", b);
+        if (i2c_bus(b, scl[b], sda[b], h[b]) != ESP_OK) {
+            n += snprintf(out + n, n < outlen ? outlen - n : 0, "err");
+            continue;
+        }
+        bool any = false;
+        for (uint16_t a = 0x08; a <= 0x77; a++) {
+            if (i2c_master_probe(*h[b], a, 30) == ESP_OK) {
+                n += snprintf(out + n, n < outlen ? outlen - n : 0, "%s0x%02X", any ? "," : "", a);
+                any = true;
+            }
+        }
+        if (!any) n += snprintf(out + n, n < outlen ? outlen - n : 0, "none");
+    }
 }
 
 static esp_err_t backlight_init(void)

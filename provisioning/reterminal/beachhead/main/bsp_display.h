@@ -8,7 +8,12 @@
 // (bootloader rollback isn't enabled yet — the net/MQTT lifeline must survive).
 #pragma once
 #include "esp_err.h"
+#include <stddef.h>
 #include "lvgl.h"
+
+// Diagnostic: probe both I2C buses and write ACKing 7-bit addresses to `out`
+// (e.g. "i2c0:0x40 i2c1:0x20,0x51,0x62"). Used to identify the battery fuel gauge.
+void bsp_i2c_scan(char *out, size_t outlen);
 
 // Call FIRST in app_main (before WiFi): force the panel dark at boot so the power rails
 // don't free-run through the bootloader->app window and strobe the screen (photosensitivity
