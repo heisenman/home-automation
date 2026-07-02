@@ -43,7 +43,7 @@
 #include "esp_hosted_ota.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v37-modular"
+#define APP_BUILD_TAG "v43-tempf"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -542,6 +542,7 @@ static void fs_publish(const char *json)
 {
     if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_FS, json, 0, 0, 0);
 }
+
 
 void app_main(void)
 {

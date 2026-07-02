@@ -27,14 +27,14 @@ static lv_obj_t *s_header, *s_grid;
 
 // server-authored graph spec for a metric (from /api/v1/sensors `graphs`, ADR-0019 shared UI spec)
 #define MAX_GRAPHS 8
-struct gspec { char key[16]; char label[18]; uint32_t color; int prec; };
+struct gspec { char key[16]; char label[18]; char unit[8]; uint32_t color; int prec; };
 
 // Per-card registry so MQTT state updates can patch a card's headline in place.
 // Written by render() and read by ui_tiles_on_state() — both hold the LVGL lock,
 // which serializes them (render rebuilds the whole registry each fetch).
 struct card_ref {
     char id[40];
-    const char *hkey, *hlabel, *hunit;   // headline metric (point into the static FMT table)
+    char hkey[24], hlabel[20], hunit[12];   // headline metric spec (copied from the server catalog)
     int hprec;
     lv_obj_t *hval;                       // the headline label widget
     char name[40];                        // display name (for the detail overlay)
@@ -115,20 +115,67 @@ static lv_obj_t *s_admin_ctrls, *s_ov_onabove, *s_ov_offbelow, *s_ov_autorow;
 static double s_edit_on_above, s_edit_off_below;   // live-edited policy values
 static bool s_ov_has_policy;
 
-// metric key -> friendly label + unit + decimal places. Order = display priority.
-struct mfmt { const char *key, *label, *unit; int prec; };
-static const struct mfmt FMT[] = {
-    {"temperature_c", "Temp",  "C",     1},
-    {"pm25_ugm3",     "PM2.5", "ug",    0},
-    {"co2_ppm",       "CO2",   "ppm",   0},
-    {"radon_bqm3",    "Radon", "Bq",    0},
-    {"humidity_pct",  "Hum",   "%",     0},
-    {"dewpoint_c",    "Dew",   "C",     1},
-    {"pressure_hpa",  "Press", "hPa",   0},
-    {"aqi",           "AQI",   "",      0},
-    {"battery_pct",   "Batt",  "%",     0},
+// Metric presentation spec = the server's shared UI catalog (/api/v1/sensors top-level `metrics`,
+// ADR-0019). SINGLE source of label/unit/precision/order truth, mirroring the PWA — no hardcoded
+// table. Order = display + headline priority. A tiny fallback covers the pre-first-fetch window (or
+// an older server that doesn't emit the catalog) until parse_catalog() replaces it.
+struct mfmt { char key[24], label[20], unit[12]; int prec; };
+#define MAX_CAT 32
+static struct mfmt s_cat[MAX_CAT] = {
+    {"temperature_c", "Temp", "C", 1},
+    {"humidity_pct",  "Hum",  "%", 0},
 };
-#define NFMT (sizeof(FMT)/sizeof(FMT[0]))
+static int s_ncat = 2;   // fallback entry count until the server catalog arrives
+
+// LVGL's montserrat font is ASCII-only; the server labels/units carry °, µ, ³, ₂ etc. Fold the
+// known multibyte glyphs to ASCII (°→"", µ→u, ²/³→2/3, ₂/₃→2/3) and drop any other non-ASCII, so
+// "°C"→"C", "µg/m³"→"ug/m3", "CO₂"→"CO2" render cleanly (renderer-local adaptation of the shared spec).
+static void ascii_fold(const char *src, char *dst, size_t cap)
+{
+    size_t o = 0;
+    for (const unsigned char *p = (const unsigned char *)src; *p && o < cap - 1; ) {
+        if (*p < 0x80) { dst[o++] = *p++; continue; }
+        char sub = 0; int adv = 0;
+        if (p[0] == 0xC2 && p[1] == 0xB0) { sub = 0;   adv = 2; }      // ° -> drop
+        else if (p[0] == 0xC2 && p[1] == 0xB5) { sub = 'u'; adv = 2; } // µ
+        else if (p[0] == 0xC2 && p[1] == 0xB2) { sub = '2'; adv = 2; } // ²
+        else if (p[0] == 0xC2 && p[1] == 0xB3) { sub = '3'; adv = 2; } // ³
+        else if (p[0] == 0xE2 && p[1] == 0x82 && p[2] == 0x82) { sub = '2'; adv = 3; } // ₂
+        else if (p[0] == 0xE2 && p[1] == 0x82 && p[2] == 0x83) { sub = '3'; adv = 3; } // ₃
+        else { p++; while ((*p & 0xC0) == 0x80) p++; continue; }       // unknown: skip whole char
+        if (sub && o < cap - 1) dst[o++] = sub;
+        p += adv;
+    }
+    dst[o] = 0;
+}
+
+// Rebuild s_cat[] from the server metric catalog. Caller holds the LVGL lock (render()).
+static void parse_catalog(cJSON *metrics)
+{
+    if (!cJSON_IsArray(metrics) || cJSON_GetArraySize(metrics) == 0) return;   // keep the fallback
+    int n = 0; cJSON *m;
+    cJSON_ArrayForEach(m, metrics) {
+        if (n >= MAX_CAT) break;
+        const cJSON *k = cJSON_GetObjectItem(m, "key");
+        if (!cJSON_IsString(k)) continue;
+        const cJSON *l = cJSON_GetObjectItem(m, "label");
+        const cJSON *u = cJSON_GetObjectItem(m, "unit");
+        const cJSON *pr = cJSON_GetObjectItem(m, "precision");
+        struct mfmt *f = &s_cat[n++];
+        snprintf(f->key, sizeof(f->key), "%s", k->valuestring);
+        ascii_fold(cJSON_IsString(l) ? l->valuestring : k->valuestring, f->label, sizeof(f->label));
+        ascii_fold(cJSON_IsString(u) ? u->valuestring : "", f->unit, sizeof(f->unit));
+        f->prec = cJSON_IsNumber(pr) ? (int)pr->valuedouble : 0;
+    }
+    if (n > 0) s_ncat = n;
+}
+
+// Panel-local unit localization: this wall panel displays Fahrenheit. Any Celsius metric
+// (temperature_c, dewpoint_c — server unit "C") is converted for DISPLAY only; the data and
+// the shared spec stay SI (the PWA still shows °C). Keyed off the unit so it stays generic.
+static inline bool is_celsius(const char *unit) { return unit && strcmp(unit, "C") == 0; }
+static inline double disp_val(const char *unit, double v) { return is_celsius(unit) ? v * 9.0 / 5.0 + 32.0 : v; }
+static inline const char *disp_unit(const char *unit) { return is_celsius(unit) ? "F" : unit; }
 
 // ---- HTTP GET into a PSRAM buffer (caller frees) ----
 static char *http_get(const char *url, int *out_len)
@@ -348,16 +395,16 @@ static void card_for(cJSON *e)
     else          lv_label_set_text(r, room);
     lv_obj_set_style_text_color(r, lv_color_hex(0x8fb4ff), 0);
 
-    // headline = highest-priority present metric, shown big
+    // headline = highest-priority present metric (catalog order), shown big
     char big[48] = ""; int headline = -1;
-    for (unsigned i = 0; i < NFMT && headline < 0; i++) {
-        if (strcmp(FMT[i].key, "battery_pct") == 0) continue;
-        bool p; double v = metric_of(metrics, FMT[i].key, &p);
-        if (p) { headline = i; snprintf(big, sizeof(big), "%.*f %s", FMT[i].prec, v, FMT[i].unit); }
+    for (int i = 0; i < s_ncat && headline < 0; i++) {
+        bool p; double v = metric_of(metrics, s_cat[i].key, &p);
+        if (p) { headline = i; snprintf(big, sizeof(big), "%.*f %s", s_cat[i].prec,
+                                        disp_val(s_cat[i].unit, v), disp_unit(s_cat[i].unit)); }
     }
     if (headline >= 0) {
         lv_obj_t *h = lv_label_create(card);
-        lv_label_set_text_fmt(h, "%s %s", FMT[headline].label, big);
+        lv_label_set_text_fmt(h, "%s %s", s_cat[headline].label, big);
         lv_obj_set_style_text_font(h, &lv_font_montserrat_28, 0);
         lv_obj_set_style_text_color(h, lv_color_hex(stale ? 0x94a3b8 : 0xffffff), 0);
         lv_obj_set_style_pad_top(h, 4, 0);
@@ -366,17 +413,20 @@ static void card_for(cJSON *e)
             int idx = s_ncards;
             struct card_ref *cr = &s_cards[s_ncards++];
             snprintf(cr->id, sizeof(cr->id), "%s", jid->valuestring);
-            cr->hkey = FMT[headline].key; cr->hlabel = FMT[headline].label;
-            cr->hunit = FMT[headline].unit; cr->hprec = FMT[headline].prec;
+            snprintf(cr->hkey, sizeof(cr->hkey), "%s", s_cat[headline].key);
+            snprintf(cr->hlabel, sizeof(cr->hlabel), "%s", s_cat[headline].label);
+            snprintf(cr->hunit, sizeof(cr->hunit), "%s", s_cat[headline].unit);
+            cr->hprec = s_cat[headline].prec;
             cr->hval = h;
             snprintf(cr->name, sizeof(cr->name), "%s", name);
             snprintf(cr->room, sizeof(cr->room), "%s", room);
-            char det[400]; size_t o = 0;                 // full detail: every known metric, one per line
-            for (unsigned i = 0; i < NFMT; i++) {
-                bool pp; double vv = metric_of(metrics, FMT[i].key, &pp);
+            char det[400]; size_t o = 0;                 // full detail: every catalog metric, one per line
+            for (int i = 0; i < s_ncat; i++) {
+                bool pp; double vv = metric_of(metrics, s_cat[i].key, &pp);
                 if (!pp) continue;
                 o += snprintf(det + o, sizeof(det) - o, "%s%s: %.*f %s",
-                              o ? "\n" : "", FMT[i].label, FMT[i].prec, vv, FMT[i].unit);
+                              o ? "\n" : "", s_cat[i].label, s_cat[i].prec,
+                              disp_val(s_cat[i].unit, vv), disp_unit(s_cat[i].unit));
                 if (o >= sizeof(det) - 24) break;
             }
             cr->detail = strdup(det);
@@ -389,13 +439,15 @@ static void card_for(cJSON *e)
                     if (cr->ngraph >= MAX_GRAPHS) break;
                     const cJSON *gk = cJSON_GetObjectItem(g, "key");
                     const cJSON *gl = cJSON_GetObjectItem(g, "label");
+                    const cJSON *gu = cJSON_GetObjectItem(g, "unit");
                     const cJSON *gc = cJSON_GetObjectItem(g, "color");
                     const cJSON *gp = cJSON_GetObjectItem(g, "precision");
                     if (!cJSON_IsString(gk)) continue;
                     struct gspec *gs = &cr->graphs[cr->ngraph++];
                     snprintf(gs->key, sizeof(gs->key), "%s", gk->valuestring);
-                    snprintf(gs->label, sizeof(gs->label), "%s",
-                             cJSON_IsString(gl) ? gl->valuestring : gk->valuestring);
+                    ascii_fold(cJSON_IsString(gl) ? gl->valuestring : gk->valuestring,
+                               gs->label, sizeof(gs->label));
+                    ascii_fold(cJSON_IsString(gu) ? gu->valuestring : "", gs->unit, sizeof(gs->unit));
                     gs->color = parse_hex_color(cJSON_IsString(gc) ? gc->valuestring : NULL);
                     gs->prec = cJSON_IsNumber(gp) ? (int)gp->valuedouble : 0;
                 }
@@ -407,12 +459,13 @@ static void card_for(cJSON *e)
 
     // remaining present metrics as a compact multiline
     char rest[192] = ""; size_t off = 0;
-    for (unsigned i = 0; i < NFMT; i++) {
-        if ((int)i == headline) continue;
-        bool p; double v = metric_of(metrics, FMT[i].key, &p);
+    for (int i = 0; i < s_ncat; i++) {
+        if (i == headline) continue;
+        bool p; double v = metric_of(metrics, s_cat[i].key, &p);
         if (!p) continue;
         off += snprintf(rest + off, sizeof(rest) - off, "%s%s %.*f%s",
-                        off ? "   " : "", FMT[i].label, FMT[i].prec, v, FMT[i].unit);
+                        off ? "   " : "", s_cat[i].label, s_cat[i].prec,
+                        disp_val(s_cat[i].unit, v), disp_unit(s_cat[i].unit));
         if (off >= sizeof(rest) - 24) break;
     }
     if (rest[0]) {
@@ -529,7 +582,7 @@ static void chart_worker(void *pv)
                         if (n >= GRAPH_POINTS) break;
                         cJSON *v = cJSON_GetObjectItem(r, "value");
                         if (!cJSON_IsNumber(v)) continue;
-                        int32_t sv = (int32_t)(v->valuedouble * CHART_SCALE);
+                        int32_t sv = (int32_t)(disp_val(g[i].unit, v->valuedouble) * CHART_SCALE);   // °C→°F for temp charts
                         vals[n] = sv;
                         if (n == 0 || sv < vmin) vmin = sv;
                         if (n == 0 || sv > vmax) vmax = sv;
@@ -893,9 +946,10 @@ static void actuator_card(cJSON *d)
     }
 }
 
-static void render(cJSON *sensors, cJSON *devices)
+static void render(cJSON *sensors, cJSON *devices, cJSON *catalog)
 {
     if (!lvgl_port_lock(0)) return;
+    parse_catalog(catalog);           // refresh the shared metric spec before rebuilding cards
     for (int i = 0; i < s_ncards; i++) { free(s_cards[i].detail); s_cards[i].detail = NULL; }
     lv_obj_clean(s_grid);
     s_ncards = 0;                     // registries rebuilt from scratch each fetch
@@ -921,8 +975,9 @@ static void ui_task(void *pv)
         cJSON *r3 = (b3 && l3 > 0) ? cJSON_Parse(b3) : NULL;
         cJSON *sensors = r1 ? cJSON_GetObjectItem(r1, "sensors") : NULL;
         cJSON *devices = r2 ? cJSON_GetObjectItem(r2, "devices") : NULL;
+        cJSON *catalog = r1 ? cJSON_GetObjectItem(r1, "metrics") : NULL;   // shared UI metric spec
         if (cJSON_IsArray(sensors) || cJSON_IsArray(devices)) {
-            render(cJSON_IsArray(sensors) ? sensors : NULL, cJSON_IsArray(devices) ? devices : NULL);
+            render(cJSON_IsArray(sensors) ? sensors : NULL, cJSON_IsArray(devices) ? devices : NULL, catalog);
         } else {
             ESP_LOGW(TAG, "fetch/parse failed");
             if (lvgl_port_lock(0)) { lv_label_set_text(s_header, "Home  -  (offline)"); lvgl_port_unlock(); }
@@ -961,7 +1016,8 @@ static void apply_state(const char *json)
                 // built-in printf does NOT support %f/%.*f and would crash (desync).
                 char buf[48];
                 snprintf(buf, sizeof(buf), "%s %.*f %s",
-                         s_cards[i].hlabel, s_cards[i].hprec, v, s_cards[i].hunit);
+                         s_cards[i].hlabel, s_cards[i].hprec,
+                         disp_val(s_cards[i].hunit, v), disp_unit(s_cards[i].hunit));
                 lv_label_set_text(s_cards[i].hval, buf);
             }
             break;
