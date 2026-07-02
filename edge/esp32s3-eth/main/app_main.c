@@ -20,6 +20,7 @@
 #include "ha_ota.h"
 #include "ha_led.h"
 #include "ha_relay.h"
+#include "ha_gas.h"
 #include "ble_scan.h"
 
 static const char *TAG = "ha_edge";
@@ -104,6 +105,9 @@ void app_main(void) {
     };
     ha_ble_scan_start(&scan_cfg);
     ESP_LOGI(TAG, "edge node up: node=%s broker=%s", cfg.node_id, cfg.broker_uri);
+
+    // SGP-40 VOC gas lane (I2C, independent of the radio) — no-op if the sensor isn't wired.
+    ha_gas_start();
 
     // If we just booted a freshly-OTA'd image, self-test now and confirm-or-rollback.
     ha_ota_confirm_if_pending();

@@ -29,7 +29,7 @@
 #endif
 
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v15-modular" // bump to prove an OTA swapped the running image
+#define HA_FW_VERSION "v16-gas" // bump to prove an OTA swapped the running image
 #endif
 
 static const char *TAG = "ha_mqtt";
@@ -288,6 +288,22 @@ void ha_mqtt_publish_reply(const char *reqid, const char *payload) {
     char topic[80];
     snprintf(topic, sizeof(topic), "home/edge/%s/%s/reply", s_node, reqid);
     esp_mqtt_client_publish(s_client, topic, payload, 0, 1, false);
+}
+
+void ha_mqtt_publish_node_sensor(const char *key, const char *reg_key,
+                                 const char *device_type, const char *metrics_json) {
+    if (!s_connected) return;
+    char topic[80];
+    snprintf(topic, sizeof(topic), "home/edge/%s/%s/adv", s_node, key);
+    char ts[24];
+    if (!ha_sntp_iso_utc(ts, sizeof(ts))) ts[0] = '\0';
+    char payload[320];
+    int n = snprintf(payload, sizeof(payload),
+        "{\"schema\":1,\"node\":\"%s\",\"mac\":\"%s\",\"device_type\":\"%s\","
+        "\"ts\":\"%s\",\"transport\":\"i2c-local\",\"metrics\":%s,\"meta\":{}}",
+        s_node, reg_key, device_type, ts, metrics_json);
+    if (n <= 0 || n >= (int)sizeof(payload)) return;
+    esp_mqtt_client_publish(s_client, topic, payload, n, 1, false);
 }
 
 void ha_mqtt_log(const char *fmt, ...) {

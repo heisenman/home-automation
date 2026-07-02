@@ -33,9 +33,9 @@ Which module each **real firmware build** links. Pairs with [MODULES.md](MODULES
 | `fs_ops` | — | — | — | shared |
 | `bat_profile` | — | — | — | fork |
 | `ha_battery` | — | — | — | shared |
-| `ha_gas` | — | fork | — | — |
-| `sgp40` | — | shared | — | — |
-| `sensirion_gas_index` | — | shared | — | — |
+| `ha_gas` | — | fork | fork | — |
+| `sgp40` | — | shared | shared | — |
+| `sensirion_gas_index` | — | shared | shared | — |
 
 <!-- /GENERATED:module-matrix -->
 

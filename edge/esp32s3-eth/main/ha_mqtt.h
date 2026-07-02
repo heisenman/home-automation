@@ -20,5 +20,12 @@ void ha_mqtt_publish_history(const char *mac_str, const char *payload);
 // Publish a generic GATT-forwarder reply to home/edge/<node>/<reqid>/reply (qos 1).
 void ha_mqtt_publish_reply(const char *reqid, const char *payload);
 
+// Publish a node-LOCAL sensor reading (e.g. an I2C SGP-40 wired to this node) to
+// home/edge/<node>/<key>/adv with transport "i2c-local". `reg_key` is the registry lookup key the
+// dictator's edge_mapper resolves against instance/devices.yaml (NOT a BLE MAC). metrics_json is a
+// pre-formed JSON object, e.g. {"voc_index":100,"voc_raw":30000}.
+void ha_mqtt_publish_node_sensor(const char *key, const char *reg_key,
+                                 const char *device_type, const char *metrics_json);
+
 // Remote log line to home/edge/<node>/log (qos 0) — debug a headless node over MQTT.
 void ha_mqtt_log(const char *fmt, ...);
