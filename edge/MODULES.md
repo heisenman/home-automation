@@ -8,7 +8,7 @@ which). Target = real shared IDF components (ADR-0020); today most are shared by
 
 | Module | Role | Contract/ADR | Platform support | Dep notes | State |
 |--------|------|--------------|------------------|-----------|-------|
-| `switchbot_decode` | Advert bytes → reading (pure, has test) | device-family decode | any | none (pure) | **shared** |
+| `switchbot_decode` | Advert bytes → reading (pure, has test) | device-family decode | any | none (pure) | **extracted → [firmware/components/](../firmware/components/switchbot_decode/)** (forks still link their copy until gated migration) |
 | `ble_scan` | NimBLE passive observer → decode → publish; transport-aware duty cycle | ADR-0001 | native-radio **or** esp-hosted-VHCI (panel) | NimBLE | drifted (c3/c6 vs s3) |
 | `gatt_exec` / `gatt_history` | Server-driven GATT actuation / history pull | ADR-0010 | native-radio **or** VHCI | NimBLE central | shared |
 | `ha_mqtt` | Broker client: adverts/status/log; subscribes signed cmd + relay; verifies HMAC | ADR-0010 | any transport | mqtt | **drifted (3×)** |
@@ -23,7 +23,8 @@ which). Target = real shared IDF components (ADR-0020); today most are shared by
 
 ## Extraction order (ADR-0020 Stage 1)
 
-Extract the **shared + pure** first (lowest risk): `switchbot_decode`, then `ble_scan` (with a platform hook
-for native-controller vs `esp_hosted_bt_controller_init`+VHCI). Panel adopts these first; live edge nodes
-migrate gated. Reconcile the **drifted** `ha_mqtt`/`app_main`/`ble_scan` into one parameterized module during
-migration.
+Extract the **shared + pure** first (lowest risk): `switchbot_decode` **✓ done** (verbatim,
+[firmware/components/switchbot_decode/](../firmware/components/switchbot_decode/), host test passes; consumed
+by no build yet), then `ble_scan` (with a platform hook for native-controller vs
+`esp_hosted_bt_controller_init`+VHCI). Panel adopts these first; live edge nodes migrate gated. Reconcile the
+**drifted** `ha_mqtt`/`app_main`/`ble_scan` into one parameterized module during migration.
