@@ -101,7 +101,9 @@ void ha_reach_start(const ha_reach_cfg_t *cfg) {
     if (!cfg) { ESP_LOGE(TAG, "null cfg"); return; }
     s_cfg = *cfg;
     s_last_report_ms = esp_log_timestamp();
-    xTaskCreate(fallback_task, "reach", 4096, NULL, 3, NULL);
+    // 6 KB: ha_reach_report() holds a ~1 KB array buffer while the publish sink builds a ~1.15 KB payload
+    // on top of it — give the report path comfortable headroom (the MQTT-task trigger path already has it).
+    xTaskCreate(fallback_task, "reach", 6144, NULL, 3, NULL);
     ESP_LOGI(TAG, "reach census up (%d slots, fallback %ums)",
              REACH_SLOTS, (unsigned)(s_cfg.fallback_ms ? s_cfg.fallback_ms : DEFAULT_FALLBACK_MS));
 }
