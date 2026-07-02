@@ -272,6 +272,37 @@ def cmd_note(a, agent):
     t["note"] = a.note; _save(t, agent); print(f"noted {a.id}: {a.note}")
 
 
+def cmd_log(a, agent):
+    """Append a work-step to the task's DURABLE step log. Part of the delegation contract: a delegated
+    worker narrates each major step (pull ✓ / build ✓ / OTA sent / validated ...) so the board records
+    HOW a task ran, not just its final state. Unlike `note` (last-write), `log` accumulates. The retained
+    task record re-publishes on each append, so a live `mosquitto_sub -t ha/agents/#` streams steps too."""
+    t = _get(a.id)
+    if not t:
+        print(f"ERROR: no such task '{a.id}'"); sys.exit(1)
+    t.setdefault("log", []).append({"ts": now(), "by": agent, "step": a.step})
+    t["note"] = a.step                         # note mirrors the latest step for at-a-glance `list`
+    _save(t, agent); _beacon(agent, current=a.id, note=f"{a.id}: {a.step}")
+    print(f"logged {a.id} step #{len(t['log'])}: {a.step}")
+
+
+def cmd_show(a, agent):
+    """Full task record incl. its step log — the after-the-fact 'what did the agent actually do' view."""
+    t = _get(a.id)
+    if not t:
+        print(f"ERROR: no such task '{a.id}'"); sys.exit(1)
+    print(_fmt(t))
+    if t.get("note"):
+        print(f"  note: {t['note']}")
+    log = t.get("log", [])
+    if not log:
+        print("  steps: (none logged)"); return
+    print(f"  steps ({len(log)}):")
+    for i, e in enumerate(log, 1):
+        age = now() - int(e.get("ts", 0))
+        print(f"    {i:>2}. [{age:>6}s ago] {e.get('by','?')}: {e.get('step','')}")
+
+
 def cmd_dep(a, agent):
     """Edit a task's dependency list. Clean escape from a cancelled/wrong dep without --force."""
     t = _get(a.id)
@@ -353,6 +384,8 @@ def main():
     sp = add("block"); sp.add_argument("id"); sp.add_argument("--reason", default="")
     sp = add("cancel"); sp.add_argument("id"); sp.add_argument("--reason", default="")
     sp = add("note"); sp.add_argument("id"); sp.add_argument("--note", required=True)
+    sp = add("log"); sp.add_argument("id"); sp.add_argument("--step", required=True)
+    add("show").add_argument("id")
     sp = add("dep"); sp.add_argument("id"); sp.add_argument("--add", default=""); sp.add_argument("--remove", default="")
     sp = add("gate"); sp.add_argument("id"); sp.add_argument("--set", default=""); sp.add_argument("--clear", action="store_true")
     sp = add("beacon"); sp.add_argument("--note", default="")
@@ -364,7 +397,7 @@ def main():
     if getattr(a, "broker", None):
         BROKER = a.broker
     agent = getattr(a, "agent", None) or os.environ.get("HA_AGENT_ID")
-    if a.cmd in ("list", "ready", "agents", "whoami") and not agent:
+    if a.cmd in ("list", "ready", "agents", "whoami", "show") and not agent:
         agent = "anon"
     if not agent:
         print("ERROR: set --as <id> or $HA_AGENT_ID (ops|dev)"); sys.exit(1)
@@ -374,8 +407,8 @@ def main():
     {"list": cmd_list, "ready": cmd_ready, "mine": cmd_mine, "agents": cmd_agents,
      "whoami": cmd_whoami, "add": cmd_add, "claim": cmd_claim, "start": cmd_start,
      "done": cmd_done, "block": cmd_block, "release": cmd_release, "cancel": cmd_cancel,
-     "note": cmd_note, "dep": cmd_dep, "gate": cmd_gate, "beacon": cmd_beacon,
-     "wake": cmd_wake}[a.cmd](a, agent)
+     "note": cmd_note, "log": cmd_log, "show": cmd_show, "dep": cmd_dep, "gate": cmd_gate,
+     "beacon": cmd_beacon, "wake": cmd_wake}[a.cmd](a, agent)
 
 
 if __name__ == "__main__":

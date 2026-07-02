@@ -7,8 +7,19 @@ Scripts the operator/agent runs against the fleet. Python + a few shell. Not ser
 `agents/coord.py` — two-Claude coordination over an MQTT task ledger (`ha/agents/#` on VIP `.200`).
 - `python3 tools/agents/coord.py --as <ops|dev> list|ready|mine` — see the board.
 - `... add <id> --title "…" --note "…"` / `... note <id> --note "…"` / `... done <id>` — update it.
+- `... show <id>` — full task record **incl. its step log** (the "what did the agent actually do" view).
 - `... wake dev` — delegate a **bounded** task to a fresh headless `claude -p` on `.210` (POLICY-bounded;
   NOT Hugh's interactive dev chat). Convention: **ops** = desktop/.245-side, **dev** = .210.
+
+### Delegation contract — a delegated worker LOGS ITS STEPS
+
+`note` is last-write-wins (a snapshot); `log` **accumulates** (a journal). Any agent that claims a delegated
+task MUST narrate each major step via `... log <id> --step "…"` — e.g. `pull ✓ @<sha>`, `build ✓ (<target>,
+<fwver>)`, `OTA sent`, `validated: <observed>`. This turns the board from a coarse status snapshot into a
+step-by-step record of HOW the task ran, visible after the fact with `show <id>` and live via
+`mosquitto_sub -t 'ha/agents/#'` (the retained task record re-publishes on every append). When **posting** a
+delegated task, restate this in the task note so the worker adopts it. Terminal `done`/`block` still carries a
+full summary note.
 
 ## Frequently used
 
