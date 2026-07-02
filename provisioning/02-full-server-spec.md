@@ -237,6 +237,39 @@ Restart services after the copy.
 **Verify:** the API returns historical rows:
 `curl -s localhost:8123/devices | head` and a 30-day deep-query returns the migrated range.
 
+### 8.1 Weather history — REQUIRED dataset (Open-Meteo backfill)
+
+`weather.db` is a **required** historical dataset, not just a live feed: the dashboard overlays outdoor
+weather against the full sensor history, so it must reach back **at least as far as the Parquet sensor
+archive** (Jan 2026+). A box is not "fully provisioned" until this is true.
+
+The §8 `weather.db` rsync is best-effort (`|| true`) and does **not** guarantee this: a freshly-installed
+or freshly-promoted (cutover) box starts a **new** `weather.db` whose earliest row is its own first poll,
+so the dashboard shows only "the last couple of weeks" of weather while sensors go back months. *(Observed
+2026-07-02 on .210: `weather.db` began 2026-06-24, the cutover date — the ADR-0018 deep-history backfill
+covered the Parquet sensor archive but not the weather lane.)*
+
+Rebuild it **independently of any peer** from the Open-Meteo ERA5 archive (free, no API key). Use the
+**same** lat/lon/label as the live lane (`instance/weather.env`) so rows dedup cleanly against the timer:
+```bash
+cd ~/home_automation
+set -a; . instance/weather.env; set +a        # HA_WEATHER_LAT / _LON / _LABEL
+cp instance/db/weather.db instance/db/weather.db.bak-pre-backfill-$(date -u +%Y%m%dT%H%M%SZ)  # backup first
+venv/bin/python3 -m server.weather --backfill --start 2026-01-01 \
+    --lat "$HA_WEATHER_LAT" --lon "$HA_WEATHER_LON" --label "$HA_WEATHER_LABEL" \
+    --db instance/db/weather.db
+```
+- **Idempotent:** `INSERT OR IGNORE` on `UNIQUE(source,location,ts,metric)` — safe to re-run any time.
+- **`--start`** should be ≤ the Parquet archive earliest (currently `2026-01`). ERA5 lags ~5 days; the
+  same command also pulls the forecast API's `past_days=92` to bridge that lag up to now.
+- **Air-gapped box:** no direct internet — run the backfill on the internet-connected twin and sync
+  `weather.db` in during backup (see `provisioning/03-sneakernet-updates.md` §data), or import
+  `data/weather-in.parquet`. Same `INSERT OR IGNORE`, same result.
+
+**Verify:** `sqlite3 instance/db/weather.db 'SELECT MIN(ts),MAX(ts),COUNT(*) FROM weather;'` spans Jan→now,
+and `curl -s 'localhost:8123/weather/readings?metric=temperature_c&start=2026-01-01T00:00:00Z&end=2026-12-31T00:00:00Z&limit=50000'`
+returns rows from January.
+
 ---
 
 ## 9. Verification checklist (the box is "done" when all pass)

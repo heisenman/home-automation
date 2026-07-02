@@ -50,6 +50,10 @@ with exact commands every run:
    PII, sneakernet-only, never in git. Until it's copied in, meters publish to
    `home/unknown/<mac>/raw`.
 4. **Reboot test** — `sudo reboot`, confirm all `ha-*` services + the scanner return.
+5. **Weather history dataset** — a fresh/cutover box starts an empty `weather.db`, so the dashboard
+   shows only recent weather while sensors go back months. Backfill it from the Open-Meteo archive to
+   match the Parquet sensor history — **required to be fully provisioned**. See
+   `provisioning/02-full-server-spec.md` §8.1.
 
 Optional, the script can do #2's sudoers half once a password exists:
 ```bash
