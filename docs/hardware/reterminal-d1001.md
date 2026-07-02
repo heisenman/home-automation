@@ -23,8 +23,22 @@ not reverse-engineer from I2C scans or LLM overviews.** Guessing produced multip
 - Pins on the sheet: `VBUS, PMID, BTST, SW, SYS, BAT, ILIM, ICHG, TS, STAT, CHG_ENBn, GND`.
   **There is NO SCL/SDA on the charger** — confirmed by grep of the whole PowerManagement sheet
   (zero i2c/scl/sda tokens). So:
-  - **Input current limit = `ILIM` pin resistor** (fixed in hardware; NOT firmware-settable).
-  - **Charge current = `ICHG` pin resistor** (fixed in hardware; NOT firmware-settable).
+  - **Charge current = `ICHG` pin resistor = 680 Ω → 995 mA target** (schematic note), **Vset (CV)
+    = 4.2 V**. Fixed in hardware; NOT firmware-settable. ⇒ a real ~1 A charge is *designed*, not a
+    trickle — the board is meant to recharge the cell meaningfully (~2.5–3 h from empty at 995 mA).
+  - **Input current limit = `ILIM` pin resistor = 330 Ω** (input-current ceiling). Fixed in hardware.
+  - **⭐ ROOT CAUSE of no-charge-while-running: the charger is BLIND to the source.** USB-C `D+/D-`
+    route to the P4's **native USB PHY — DP=GPIO25 (pin53), DN=GPIO24 (pin52)** (nets `USB_JT_DP/DN`;
+    the same USB we flash over), **NOT to the BQ25616's D+/D-**. So the
+    charger cannot run BC1.2 detection to negotiate high input current from a capable charger — it
+    runs only on the ILIM ceiling + its POR default `IINDPM`. With no I2C to raise `IINDPM` either,
+    the input budget is fixed and modest, and the running P4+C6+display draw on the shared power-path
+    input consumes it → ~0 left for the 995 mA charge stage → cell holds / slightly discharges on
+    wall. **Three independent reasons it can't charge while running, all hardware, none firmware-
+    fixable:** (1) no I2C to the charger, (2) BC1.2 bypassed (D+/D- → P4), (3) shared power-path input
+    budget eaten by system load. Charging resumes only when system load drops below the input budget
+    (powered off / deep-idle). This is a Seeed design tradeoff: USB *data* to the P4 was prioritized
+    over BC1.2 *charge negotiation*.
   - **Enable = `CHG_ENBn`** (active-low) driven by **PCA9535 expander pin 10** (our firmware asserts
     this — it was the root-cause fix for "63% at full charge": the cell never topped up until we
     drove CHG_ENBn low).
@@ -103,12 +117,14 @@ hardware (ICHG resistor + VINDPM), which firmware cannot change.
   nets, NOT GPIO10 — no conflict with the charge enable).
 
 ## OPEN items (do NOT guess — read the schematic or ask)
-1. **`ILIM` / `ICHG` resistor values** → the *designed* input-current-limit and charge-current in
-   amps. Grep-tracing the nets was unreliable; read them in KiCad (trace the resistors on U16's ILIM
-   and ICHG pins) or from a BOM. This is the number that says whether the design intends meaningful
-   charging or a token trickle.
+1. ✅ RESOLVED (Hugh, from schematic notes): `ICHG`=680 Ω → **995 mA** charge target, **Vset=4.2 V**,
+   `ILIM`=330 Ω input ceiling. Still useful: what input-current-limit (A) the 330 Ω ILIM sets, and
+   what BC1.2 mode the input detects (USB100/500/DCP) — that's the input budget that determines
+   whether it can ever charge while running.
 2. **Battery capacity** (label/spec) — "~2500 mAh" is unverified.
 3. **Full I2C address map** — reconcile the scan addresses above against `I2CTreeDiagram`.
+4. **Decisive test:** powered-fully-off-on-charger ~20–30 min — design predicts the cell climbs at
+   up to 995 mA. If it does → healthy, in-service charging is just budget-starved. If flat → fault.
 
 ## Corrections this reference supersedes (guessed-wrong facts, now fixed)
 - ❌ "Only the IMU + expander are on I2C" → there are ~8–10 devices.
