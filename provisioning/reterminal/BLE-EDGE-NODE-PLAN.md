@@ -94,7 +94,22 @@ antenna issue — `running:false` means we never reached the radio (antenna woul
   `cmd/ble on` — PASS = `running:true` + `adv_total` climbs. Recovery if the C6 link regresses: physical C6
   UART reflash (bench/USB access on hand).
 
-**⛔ 2026-07-01 result: over-SDIO reflash is IMPOSSIBLE on this unit.** `cmd/slaveota` (on v27) transferred
+**✅ 2026-07-01 pm — DONE + HW-VERIFIED. C6 serially reflashed to 2.12.9 (`CP_BT=y`); all gates pass.**
+Hugh exposed the `ESP32_C6_Debug` header (TXD/RXD/GND wired; BOOT/RST = pins, jumpered to GND). Sequence that
+worked: (1) `sudo chmod 666 /dev/ttyACM0 /dev/ttyUSB0` (not in `dialout`); (2) park P4 in ROM bootloader
+(`esptool -p /dev/ttyACM0 --before default_reset --after no_reset --no-stub chip_id`); (3) manual C6 download
+mode = hold BOOT→GND, tap RST→GND, release BOOT; (4) probe `esptool -p /dev/ttyUSB0 --chip esp32c6 --before
+no_reset --after no_reset chip_id` → **ESP32-C6FH4 rev v0.2, 4 MB**; (5) **factory backup** 4 MB →
+`~/c6-factory-2.3.0-backup.bin` (99 s, held stable); (6) `write_flash` full image (bootloader+parttable+otadata+
+`network_adapter.bin`) → *Hash verified*; (7) power-cycle. Gates: **① WiFi/slave healthy** (`v27` `wifi_rc:0`);
+**② BLE WORKS** — `cmd/ble on` → `running:true`, `adv_total` 99→115 climbing, **5 unique MACs** (RSSI −95..−100 =
+bare internal antenna, no SMA — coverage item, not functional); **③ P4 WiFi-OTA** proven (v26→v27 earlier);
+**④ over-SDIO C6 reflash NOW WORKS** — `cmd/slaveota` → `begin→progress→complete err:0x0` (the finalize that
+was `0x106` on 2.3.0), C6 rebooted into the OTA'd slot and recovered clean (`wifi_rc:0`). **⇒ future C6 updates
+are wireless — the programmer rig is no longer needed.** `esptool` buffering gotcha: pipe `mosquitto_sub` through
+`stdbuf -oL` and use `-C <n>` for clean-exit capture (raw `timeout` kills before flush). **NEXT = Stage 1.**
+
+**⛔ 2026-07-01 (earlier) — over-SDIO reflash was IMPOSSIBLE on the FACTORY slave.** `cmd/slaveota` (on v27) transferred
 all 1,156,208 bytes (begin + every write OK) then **failed `0x106` at finalize** (`ota_end`/`activate`); C6
 never rebooted, WiFi stayed `rc:0`. Root cause (migration_guide): **slave-OTA requires slave > 2.5.X; the
 factory C6 is 2.3.0**, which predates the OTA-finalize RPC. There is no over-the-wire shortcut — the C6 must
