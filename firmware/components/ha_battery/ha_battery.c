@@ -31,7 +31,7 @@ ha_battery_cfg_t ha_battery_d1001_cfg(esp_io_expander_handle_t io_expander,
         .gpio_charge = 15, .gpio_vsys_pg = 4,
         .i2c_bus = i2c_bus, .imu_addr = 0x6A,
         .lut = D1001_LUT, .lut_n = 21,
-        .usb_present_mv = 4000, .volt_high_mv = 4150, .volt_recharge_mv = 4050,
+        .usb_present_mv = 4000, .volt_high_mv = 4150, .volt_recharge_mv = 3800,  // factory hysteresis band
         .temp_min_dc = 20, .temp_max_dc = 430,
     };
     return c;
@@ -230,41 +230,35 @@ static void charge_set(bool en)
     esp_io_expander_set_level(s_cfg.io_expander, s_cfg.exp_charge_en_mask, en ? 0 : 1);   // active-low
 }
 
-// Thermal-gated charge manager + restart watchdog. Charging stays OFF unless the cable is in,
-// the cell is below full, and the board temp is in range (fail-safe: no temp ⇒ no charge). The
-// watchdog handles a charger IC that latched "done" early: if we want charge, the cell is well
-// below full, yet the IC reports idle, pulse CHARGE_EN off→on to start a fresh cycle.
+// Charge manager — MIRRORS the Seeed factory BSP (esp32_p4_re_terminal_d1001.c
+// `bsp_battery_charge_task`), which is the proven-correct behaviour for this hardware:
+//   • ENABLED by default (matches the CHG_ENBn 100k pull-down hardware default);
+//   • simple voltage HYSTERESIS only (stop >volt_high, resume <volt_recharge);
+//   • NO firmware thermal gate — the BQ25616's TS/NTC pin does thermal protection in HARDWARE
+//     (the factory compiles its firmware thermal-protect OUT for exactly this reason);
+//   • NO "restart watchdog" pulsing.
+// History: our previous version disabled at startup, thermal-gated (fail-closed on a bad IMU read),
+// and PULSED CHARGE_EN off→on every 15 s whenever STAT read "not charging". That was self-defeating:
+// each pulse restarted the BQ's charge cycle so it never established → STAT never read charging →
+// endless pulsing → cell stuck at ~equilibrium. Falsified by production reality (every shipped D1001
+// charges) + confirmed by reading the factory BSP. See docs/hardware/reterminal-d1001.md.
 static void charge_task(void *pv)
 {
-    charge_set(false);
-    s_charge_en = false;
-    int stalled = 0;
+    charge_set(true);        // start enabled (factory default; the pull-down would do this anyway)
+    s_charge_en = true;
     for (;;) {
         ha_batt_sample_t s = {0};
-        bool ok = (ha_battery_sample(&s) == ESP_OK);
-        bool cable   = ok && (s.usb_mv > s_cfg.usb_present_mv);
-        bool temp_ok = s.have_temp && (s.temp_dc >= s_cfg.temp_min_dc && s.temp_dc <= s_cfg.temp_max_dc);
-        bool room    = ok && (s.batt_mv < s_cfg.volt_high_mv);
-        bool want    = cable && temp_ok && room;
-        if (want != s_charge_en) {
-            charge_set(want);
-            s_charge_en = want;
-            stalled = 0;
-            ESP_LOGW(TAG, "charge %s (usb=%dmV batt=%dmV temp=%d.%d°C)", want ? "ON" : "OFF",
-                     s.usb_mv, s.batt_mv, s.have_temp ? s.temp_dc / 10 : -99,
-                     s.have_temp ? s.temp_dc % 10 : 0);
-        }
-        // watchdog: want charge, cell clearly not full, but the IC is idle → kick it
-        if (want && !s.charging && s.batt_mv < s_cfg.volt_recharge_mv) {
-            if (++stalled >= 5) {   // ~15 s of wanting-but-idle
-                ESP_LOGW(TAG, "charger idle at %dmV — kicking CHARGE_EN", s.batt_mv);
-                charge_set(false); vTaskDelay(pdMS_TO_TICKS(1500)); charge_set(true);
-                stalled = 0;
+        if (ha_battery_sample(&s) == ESP_OK) {
+            if (s.batt_mv > s_cfg.volt_high_mv && s_charge_en) {          // full → stop
+                charge_set(false); s_charge_en = false;
+                ESP_LOGW(TAG, "batt %dmV > %dmV — charge OFF", s.batt_mv, s_cfg.volt_high_mv);
+            } else if (s.batt_mv < s_cfg.volt_recharge_mv && !s_charge_en) {   // drained → resume
+                charge_set(true); s_charge_en = true;
+                ESP_LOGW(TAG, "batt %dmV < %dmV — charge ON", s.batt_mv, s_cfg.volt_recharge_mv);
             }
-        } else {
-            stalled = 0;
+            // between thresholds: leave the enable as-is (hysteresis). No pulsing, no thermal gate.
         }
-        vTaskDelay(pdMS_TO_TICKS(3000));
+        vTaskDelay(pdMS_TO_TICKS(2000));
     }
 }
 

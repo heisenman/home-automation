@@ -41,7 +41,7 @@ typedef struct {
     // --- charge policy ---
     int usb_present_mv;      // USB rail above this ⇒ cable present (D1001: 4000)
     int volt_high_mv;        // stop charging above this (D1001: 4150)
-    int volt_recharge_mv;    // below this + idle ⇒ kick the charger (D1001: 4050)
+    int volt_recharge_mv;    // resume charge below this (hysteresis low; D1001: 3800, factory band)
     int temp_min_dc, temp_max_dc;   // safe charge window in deci-°C (D1001: 20..430)
 } ha_battery_cfg_t;
 
