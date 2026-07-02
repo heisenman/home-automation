@@ -39,11 +39,12 @@
 #include "fs_ops.h"
 #include "ui_tiles.h"
 #include "ha_ble_scan.h"
+#include "ha_reach.h"
 #include "esp_hosted.h"
 #include "esp_hosted_ota.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v45-power"
+#define APP_BUILD_TAG "v47-pwrble"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -70,14 +71,21 @@ static const char *TAG = "beachhead";
 #define T_BPROF  "d1001-beachhead/battprofile"    // <- live mirror of the SD battery-profile rows
 #define T_FSC    "d1001-beachhead/cmd/fs"          // -> JSON SD file op (ls/stat/read/write/rm/mkdir/df)
 #define T_FS     "d1001-beachhead/fs"              // <- JSON file-op result
+#define T_PWR    "d1001-beachhead/power"           // <- power-context change (on_wall / ble_relay), retained
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
 static void ble_task(void *pv);         // passive BLE relay task (defined near start_mqtt)
+static void ble_ensure_started(void);   // idempotent one-shot BLE bring-up (power-aware + cmd/ble)
+static void power_task(void *pv);       // power-context watcher: BLE on wall / off battery + notify
 static void slave_ota_task(void *pv);   // C6 slave-OTA task (defined near start_mqtt)
 static void i2cscan_task(void *pv);     // I2C bus scan (fuel-gauge ID) — defined near start_mqtt
 static void battdump_task(void *pv);    // 0x36 register dump (chip ID) — defined near start_mqtt
 static volatile bool s_debug = false;         // <-- diagnostic firehose, default OFF
+// Power-aware BLE state (defined here so the cmd/ble handler can force-on; logic below).
+static volatile bool s_ble_started  = false;  // ha_ble_scan_start done once (task created)
+static volatile bool s_on_wall      = false;  // last observed wall-power state (starts battery)
+static volatile bool s_ble_relaying = false;  // scan currently active (started & not paused)
 static EventGroupHandle_t s_evt;
 #define WIFI_CONNECTED_BIT BIT0
 static char s_ip[16] = "?";
@@ -308,7 +316,7 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
         } else if (tl == (int)strlen(T_BLEC) && strncmp(e->topic, T_BLEC, tl) == 0) {
             bool on = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
                                    e->data[0] == 't' || e->data[0] == 'T'));
-            if (on) xTaskCreate(ble_task, "ble", 6144, NULL, 3, NULL);   // passive relay, on demand
+            if (on) { ble_ensure_started(); ha_ble_scan_resume(); s_ble_relaying = true; }  // manual force-on (even on battery)
         } else if (tl == (int)strlen(T_SLVOTA) && strncmp(e->topic, T_SLVOTA, tl) == 0) {
             char *url = strndup(e->data, dl);
             if (url) xTaskCreate(slave_ota_task, "slaveota", 8192, url, 5, NULL);   // C6 reflash
@@ -384,6 +392,26 @@ static void panel_publish_adv(const char *mac_str, const sb_reading_t *r, int rs
     esp_mqtt_client_publish(s_client, topic, payload, n, 1, false);
 }
 
+// ADR-0023 reach census: feed EVERY heard SwitchBot advert (allowlist-independent) into the
+// per-MAC RSSI-EWMA table. Hot path — keep it cheap. The panel relays everything it hears, but
+// the census is what makes that reach VISIBLE to the coordinator's best_relay (fossil-killer).
+static void panel_on_sighting(const uint8_t mac[6], int rssi, void *user)
+{
+    (void)user;
+    ha_reach_note(mac, rssi);
+}
+
+// Reach report sink: wrap ha_reach's JSON array and publish the canonical census topic. The
+// dictator's ha-edge-mapper ingests home/edge/+/reach for ANY node (report is unsigned; only the
+// coordinator's trigger is signed — which this unsigned-LAN panel neither receives nor needs).
+static void reach_publish(const char *reach_json)
+{
+    if (!s_client || !s_mqtt_up || !reach_json) return;
+    char topic[64];
+    snprintf(topic, sizeof(topic), "home/edge/%s/reach", BLE_NODE);
+    esp_mqtt_client_publish(s_client, topic, reach_json, 0, 0, false);
+}
+
 // Passive BLE relay: start the shared observer (VHCI controller + adv-publish sink),
 // then publish a compact telemetry line every 2s. Own task — never blocks the MQTT
 // callback. Non-fatal: if bring-up bailed we still publish running:false so it's visible.
@@ -392,9 +420,18 @@ static void ble_task(void *pv)
     ha_ble_scan_cfg_t cfg = {
         .controller_init = panel_bt_controller_init,   // VHCI (panel); edge passes NULL
         .on_reading      = panel_publish_adv,
+        .on_sighting     = panel_on_sighting,          // ADR-0023 reach census tap
         .user            = NULL,
+        // WiFi rides the C6 radio over esp-hosted; a continuous BLE scan starves the WiFi
+        // beacon (bcn_timeout drops). Duty-cycle to ~40% so the MQTT/OTA lifeline holds —
+        // mandatory now that BLE runs by default on wall power, not just on-demand.
+        .shared_radio    = true,
     };
     ha_ble_scan_start(&cfg);
+    // Census: autonomous fallback cadence (no signed trigger — this panel isn't an enrolled
+    // signing node; the mapper ingests the fallback report all the same). Default 30 min window.
+    ha_reach_cfg_t reach_cfg = { .node_id = BLE_NODE, .publish = reach_publish, .fallback_ms = 0 };
+    ha_reach_start(&reach_cfg);
     for (;;) {
         uint32_t total = 0, decoded = 0; int8_t rssi = 0;
         ha_ble_scan_stats(&total, &decoded, &rssi);
@@ -407,6 +444,67 @@ static void ble_task(void *pv)
             esp_mqtt_client_publish(s_client, T_BLE, msg, 0, 1, 1);   // qos1 retained
         }
         vTaskDelay(pdMS_TO_TICKS(2000));
+    }
+}
+
+// ── Power-aware BLE (Hugh's directive, 2026-07-02) ───────────────────────────────
+// The panel relays BLE + runs the ADR-0023 reach census ONLY on wall power; on battery
+// it pauses the radio so it never burns the cell relaying for its neighbours. On every
+// power-context CHANGE it pushes an immediate notice (T_PWR + status) so the coordinator
+// can rebalance the mesh around the panel's new availability, and on regaining wall power
+// it fires a fresh reach report so best_relay re-includes the panel at once.
+// (s_ble_started / s_on_wall / s_ble_relaying declared up top for the cmd/ble handler.)
+
+// Bring up the BLE observer + reach census exactly once. Idempotent: safe to call from the
+// power watcher and from a manual cmd/ble. ha_ble_scan_start itself guards re-entry, but the
+// single ble_task (telemetry loop + ha_reach_start) must not be spawned twice.
+static void ble_ensure_started(void)
+{
+    if (s_ble_started) return;
+    s_ble_started = true;
+    xTaskCreate(ble_task, "ble", 6144, NULL, 3, NULL);
+}
+
+// Announce a power-context transition to the broker (retained, so a late-subscribing
+// coordinator still sees the current state). Edge-consumable schema for the pending
+// "prompted rebalancing on known state change" coordinator handler (dev's).
+static void power_ctx_publish(bool on_wall)
+{
+    if (!s_client || !s_mqtt_up) return;
+    char msg[160];
+    snprintf(msg, sizeof(msg),
+        "{\"node\":\"%s\",\"event\":\"power_ctx\",\"on_wall\":%s,\"ble_relay\":%s}",
+        BLE_NODE, on_wall ? "true" : "false", s_ble_relaying ? "true" : "false");
+    esp_mqtt_client_publish(s_client, T_PWR, msg, 0, 1, 1);   // qos1 retained
+}
+
+// Poll wall power; act only on the edge. Gated on MQTT so the very first transition (boot
+// context established) actually reaches the broker. 3s poll ⇒ a plug/unplug is reflected in
+// well under the 15s heartbeat, which is what makes it feel like a live "context change".
+static void power_task(void *pv)
+{
+    ha_batt_sample_t bs = {0};
+    for (;;) {
+        if (s_mqtt_up && ha_battery_sample(&bs) == ESP_OK) {
+            bool wall = bs.on_wall;
+            if (wall != s_on_wall) {
+                s_on_wall = wall;
+                if (wall) {
+                    if (!s_ble_started) ble_ensure_started();  // fresh start already scans
+                    else                ha_ble_scan_resume();  // was paused on battery
+                    s_ble_relaying = true;
+                } else {
+                    if (s_ble_started)  ha_ble_scan_pause();   // stop burning the cell
+                    s_ble_relaying = false;
+                }
+                power_ctx_publish(wall);   // tell the coordinator NOW (retained)
+                publish_status();          // status carries on_wall/gaining too
+                if (wall && s_ble_started) ha_reach_report();  // push fresh reach so best_relay re-adds us
+                ESP_LOGW(TAG, "power ctx -> %s; BLE relay %s",
+                         wall ? "WALL" : "BATTERY", s_ble_relaying ? "ON" : "OFF");
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(3000));
     }
 }
 
@@ -594,6 +692,7 @@ void app_main(void)
     ha_battery_charge_start();                 // thermal-gated charger + restart watchdog
     xTaskCreate(heartbeat_task, "hb", 4096, NULL, 3, NULL);
     xTaskCreate(button_task, "btn", 3072, NULL, 3, NULL);   // back-button screen toggle
+    xTaskCreate(power_task, "pwr", 4096, NULL, 3, NULL);    // power-aware BLE: on wall / off battery + notify
     bat_profile_start(battprofile_publish);   // mount SD + log the battery discharge curve (non-fatal)
     fs_ops_start(fs_publish);                 // SD file-ops over MQTT (cmd/fs)
     // Display is NOT started here — trigger it over MQTT with cmd/display "on"
