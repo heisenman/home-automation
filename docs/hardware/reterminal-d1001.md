@@ -26,7 +26,30 @@ not reverse-engineer from I2C scans or LLM overviews.** Guessing produced multip
   - **Charge current = `ICHG` pin resistor = 680 Ω → 995 mA target** (schematic note), **Vset (CV)
     = 4.2 V**. Fixed in hardware; NOT firmware-settable. ⇒ a real ~1 A charge is *designed*, not a
     trickle — the board is meant to recharge the cell meaningfully (~2.5–3 h from empty at 995 mA).
-  - **Input current limit = `ILIM` pin resistor = 330 Ω** (input-current ceiling). Fixed in hardware.
+  - **Input current limit = `ILIM` pin resistor = 330 Ω → ~1.45 A ceiling** (schematic note:
+    `I = 478/R = 1448 mA`). This is a *healthy* ceiling and NOT the bottleneck — see below.
+  - **Type-C: NO PD/port controller; CC1/CC2 = plain 5.1 kΩ Rd pulldowns** ⇒ dumb sink, 5 V only, no
+    voltage negotiation, no active current advertisement read. `usb_mv` ≈ 4.8 V confirms 5 V.
+  - **⚠️ CORRECTION (2026-07-02):** an earlier version of this doc concluded the board "can't charge
+    while running" due to a low unraisable IINDPM. **That is WRONG — falsified by production reality:**
+    the D1001 ships and charges for everyone, so the hardware charges fine while running on the 1.45 A
+    ILIM (BC1.2/I2C are conveniences, not requirements for a standalone ILIM-resistor charger). The
+    error was *guessing* the IINDPM POR default instead of trusting the "it obviously works in
+    production" sanity check (Hugh). **The real variable on our unit is our CUSTOM firmware**, which is
+    the only difference from a working stock D1001. `EN_BAT_CHGn` has a 100k pull-down ⇒ hardware
+    default = charge-ENABLED; a stock unit that never drives `EXP_GPO10` just charges. **CONFIRMED by
+    reading the factory BSP** (`Seeed-Studio/reTerminal-D1001`, `esp32_p4_re_terminal_d1001.c`
+    `bsp_battery_charge_task`): the factory (a) does NOT drive the enable at boot — `bat_chg_state`
+    inits `true` and it acts only on state-change, so the 100k pull-down holds charge enabled; (b) uses
+    simple voltage hysteresis only (disable >4150 mV, enable <3800 mV, enable on USB-insert); (c) has
+    thermal protection COMPILED OUT (`BSP_BATTERY_CHARGE_PROTECT 0`); (d) NEVER pulses the enable; (e)
+    never steers the BQ (just enable/disable → BQ autonomously CC/CVs at 995 mA/4.2 V). **Our
+    `ha_battery` diverges in 3 ways, each able to suppress charge:** (1) `charge_set(false)` at startup
+    (disables); (2) thermal-gate on IMU temp (factory OFF — fail-closed if temp read fails); (3) **a
+    watchdog that PULSES the enable off→on every 15 s forever** (STAT never reads charging → perpetual
+    pulsing → each re-enable restarts the BQ charge cycle → never establishes → self-inflicted). **FIX:
+    mirror the factory — drop the watchdog pulse, don't disable at startup, drop/fail-open the thermal
+    gate; keep simple hysteresis. The hardware charges fine (production proof); we broke it.**
   - **⭐ ROOT CAUSE of no-charge-while-running: the charger is BLIND to the source.** USB-C `D+/D-`
     route to the P4's **native USB PHY — DP=GPIO25 (pin53), DN=GPIO24 (pin52)** (nets `USB_JT_DP/DN`;
     the same USB we flash over), **NOT to the BQ25616's D+/D-**. So the
