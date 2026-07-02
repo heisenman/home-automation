@@ -5,7 +5,11 @@ HUGH-gated, needs a maintenance window) is fast and reversible. This is the stan
 **not** touch the live network and does **not** need the cutover gate cleared.
 
 **Owner:** ops (taken over from dev per Hugh, 2026-06-24 — standalone, no shared files).
-**Status:** image pinned + offline configs drafted. Awaits the physical router (ETA ~2026-07-09) to flash.
+**Status:** ✅ FLASHED + configured on the bench 2026-07-01 (OpenWrt 25.12.4), staged cutover-ready at `192.168.0.1`.
+Awaits the physical cutover (plug-swap) once the rest of the net is provisioned. Repeatable steps + gotchas:
+`openwrt-flash-procedure.md`. Divergences from the plan below, decided at flash time: SSID changed to a **hidden
+`autohome_airgap`** on both bands (was `CTWap_24g` — so edge nodes must be reprovisioned, they will NOT auto-rejoin);
+`.245` **dropped** from reservations ("won't move over"), with the future **G11** to become the VRRP BACKUP + NTP peer.
 
 ## 0. Hardware — CONFIRMED
 - **Netgear Nighthawk X4S = Netgear R7800**, Qualcomm **ipq806x**, OpenWRT profile **`netgear_r7800`**
