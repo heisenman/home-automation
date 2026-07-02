@@ -20,9 +20,13 @@ firmware/
 
 | Module | Home | Consumed by | Notes |
 |--------|------|-------------|-------|
-| `switchbot_decode` | **`firmware/components/`** ✓ | (none yet) | pure, host-tested; verbatim lift from the byte-identical forks. Live nodes still link their fork copy until gated migration. |
+| `switchbot_decode` | **`firmware/components/`** ✓ | D1001 panel | pure, host-tested; verbatim lift from the byte-identical forks. Live edge nodes still link their fork copy until gated migration. |
+| `ha_ble_scan` | **`firmware/components/`** ✓ | D1001 panel | shared NimBLE observer; controller-init + publish sink are caller hooks (native vs VHCI). Panel publishes canonical `home/edge/<node>/<mac>/adv`. Live edge nodes still on their `ble_scan` forks. |
 
-Everything else remains in the forks. Extraction order + rationale: [edge/MODULES.md](../edge/MODULES.md).
+The panel build (`~/reterminal-dev/d1001-beachhead`, off-repo dev tree; mirror at
+[provisioning/reterminal/beachhead/](../provisioning/reterminal/AGENTS.md)) consumes these via
+`components/<name>` **symlinks** into this tree — single source of truth stays here. Everything else remains
+in the forks. Extraction order + rationale: [edge/MODULES.md](../edge/MODULES.md).
 
 ## Rules
 

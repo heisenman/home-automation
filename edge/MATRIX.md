@@ -8,8 +8,8 @@ Which module each device build links. Pairs with [MODULES.md](MODULES.md).
 
 | Module | esp32c3 | esp32c6 | esp32s3-eth | **D1001 panel** | E1001? | non-Seeed? |
 |--------|:-------:|:-------:|:-----------:|:---------------:|:------:|:----------:|
-| `switchbot_decode` | ✓ | ✓ | ✓ | ✓ (Stage 1) | ✓ | ✓ |
-| `ble_scan` | native | native | native | **VHCI** (Stage 1) | ? | ? |
+| `switchbot_decode` | ✓ (fork) | ✓ (fork) | ✓ (fork) | ✓ **shared** | ✓ | ✓ |
+| `ble_scan` → `ha_ble_scan` | native (fork) | native (fork) | native (fork) | **shared, VHCI** ✓ | ? | ? |
 | `gatt_exec`/`gatt_history` | ✓ | ✓ | ✓ | ⟶ Stage 2 | … | … |
 | `ha_mqtt` | ✓ | ✓ | ✓ | ✓ (panel has its own client) | … | … |
 | `ha_relay` | ✓ | ✓ | ✓ | ⟶ (peer node) | … | … |
