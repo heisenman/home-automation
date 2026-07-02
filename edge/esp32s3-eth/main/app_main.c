@@ -21,6 +21,7 @@
 #include "ha_led.h"
 #include "ha_relay.h"
 #include "ha_gas.h"
+#include "ha_reach.h"
 #include "ble_scan.h"
 
 static const char *TAG = "ha_edge";
@@ -43,6 +44,13 @@ static void edge_on_reading(const char *mac_str, const sb_reading_t *r, int rssi
     (void)user;
     if (ha_relay_allowed(mac_str))
         ha_mqtt_publish_reading(mac_str, r, rssi);
+}
+
+// Reach-census tap (ADR-0023): every heard endpoint feeds the RSSI-EWMA table, regardless of the relay
+// allowlist — so the coordinator sees this node's whole neighborhood, not just what it currently relays.
+static void edge_on_sighting(const uint8_t mac[6], int rssi, void *user) {
+    (void)user;
+    ha_reach_note(mac, rssi);
 }
 
 void app_main(void) {
@@ -100,11 +108,21 @@ void app_main(void) {
     ha_ble_scan_cfg_t scan_cfg = {
         .controller_init = NULL,          // native controller (nimble_port_init brings it up)
         .on_reading      = edge_on_reading,
+        .on_sighting     = edge_on_sighting,   // ADR-0023 reach census tap (allowlist-independent)
         .shared_radio    = on_wifi,       // duty-cycle when on WiFi (shared radio); continuous when wired
         .user            = NULL,
     };
     ha_ble_scan_start(&scan_cfg);
     ESP_LOGI(TAG, "edge node up: node=%s broker=%s", cfg.node_id, cfg.broker_uri);
+
+    // Mesh reach census (ADR-0023): report the RSSI-EWMA neighborhood on a coordinator push (or a long
+    // fallback). Publishes home/edge/<node>/reach; the trigger arrives on .../reach/req (handled in ha_mqtt).
+    ha_reach_cfg_t reach_cfg = {
+        .node_id     = cfg.node_id,
+        .publish     = ha_mqtt_publish_reach,
+        .fallback_ms = 0,                 // 0 => default (~30 min, ≈2× the 900 s coordinator cadence)
+    };
+    ha_reach_start(&reach_cfg);
 
     // SGP-40 VOC gas lane (I2C, independent of the radio) — no-op if the sensor isn't wired.
     ha_gas_start();

@@ -85,6 +85,31 @@ node relays* (bulky, still filtered). The relay-filter and its energy savings st
 - **Drop the dwell / raise churn to chase reach.** Reintroduces flapping and burns epochs; the fix is better
   *observation*, not twitchier *actuation*.
 
+## Implementation (as built — 2026-07-02, dev)
+
+**Amendment — cadence is SERVER-PUSH, not a node timer.** Rather than each node free-running a ~5 min
+publish, the **coordinator pushes a trigger** and every node reports, so the whole mesh censuses at a
+coordinated instant (a coherent RSSI snapshot for `best_relay`, and an on-demand re-census the moment a
+node relocates). A **long autonomous fallback** on the node preserves the "no node is ever invisible"
+guarantee if the trigger path goes silent. Timing thus has a single owner — the coordinator's existing
+900 s reconcile loop drives both reconcile and census, so reach is freshest exactly when it's consumed.
+
+Mechanism:
+- **Edge** — new shared component `firmware/components/ha_reach/` (per-MAC RSSI-EWMA table) fed by a new
+  optional `ha_ble_scan` `on_sighting` tap (every heard SwitchBot advert, pre-dedup, allowlist-independent).
+  Node reports a JSON array `[{mac,rssi_ewma,count,age_s}]` on `home/edge/<node>/reach`. Wired on the edge
+  C6 (`v14-reach`) + S3-ETH (`v17-reach`); backward-compatible so the panel/c3 build unchanged until opted in.
+- **Trigger** — the coordinator publishes a **signed, sig-only** envelope to `home/edge/<node>/reach/req`
+  each pass (reuses `sign_envelope` + the per-node cmd-secret LUT). Deliberately **not** on the `cmd`
+  anti-replay path: a trigger is idempotent, so isolating it removes any risk of a census trigger colliding
+  with — and dropping — a real `history`/`gatt`/`ota` command sharing the per-node `(ts,seq)` high-water mark.
+- **Server** — `edge_mapper` subscribes `home/edge/+/reach`, resolves each MAC→device_id via the registry,
+  and feeds the existing passive-sighting hook `record_link(..., ok=None)`. No coordinator ingest change; the
+  next reconcile consumes it.
+
+Resolved knobs (open to shadow-tuning): **trigger cadence** = the 900 s reconcile loop; **node fallback** ≈
+30 min (≈2× cadence); **RSSI EWMA** α = 0.3; **table** = 16 slots; **report staleness** = 15 min.
+
 ## Open follow-ups
 
 - Tuning knobs (start conservative, shadow-tune per ADR-0016): **census interval** ~5 min; **RSSI EWMA**

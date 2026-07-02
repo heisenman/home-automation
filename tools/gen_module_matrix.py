@@ -51,6 +51,7 @@ MODULES = [
     ("ha_mqtt", {"sources": ["ha_mqtt.c"], "component": None}),
     ("ble_scan", {"sources": ["ble_scan.c"], "component": "ha_ble_scan"}),
     ("switchbot_decode", {"sources": ["switchbot_decode.c"], "component": "switchbot_decode"}),
+    ("ha_reach", {"sources": [], "component": "ha_reach"}),
     ("gatt_history", {"sources": ["gatt_history.c"], "component": None}),
     ("gatt_exec", {"sources": ["gatt_exec.c"], "component": None}),
     ("ha_ota", {"sources": ["ha_ota.c"], "component": None}),

@@ -142,11 +142,16 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
     }
     if (!sb_is_switchbot(has_0969, has_fd3d)) return 0;
 
+    const uint8_t *a = event->disc.addr.val;
+    uint8_t mac[6] = { a[5], a[4], a[3], a[2], a[1], a[0] };
+
+    // Reach census tap (ADR-0023): feed EVERY heard endpoint — before dedup, before the relay filter —
+    // so the coordinator sees a node's full neighborhood, not just what it currently relays.
+    if (s_cfg.on_sighting) s_cfg.on_sighting(mac, event->disc.rssi, s_cfg.user);
+
     sb_reading_t r;
     if (!sb_decode(svc, svc_len, mfr, mfr_len, &r) || !r.valid) return 0;
 
-    const uint8_t *a = event->disc.addr.val;
-    uint8_t mac[6] = { a[5], a[4], a[3], a[2], a[1], a[0] };
     dedup_t *slot = find_or_alloc(mac);
     slot->addr = event->disc.addr;     // cache full address (type + val) for GATT connect
     if (!should_publish(slot, mac, &r)) return 0;

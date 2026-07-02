@@ -23,5 +23,10 @@ void ha_mqtt_publish_reply(const char *reqid, const char *payload);
 void ha_mqtt_publish_node_sensor(const char *key, const char *reg_key,
                                  const char *device_type, const char *metrics_json);
 
+// Publish a mesh reach census (ADR-0023) to home/edge/<node>/reach. `reach_json` is a pre-formed JSON
+// ARRAY [{mac,rssi_ewma,count,age_s},…] from ha_reach; this wraps it with schema/node/ts. The node
+// subscribes to home/edge/<node>/reach/req (signed trigger) and calls ha_reach_report() in response.
+void ha_mqtt_publish_reach(const char *reach_json);
+
 // Remote log line to home/edge/<node>/log (qos 0) — debug a headless node over MQTT.
 void ha_mqtt_log(const char *fmt, ...);

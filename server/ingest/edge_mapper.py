@@ -54,6 +54,7 @@ log = logging.getLogger("ha.edge_mapper")
 BROKER_HOST: str = os.environ.get("HA_BROKER", "localhost")
 BROKER_PORT: int = int(os.environ.get("HA_BROKER_PORT", "1883"))
 SUBSCRIBE_TOPIC: str = "home/edge/+/+/adv"
+REACH_TOPIC: str = "home/edge/+/reach"   # ADR-0023 mesh reach census (node→endpoint neighborhood summary)
 MESSAGE_SCHEMA: int = 1
 
 
@@ -113,10 +114,36 @@ class EdgeMapper:
         except Exception as exc:
             log.debug("mesh record_link failed (%s -> %s): %s", node, device_id, exc)
 
+    def _on_reach(self, topic: str, payload: dict) -> None:
+        """Ingest a reach census: resolve each heard MAC → device_id and record it as a passive sighting
+        (record_link ok=None), exactly like a relayed advert but for endpoints the node ISN'T relaying.
+        Unknown MACs are dropped (same as the advert path). Best-effort; never raises."""
+        parts = topic.split("/")
+        node = payload.get("node") or (parts[2] if len(parts) > 2 else "unknown")
+        reach = payload.get("reach")
+        if not isinstance(reach, list):
+            log.warning("reach census from %s missing reach[]", node)
+            return
+        seen = 0
+        for entry in reach:
+            if not isinstance(entry, dict):
+                continue
+            mac = str(entry.get("mac", "")).upper()
+            reg = self._registry.get(mac)
+            if not reg:
+                if mac and mac not in self._unknown_seen:
+                    self._unknown_seen.add(mac)
+                    log.warning("reach census: UNKNOWN mac=%s (node=%s) — add it to the registry", mac, node)
+                continue
+            self._record_reach(reg["device_id"], node, entry.get("rssi_ewma"))
+            seen += 1
+        log.debug("reach census from %s: %d/%d known endpoints recorded", node, seen, len(reach))
+
     def on_connect(self, client, userdata, flags, rc, properties=None):
         if rc == 0:
             client.subscribe(SUBSCRIBE_TOPIC, qos=1)
-            log.info("connected; subscribed to %s", SUBSCRIBE_TOPIC)
+            client.subscribe(REACH_TOPIC, qos=1)
+            log.info("connected; subscribed to %s and %s", SUBSCRIBE_TOPIC, REACH_TOPIC)
         else:
             log.error("MQTT connect failed rc=%s", rc)
 
@@ -125,6 +152,14 @@ class EdgeMapper:
             payload = json.loads(msg.payload.decode())
         except (ValueError, UnicodeDecodeError) as exc:
             log.warning("bad edge payload on %s: %s", msg.topic, exc)
+            return
+
+        # ADR-0023: a reach census (home/edge/<node>/reach) feeds the SAME passive-sighting hook as
+        # relayed adverts, but for the WHOLE neighborhood a node hears — not just what it relays. This is
+        # what lets best_relay see un-relayed reach (organic rebalancing) and keeps relocated / relay-none
+        # nodes visible (no fossils). Metadata only; it never republishes a canonical reading.
+        if msg.topic.endswith("/reach"):
+            self._on_reach(msg.topic, payload)
             return
 
         mac = str(payload.get("mac", "")).upper()

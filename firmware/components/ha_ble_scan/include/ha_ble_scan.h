@@ -32,6 +32,12 @@ typedef struct {
     void (*on_reading)(const char *mac_str, const sb_reading_t *r, int rssi, void *user);
     void *user;
 
+    // Optional per-sighting tap (ADR-0023 reach census). Called for EVERY heard SwitchBot advert —
+    // BEFORE the dedup publish-gate and INDEPENDENT of any relay allowlist — on the NimBLE host task.
+    // mac is display order. NULL => off (default; panel + un-migrated nodes are unaffected). Runs in the
+    // scan hot path, so keep it cheap (the edge wires it to ha_reach_note, an O(slots) table update).
+    void (*on_sighting)(const uint8_t mac[6], int rssi, void *user);
+
     // shared_radio: BLE and the network transport share ONE 2.4GHz radio (WiFi on c6/c3, WiFi over
     // esp-hosted SDIO on the panel, or a WiFi-fallback s3). A continuous scan (window==itvl) hogs the
     // radio and starves the WiFi beacon (bcn_timeout → drops). true ⇒ duty-cycle the scan to ~40%

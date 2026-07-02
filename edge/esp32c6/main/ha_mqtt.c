@@ -4,6 +4,7 @@
 #include "gatt_exec.h"
 #include "ha_ota.h"
 #include "ha_relay.h"
+#include "ha_reach.h"
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -28,7 +29,7 @@
 #endif
 
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v13-gas"  // bump to prove an OTA swapped the running image
+#define HA_FW_VERSION "v14-reach"  // bump to prove an OTA swapped the running image
 #endif
 
 static const char *TAG = "ha_mqtt";
@@ -37,6 +38,7 @@ static char s_node[32];
 static char s_status_topic[64];
 static char s_cmd_topic[64];
 static char s_relay_topic[64];        // home/edge/<node>/relay — signed Phase-B coverage directives
+static char s_reach_req_topic[64];    // home/edge/<node>/reach/req — signed census trigger (ADR-0023)
 static char s_online_msg[64];     // "online <slot> <fwver>" — shows which OTA slot/version is running
 static volatile bool s_connected;
 
@@ -196,6 +198,22 @@ static void handle_relay(const char *data, int len) {
     cJSON_Delete(root);
 }
 
+// A signed reach-census trigger on home/edge/<node>/reach/req (ADR-0023). Sig-only (same HMAC path as
+// relay directives): a trigger is idempotent + harmless (it only prompts a metadata report), so it
+// deliberately does NOT share the cmd anti-replay high-water mark — that keeps a frequent census trigger
+// from ever colliding with and dropping a real actuation command. Verify the {p,s} HMAC, then report.
+static void handle_reach_req(const char *data, int len) {
+    cJSON *root = cJSON_ParseWithLength(data, len);
+    if (!root) { ESP_LOGW(TAG, "bad reach/req json"); return; }
+    const cJSON *p = cJSON_GetObjectItem(root, "p");
+    const cJSON *s = cJSON_GetObjectItem(root, "s");
+    if (cJSON_IsString(p) && cJSON_IsString(s) && cmd_sig_ok(p->valuestring, s->valuestring))
+        ha_reach_report();
+    else
+        ha_mqtt_log("reach/req rejected: bad-sig/unsigned");
+    cJSON_Delete(root);
+}
+
 static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     esp_mqtt_event_handle_t e = event_data;
     switch ((esp_mqtt_event_id_t)event_id) {
@@ -205,6 +223,7 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
             esp_mqtt_client_publish(s_client, s_status_topic, s_online_msg, 0, 1, true);
             esp_mqtt_client_subscribe(s_client, s_cmd_topic, 1);
             esp_mqtt_client_subscribe(s_client, s_relay_topic, 1);   // Phase B coverage directives (retained)
+            esp_mqtt_client_subscribe(s_client, s_reach_req_topic, 1);   // ADR-0023 census trigger
             break;
         case MQTT_EVENT_DISCONNECTED:
             s_connected = false;
@@ -215,6 +234,8 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
                 handle_cmd(e->data, e->data_len);
             else if (e->topic_len == (int)strlen(s_relay_topic) && strncmp(e->topic, s_relay_topic, e->topic_len) == 0)
                 handle_relay(e->data, e->data_len);
+            else if (e->topic_len == (int)strlen(s_reach_req_topic) && strncmp(e->topic, s_reach_req_topic, e->topic_len) == 0)
+                handle_reach_req(e->data, e->data_len);
             break;
         default:
             break;
@@ -226,6 +247,7 @@ void ha_mqtt_start(const char *broker_uri, const char *node_id) {
     snprintf(s_status_topic, sizeof(s_status_topic), "home/edge/%s/status", s_node);
     snprintf(s_cmd_topic, sizeof(s_cmd_topic), "home/edge/%s/cmd", s_node);
     snprintf(s_relay_topic, sizeof(s_relay_topic), "home/edge/%s/relay", s_node);
+    snprintf(s_reach_req_topic, sizeof(s_reach_req_topic), "home/edge/%s/reach/req", s_node);
     const esp_partition_t *run = esp_ota_get_running_partition();
     snprintf(s_online_msg, sizeof(s_online_msg), "online %s %s", run ? run->label : "?", HA_FW_VERSION);
 
@@ -299,6 +321,19 @@ void ha_mqtt_publish_reply(const char *reqid, const char *payload) {
     char topic[80];
     snprintf(topic, sizeof(topic), "home/edge/%s/%s/reply", s_node, reqid);
     esp_mqtt_client_publish(s_client, topic, payload, 0, 1, false);
+}
+
+void ha_mqtt_publish_reach(const char *reach_json) {
+    if (!s_connected) return;
+    char topic[64];
+    snprintf(topic, sizeof(topic), "home/edge/%s/reach", s_node);
+    char ts[24];
+    if (!ha_sntp_iso_utc(ts, sizeof(ts))) ts[0] = '\0';
+    char payload[1152];
+    int n = snprintf(payload, sizeof(payload),
+        "{\"schema\":1,\"node\":\"%s\",\"ts\":\"%s\",\"reach\":%s}", s_node, ts, reach_json);
+    if (n <= 0 || n >= (int)sizeof(payload)) return;   // oversized → drop (next census reports fresh)
+    esp_mqtt_client_publish(s_client, topic, payload, n, 1, false);
 }
 
 void ha_mqtt_log(const char *fmt, ...) {

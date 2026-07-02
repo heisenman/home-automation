@@ -9,12 +9,12 @@ config lives in `../instance/` (git-ignored); templates in [`../config-examples/
 |----------|------|-----|
 | `api/` | FastAPI **BFF** + endpoints; `viewmodel.py` = **single source of UI truth** (`METRIC_CATALOG`, control specs) rendered by both PWA and panel | 0013 |
 | `web/` | The PWA (`app.js`) served at `/app` — a thin renderer of the BFF spec | 0013 |
-| `ingest/` | MQTT → canonical readings; bridges (tasmota, levoit); `edge-mapper` (MAC→device/area) | 0001 |
+| `ingest/` | MQTT → canonical readings; bridges (tasmota, levoit); `edge-mapper` (MAC→device/area, **+ reach census `home/edge/+/reach` → `record_link(ok=None)`**) | 0001,0023 |
 | `storage/` | Two-tier: sqlite **hot** + parquet **archive** (compactor, hash manifest) | 0004,0006,0009 |
 | `control/` | Actuator control loop, override/policy/scenes; trait-based | 0002,0011,0014 |
 | `device_registry.py` | The registry the dictator owns (devices, traits, areas) | 0001,0002 |
 | `cluster/` | Heartbeat / failover coordination (pairs with `../failover/`) | 0016,0018 |
-| `comms/`, `mesh/` | Event/resource abstraction; mesh topology + relay-coverage assignment | 0012,0015 |
+| `comms/`, `mesh/` | Event/resource abstraction; mesh topology + relay-coverage assignment; `coordinator.py` also **pushes** the reach-census trigger (`home/edge/<node>/reach/req`, signed, sig-only) each pass | 0012,0015,0023 |
 | `notify/` | Alert engine → MQTT `home/_alerts` → ntfy bridge (web-push dropped) | — |
 | `weather/` | Weather lane | 0008 |
 | `config/`, `util/` | Config loading, shared helpers | — |

@@ -69,6 +69,7 @@ def build_directive(relay_macs: list[str], epoch: int, ttl_s: int = 3600) -> dic
 
 DEFAULT_DWELL_S = 900.0          # decision #5: a node's set must hold this long before we re-publish
 RELAY_TOPIC = "home/edge/{node}/relay"
+REACH_REQ_TOPIC = "home/edge/{node}/reach/req"   # ADR-0023: signed census trigger (server-push cadence)
 
 
 def sign_envelope(secret: str, payload: dict) -> dict:
@@ -78,6 +79,26 @@ def sign_envelope(secret: str, payload: dict) -> dict:
     p = json.dumps(payload, separators=(",", ":"), sort_keys=True)
     s = hmac.new(secret.encode("utf-8"), p.encode("utf-8"), hashlib.sha256).hexdigest()
     return {"p": p, "s": s}
+
+
+def trigger_reach(client, lut: dict) -> int:
+    """ADR-0023 server-push census: publish a signed trigger to every enrolled node so the whole mesh
+    reports its reach neighborhood at a coordinated instant. Fired once per reconcile pass; responses
+    land on home/edge/<node>/reach (ingested by the mapper) and feed the NEXT pass's best_relay — so
+    relocated/relay-none nodes stay visible and rebalancing sees un-relayed reach. Sig-only + idempotent
+    (the firmware handler does no anti-replay), so it can't collide with real actuation commands. A node
+    keeps a long autonomous fallback, so a silent coordinator never makes a node invisible. Returns count."""
+    if client is None:
+        return 0
+    n = 0
+    for nid, info in sorted(lut.items()):
+        secret = (info or {}).get("cmd_secret")
+        if not secret:
+            continue
+        env = sign_envelope(secret, {"op": "reach"})
+        client.publish(REACH_REQ_TOPIC.format(node=nid), json.dumps(env), qos=1, retain=False)
+        n += 1
+    return n
 
 
 def _state(epoch, published, pending, since) -> dict:
@@ -244,9 +265,13 @@ def main() -> None:
 
     def one_pass():
         out = publish_pass(conn, dev_to_mac, lut, client=client, dwell_s=a.dwell, only=only)
+        # ADR-0023: after reconciling on the reach we already have, ask every node to re-census. Their
+        # responses land during the --loop sleep and sharpen the NEXT pass (organic rebalance, no fossils).
+        triggered = trigger_reach(client, lut) if client else 0
         mode = "PUBLISH" if client else "dry-run"
         print(f"# [{mode}] local={len(out['local_devs'])} | published={out['published'] or '-'} | "
-              f"pending(dwell)={out['pending'] or '-'} | no-secret={out['skipped_no_secret'] or '-'}")
+              f"pending(dwell)={out['pending'] or '-'} | no-secret={out['skipped_no_secret'] or '-'} | "
+              f"reach-triggered={triggered}")
         return out
 
     try:

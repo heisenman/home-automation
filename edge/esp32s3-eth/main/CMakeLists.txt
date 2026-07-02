@@ -15,5 +15,5 @@ idf_component_register(
     INCLUDE_DIRS "."
     REQUIRES nvs_flash esp_eth esp_wifi driver esp_driver_rmt esp_event esp_netif mqtt bt json
              app_update esp_https_ota esp_http_client mbedtls
-             switchbot_decode ha_ble_scan sgp40 sensirion_gas_index
+             switchbot_decode ha_ble_scan ha_reach sgp40 sensirion_gas_index
 )
