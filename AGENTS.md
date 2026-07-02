@@ -16,6 +16,23 @@ mirrors the dictator with keepalived/VRRP auto-failover behind a VIP.
 - Deep reference: [home-automation-architecture-plan.md](home-automation-architecture-plan.md),
   [docs/ROADMAP.md](docs/ROADMAP.md), the [ADR index](docs/adr/).
 
+## Machines & repo checkouts — READ BEFORE BUILDING/FLASHING
+
+**Three machines, one GitHub origin (`heisenman/home-automation`), but the checkout folder name DIFFERS per
+machine** — this has caused real confusion. Full detail + the per-device build/flash matrix:
+**[docs/ENVIRONMENT.md](docs/ENVIRONMENT.md).** The short version:
+
+| Machine | Addr | Checkout | Role | Builds/flashes here | Edge `secrets.h`? |
+|---------|------|----------|------|---------------------|-------------------|
+| **bench** (`SuperDuperBuddy`) | `.112` | `~/ha-coord` | **ops** — the "convenient bench" (Claude ops sessions); ESP-IDF present | **reTerminal panels** (P4/C6; dev tree `~/reterminal-dev`) | **NO** — only `secrets.example.h` |
+| **ha-dev** (dictator) | `.210` | `~/home_automation` | **canonical real dev** (Hugh is moving all real dev here) + the live dictator; ESP-IDF present | **edge nodes** (c3/c6/s3): build + **signed OTA** | **YES** — real per-node secrets |
+| **fileserver** | `.245` | — | CRITICAL fileserver + warm standby | nothing — **hands-off** | — |
+
+**Rule of thumb:** panel firmware → **bench**; edge-node firmware (build, sign, OTA) → **`.210`** (that's where
+`secrets.h` + the command secrets live). Never build/OTA an edge node from the bench — its `secrets.h` isn't
+here, so the bin gets empty wifi/command-secret and can't reconnect or be signed. To tell where you are:
+`hostname` / `pwd` (folder name) / `hostname -I`.
+
 ## Directory map
 
 | Dir | What's here | AGENTS |
