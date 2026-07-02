@@ -64,6 +64,10 @@ MODULES = [
     ("ha_gas", {"sources": ["ha_gas.c"], "component": None}),
     ("sgp40", {"sources": [], "component": "sgp40"}),
     ("sensirion_gas_index", {"sources": [], "component": "sensirion_gas_index"}),
+    # NOTE: sqlite3 (firmware/components/sqlite3, ADR-0022) is a validated shared component but
+    # is not yet REQUIRED by any committed build (its consumer, ha_replica, is gated on the
+    # server rung contract). Add its matrix row here the moment a build's CMakeLists consumes it,
+    # so the matrix keeps reflecting real usage rather than availability. See edge/MODULES.md.
 ]
 
 _SECTION_KEYWORDS = {
