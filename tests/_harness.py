@@ -11,9 +11,12 @@ Run all:   venv/bin/python -m tests.run_all
 """
 from __future__ import annotations
 
+import inspect
 import sys
+import tempfile
 import traceback
 from contextlib import contextmanager
+from pathlib import Path
 
 
 @contextmanager
@@ -33,8 +36,17 @@ def run_module(ns: dict) -> int:
     name = ns.get("__name__", "tests")
     passed = failed = 0
     for t in tests:
+        fn = ns[t]
+        # Support the one pytest fixture our suites use: a test that declares `tmp_path`
+        # gets a fresh temp dir (as a Path), like pytest. Keeps pytest-native modules
+        # (test_device_registry, test_secret_store) runnable under this dependency-free harness.
+        wants_tmp = "tmp_path" in inspect.signature(fn).parameters
         try:
-            ns[t]()
+            if wants_tmp:
+                with tempfile.TemporaryDirectory() as d:
+                    fn(Path(d))
+            else:
+                fn()
             print(f"  PASS {t}")
             passed += 1
         except Exception:

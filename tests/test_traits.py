@@ -4,7 +4,7 @@ from tests._harness import raises, run_module
 
 
 def test_known_traits():
-    assert set(T.known_traits()) == {"switchable", "ranged", "positionable", "lockable", "setpoint"}
+    assert set(T.known_traits()) == {"switchable", "ranged", "positionable", "lockable", "setpoint", "indicator"}
 
 
 def test_switchable_set():

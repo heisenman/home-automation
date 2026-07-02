@@ -12,8 +12,15 @@ def main() -> int:
     for mod in pkgutil.iter_modules(tests.__path__):
         if not mod.name.startswith("test_"):
             continue
-        m = importlib.import_module(f"tests.{mod.name}")
         print(f"== tests.{mod.name} ==")
+        try:
+            m = importlib.import_module(f"tests.{mod.name}")
+        except Exception as e:
+            # Don't let one unimportable module (e.g. a missing dep outside the server venv)
+            # abort the whole suite and hide every result after it.
+            print(f"  ERROR importing tests.{mod.name}: {e!r}")
+            rc |= 1
+            continue
         rc |= run_module(vars(m))
     print("\nALL PASS" if rc == 0 else "\nFAILURES")
     return rc
