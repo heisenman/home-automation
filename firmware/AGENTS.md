@@ -20,13 +20,14 @@ firmware/
 
 | Module | Home | Consumed by | Notes |
 |--------|------|-------------|-------|
-| `switchbot_decode` | **`firmware/components/`** ✓ | D1001 panel | pure, host-tested; verbatim lift from the byte-identical forks. Live edge nodes still link their fork copy until gated migration. |
-| `ha_ble_scan` | **`firmware/components/`** ✓ | D1001 panel | shared NimBLE observer; controller-init + publish sink are caller hooks (native vs VHCI). Panel publishes canonical `home/edge/<node>/<mac>/adv`. Live edge nodes still on their `ble_scan` forks. |
+| `switchbot_decode` | **`firmware/components/`** ✓ | **all builds** (panel + c3/c6/s3) | pure, host-tested; verbatim lift. Fork copies retired fleet-wide. |
+| `ha_ble_scan` | **`firmware/components/`** ✓ | **all builds** (panel + c3/c6/s3) | shared NimBLE observer; controller-init + publish sink + `shared_radio` duty-cycle are caller hooks/flags (native vs VHCI; WiFi coexistence). The s3 duty-cycle drift is reconciled here. Fork copies retired. |
 
-The panel build (`~/reterminal-dev/d1001-beachhead`, off-repo dev tree; mirror at
-[provisioning/reterminal/beachhead/](../provisioning/reterminal/AGENTS.md)) consumes these via
-`components/<name>` **symlinks** into this tree — single source of truth stays here. Everything else remains
-in the forks. Extraction order + rationale: [edge/MODULES.md](../edge/MODULES.md).
+**Fully migrated (ADR-0020 Stage 2 complete for the BLE core).** Consumers link the shared components via
+`REQUIRES` + `EXTRA_COMPONENT_DIRS ../../firmware/components` (edge nodes) or `components/<name>` **symlinks**
+(the panel, off-repo dev tree at `~/reterminal-dev/d1001-beachhead`). Each node keeps a 2-line `ble_scan.h`
+shim so `gatt_*`/`ha_ota` includes are untouched. Still forked (future stages): `ha_mqtt` (3×-drifted),
+`app_main`, `gatt_*` (Stage 2 → shared `ha_gatt`), and the platform modules. Extraction order + rationale: [edge/MODULES.md](../edge/MODULES.md).
 
 ## Rules
 

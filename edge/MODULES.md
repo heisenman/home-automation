@@ -8,8 +8,8 @@ which). Target = real shared IDF components (ADR-0020); today most are shared by
 
 | Module | Role | Contract/ADR | Platform support | Dep notes | State |
 |--------|------|--------------|------------------|-----------|-------|
-| `switchbot_decode` | Advert bytes → reading (pure, has test) | device-family decode | any | none (pure) | **extracted → [firmware/components/](../firmware/components/switchbot_decode/)** (forks still link their copy until gated migration) |
-| `ble_scan` | NimBLE passive observer → decode → publish; transport-aware duty cycle | ADR-0001 | native-radio **or** esp-hosted-VHCI (panel) | NimBLE | drifted (c3/c6 vs s3) |
+| `switchbot_decode` | Advert bytes → reading (pure, has test) | device-family decode | any | none (pure) | **shared → [firmware/components/](../firmware/components/switchbot_decode/)** — all builds migrated |
+| `ha_ble_scan` (was `ble_scan`) | NimBLE passive observer → decode → dedup → sink callback; transport-aware duty cycle (`shared_radio`) | ADR-0001 | native-radio **or** esp-hosted-VHCI (panel) | NimBLE | **shared → [firmware/components/](../firmware/components/ha_ble_scan/)** — all builds migrated; s3 duty-cycle reconciled into the `shared_radio` cfg flag |
 | `gatt_exec` / `gatt_history` | Server-driven GATT actuation / history pull | ADR-0010 | native-radio **or** VHCI | NimBLE central | shared |
 | `ha_mqtt` | Broker client: adverts/status/log; subscribes signed cmd + relay; verifies HMAC | ADR-0010 | any transport | mqtt | **drifted (3×)** |
 | `ha_relay` | Phase-B coverage filter (signed `relay_assign`, NVS, epoch-guarded) | ADR-0015 | any | nvs | shared |

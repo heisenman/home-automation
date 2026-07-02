@@ -44,26 +44,20 @@ def test_shared_components_exist_and_are_used():
         assert "shared" in matrix[mod].values(), f"{mod} names component {comp} but no build links it shared"
 
 
-def test_unmigrated_edge_nodes_still_fork():
-    """Migration-state guard: c3 + s3 are NOT yet migrated, so they still fork the BLE core. Asserts we
-    don't silently drop their copies before their gated cutover. (c6 migrated — see below.)"""
+def test_ble_core_fully_migrated():
+    """ADR-0020 Stage 2 complete: every build (panel + all edge nodes) links the shared BLE core,
+    and no build forks switchbot_decode/ble_scan anymore. Guards against a fork copy sneaking back in."""
     matrix = G.build_matrix()
-    for node in ("esp32c3", "esp32s3-eth"):
-        assert matrix["switchbot_decode"][node] == "fork"
-        assert matrix["ble_scan"][node] == "fork"
-
-
-def test_migrated_builds_use_shared_ble_core():
-    """d1001-panel (Stage 1) + esp32c6 (Stage 2, first live-node migration) link the shared components."""
-    matrix = G.build_matrix()
-    for dev in ("d1001-panel", "esp32c6"):
-        assert matrix["switchbot_decode"][dev] == "shared"
-        assert matrix["ble_scan"][dev] == "shared"
+    for dev in ("d1001-panel", "esp32c6", "esp32c3", "esp32s3-eth"):
+        assert matrix["switchbot_decode"][dev] == "shared", f"{dev} not on shared switchbot_decode"
+        assert matrix["ble_scan"][dev] == "shared", f"{dev} not on shared ble_scan"
+    for mod in ("switchbot_decode", "ble_scan"):
+        assert "fork" not in matrix[mod].values(), f"{mod} still forked somewhere"
 
 
 def test_drift_is_detected():
     """A stale doc must not compare equal to the generated expectation."""
-    mangled = G.MATRIX.read_text().replace("| `ble_scan` | fork", "| `ble_scan` | shared", 1)
+    mangled = G.MATRIX.read_text().replace("| `ble_scan` | shared", "| `ble_scan` | fork", 1)
     assert mangled != G.expected_doc()
 
 

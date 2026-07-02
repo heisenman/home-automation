@@ -20,6 +20,15 @@ static uint8_t  own_addr_type;
 static volatile bool s_paused;
 static volatile bool s_running;
 
+// Transport-aware scan duty cycle (reconciled from the s3-eth fork, ADR-0020 Stage 2). Continuous
+// (window==itvl) unless the radio is shared with WiFi, in which case yield ~60% so the link survives.
+#define SCAN_ITVL_FULL    BLE_GAP_SCAN_FAST_INTERVAL_MIN   // window==itvl ⇒ scan 100% of the time
+#define SCAN_WINDOW_FULL  BLE_GAP_SCAN_FAST_WINDOW
+#define SCAN_ITVL_WIFI    160U   // 100 ms (units of 0.625 ms)
+#define SCAN_WINDOW_WIFI   64U   // 40 ms ⇒ ~40% duty, ~60% of the radio left for WiFi
+static uint16_t s_scan_itvl   = SCAN_ITVL_FULL;
+static uint16_t s_scan_window = SCAN_WINDOW_FULL;
+
 // observability
 static volatile uint32_t s_total_adv;
 static volatile uint32_t s_decoded;
@@ -92,7 +101,7 @@ static int gap_event(struct ble_gap_event *event, void *arg);
 static void start_scan(void) {
     struct ble_gap_disc_params dp = {0};
     dp.passive = 1; dp.filter_duplicates = 0;
-    dp.itvl = BLE_GAP_SCAN_FAST_INTERVAL_MIN; dp.window = BLE_GAP_SCAN_FAST_WINDOW;
+    dp.itvl = s_scan_itvl; dp.window = s_scan_window;
     int rc = ble_gap_disc(own_addr_type, BLE_HS_FOREVER, &dp, gap_event, NULL);
     if (rc != 0) { s_running = false; ESP_LOGE(TAG, "ble_gap_disc failed rc=%d", rc); }
     else         { s_running = true;  ESP_LOGI(TAG, "passive scan started (own_addr_type=%d)", own_addr_type); }
@@ -166,6 +175,14 @@ void ha_ble_scan_start(const ha_ble_scan_cfg_t *cfg) {
     if (started) { ESP_LOGW(TAG, "already started"); return; }
     if (!cfg)    { ESP_LOGE(TAG, "null cfg"); return; }
     s_cfg = *cfg;
+
+    if (s_cfg.shared_radio) {             // WiFi shares the radio → duty-cycle so the link survives
+        s_scan_itvl = SCAN_ITVL_WIFI;
+        s_scan_window = SCAN_WINDOW_WIFI;
+    }
+    ESP_LOGI(TAG, "scan mode: %s (itvl=%u window=%u ×0.625ms)",
+             s_cfg.shared_radio ? "duty-cycled for WiFi coexistence" : "continuous",
+             s_scan_itvl, s_scan_window);
 
     if (s_cfg.controller_init) {          // platform: bring up the controller (VHCI on the panel)
         esp_err_t e = s_cfg.controller_init();

@@ -35,6 +35,15 @@ static void on_eth_link_down(void *a, esp_event_base_t b, int32_t id, void *d) {
     esp_restart();
 }
 
+// Edge publish sink for the shared ha_ble_scan observer (ADR-0020): Phase-B relay gate,
+// then publish. Replaces the tail of the old fork ble_scan.c gap_event now that
+// parse/decode/dedup live in the shared component. controller_init stays NULL (native).
+static void edge_on_reading(const char *mac_str, const sb_reading_t *r, int rssi, void *user) {
+    (void)user;
+    if (ha_relay_allowed(mac_str))
+        ha_mqtt_publish_reading(mac_str, r, rssi);
+}
+
 void app_main(void) {
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -87,7 +96,13 @@ void app_main(void) {
 
     ha_relay_init();                // load the persisted Phase-B coverage allowlist (default: relay-all)
     ha_mqtt_start(cfg.broker_uri, cfg.node_id);
-    ha_ble_scan_start(on_wifi);     // duty-cycle the scan when on Wi-Fi (shared radio); full when wired
+    ha_ble_scan_cfg_t scan_cfg = {
+        .controller_init = NULL,          // native controller (nimble_port_init brings it up)
+        .on_reading      = edge_on_reading,
+        .shared_radio    = on_wifi,       // duty-cycle when on WiFi (shared radio); continuous when wired
+        .user            = NULL,
+    };
+    ha_ble_scan_start(&scan_cfg);
     ESP_LOGI(TAG, "edge node up: node=%s broker=%s", cfg.node_id, cfg.broker_uri);
 
     // If we just booted a freshly-OTA'd image, self-test now and confirm-or-rollback.

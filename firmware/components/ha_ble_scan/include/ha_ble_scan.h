@@ -31,6 +31,14 @@ typedef struct {
     //   panel => publish canonical home/edge/<node>/<mac>/adv
     void (*on_reading)(const char *mac_str, const sb_reading_t *r, int rssi, void *user);
     void *user;
+
+    // shared_radio: BLE and the network transport share ONE 2.4GHz radio (WiFi on c6/c3, WiFi over
+    // esp-hosted SDIO on the panel, or a WiFi-fallback s3). A continuous scan (window==itvl) hogs the
+    // radio and starves the WiFi beacon (bcn_timeout → drops). true ⇒ duty-cycle the scan to ~40%
+    // (leaving ~60% for WiFi); false (default) ⇒ scan continuously (wired s3-eth, or where coexistence
+    // isn't a concern). Reconciled from the s3-eth fork (ADR-0020 Stage 2). OTA/GATT still fully pause
+    // the scan via ha_ble_scan_pause() regardless.
+    bool shared_radio;
 } ha_ble_scan_cfg_t;
 
 // Start the observer. *cfg is copied. Non-fatal: logs + returns on any failure.

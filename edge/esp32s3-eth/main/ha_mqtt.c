@@ -29,7 +29,7 @@
 #endif
 
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v14-nonce" // bump to prove an OTA swapped the running image
+#define HA_FW_VERSION "v15-modular" // bump to prove an OTA swapped the running image
 #endif
 
 static const char *TAG = "ha_mqtt";
