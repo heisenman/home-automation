@@ -22,6 +22,7 @@ Scripts the operator/agent runs against the fleet. Python + a few shell. Not ser
 | `gen_tls.py`, `gen_vapid.py` | Cert / key generation |
 | `power_report.py`, `mesh_probe.py`, `gap_watcher.py` | Diagnostics |
 | `host-leds.sh` | Box operability LEDs |
+| `gen_module_matrix.py` | Generate/`--check` the firmware device×module matrix (`edge/MATRIX.md`) from each build's `CMakeLists` (ADR-0020 drift-guard; pinned by `tests/test_module_matrix.py`) |
 
 ## Gotchas
 
