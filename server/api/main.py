@@ -37,6 +37,7 @@ from fastapi.staticfiles import StaticFiles
 DB_PATH = Path(os.environ.get("HA_DB", "instance/db/hot.db"))
 PARQUET_GLOB = Path(os.environ.get("HA_PARQUET_DIR", "instance/db/parquet"))
 WEATHER_DB = Path(os.environ.get("HA_WEATHER_DB", "instance/db/weather.db"))
+RUNG_DB = Path(os.environ.get("HA_RUNG_DB", "instance/db/rungs.db"))   # ADR-0022 rollup ladder (panel replica)
 WEATHER_TABLE = os.environ.get("HA_WEATHER_TABLE", "weather")
 MAX_DEEP_ROWS: int = int(os.environ.get("HA_MAX_DEEP_ROWS", "50000"))
 VAPID_PATH = Path(os.environ.get("HA_VAPID", "instance/vapid.json"))   # PWA web-push keys (gitignored)
@@ -1021,6 +1022,37 @@ def display_viewmodel(device_id: str):
     if vm is None:
         raise HTTPException(status_code=404, detail=f"no controllable device {device_id!r}")
     return vm
+
+
+@app.get("/api/v1/rung/manifest.json", include_in_schema=True)
+def rung_manifest():
+    """ADR-0022 replica sync: per-rung {latest_bucket_start, rows} + the file's sha256/size, so the panel
+    ha_replica can tell if it's behind without pulling the whole DB. Mirrors the parquet manifest pattern."""
+    if not RUNG_DB.exists():
+        raise HTTPException(status_code=404, detail="rungs.db not built yet")
+    import hashlib
+    data = RUNG_DB.read_bytes()
+    conn = sqlite3.connect(str(RUNG_DB))
+    try:
+        rungs = {}
+        for (res,) in conn.execute("SELECT DISTINCT res FROM rung"):
+            n, hi = conn.execute("SELECT COUNT(*), MAX(bucket_start) FROM rung WHERE res=?", (res,)).fetchone()
+            rungs[res] = {"rows": n, "latest_bucket_start": hi}
+    finally:
+        conn.close()
+    return {"sha256": hashlib.sha256(data).hexdigest(), "size_bytes": len(data),
+            "updated_ts": datetime.fromtimestamp(RUNG_DB.stat().st_mtime, timezone.utc)
+                          .strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "rungs": rungs}
+
+
+@app.get("/api/v1/rung/full.db", include_in_schema=True)
+def rung_full_db():
+    """ADR-0022 seed pull: the whole compact rung sqlite. The panel copies it to SD and queries locally
+    (offline, instant charts). Small (MB); a full re-pull is cheap. Incremental 'since' is Phase 2."""
+    if not RUNG_DB.exists():
+        raise HTTPException(status_code=404, detail="rungs.db not built yet")
+    return FileResponse(str(RUNG_DB), media_type="application/octet-stream", filename="rungs.db")
 
 
 @app.get("/devices")

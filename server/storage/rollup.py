@@ -186,3 +186,36 @@ def run(raw_conn: sqlite3.Connection, rung_conn: sqlite3.Connection, *, now_epoc
     rung_conn.commit()
     log.info("rollup pass: %s", out)
     return out
+
+
+def run_paths(raw_db: str, rung_db: str, *, now_epoch: int | None = None, full: bool = False) -> dict:
+    """Convenience: open the raw (hot.db) + rung dbs by path and run one pass."""
+    import time
+    raw = sqlite3.connect(raw_db)
+    rung = sqlite3.connect(rung_db)
+    try:
+        return run(raw, rung, now_epoch=now_epoch if now_epoch is not None else int(time.time()), full=full)
+    finally:
+        raw.close()
+        rung.close()
+
+
+def _main() -> int:
+    import argparse
+    import time
+    p = argparse.ArgumentParser(description="ADR-0022 rollup ladder: build/refresh rungs.db from raw readings")
+    p.add_argument("--raw", default="instance/db/hot.db", help="raw readings sqlite (hot.db)")
+    p.add_argument("--rung", default="instance/db/rungs.db", help="output rung sqlite")
+    p.add_argument("--full", action="store_true", help="reprocess from epoch 0 (initial seed)")
+    p.add_argument("--now", type=int, default=None, help="override now (epoch s); default = wall clock")
+    p.add_argument("--log-level", default="INFO")
+    a = p.parse_args()
+    logging.basicConfig(level=getattr(logging, a.log_level), format="%(asctime)s %(levelname)s %(name)s — %(message)s")
+    t0 = time.time()
+    out = run_paths(a.raw, a.rung, now_epoch=a.now, full=a.full)
+    print(f"rollup {'FULL' if a.full else 'incremental'} {a.raw} -> {a.rung} in {time.time()-t0:.1f}s: {out}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(_main())
