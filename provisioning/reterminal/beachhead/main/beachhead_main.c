@@ -37,6 +37,7 @@
 #include "esp_io_expander.h"
 #include "bat_profile.h"
 #include "ha_battery.h"
+#include "ha_power_policy.h"   // battery safety policy: shutdown/warn/boot-gate (ADR-0024)
 #include "fs_ops.h"
 #include "ui_tiles.h"
 #include "ha_replica.h"   // ADR-0022 Phase 1a: rung DB replica to SD
@@ -47,7 +48,7 @@
 #include "esp_hosted_ota.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v57-localcharts"
+#define APP_BUILD_TAG "v58-battpolicy"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -81,6 +82,9 @@ static const char *TAG = "beachhead";
 #define T_PIN    "d1001-beachhead/pin"             // <- {gpio|exp, level|set} readback for cmd/gpio + cmd/exp
 #define T_CHGC   "d1001-beachhead/cmd/charge"      // -> auto|hold|on|off | reset[ ms] | status : charge-mgr control
 #define T_CHG    "d1001-beachhead/charge"          // <- charge-manager state (mode + STAT + cell)
+#define T_ALERT  "d1001-beachhead/alert"           // <- low-battery warn (retained) -> ntfy bridge
+#define T_BRATE  "d1001-beachhead/cmd/battrate"    // -> N: battery telemetry sample period in ms (finer-cadence hook)
+#define T_PPTEST "d1001-beachhead/cmd/pptest"      // -> "mv N": inject a policy reading to bench-test warn/shutdown (0=resume)
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
@@ -291,6 +295,34 @@ static void ota_task(void *pv)
     vTaskDelete(NULL);
 }
 
+// --- Battery safety policy (ADR-0024): shutdown / warn / boot-gate. Decisions live in the shared
+// ha_power_policy component; these are the D1001 actuators injected into it. ---
+#define BSP_LED_R  GPIO_NUM_22           // red status LED, active-low (Seeed direct P4 GPIO)
+static ha_power_policy_cfg_t s_pp_cfg;   // set early in app_main (ha_power_policy_d1001_cfg)
+static volatile int s_pp_test_mv = 0;    // >0 overrides the policy reading — bench test of warn/shutdown
+
+static void led_init(void) { gpio_reset_pin(BSP_LED_R); gpio_set_direction(BSP_LED_R, GPIO_MODE_OUTPUT); gpio_set_level(BSP_LED_R, 1); }
+static void pp_led(void *ctx, bool on)  { gpio_set_level(BSP_LED_R, on ? 0 : 1); }   // active-low
+static void pp_power_off(void *ctx)     { bsp_power_off(); }
+static void pp_spawn_display(void *ctx) { xTaskCreate(display_task, "disp", 8192, NULL, 4, NULL); }
+static void pp_warn(void *ctx, bool on)
+{
+    if (s_client && s_mqtt_up)
+        esp_mqtt_client_publish(s_client, T_ALERT,
+            on ? "{\"battery\":\"low\",\"msg\":\"charge the panel\"}" : "{\"battery\":\"ok\"}", 0, 1, 1);  // retained -> ntfy
+}
+static int pp_read_mv(void *ctx)
+{
+    if (s_pp_test_mv > 0) return s_pp_test_mv;         // bench override (test warn/shutdown without draining)
+    ha_batt_sample_t s = {0};
+    if (ha_battery_sample(&s) != ESP_OK) return 9999;  // gauge glitch -> don't trip (fail-safe high)
+    if (s.on_wall) return 9999;                        // on external power -> no over-discharge risk
+    return s.batt_mv_norm;                             // on battery: the normalized cell drives the policy
+}
+static ha_power_policy_io_t s_pp_io = {
+    .read_mv = pp_read_mv, .power_off = pp_power_off, .warn = pp_warn, .led = pp_led, .ctx = NULL,
+};
+
 static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, void *data)
 {
     esp_mqtt_event_handle_t e = (esp_mqtt_event_handle_t)data;
@@ -309,7 +341,10 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
         // retry. Idempotent (display_task guards on s_disp_started; the flag stops reconnect re-triggers).
         if (!s_auto_disp_done) {
             s_auto_disp_done = true;
-            xTaskCreate(display_task, "disp", 8192, NULL, 4, NULL);
+            // Boot-gate the display (ADR-0024 §6): below the cold-start floor, hold the panel dark +
+            // blink the red LED, and bring it up only once the cell recovers. Non-blocking — the
+            // net/MQTT lifeline stays live while dark; on a gauge glitch it fails toward display-up.
+            ha_power_policy_boot_gate(&s_pp_cfg, &s_pp_io, pp_spawn_display);
         }
         break;
     case MQTT_EVENT_DISCONNECTED:
@@ -402,6 +437,19 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
                 cs.gaining ? "true" : "false", okc ? cs.batt_mv_smoothed : -1, okc ? cs.soc : -1,
                 cs.charge_en ? "true" : "false");
             esp_mqtt_client_publish(e->client, T_CHG, out, 0, 0, 0);
+        } else if (tl == (int)strlen(T_BRATE) && strncmp(e->topic, T_BRATE, tl) == 0) {
+            char b[16]; int nb = dl < 15 ? dl : 15; memcpy(b, e->data, nb); b[nb] = 0;
+            int ms = atoi(b);
+            int applied = bat_profile_set_rate(ms);   // clamps to a sane range; returns the value used
+            char out[48]; snprintf(out, sizeof(out), "{\"battrate_ms\":%d}", applied);
+            esp_mqtt_client_publish(e->client, T_ACK, out, 0, 0, 0);
+        } else if (tl == (int)strlen(T_PPTEST) && strncmp(e->topic, T_PPTEST, tl) == 0) {
+            char b[24]; int nb = dl < 23 ? dl : 23; memcpy(b, e->data, nb); b[nb] = 0;
+            int mv = 0;
+            if (sscanf(b, "mv %d", &mv) == 1) s_pp_test_mv = mv;   // 0 = resume the real reading
+            char out[64]; snprintf(out, sizeof(out), "{\"pptest_mv\":%d,\"note\":\"%s\"}",
+                                   s_pp_test_mv, s_pp_test_mv ? "policy sees this reading" : "real reading");
+            esp_mqtt_client_publish(e->client, T_ACK, out, 0, 0, 0);
         } else if (tl == (int)strlen(T_FSC) && strncmp(e->topic, T_FSC, tl) == 0) {
             char *j = strndup(e->data, dl);
             if (j) { fs_ops_submit(j); free(j); }   // SD file op; worker copies + runs off this stack
@@ -738,6 +786,8 @@ static void fs_publish(const char *json)
 void app_main(void)
 {
     bsp_display_predark();   // FIRST: hold the panel dark across boot (kills the OTA-reboot strobe)
+    led_init();                                // red status LED off; used by the boot gate + warn
+    s_pp_cfg = ha_power_policy_d1001_cfg();     // set before MQTT-connect can fire the boot gate
     s_log_q = xQueueCreate(48, sizeof(char *));
     xTaskCreate(log_drain_task, "logdrain", 4096, NULL, 4, NULL);
     s_orig_vprintf = esp_log_set_vprintf(log_vprintf);   // permanent; gated by s_debug
@@ -780,8 +830,10 @@ void app_main(void)
     ESP_LOGI(TAG, "WiFi up — starting MQTT");
     start_mqtt();
     ha_battery_cfg_t bcfg = ha_battery_d1001_cfg(bsp_io_expander(), bsp_i2c1());
+    bcfg.display_on_fn = bsp_display_is_on;   // display state for SoC normalization (ADR-0024)
     ha_battery_init(&bcfg);                    // ADC/IMU/charge config (handles from the display BSP)
     ha_battery_charge_start();                 // thermal-gated charger + restart watchdog
+    ha_power_policy_monitor_start(&s_pp_cfg, &s_pp_io, 5000);   // battery safety monitor: warn @5-10%, hard-off @0%
     xTaskCreate(heartbeat_task, "hb", 4096, NULL, 3, NULL);
     xTaskCreate(button_task, "btn", 3072, NULL, 3, NULL);   // back-button screen toggle
     xTaskCreate(power_task, "pwr", 4096, NULL, 3, NULL);    // power-aware BLE: on wall / off battery + notify

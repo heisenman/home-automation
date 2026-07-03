@@ -19,10 +19,19 @@ static const char *TAG = "battprof";
 
 #define SD_MOUNT   "/sdcard"
 #define CSV_PATH   SD_MOUNT "/battprofile.csv"
-#define SAMPLE_MS  15000       // 15 s cadence — ~240 rows/hr, hours of headroom on a 32 GB card
+#define SAMPLE_MS_DEFAULT 15000   // 15 s cadence — ~240 rows/hr, hours of headroom on a 32 GB card
 #define CSV_HEADER "uptime_s,raw_ch2,cali_mv,batt_mv,batt_mv_smooth,usb_mv,vsys_pg,charging,soc,temp_dc,charge_en\n"
 
 static void (*s_publish)(const char *json);
+static volatile int s_sample_ms = SAMPLE_MS_DEFAULT;   // runtime cadence (cmd/battrate); finer over transitions
+
+int bat_profile_set_rate(int ms)
+{
+    if (ms < 200)    ms = 200;      // 5 Hz ceiling — protects the bus + SD from a runaway rate
+    if (ms > 300000) ms = 300000;   // 5 min floor
+    s_sample_ms = ms;
+    return ms;
+}
 
 // Append one row to the SD CSV — open/append/close PER ROW, presence-gated. No persistent handle,
 // so a hot-unplug can never leave a dead FILE* or spam write timeouts; the row is just skipped.
@@ -42,8 +51,8 @@ static void csv_append(uint32_t up, const ha_batt_sample_t *s, int tdc)
 
 static void profile_task(void *pv)
 {
-    ESP_LOGW(TAG, "battery profiler: MQTT %s every %ds + CSV to %s when SD present",
-             "d1001-beachhead/battprofile", SAMPLE_MS / 1000, CSV_PATH);
+    ESP_LOGW(TAG, "battery profiler: MQTT %s every %dms + CSV to %s when SD present",
+             "d1001-beachhead/battprofile", s_sample_ms, CSV_PATH);
     for (;;) {
         ha_batt_sample_t s = {0};
         if (ha_battery_sample(&s) == ESP_OK) {
@@ -65,7 +74,7 @@ static void profile_task(void *pv)
         } else {
             ESP_LOGW(TAG, "battery sample failed");
         }
-        vTaskDelay(pdMS_TO_TICKS(SAMPLE_MS));
+        vTaskDelay(pdMS_TO_TICKS(s_sample_ms));
     }
 }
 

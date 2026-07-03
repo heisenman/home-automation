@@ -55,6 +55,7 @@ typedef struct {
     int  cali_mv;            // calibrated mV pre-divider
     int  batt_mv;            // battery mV (× divider), instantaneous
     int  batt_mv_smoothed;   // reported/smoothed battery mV
+    int  batt_mv_norm;       // smoothed mV normalized to the base frame (offsets removed) — feeds ha_power_policy
     int  usb_mv;             // USB/VSYS mV; > usb_present_mv ⇒ cable in
     int  vsys_pg;            // VSYS power-good GPIO raw level
     bool charging;           // charge GPIO active-low (low=charging) — charger IC's STAT pin

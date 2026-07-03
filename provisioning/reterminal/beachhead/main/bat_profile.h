@@ -12,3 +12,7 @@
 #include "esp_err.h"
 
 esp_err_t bat_profile_start(void (*publish)(const char *json));
+
+// Set the telemetry sample period (ms) at runtime — finer cadence over charge/discharge transitions
+// (cmd/battrate). Clamped to [200, 300000]; returns the value actually applied.
+int bat_profile_set_rate(int ms);

@@ -125,14 +125,13 @@ static int lut_pct(int mv)
 //   • 100% = the charger's own done signal: on wall, charge allowed (charge_en), STAT not-charging,
 //     cell high ⇒ the BQ terminated ⇒ full, by the hardware's definition (Hugh). Voltage alone
 //     mis-reads a full-on-charger cell (~95% base frame under the constant-offset model).
-static int soc_normalized(int smooth_mv, bool display_on, bool on_wall, bool charging)
+// Normalized SoC from a pre-normalized reading + state. `smooth_mv` (raw base-frame) still gates the
+// hardware-100% anchor; `vnorm` drives the curve.
+static int soc_from(int smooth_mv, int vnorm, bool on_wall, bool charging)
 {
     if (on_wall && s_charge_en && !charging && smooth_mv >= FULL_DETECT_MV)
         return 100;
-    if (s_have_profile) {
-        int vnorm = ha_batt_profile_normalize(&s_profile, smooth_mv, display_on, on_wall, charging);
-        return ha_batt_profile_soc(&s_profile, vnorm);
-    }
+    if (s_have_profile) return ha_batt_profile_soc(&s_profile, vnorm);
     return lut_pct(smooth_mv);   // legacy raw-voltage LUT fallback
 }
 
@@ -246,7 +245,11 @@ esp_err_t ha_battery_sample(ha_batt_sample_t *out)
         out->on_wall = on_charger;
         out->gaining = s_gaining;
         bool display_on = s_cfg.display_on_fn ? s_cfg.display_on_fn() : true;
-        out->soc = soc_normalized(s_smooth_mv, display_on, on_charger, out->charging);
+        int vnorm = s_have_profile
+            ? ha_batt_profile_normalize(&s_profile, s_smooth_mv, display_on, on_charger, out->charging)
+            : s_smooth_mv;
+        out->batt_mv_norm = vnorm;
+        out->soc = soc_from(s_smooth_mv, vnorm, on_charger, out->charging);
         out->temp_dc = ht ? tdc : -9999;
         out->have_temp = ht;
         out->charge_en = s_charge_en;
