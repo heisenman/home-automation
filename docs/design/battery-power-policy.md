@@ -34,6 +34,20 @@ log. All confirmed against Hugh's bench meter and the panel.
   `charging→done` edge).
 - Bottom extrapolated from the measured display-on discharge; **not** below ~3400.
 
+**Power topology (schematic-confirmed, PowerManagement sheet, U16):** the cell reaches the system **only through
+the BQ25616's internal BATFET** — `J7 (VBAT) → BQ25616 BAT1/2 → [NVDC BATFET] → SYS1/2 → VSYS`. No discrete
+diode/FET path from the cell to VSYS. With USB in, VSYS is bucked from VBUS and the cell charges through the
+BATFET; with USB out, the BATFET ties VBAT→VSYS (battery-only). VSYS → TPS631000 buck-boost → VDD_3V3, gated by
+`EN_VDD_3V3` = the `PWR_HOLD` latch — so `bsp_power_off()` kills VDD_3V3 (the load), not VSYS, which is why the
+rails read 0 V and the cell is preserved.
+
+**USB-kill (forced discharge with USB attached) = NOT firmware-reachable on the D1001 (resolved 2026-07-03).**
+Source selection (VBUS vs cell) is internal to U16; its only input-disable (HIZ) is I²C-only and the charger is
+not on I²C. The VBUS input leg has no series load switch (the one SY6280 load switch, U11, gates *SD* power via
+`SD_PWR_EN`, not VBUS). ACDRV/VAC could drive an external input FET, but it'd be BQ-commanded (I²C), so still
+not GPIO-reachable. **Conclusion:** forced discharge needs human intervention (unplug, or a VBUS-leg jumper/cut);
+a scriptable kill would require a board mod (a load switch in the VBUS leg with EN on a spare expander line).
+
 **Known gaps:** true CV-termination voltage (charge starved by display load — recharge display-off to get it);
 the cold-start/inrush floor (needs a controlled low-battery boot test) → boot gate stays conservative until then.
 
@@ -75,9 +89,11 @@ The `ha_power_policy` decisions are reused unchanged on the next device — only
   explicitly improvable, not frozen.**
 - Accept a pushed profile (MQTT `cmd/battprofile` or an SD file) and hot-swap it without a reflash; keep the
   prior as rollback.
-- **Automated re-characterization harness** (bench-hosted first): a script drives the knobs (`cmd/charge`,
-  `cmd/screen`, and USB-kill if it turns out reachable) through the ADR-0024 cycle, logs the telemetry at
+- **Automated re-characterization harness** (bench-hosted first): a script drives the **scriptable** knobs
+  (`cmd/charge` /CE, `cmd/screen` display load, sampling rate) through the ADR-0024 cycle, logs the telemetry at
   250 ms–1 s over the transitions, fits a fresh profile, and pushes it back — so accuracy improves each run.
+  The **discharge leg stays manual** (USB unplugged): USB-kill is not firmware-reachable (see Power topology
+  above), so the harness pauses for a human "USB out" step rather than scripting the source switch.
 
 ## Verification (per task, HW @ .8; monitor over USB — panics = Hugh)
 - **A:** SoC tracks the meter across display on/off, USB in/out, charge on/off (offsets cancel); no latch on a

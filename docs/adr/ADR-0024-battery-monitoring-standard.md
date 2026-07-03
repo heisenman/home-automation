@@ -136,7 +136,10 @@ Devices SHOULD expose runtime control so characterization can be scripted rather
 - **Hard power-off** (rail latch). D1001: `PWR_HOLD`.
 - **Read STAT / ADC / state** on demand (D1001: `cmd/gpio`, the telemetry stream).
 - **USB-input kill** (force battery drain with USB attached) — **per-device TBD**; requires a firmware-reachable
-  input disable / load switch. Not assumed to exist; check the schematic per device.
+  input disable / load switch. Not assumed to exist; check the schematic per device. **D1001: resolved NO
+  (2026-07-03)** — the BQ25616 is an NVDC power-path charger, so source selection is internal; its only input
+  disable (HIZ) is I²C-only and the charger isn't on I²C, and the VBUS leg has no external series switch. Forced
+  discharge on the D1001 is human-only; a scriptable kill would need a board mod (VBUS-leg load switch on a GPIO).
 
 ## Re-characterization & profile evolution
 
