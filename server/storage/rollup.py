@@ -34,13 +34,41 @@ _META_DDL = "CREATE TABLE IF NOT EXISTS rollup_meta (k TEXT PRIMARY KEY, v TEXT)
 
 WIDTH_S = {"1min": 60, "1hour": 3600, "1day": 86400, "1week": 604800}
 CASCADE = [("1hour", "1min"), ("1day", "1hour"), ("1week", "1day")]   # (dest, src), bottom-up
-RETENTION_DAYS = {"1min": 90, "1hour": 730}                            # 1day / 1week kept forever
+# 1min tuned DOWN from the ADR-0022 default (90d) to 7d: sampling here is ~1/min, so the 1min rung barely
+# compacts vs raw — 90d of it made the panel-replica rungs.db ~700MB (not the "MB-scale" the ladder promises).
+# A wall panel only needs 1min detail for recent ≤2d zoom; 1hour covers older spans legibly. Tunable knob.
+RETENTION_DAYS = {"1min": 7, "1hour": 730}                             # 1day / 1week kept forever
+
+# ── resolution selector ─────────────────────────────────────────────────────────────────────────────
+# Pick the rung whose points-per-chart stays legible for a given query span. Kept here (not in the API) so
+# the panel's ha_replica mirrors the SAME span→rung mapping and charts render identically off the replica.
+# Ordered; first `span_s <= limit` wins. "raw" = full-resolution hot+parquet (exact, no rung).
+RESOLUTION_LADDER = [
+    (2 * 3600,        "raw"),      # ≤2h  → raw points (exact)
+    (2 * 86400,       "1min"),     # ≤2d  → 1-min rung  (≤2880 pts)
+    (60 * 86400,      "1hour"),    # ≤2mo → 1-hour rung (≤1440 pts)
+    (4 * 365 * 86400, "1day"),     # ≤4y  → 1-day rung  (≤1460 pts)
+]
+DEFAULT_LONG_RES = "1week"                                             # beyond 4y
+
+
+def select_resolution(span_s: float) -> str:
+    """span (seconds) → rung name (or 'raw'). The single source of truth for span→rung; API + panel mirror it."""
+    for limit, res in RESOLUTION_LADDER:
+        if span_s <= limit:
+            return res
+    return DEFAULT_LONG_RES
 
 
 # ── time helpers ──────────────────────────────────────────────────────────────
 def epoch_of(ts_iso: str) -> int:
     """ISO-8601 (…Z) → epoch seconds (UTC)."""
     return int(datetime.fromisoformat(ts_iso.replace("Z", "+00:00")).timestamp())
+
+
+def iso_of(epoch: int) -> str:
+    """epoch seconds (UTC) → ISO-8601 …Z (inverse of epoch_of; used to label rung bucket_start for clients)."""
+    return datetime.fromtimestamp(epoch, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
 def dest_bucket(src_epoch: int, dest_res: str) -> int:
@@ -200,6 +228,69 @@ def run_paths(raw_db: str, rung_db: str, *, now_epoch: int | None = None, full: 
         rung.close()
 
 
+# ── parquet backfill (one-time history seed) ──────────────────────────────────────────────────────────
+def _month_windows(lo_epoch: int, hi_epoch: int):
+    """Yield [start, next_month_start) epoch pairs covering [lo,hi). A calendar-month boundary never splits
+    an hour or a day, so composing 1hour←1min one month at a time is exact — this bounds cascade memory."""
+    dt = datetime.fromtimestamp(lo_epoch, timezone.utc).replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    while dt.timestamp() < hi_epoch:
+        nxt = dt.replace(year=dt.year + 1, month=1) if dt.month == 12 else dt.replace(month=dt.month + 1)
+        yield int(dt.timestamp()), int(nxt.timestamp())
+        dt = nxt
+
+
+def backfill_from_parquet(glob_pattern: str, rung_conn: sqlite3.Connection, *, now_epoch: int,
+                          log_fn=log.info) -> dict:
+    """Seed the full history from the parquet archive (server/storage/compactor.py output). Reads one file
+    (≈one month) at a time so the raw→1min aggregation is memory-bounded, upserts 1min, then cascades up the
+    ladder and prunes. Idempotent (recompute-and-replace per bucket). Sets `last_min_since` to the parquet
+    high-water-mark so a subsequent incremental run() tops up the gap to now from hot.db."""
+    import glob as _glob
+    import pyarrow.parquet as pq
+
+    ensure_schema(rung_conn)
+    files = sorted(f for f in _glob.glob(glob_pattern, recursive=True) if f.endswith(".parquet"))
+    total_min, max_bucket = 0, 0
+    for path in files:
+        # ParquetFile (not read_table): read THIS file only. read_table would infer hive partitioning from
+        # the year=/month= path and try to merge every sibling's schema — the archive's `year` column dtype
+        # varies across files (int64 vs dictionary), which makes that merge raise.
+        t = pq.ParquetFile(path).read(columns=["ts", "device_id", "metric", "value"])
+        rows = list(zip(t.column("ts").to_pylist(), t.column("device_id").to_pylist(),
+                        t.column("metric").to_pylist(), t.column("value").to_pylist()))
+        aggs = aggregate_raw(rows)
+        payload = [("1min", dev, met, b, *agg) for (dev, met, b), agg in aggs.items()]
+        if payload:
+            rung_conn.executemany(_UPSERT, payload)
+            rung_conn.commit()
+            total_min += len(payload)
+            max_bucket = max(max_bucket, max(p[3] for p in payload))
+        log_fn("backfill %s: %d raw → %d 1min buckets", path, len(rows), len(payload))
+
+    hi = now_epoch // 60 * 60 + 1
+    out = {"files": len(files), "1min": total_min}
+    lo = rung_conn.execute("SELECT MIN(bucket_start) FROM rung WHERE res='1min'").fetchone()[0] or 0
+    # 1hour←1min per calendar month (exact + bounded); 1day/1week whole-range (their sources are small).
+    n_hour = 0
+    for m_lo, m_hi in _month_windows(lo, hi):
+        n_hour += cascade(rung_conn, "1hour", "1min", m_lo, m_hi)
+    out["1hour"] = n_hour
+    out["1day"] = cascade(rung_conn, "1day", "1hour", 0, hi)
+    out["1week"] = cascade(rung_conn, "1week", "1day", 0, hi)
+    out["pruned"] = prune(rung_conn, now_epoch)
+    if max_bucket:
+        _meta_set(rung_conn, "last_min_since", iso_of(max_bucket + 60))   # next incremental starts just past
+    _meta_set(rung_conn, "last_run", iso_of(now_epoch))
+    rung_conn.commit()
+    # Backfill churns millions of transient 1min rows that prune deletes — VACUUM reclaims the freed pages so
+    # the replicated file is MB-scale, not stuck at its high-water-mark. One-time seed only; the ~5min
+    # incremental run() never vacuums (too costly per tick).
+    rung_conn.execute("VACUUM")
+    out["vacuumed"] = True
+    log_fn("backfill complete: %s", out)
+    return out
+
+
 def _main() -> int:
     import argparse
     import time
@@ -207,12 +298,26 @@ def _main() -> int:
     p.add_argument("--raw", default="instance/db/hot.db", help="raw readings sqlite (hot.db)")
     p.add_argument("--rung", default="instance/db/rungs.db", help="output rung sqlite")
     p.add_argument("--full", action="store_true", help="reprocess from epoch 0 (initial seed)")
+    p.add_argument("--parquet", nargs="?", const="instance/db/parquet/year=*/month=*/*.parquet", default=None,
+                   help="one-time history seed from the parquet archive (glob), then top up from --raw hot.db")
     p.add_argument("--now", type=int, default=None, help="override now (epoch s); default = wall clock")
     p.add_argument("--log-level", default="INFO")
     a = p.parse_args()
     logging.basicConfig(level=getattr(logging, a.log_level), format="%(asctime)s %(levelname)s %(name)s — %(message)s")
+    now_epoch = a.now if a.now is not None else int(time.time())
     t0 = time.time()
-    out = run_paths(a.raw, a.rung, now_epoch=a.now, full=a.full)
+    if a.parquet:
+        rung = sqlite3.connect(a.rung)
+        try:
+            bout = backfill_from_parquet(a.parquet, rung, now_epoch=now_epoch)
+        finally:
+            rung.close()
+        # top up the parquet→now gap from the hot tier (parquet lags live by the compaction interval).
+        tout = run_paths(a.raw, a.rung, now_epoch=now_epoch, full=False)
+        print(f"rollup PARQUET-BACKFILL {a.parquet} + hot {a.raw} -> {a.rung} in {time.time()-t0:.1f}s: "
+              f"backfill={bout} topup={tout}")
+        return 0
+    out = run_paths(a.raw, a.rung, now_epoch=now_epoch, full=a.full)
     print(f"rollup {'FULL' if a.full else 'incremental'} {a.raw} -> {a.rung} in {time.time()-t0:.1f}s: {out}")
     return 0
 

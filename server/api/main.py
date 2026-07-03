@@ -29,7 +29,7 @@ from typing import Optional
 import duckdb
 from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, JSONResponse
+from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
 # ── Config ────────────────────────────────────────────────────────────────────
@@ -1055,6 +1055,35 @@ def rung_full_db():
     return FileResponse(str(RUNG_DB), media_type="application/octet-stream", filename="rungs.db")
 
 
+_RUNG_COLS = ["device_id", "metric", "bucket_start", "vmin", "vmax", "vmean", "vcount", "vlast"]
+
+
+@app.get("/api/v1/rung/since", include_in_schema=True)
+def rung_since(res: str = Query(..., description="rung name: 1min|1hour|1day|1week"),
+               after: int = Query(default=0, ge=0, description="last bucket_start the client holds (inclusive HWM)"),
+               limit: int = Query(default=100_000, ge=1, le=1_000_000)):
+    """ADR-0022 incremental replica sync: stream this rung's rows with bucket_start >= `after` as NDJSON
+    (one JSON object per line) so the panel pulls only what changed since its high-water-mark instead of
+    re-fetching full.db. `after` is INCLUSIVE so the boundary bucket — which recompute-and-replace keeps
+    updating until it closes — is always re-sent; the consumer upserts by (res,device_id,metric,bucket_start)."""
+    if res not in ("1min", "1hour", "1day", "1week"):
+        raise HTTPException(status_code=400, detail=f"bad res {res!r}")
+    if not RUNG_DB.exists():
+        raise HTTPException(status_code=404, detail="rungs.db not built yet")
+
+    def gen():
+        conn = sqlite3.connect(str(RUNG_DB))
+        try:
+            q = (f"SELECT {','.join(_RUNG_COLS)} FROM rung WHERE res=? AND bucket_start>=? "
+                 f"ORDER BY bucket_start LIMIT ?")
+            for row in conn.execute(q, (res, after, limit)):
+                yield json.dumps({"res": res, **dict(zip(_RUNG_COLS, row))}, separators=(",", ":")) + "\n"
+        finally:
+            conn.close()
+
+    return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
 @app.get("/devices")
 def list_devices():
     """All known devices with their last reading timestamp and last RSSI."""
@@ -1176,6 +1205,9 @@ async def device_readings(
                                    description="server-computed window: last N hours (clockless clients)"),
     metric: Optional[str] = Query(default=None),
     limit: int = Query(default=10000, ge=1, le=MAX_DEEP_ROWS),
+    res: Optional[str] = Query(default=None,
+                               description="resolution: omit/'raw'=exact points; 'auto'=server picks a rung "
+                                           "by span; or force '1min'|'1hour'|'1day'|'1week' (ADR-0022 rung)"),
 ):
     """
     Raw readings over a time range. Hot tier via sqlite3; Parquet archive via DuckDB's
@@ -1184,12 +1216,25 @@ async def device_readings(
 
     `hours` (or omitting start/end) makes the SERVER compute the window from its own clock —
     for clockless clients like the D1001 panel (air-gapped, no NTP). Default window = 72h.
+
+    `res` opts into the ADR-0022 rung ladder: 'auto' lets the server pick a rung by span (so a
+    year-long chart returns ~365 daily points, not 10M raw), or force a specific rung. Omitting `res`
+    (the default) keeps the exact raw behaviour untouched — existing clients are unaffected.
     """
     if hours is not None or not start or not end:
         h = hours if hours is not None else 72.0
         now = datetime.now(timezone.utc)
         end = now.strftime("%Y-%m-%dT%H:%M:%SZ")
         start = (now - timedelta(hours=h)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    if res and res != "raw":                     # rung path: server-selected or forced aggregate resolution
+        rung_res = _resolve_rung_res(res, start, end)
+        if rung_res != "raw":
+            out = await asyncio.to_thread(_rung_query, device_id, start, end, metric, rung_res, limit)
+            # None ⇒ rungs.db absent. Empty under res=auto ⇒ the window predates that rung's retention (e.g. a
+            # 2-day span from months ago selects 1min, but 1min is pruned to 7d) — fall through to raw/parquet.
+            # A FORCED rung is returned as-is (caller asked for exactly it), even if empty.
+            if out is not None and (out["rows"] > 0 or res != "auto"):
+                return out
     if metric == "dewpoint_c":                  # derived metric: compute from paired temp + RH
         return await _dewpoint_readings(device_id, start, end, limit)
     async with _deep_query_lock:
@@ -1224,6 +1269,56 @@ async def _dewpoint_readings(device_id: str, start: str, end: str, limit: int) -
             rows.append({"ts": r["ts"], "device_id": device_id, "metric": "dewpoint_c", "value": dp,
                          "unit": "degC", "area": r.get("area"), "transport": r.get("transport")})
     return {"device_id": device_id, "metric": "dewpoint_c", "rows": len(rows), "readings": rows}
+
+
+def _resolve_rung_res(res: str, start: str, end: str) -> str:
+    """Map the `res` param to a concrete rung. 'auto' → span-selected (shared rollup.select_resolution so the
+    panel replica agrees); an explicit rung passes through; anything else falls back to raw."""
+    from server.storage.rollup import epoch_of, select_resolution
+    if res == "auto":
+        try:
+            return select_resolution(max(0, epoch_of(end) - epoch_of(start)))
+        except (ValueError, TypeError):
+            return "raw"
+    return res if res in ("1min", "1hour", "1day", "1week") else "raw"
+
+
+def _rung_query(device_id: str, start: str, end: str, metric: Optional[str], res: str, limit: int):
+    """Serve a device's readings from the ADR-0022 rung ladder at resolution `res`. Returns aggregate points
+    (value=mean, plus min/max/count for a band) so a long-span chart stays legible and cheap. Returns None if
+    rungs.db isn't built (caller falls back to the raw tier). Calibration offsets applied to value/min/max."""
+    from server.storage.rollup import epoch_of, iso_of
+    if not RUNG_DB.exists():
+        return None
+    lo, hi = epoch_of(start), epoch_of(end)
+    conn = sqlite3.connect(str(RUNG_DB))
+    try:
+        q = ("SELECT metric, bucket_start, vmin, vmax, vmean, vcount FROM rung "
+             "WHERE res=? AND device_id=? AND bucket_start>=? AND bucket_start<=?")
+        params: list = [res, device_id, lo, hi]
+        if metric:
+            q += " AND metric=?"
+            params.append(metric)
+        q += " ORDER BY bucket_start"
+        raw = conn.execute(q, params).fetchall()
+    finally:
+        conn.close()
+    offs = _device_calibration(device_id)
+    rows = []
+    for m, b, vmin, vmax, vmean, vcount in raw:
+        o = offs.get(m, 0) if offs else 0
+        rows.append({"ts": iso_of(b), "device_id": device_id, "metric": m,
+                     "value": (vmean + o) if vmean is not None else None,
+                     "min": (vmin + o) if vmin is not None else None,
+                     "max": (vmax + o) if vmax is not None else None,
+                     "count": vcount, "resolution": res})
+    n = len(rows)
+    truncated = n > limit
+    if truncated:                                # decimate evenly (keep first & last), same as the raw path
+        idx = sorted({round(i * (n - 1) / (limit - 1)) for i in range(limit)})
+        rows = [rows[i] for i in idx]
+    return {"device_id": device_id, "start": start, "end": end, "metric": metric, "resolution": res,
+            "rows": len(rows), "truncated": truncated, "readings": rows}
 
 
 _COLS = ["ts", "device_id", "metric", "value", "unit", "area", "transport"]

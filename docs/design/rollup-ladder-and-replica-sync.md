@@ -59,27 +59,40 @@ Incremental, idempotent, cutoff-driven — mirrors the compactor pattern (`serve
   (a dest bucket is finalized once all source buckets in it exist).
 - **Idempotency:** `INSERT … ON CONFLICT(res,device_id,metric,bucket_start) DO UPDATE` — a re-run is a no-op /
   self-heals a partial bucket. Same discipline as the hot-tier reconcile (`INSERT OR IGNORE` on the unique key).
-- **Retention (ADR-0022 defaults; tuning knobs):** prune `1min` >90 d, `1hour` >2 y; `1day`/`1week` kept
-  forever. Raw stays as parquet (forensic) — not pruned by this engine.
+- **Retention (tuning knobs):** prune `1min` >**7 d** (tuned DOWN from the ADR-0022 90 d default), `1hour`
+  >2 y; `1day`/`1week` kept forever. Raw stays as parquet (forensic) — not pruned by this engine.
+  *Why 7 d:* sampling here is ~1/min, so the `1min` rung barely compacts vs raw — 90 d of it made the
+  panel-replica `rungs.db` ~700 MB (vs the "MB-scale" the ladder promises). A wall panel needs `1min` only
+  for recent ≤2 d zoom; older spans use `1hour`. Bump it back up if fine-grained deep history is wanted, at
+  a replica-size cost (~65 k `1min` rows/day here → ~7 MB/day).
 - **Cadence:** `ha-rollup.timer` ~every 5 min (1min rung fresh enough for a wall panel; cascades fire as
   buckets complete). ⚠ **installing the new systemd unit on .210 is a Hugh-gated deploy** (new unit) — engine
   code + tests are ungated; I'll hand the unit for install.
 - **Output:** `instance/db/rungs.db` (single file, all resolutions). Engine module `server/storage/rollup.py`
   + `server/tests/test_rollup.py` (composition math + idempotency + retention).
 
-## 3. QUERY RESOLUTION-SELECTOR — dev (server + mirrored on panel)
-`GET /devices/{id}/readings?start&end&metric` picks the rung by span so charts are pixel-identical to raw:
+## 3. QUERY RESOLUTION-SELECTOR — dev (server + mirrored on panel)   ✅ BUILT (`rollup.select_resolution`)
+`GET /devices/{id}/readings?…&res=auto` picks the rung by span so charts stay legible (opt-in: omit `res`
+or `res=raw` = exact raw behaviour, unchanged for existing clients; or force `res=1min|1hour|1day|1week`).
 
-| Span | Rung |
-|---|---|
-| ≤ 2 h | raw / 1min |
-| ≤ 2 mo | 1hour |
-| ≤ decades | 1day |
-| longer | 1week |
+| Span | Rung (`select_resolution`) | ~pts |
+|---|---|---|
+| ≤ 2 h | **raw** (server has raw) / **1min** (panel — no raw) | ≤240 |
+| ≤ 2 d | 1min | ≤2880 |
+| ≤ 2 mo | 1hour | ≤1440 |
+| ≤ 4 y | 1day | ≤1460 |
+| longer | 1week | — |
 
-Returns `bucket_start, vmin, vmax, vmean` per bucket → band + line. **The panel runs the identical selector**
-against its local `rungs.db` (ops mirrors this tiny function; I'll publish it as pseudocode + the server impl
-so they don't diverge).
+`select_resolution(span_s)` in `server/storage/rollup.py` is the **single source of truth** — a pure span→rung
+fn (no recency arg, so it's trivial to mirror). The server returns `raw` for ≤2h (it has the raw tier); the
+panel substitutes `1min`. Rung responses carry `value=vmean` + `min`/`max`/`count` per bucket → band + line;
+calibration offsets are applied to `value`/`min`/`max`.
+
+**Selector × retention (important for the panel mirror):** the selector is span-only, so a 2-day window from
+*months ago* selects `1min` — but `1min` is pruned to 7 d (§ retention). The **server** handles this safely:
+under `res=auto`, an empty rung result falls through to raw/parquet (forever). The **panel** has no raw, so
+ops's mirror should **escalate to the next coarser rung when the local rung query returns no rows** for the
+window (1min→1hour→1day). A *forced* `res=1min` is returned as-is (may be empty) — caller's choice.
 
 ## 4. SYNC CONTRACT — dev serves, ops pulls (HTTP, OTA-style)
 fs_ops-over-MQTT (1536 B/read) is too slow for an MB file. Reuse the **OTA transport**: server serves files
@@ -92,8 +105,10 @@ over HTTP; panel pulls with `esp_http_client` (already in the panel for OTA). LA
 - `GET /api/v1/rung/full.db` → the whole `rungs.db` (streamed). **Seed / cold-start** path: panel copies it to
   SD directly (fast — no row-by-row insert; the P4 spike showed 518 k-row insert is 124 s, a file copy is not).
 - `GET /api/v1/rung/since?res={res}&after={bucket_start}` → **NDJSON**, one row per line
-  `{"res","device_id","metric","bucket_start","vmin","vmax","vmean","vcount","vlast"}`, `bucket_start > after`.
-  **Steady-state** path: panel INSERTs the small delta (a 1min tick = ~N-series rows) and advances its HWM.
+  `{"res","device_id","metric","bucket_start","vmin","vmax","vmean","vcount","vlast"}`. ✅ BUILT.
+  **`after` is INCLUSIVE (`bucket_start >= after`)** — the newest bucket is recompute-and-replaced until it
+  closes, so it must be re-sent; the consumer upserts by `(res,device_id,metric,bucket_start)`, making the
+  one-row overlap a no-op. **Steady-state** path: panel INSERTs the small delta and advances its HWM.
 - `GET /api/v1/replica/config` → the opaque encrypted config blob (ADR-0022) — same transport, panel stores it.
 
 **Panel `ha_replica` loop (ops builds):** on boot → if no local `rungs.db`, pull `full.db` to SD; else poll

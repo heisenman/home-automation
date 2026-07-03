@@ -1,0 +1,14 @@
+[Unit]
+Description=Home Automation — Rollup Ladder Timer (~every 5 min; 1min rung fresh for the wall panel)
+After=ha-writer.service
+
+[Timer]
+# Every 5 minutes. The 1min rung is recompute-and-replace + idempotent, so a missed/overlapping run
+# self-heals; Persistent catches up one run after downtime.
+OnBootSec=3min
+OnUnitActiveSec=5min
+Persistent=true
+Unit=ha-rollup.service
+
+[Install]
+WantedBy=timers.target

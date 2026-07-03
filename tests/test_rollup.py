@@ -116,6 +116,49 @@ def test_run_is_idempotent():
     assert snap1 == snap2                                # no duplication, no drift
 
 
+# ── resolution selector (span → rung) ─────────────────────────────────────────────────────────────────
+def test_select_resolution_span_ladder():
+    assert R.select_resolution(3600) == "raw"                # 1h
+    assert R.select_resolution(2 * 3600) == "raw"            # 2h boundary inclusive
+    assert R.select_resolution(2 * 3600 + 1) == "1min"       # just over 2h
+    assert R.select_resolution(2 * 86400) == "1min"          # 2d boundary
+    assert R.select_resolution(7 * 86400) == "1hour"         # a week
+    assert R.select_resolution(60 * 86400) == "1hour"        # 2mo boundary
+    assert R.select_resolution(365 * 86400) == "1day"        # a year
+    assert R.select_resolution(4 * 365 * 86400) == "1day"    # 4y boundary
+    assert R.select_resolution(10 * 365 * 86400) == "1week"  # decade → coarsest
+
+
+def test_iso_epoch_roundtrip():
+    e = R.epoch_of("2026-07-02T15:37:00Z")
+    assert R.iso_of(e) == "2026-07-02T15:37:00Z"
+
+
+# ── parquet backfill ──────────────────────────────────────────────────────────────────────────────────
+def test_backfill_from_parquet_seeds_ladder_and_hwm(tmp_path):
+    pq = __import__("importlib").import_module("pyarrow.parquet")
+    pa = __import__("importlib").import_module("pyarrow")
+    base = R.epoch_of("2026-05-01T00:00:00Z")                # inside one month
+    rows = [(_iso(base + i * 30), "d1", "t", float(i % 50)) for i in range(2 * 60 * 2)]   # 2h @30s
+    tbl = pa.table({"ts": [r[0] for r in rows], "device_id": [r[1] for r in rows],
+                    "metric": [r[2] for r in rows], "value": [r[3] for r in rows]})
+    pdir = tmp_path / "year=2026" / "month=05"
+    pdir.mkdir(parents=True)
+    pq.write_table(tbl, str(pdir / "2026-05.parquet"))
+
+    rung = sqlite3.connect(":memory:")
+    now = base + 2 * 3600 + 120
+    out = R.backfill_from_parquet(str(tmp_path / "year=*" / "month=*" / "*.parquet"), rung,
+                                  now_epoch=now, log_fn=lambda *a: None)
+    assert out["files"] == 1 and out["1min"] == 120 and out["1hour"] == 2 and out["1day"] == 1
+    # hierarchical consistency survives the parquet path: 1hour count == 120 readings/hour
+    h0 = rung.execute("SELECT vcount FROM rung WHERE res='1hour' AND bucket_start=?", (base,)).fetchone()
+    assert h0[0] == 120
+    # HWM set so a later incremental continues just past the last seeded minute
+    hwm = rung.execute("SELECT v FROM rollup_meta WHERE k='last_min_since'").fetchone()[0]
+    assert R.epoch_of(hwm) == base + (2 * 3600 - 60) + 60    # last bucket_start + 60
+
+
 def test_prune_drops_old_minute_keeps_day():
     rung = sqlite3.connect(":memory:")
     R.ensure_schema(rung)

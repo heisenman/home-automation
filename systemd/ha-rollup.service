@@ -1,0 +1,27 @@
+[Unit]
+Description=Home Automation — Rollup Ladder incremental pass (ADR-0022, one-shot)
+Documentation=file:///home/visko/home_automation/docs/design/rollup-ladder-and-replica-sync.md
+After=ha-writer.service
+
+[Service]
+Type=oneshot
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+# Incremental: reads new minutes from hot.db since the stored HWM, cascades up the ladder, prunes.
+# One-time history seed (parquet) is a manual op: `python -m server.storage.rollup --parquet`.
+ExecStart=/home/visko/home_automation/venv/bin/python3 \
+    -m server.storage.rollup \
+    --raw instance/db/hot.db \
+    --rung instance/db/rungs.db \
+    --log-level INFO
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/visko/home_automation/instance
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-rollup
