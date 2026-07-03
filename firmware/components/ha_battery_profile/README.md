@@ -17,12 +17,15 @@ improved in the field.
 - **Runtime** (`ha_battery_profile_rt.c`, added at gauge-integration) — load/save/hot-swap from
   NVS, an SD file, or an MQTT-pushed blob; returns a validated `ha_batt_profile_t`.
 
-## D1001 default (v1)
+## D1001 default (v2 — discharge-regressed)
 
 Bench-characterized 2026-07-03. Offsets measured (+40 display-off / +128 USB / +80 charging). The
-LUT is **linear-provisional** between the two measured anchors (0% = 3450 mV, 100% ≈ 3860 mV) —
-a placeholder until the regressed curve from a finer-cadence discharge run replaces it (as data, no
-reflash). Floors mirror `ha_power_policy_d1001_cfg()`; the caller builds the policy cfg from these.
+LUT is **regressed from a 146-min fixed-load discharge** (constant load ⇒ coulombs ≈ time): the
+mid-band (~12–75% SoC, 3509–3808 mV) is measured and captures the real Li-ion plateau (it rides
+~50–65 mV above a naive straight line); the ends (0–12% / 75–100%) are linear-stitched to the
+anchors (0% = 3450, 100% = 3860) because the discharge began at ~75% and stopped at the safe floor.
+A single discharge from a true full charge at finer cadence makes the whole curve measured — as
+data, no reflash. Floors mirror `ha_power_policy_d1001_cfg()`; the caller builds the policy cfg from these.
 
 ## Relationship to the other battery modules
 

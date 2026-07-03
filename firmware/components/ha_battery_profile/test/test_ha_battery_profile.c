@@ -14,7 +14,7 @@ int main(void) {
     ha_batt_profile_t p = ha_batt_profile_d1001_default();
 
     // --- provenance + LUT shape ---
-    check("has version", strcmp(p.version, "v1") == 0);
+    check("has version", p.version[0] == 'v');
     check("lut_n = 21", p.lut_n == 21);
     check("lut ascending & endpoints", p.lut[0] == 3450 && p.lut[20] == 3860);
     int mono = 1;
@@ -40,9 +40,12 @@ int main(void) {
     check("at floor -> 0%", ha_batt_profile_soc(&p, 3450) == 0);
     check("above top -> 100%", ha_batt_profile_soc(&p, 3900) == 100);
     check("at top -> 100%", ha_batt_profile_soc(&p, 3860) == 100);
-    check("exact LUT point (lut[10]=3655) -> 50%", ha_batt_profile_soc(&p, 3655) == 50);
-    // midway between lut[10]=3655 (50%) and lut[11]=3676 (55%) ~ 52-53%
-    int mid = ha_batt_profile_soc(&p, 3665);
+    // round-trip: every LUT point maps back to its own 5%-step SoC (value-agnostic to the curve).
+    int rt = 1;
+    for (int k = 0; k < p.lut_n; k++) if (ha_batt_profile_soc(&p, p.lut[k]) != k * 5) rt = 0;
+    check("every LUT point round-trips to k*5%", rt);
+    // midway between two adjacent LUT points lands strictly between their SoCs.
+    int mid = ha_batt_profile_soc(&p, (p.lut[10] + p.lut[11]) / 2);
     check("interpolates between points", mid > 50 && mid < 55);
     // monotonic non-decreasing across the whole range
     int prev = -1, ok = 1;

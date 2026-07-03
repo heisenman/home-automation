@@ -6,22 +6,26 @@ ha_batt_profile_t ha_batt_profile_d1001_default(void)
 {
     ha_batt_profile_t p;
     memset(&p, 0, sizeof(p));
-    strcpy(p.version, "v1");
+    strcpy(p.version, "v2");
     strcpy(p.date,    "2026-07-03");
-    strcpy(p.method,  "bench");
+    strcpy(p.method,  "bench-discharge");
 
     // Measured state offsets (D1001 characterization session).
     p.off_display_off_mv = 40;
     p.off_usb_mv         = 128;
     p.off_charging_mv    = 80;
 
-    // LINEAR-PROVISIONAL LUT between the two measured anchors (0% = 3450 mV, 100% ≈ 3860 mV),
-    // 21 points @ 5%/step. Real Li-ion is flat in the middle / steep at the ends — this straight
-    // line is a placeholder until the regressed curve from a finer-cadence discharge run replaces
-    // it (deploys as data, no reflash, per ADR-0024 §5). Kept monotonic so SoC never inverts.
+    // REGRESSED LUT from the 146-min fixed-load discharge (display-on / USB-out = base frame;
+    // constant load => coulombs ~ time). 21 points @ 5%/step. The MID-BAND (~12–75% SoC,
+    // 3509–3808 mV) is measured and captures the real Li-ion plateau — it rides ~50–65 mV above a
+    // naive straight line. The ENDS (0–12% and 75–100%) are LINEAR-STITCHED to the anchors
+    // (0% = 3450, 100% = 3860): the discharge started at ~75% (not a true full) and stopped at the
+    // safe floor, so those regions aren't measured yet. A single discharge from a real full charge
+    // at finer cadence makes the whole curve measured — deploys as data, no reflash (ADR-0024 §5).
+    // Strictly monotonic so SoC never inverts.
     static const int lut21[21] = {
-        3450, 3471, 3491, 3512, 3532, 3553, 3573, 3594, 3614, 3635, 3655,
-        3676, 3696, 3717, 3737, 3758, 3778, 3799, 3819, 3840, 3860,
+        3450, 3475, 3501, 3526, 3538, 3569, 3596, 3630, 3650, 3702, 3720,
+        3732, 3750, 3770, 3792, 3808, 3818, 3829, 3839, 3850, 3860,
     };
     p.lut_n = 21;
     memcpy(p.lut, lut21, sizeof(lut21));
