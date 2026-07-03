@@ -1,8 +1,17 @@
 # D1001 panel UI modularization — `ui_tiles.c` (1393 L) → `main/ui/` modules
 
-**Date:** 2026-07-02  **Status:** PLAN (implement next session, after compact). **Owner:** ops.
+**Date:** 2026-07-02  **Status:** ✅ **DONE (2026-07-02).** **Owner:** ops.
 Executes **ADR-0020** (module-first) on the panel; foundation for the panel's shared-ui-spec controls
 renderer (pairs with `shared-ui-spec`). Behavior-preserving refactor of *working* code (v52-event).
+
+> **Outcome (2026-07-02, HW-verified @ .8):** `ui_tiles.c` 1393 L → **206 L** slim orchestrator + 8 `ui/`
+> modules (`ui_format`, `ui_http`, `ui_chart`, `ui_grid`, `ui_expand`, `ui_admin`, `ui_scenes`,
+> `ui_controls`), read-path + write-path, verbatim-faithful (md5-proven vs mirror). Shipped `13f0c23`
+> (split + LVGL-heap→PSRAM, v54) → `104411c` (Phase-2 `vm.controls` renderer, v55) → `5b9d815`
+> (ha_replica local charts, v57). Two follow-ons emerged and shipped in the same arc: **LVGL heap → PSRAM**
+> (custom allocator — ended the chart-memory arms race the split exposed) and **shared-ui-spec Phase 2**.
+> First execution of the module-first rule, now a standing mandate in
+> [firmware/AGENTS.md](../../firmware/AGENTS.md); ADR-0020 is Accepted.
 
 > **Why.** `main/ui_tiles.c` is a 1393-line monolith holding every panel concern (grid, expand, charts,
 > scenes, admin, actuator controls, HTTP, formatting, orchestration). It's the biggest un-modularized thing

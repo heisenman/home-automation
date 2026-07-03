@@ -1,5 +1,14 @@
 # D1001 host beachhead (ADR-0019 Phase 1 + 2)
 
+> **Current state (2026-07-02, `v57-localcharts`):** the sections below document the original Phase 1/2
+> bring-up (v9-era) and remain accurate for connectivity/OTA/display. Since then the app has grown a full UI
+> and is **modularized** — `main/ui_tiles.c` is now a 206 L orchestrator + 8 `main/ui/` modules (grid,
+> expand, chart, format, http, admin, scenes, controls); see
+> [docs/design/panel-ui-modularization.md](../../../docs/design/panel-ui-modularization.md). Controls render
+> from the BFF `vm.controls` spec (shared-ui-spec), the LVGL heap lives in **PSRAM** (`lv_mem_psram.c`), and
+> `ha_replica` mirrors the server rung DB to SD so charts render from local storage (ADR-0022). App is now
+> ~2.1 MB / **49 % of the 4 MB OTA slot free** (was 66 % before `sqlite3`).
+
 ESP-IDF app that **proves the connectivity + OTA stack** on the reTerminal D1001's ESP32-P4, then brings up
 the **display** on demand: boot → bring up the **ESP32-C6 over esp-hosted/SDIO** → join WiFi → MQTT to the
 dictator (`.210`), then (on the `cmd/display on` command) → **JD9365 800×1280 MIPI-DSI panel + LVGL**.

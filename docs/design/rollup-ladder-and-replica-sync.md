@@ -132,7 +132,23 @@ idempotently so an overlapping re-pull is a no-op.
 ## 6. Phasing (each phase independently shippable)
 - **Phase 1 (unblocks ops):** schema frozen + engine builds `rungs.db` + `full.db` serve + panel seed-pull &
   local query. Proves end-to-end on real data. ops can build the whole panel consumer against `full.db` now.
-- **Phase 2:** `manifest.json` + `since` incremental (steady-state efficiency).
+  **✅ DONE + LIVE (2026-07-02).** dev: engine + serve endpoints + `ha-rollup.timer` (`822bf11`). ops panel
+  side split into **1a seed-pull** (`417126d`/v56 — `full.db`→`/sdcard/rungs.db` via `manifest.json` sha
+  compare, atomic swap, hourly) and **1b local charts** (`5b9d815`/v57 — `ui_chart` queries the local
+  `rungs.db` via the vendored `sqlite3` VFS; `ha_replica` owns all DB access + `ha_replica_rung_query`
+  mirrors `select_resolution`; a mutex serializes reads vs the file swap). HW-verified: 26 charts from
+  `rung(SD)`, 0 panics.
+  - **⚠️ Reality vs "MB-scale":** the current `full.db` is **~38 MB** (ALL rungs, full history) and its
+    sha changes every rollup (~5 min, the 1min rung always grows), so a full re-pull is *not* free —
+    Phase 1a polls **hourly** (a 72h wall panel tolerates ~1h staleness) rather than chasing every change.
+    This is the concrete motivation for Phase 2. A later refinement could pull only the rungs the panel
+    needs (it graphs `1hour`/`1day` for its 72h window, not `1min`) to shrink the seed.
+  - **Refinement (deferred, per dev's board note):** on a 0-row local query, *escalate* `1min→1hour→1day`
+    before giving up. For the panel's fixed 72h window the selector already lands on `1hour` (which has
+    retention), so this isn't triggered today; current behavior falls back to the network on 0 rows.
+- **Phase 2:** `manifest.json` + `since` incremental (steady-state efficiency). **← next for ops:** upsert
+  the delta by `(res,device_id,metric,bucket_start)` instead of the ~38 MB hourly full re-pull (adds sqlite
+  *writes* to `ha_replica`, already covered by its mutex).
 - **Phase 3:** config blob + parquet-recovery pull (panel as a recovery tier, ADR-0016/0018).
 
 ## 7. Open questions

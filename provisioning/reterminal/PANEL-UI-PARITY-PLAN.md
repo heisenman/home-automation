@@ -1,5 +1,21 @@
 # D1001 ⇄ PWA: shared-spec UI merge + panel web-app parity (inline expand, 72h charts, full controls, scenes, admin lock)
 
+> ## ✅ SUPERSEDED / DELIVERED (2026-07-02) — historical plan, kept for rationale
+> Every feature in this plan shipped and is HW-verified on the D1001 @ `.8`:
+> - **Phase 0 (merge foundation)** — BFF `vm.controls`/`vm.display` as the single UI-truth; PWA renders it
+>   (`0de4848`), and the **panel** now renders it too (Phase 2, `104411c`/v55).
+> - **Phase A (reads)** — inline expand + stacked 72h `lv_chart`s on a scrollable screen (shipped in the
+>   v17-era monolith; then charts moved to the **local SD rung replica**, `5b9d815`/v57).
+> - **Phase B (top bar)** — scene selector + admin lock/unlock (LVGL keyboard → RAM admin JWT).
+> - **Phase C (controls)** — override + setpoint/ranged/indicator + automation editor, all server-authored.
+>
+> The renderer was then **modularized** (`ui_tiles.c` 1393→206 L + 8 `ui/` modules,
+> [docs/design/panel-ui-modularization.md](../../docs/design/panel-ui-modularization.md)) and the memory
+> ceiling fixed (LVGL heap → PSRAM). The panel is now a thin renderer of the shared spec — the merge
+> decision below was realized. **Do not re-implement from this plan;** it's kept for the merge rationale.
+> Remaining descendant work lives under board items `shared-ui-spec` (open nits) and `ha-replica-panel`
+> (Phase 2 incremental sync).
+
 ## Context
 The D1001 wall panel (Phase 2 LIVE, v17) has native LVGL tiles with a **modal** tap-detail and basic on/off
 via a scoped operator token. Hugh wants panel↔PWA **feature parity** (tap a tile → it expands INLINE below
