@@ -178,14 +178,29 @@ function prepSeries(s, unit) {
 }
 
 // ── override controls ────────────────────────────────────────────────────────
-function OverrideControls({ id, override, isAdmin, onChange, onNeedAdmin }) {
+// Renders the server-authored `override` control (shared-ui-spec): presets + action contract come from
+// vm.controls, not hardcoded here. Falls back to the legacy Off/Boost/Resume set if the spec is absent
+// (migration safety). Behavior preserved: off/boost always shown, clear only while an override is active.
+function OverrideControls({ vm, isAdmin, onChange, onNeedAdmin }) {
+  const id = vm.device_id;
+  const override = vm.override;
+  const spec = (vm.controls || []).find((c) => c.kind === "override");
+  const presets = spec?.presets || [
+    { action: "off", duration_min: 60, label: "Off 1h" },
+    { action: "boost_on", duration_min: 60, label: "Boost 1h" },
+    { action: "clear", label: "Resume auto", when: "override_active" },
+  ];
+  const method = spec?.action?.method || "POST";
+  const path = (spec?.action?.path || "/control/{id}/override").replace("{id}", id);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  const act = async (action, duration_min) => {
+  const act = async (p) => {
     if (!isAdmin) return onNeedAdmin();
     setBusy(true); setErr("");
     try {
-      await adminSend("POST", `/control/${id}/override`, { action, duration_min });
+      const body = p.action === "clear" ? { action: "clear" }
+        : { action: p.action, duration_min: p.duration_min };
+      await adminSend(method, path, body);
       await onChange();
     } catch (e) { setErr(String(e.message)); }
     setBusy(false);
@@ -193,10 +208,9 @@ function OverrideControls({ id, override, isAdmin, onChange, onNeedAdmin }) {
   const left = override && override.expires_in_min != null ? Math.ceil(override.expires_in_min) : null;
   return html`
     <div class="controls">
-      <button class="btn sm" disabled=${busy} onClick=${() => act("off", 60)}>Off 1h</button>
-      <button class="btn sm" disabled=${busy} onClick=${() => act("boost_on", 60)}>Boost 1h</button>
-      ${override && html`<button class="btn sm ghost" disabled=${busy}
-          onClick=${() => act("clear")}>Resume auto</button>`}
+      ${presets.filter((p) => p.when !== "override_active" || override).map((p) => html`
+        <button class="btn sm ${p.action === "clear" ? "ghost" : ""}" disabled=${busy}
+          onClick=${() => act(p)}>${p.label}</button>`)}
       ${override && html`<span class="note">override: <b>${override.action}</b>${
           left != null ? ` · ${left}m left` : ""}</span>`}
       ${err && html`<span class="err">${err}</span>`}
@@ -377,22 +391,32 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
 }
 
 // ── manual control (direct command set) ─────────────────────────────────────
+// Renders the server-authored command controls (setpoint/ranged/indicator) from vm.controls — label,
+// ranges, options, and the action contract all come from the spec, not from client-side trait mapping.
+// Widget construction stays here (the "thin renderer"); the *decisions* live in the BFF (shared-ui-spec).
 function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
-  const traits = vm.traits || {};
   const act = vm.actuator || {};
-  const sp = traits.setpoint, rg = traits.ranged, ind = traits.indicator;
+  const cmds = (vm.controls || []).filter((c) =>
+    c.kind === "setpoint" || c.kind === "ranged" || c.kind === "indicator");
+  const spCtl = cmds.find((c) => c.kind === "setpoint");
+  const rgCtl = cmds.find((c) => c.kind === "ranged");
+  const indCtl = cmds.find((c) => c.kind === "indicator");
+  const spInit = spCtl ? (act[spCtl.now_key] ?? spCtl.safe_value ?? "") : "";
   const [open, setOpen] = useState(false);
-  const [target, setTarget] = useState(act.target_pct ?? (sp && sp.safe_value) ?? "");
+  const [target, setTarget] = useState(spInit);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
 
-  if (!sp && !rg && !ind) return null;                 // device exposes no manual functions
+  if (!cmds.length) return null;                        // device exposes no manual functions
 
-  const cmd = async (trait, args, tag) => {
+  // one issuer for every command kind: path/trait/action/arg_key all come from the control's action contract.
+  const cmd = async (c, value, tag) => {
     if (!isAdmin) return onNeedAdmin();
     setBusy(tag); setErr("");
     try {
-      await adminSend("POST", `/devices/${vm.device_id}/command`, { trait, action: "set", args });
+      const path = c.action.path.replace("{id}", vm.device_id);
+      await adminSend(c.action.method, path,
+        { trait: c.action.trait, action: c.action.action, args: { [c.action.arg_key]: value } });
       await onChange();
     } catch (e) { setErr(String(e.message)); }
     setBusy("");
@@ -402,42 +426,41 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
     return html`<div class="settings"><button class="btn sm ghost"
         onClick=${() => setOpen(true)}>🎛 Manual control</button></div>`;
   }
+  const u = spCtl && spCtl.unit ? spCtl.unit : "";
+  const spNow = spCtl ? act[spCtl.now_key] : null;
+  const rgNow = rgCtl ? act[rgCtl.now_key] : null;
+  const indNow = indCtl ? act[indCtl.now_key] : null;
   return html`
     <div class="settings">
       <div class="divider"></div>
       <p class="note">Direct device commands. Power is automation-managed — use the override buttons
         above to force on/off.</p>
-      ${sp && html`
-        <div class="field"><label>Target humidity</label>
-          <input type="number" min=${sp.min} max=${sp.max} value=${target}
+      ${spCtl && html`
+        <div class="field"><label>${spCtl.label}</label>
+          <input type="number" min=${spCtl.min} max=${spCtl.max} value=${target}
             onInput=${(e) => setTarget(e.target.value)} />
-          <button class="btn sm primary" disabled=${busy === "target"}
-            onClick=${() => cmd("setpoint", { value: Number(target) }, "target")}>Set</button>
-          <span class="note">${sp.min}–${sp.max}%${act.target_pct != null ? ` · now ${act.target_pct}%` : ""}</span>
+          <button class="btn sm primary" disabled=${busy === "setpoint"}
+            onClick=${() => cmd(spCtl, Number(target), "setpoint")}>Set</button>
+          <span class="note">${spCtl.min}–${spCtl.max}${u}${spNow != null ? ` · now ${spNow}${u}` : ""}</span>
         </div>`}
-      ${rg && (() => {
-        const vals = rg.step ? steps(rg.min, rg.max, rg.step) : range(rg.min, rg.max);
-        const NAMES = { 2: ["Low", "High"], 3: ["Low", "Med", "High"] };
-        const name = (v, i) => (NAMES[vals.length] ? NAMES[vals.length][i] : String(v));
-        return html`
-        <div class="field"><label>Fan speed</label>
+      ${rgCtl && html`
+        <div class="field"><label>${rgCtl.label}</label>
           <div class="controls">
-            ${vals.map((n, i) => html`
-              <button class="btn sm ${act.fan_speed === n ? "primary" : ""}" disabled=${busy === "fan"}
-                title=${n} onClick=${() => cmd("ranged", { level: n }, "fan")}>${name(n, i)}</button>`)}
+            ${rgCtl.options.map((o) => html`
+              <button class="btn sm ${rgNow === o.value ? "primary" : ""}" disabled=${busy === "ranged"}
+                title=${o.value} onClick=${() => cmd(rgCtl, o.value, "ranged")}>${o.label}</button>`)}
           </div>
-          ${act.fan_speed != null && html`<span class="note">now: ${act.fan_speed}</span>`}
-        </div>`;
-      })()}
-      ${ind && html`
-        <div class="field"><label>LED / panel light</label>
+          ${rgNow != null && html`<span class="note">now: ${rgNow}</span>`}
+        </div>`}
+      ${indCtl && html`
+        <div class="field"><label>${indCtl.label}</label>
           <div class="controls">
-            <button class="btn sm" disabled=${busy === "led"}
-              onClick=${() => cmd("indicator", { on: true }, "led")}>On</button>
-            <button class="btn sm" disabled=${busy === "led"}
-              onClick=${() => cmd("indicator", { on: false }, "led")}>Off</button>
+            <button class="btn sm" disabled=${busy === "indicator"}
+              onClick=${() => cmd(indCtl, true, "indicator")}>On</button>
+            <button class="btn sm" disabled=${busy === "indicator"}
+              onClick=${() => cmd(indCtl, false, "indicator")}>Off</button>
           </div>
-          ${act.led_on != null && html`<span class="note">now: ${act.led_on ? "on" : "off"}</span>`}
+          ${indNow != null && html`<span class="note">now: ${indNow ? "on" : "off"}</span>`}
         </div>`}
       ${err && html`<span class="err">${err}</span>`}
       <div class="controls"><button class="btn sm ghost" onClick=${() => setOpen(false)}>Close</button></div>
@@ -592,7 +615,7 @@ function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit }) {
       </div>
       ${d && html`<div class="reason">${d.source}: ${d.reason}</div>`}
       <${DecisionHistory} decisions=${vm.recent_decisions} />
-      <${OverrideControls} id=${vm.device_id} override=${vm.override} isAdmin=${isAdmin}
+      <${OverrideControls} vm=${vm} isAdmin=${isAdmin}
         onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
       <${ManualControl} vm=${vm} isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
       ${ranged
