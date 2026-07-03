@@ -289,7 +289,15 @@ esp_err_t bsp_display_start(void)
     // content — never the uninitialized framebuffer (the brief "bring-up flash"). predark handles the
     // reboot-down dark; this handles the bring-up, making auto-boot visually clean end to end.
     vTaskDelay(pdMS_TO_TICKS(200));   // let the lvgl_port task flush at least one frame
-    bsp_display_brightness(80);
+    // Gradual backlight rise (0 -> 80% over ~600ms) instead of a single step. The backlight LED
+    // string is the largest controllable current jump at bring-up; ramping it spreads that inrush
+    // so the peak stays within the BQ25616 power-path input budget (~1.45A, ILIM-set — see
+    // docs/hardware/reterminal-d1001.md). Softer on the battery every boot (it supplements any peak
+    // above the input budget), and a step toward USB-only operation with a depleted/absent cell.
+    for (int p = 2; p <= 80; p += 2) {
+        bsp_display_brightness(p);
+        vTaskDelay(pdMS_TO_TICKS(15));
+    }
     s_screen_on = true;
     s_ready = true;
     ESP_LOGI(TAG, "display ready (%dx%d)", LCD_H_RES, LCD_V_RES);

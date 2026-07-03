@@ -46,6 +46,12 @@ CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 # === Phase 2 display (LVGL + MIPI-DSI) ===
 # LVGL renders RGB565 to match the JD9365 DPI panel; draw buffers live in PSRAM.
 CONFIG_LV_COLOR_DEPTH_16=y
+# LVGL heap → PSRAM: use a custom allocator (lv_mem_psram.c → heap_caps SPIRAM) instead of the
+# builtin internal-RAM pool. The fixed internal pool crashed stacked chart expansions (transient
+# draw-layer buffers exhaust it) and could not be grown (a bigger pool starves DSI's internal RAM
+# → boot loop). PSRAM makes LVGL memory effectively unbounded AND frees internal RAM. LV_MEM_SIZE
+# below is inert under a custom allocator but left as the documented former ceiling.
+CONFIG_LV_USE_CUSTOM_MALLOC=y
 CONFIG_LV_MEM_SIZE_KILOBYTES=64
 # Fonts for the tile UI (headline values + titles); default is 14 only.
 CONFIG_LV_FONT_MONTSERRAT_20=y

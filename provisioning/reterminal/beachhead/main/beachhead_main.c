@@ -45,7 +45,7 @@
 #include "esp_hosted_ota.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v51-chgctl"
+#define APP_BUILD_TAG "v54-uisplit2"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -539,7 +539,21 @@ static void power_ctx_publish(bool on_wall)
     snprintf(msg, sizeof(msg),
         "{\"node\":\"%s\",\"event\":\"power_ctx\",\"on_wall\":%s,\"ble_relay\":%s}",
         BLE_NODE, on_wall ? "true" : "false", s_ble_relaying ? "true" : "false");
-    esp_mqtt_client_publish(s_client, T_PWR, msg, 0, 1, 1);   // qos1 retained
+    esp_mqtt_client_publish(s_client, T_PWR, msg, 0, 1, 1);   // qos1 retained (legacy topic, kept through cutover)
+
+    // Canonical node state-change envelope — docs/design/rollup-ladder-and-replica-sync.md Part C.
+    // dev's coordinator event-reconcile consumes home/edge/+/event (ADR-0023 census inverted, node->server).
+    // ts left empty: the panel has no wall-clock (no SNTP), same convention as the reach report — the
+    // coordinator stamps arrival. censusing == relaying (the reach census runs with the wall-only relay).
+    // Retained = current-state semantics so a reconnecting coordinator re-reads it.
+    char etopic[64], emsg[224];
+    snprintf(etopic, sizeof(etopic), "home/edge/%s/event", BLE_NODE);
+    snprintf(emsg, sizeof(emsg),
+        "{\"schema\":1,\"node\":\"%s\",\"kind\":\"power\",\"ts\":\"\","
+        "\"state\":{\"on_wall\":%s,\"relaying\":%s,\"censusing\":%s}}",
+        BLE_NODE, on_wall ? "true" : "false",
+        s_ble_relaying ? "true" : "false", s_ble_relaying ? "true" : "false");
+    esp_mqtt_client_publish(s_client, etopic, emsg, 0, 1, 1);   // qos1 retained
 }
 
 // Poll wall power; act only on the edge. Gated on MQTT so the very first transition (boot
