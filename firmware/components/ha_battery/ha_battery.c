@@ -16,6 +16,7 @@ static const char *TAG = "ha_batt";
 
 #define ADC_SAMPLES 16
 #define AVG_WIN      8
+#define FULL_DETECT_MV 3700   // sanity floor for the charge-terminated→100% anchor (reject a low-cell plug-in transient)
 
 // reTerminal D1001 21-point voltage LUT (3262 mV = 0% … 4047 mV = 100%, 5%/step).
 static const int D1001_LUT[21] = { 3262,3390,3467,3554,3619,3659,3686,3710,3731,3752,
@@ -39,6 +40,8 @@ ha_battery_cfg_t ha_battery_d1001_cfg(esp_io_expander_handle_t io_expander,
 
 static ha_battery_cfg_t s_cfg;
 static bool s_have_cfg;
+static ha_batt_profile_t s_profile;   // state-normalized V→SoC profile (ADR-0024 §5)
+static bool s_have_profile;
 static adc_oneshot_unit_handle_t s_adc;
 static adc_cali_handle_t s_cali_batt, s_cali_usb;
 static bool s_init;
@@ -116,6 +119,23 @@ static int lut_pct(int mv)
     return 100;
 }
 
+// State-normalized SoC (ADR-0024). Normalizing out the display/USB/charging offsets means a state
+// CHANGE (screen off, cable in) does not jump the reading — the offsets cancel. Two anchors the
+// voltage curve can't give trustworthily are handled explicitly:
+//   • 100% = the charger's own done signal: on wall, charge allowed (charge_en), STAT not-charging,
+//     cell high ⇒ the BQ terminated ⇒ full, by the hardware's definition (Hugh). Voltage alone
+//     mis-reads a full-on-charger cell (~95% base frame under the constant-offset model).
+static int soc_normalized(int smooth_mv, bool display_on, bool on_wall, bool charging)
+{
+    if (on_wall && s_charge_en && !charging && smooth_mv >= FULL_DETECT_MV)
+        return 100;
+    if (s_have_profile) {
+        int vnorm = ha_batt_profile_normalize(&s_profile, smooth_mv, display_on, on_wall, charging);
+        return ha_batt_profile_soc(&s_profile, vnorm);
+    }
+    return lut_pct(smooth_mv);   // legacy raw-voltage LUT fallback
+}
+
 static int adc_read_mv(int ch, adc_cali_handle_t cali, int *raw_out)
 {
     int raw[ADC_SAMPLES];
@@ -167,6 +187,8 @@ esp_err_t ha_battery_init(const ha_battery_cfg_t *cfg)
     if (!cfg) return ESP_ERR_INVALID_ARG;
     s_cfg = *cfg;
     if (!s_cfg.lut) { s_cfg.lut = D1001_LUT; s_cfg.lut_n = 21; }
+    s_profile = cfg->profile ? *cfg->profile : ha_batt_profile_d1001_default();
+    s_have_profile = true;
     s_have_cfg = true;
     if (!s_mtx) s_mtx = xSemaphoreCreateMutex();
     batt_adc_init();
@@ -194,9 +216,11 @@ esp_err_t ha_battery_sample(ha_batt_sample_t *out)
     int avg = (int)(avgsum / s_win_n);
 
     bool on_charger = (usb_mv > s_cfg.usb_present_mv);
-    if (s_smooth_mv == 0)        s_smooth_mv = avg;
-    else if (on_charger)         s_smooth_mv = avg;
-    else if (avg < s_smooth_mv)  s_smooth_mv = avg;   // discharging: ratchet down only
+    // Symmetric EMA (~4-sample time constant) — tracks both directions. Replaces the old
+    // ratchet-down-only smoother that permanently latched SoC onto a transient load sag
+    // (ADR-0024 §1: "no one-way smoothing"). State offsets, not the smoother, handle load steps.
+    if (s_smooth_mv == 0) s_smooth_mv = avg;
+    else                  s_smooth_mv += (avg - s_smooth_mv) / 4;
 
     // "gaining" = the cell voltage is actually RISING over ~60 s. This is the honest
     // "actively charging" signal: on a current-limited port the charger STAT pin can assert
@@ -221,7 +245,8 @@ esp_err_t ha_battery_sample(ha_batt_sample_t *out)
         out->charging = (s_cfg.gpio_charge >= 0) && (gpio_get_level(s_cfg.gpio_charge) == 0);
         out->on_wall = on_charger;
         out->gaining = s_gaining;
-        out->soc = lut_pct(s_smooth_mv);
+        bool display_on = s_cfg.display_on_fn ? s_cfg.display_on_fn() : true;
+        out->soc = soc_normalized(s_smooth_mv, display_on, on_charger, out->charging);
         out->temp_dc = ht ? tdc : -9999;
         out->have_temp = ht;
         out->charge_en = s_charge_en;

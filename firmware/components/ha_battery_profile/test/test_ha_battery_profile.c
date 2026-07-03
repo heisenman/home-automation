@@ -16,7 +16,9 @@ int main(void) {
     // --- provenance + LUT shape ---
     check("has version", p.version[0] == 'v');
     check("lut_n = 21", p.lut_n == 21);
-    check("lut ascending & endpoints", p.lut[0] == 3450 && p.lut[20] == 3860);
+    // floor is the fixed safety anchor; the full anchor is base-frame full (device/regression-specific).
+    check("lut endpoints (floor 3450, base-frame full 3750-3900)",
+          p.lut[0] == 3450 && p.lut[20] >= 3750 && p.lut[20] <= 3900);
     int mono = 1;
     for (int i = 1; i < p.lut_n; i++) if (p.lut[i] <= p.lut[i-1]) mono = 0;
     check("lut strictly monotonic", mono);

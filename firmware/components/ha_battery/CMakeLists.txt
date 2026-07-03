@@ -5,4 +5,4 @@
 # (the panel's display BSP owns them).
 idf_component_register(SRCS "ha_battery.c"
                        INCLUDE_DIRS "include"
-                       REQUIRES esp_adc driver esp_io_expander esp_timer)
+                       REQUIRES esp_adc driver esp_io_expander esp_timer ha_battery_profile)

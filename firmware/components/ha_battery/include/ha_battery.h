@@ -12,6 +12,7 @@
 #include <stddef.h>
 #include "esp_io_expander.h"
 #include "driver/i2c_master.h"
+#include "ha_battery_profile.h"   // state-normalized V→SoC profile (ADR-0024 §5)
 
 typedef struct {
     // --- ADC voltage sense ---
@@ -34,9 +35,13 @@ typedef struct {
     i2c_master_bus_handle_t i2c_bus;   // NULL if no temp source
     uint8_t imu_addr;        // D1001: 0x6A
 
-    // --- SoC LUT (21-point mV, 5%/step) ---
+    // --- SoC LUT (21-point mV, 5%/step) — legacy raw-voltage fallback when no profile is set ---
     const int *lut;          // NULL → built-in D1001 LUT
     int lut_n;               // point count (21)
+
+    // --- state-normalized profile (ADR-0024): preferred over the raw LUT above when non-NULL ---
+    const ha_batt_profile_t *profile;  // NULL → baked-in ha_batt_profile_d1001_default()
+    bool (*display_on_fn)(void);       // display state for normalization; NULL → assume on (base frame)
 
     // --- charge policy ---
     int usb_present_mv;      // USB rail above this ⇒ cable present (D1001: 4000)
