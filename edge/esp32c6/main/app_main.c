@@ -3,6 +3,7 @@
 #include "nvs_flash.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "driver/gpio.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
@@ -40,6 +41,14 @@ void app_main(void) {
         ESP_ERROR_CHECK(nvs_flash_erase());
         ESP_ERROR_CHECK(nvs_flash_init());
     }
+
+    // Kill the XIAO ESP32-C6 onboard USER LED (GPIO15, active-low) — edge nodes don't need it and a glowing
+    // LED in a bedroom is a nuisance. If the visible RED LED is instead the hardware battery-CHARGE indicator
+    // (wired to the charge IC, not a GPIO), this has no effect — that one can't be killed in software (tape
+    // it). Empirical test: v16-ledoff.
+    gpio_reset_pin(GPIO_NUM_15);
+    gpio_set_direction(GPIO_NUM_15, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_NUM_15, 1);           // active-low user LED → HIGH = off
 
     ha_config_t cfg;
     ha_config_load(&cfg);
