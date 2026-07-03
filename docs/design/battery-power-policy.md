@@ -66,12 +66,14 @@ The `ha_power_policy` decisions are reused unchanged on the next device — only
    + `on_charger` (`usb_mv > present`) + `charging` (STAT). Offsets from the table above (config, not hard-coded).
 4. **Rebuild `D1001_LUT`** from the measured discharge curve, anchored 0% = 3450 mV, ~99% = top; monotonic,
    5%-spaced. Validate SoC vs meter at a few points.
-   **DONE (v2, 2026-07-03):** regressed from the 146-min fixed-load discharge (constant load ⇒ coulombs ≈ time),
-   now the baked-in default in `ha_battery_profile` (`ha_batt_profile_d1001_default()`). Mid-band ~12–75% SoC
-   (3509–3808 mV) is measured — it rides ~50–65 mV above the old linear placeholder, capturing the real Li-ion
-   plateau; ends (0–12% / 75–100%) linear-stitched to the anchors (discharge began ~75%, stopped at the safe
-   floor). Meter-validate the mid-band at gauge integration; the two extrapolated ends close with one discharge
-   from a true full charge at finer cadence (the harness run once the sample-rate hook lands).
+   **DONE (v3, 2026-07-03):** regressed from the 146-min fixed-load discharge (constant load ⇒ coulombs ≈ time),
+   the baked-in default in `ha_battery_profile`. **Anchored 100% = 3796 mV base-frame** (the cell the instant it
+   left a terminated charge — the unplug transition; v2's bug was borrowing 3860, an on-USB number). The
+   discharge began at full, so **~16–100% is MEASURED**; only 0–16% (below the safe-stop to the floor) is
+   extrapolated. **Wired into `ha_battery`** (`d63aca8`): normalize→LUT + the charge-terminated→100% hardware
+   anchor + symmetric EMA (ratchet killed). **Flashed + HW-verified 2026-07-03:** first boot read `soc=100` on
+   wall/terminated — first 100% in this device's history. Meter-validate the mid-band on battery; the residual
+   near-extreme offset error closes with multi-point offset characterization (the harness run).
 
 ### B. Shutdown at 0% (`ha_battery` → `bsp_power_off`)
 - When `SoC ≤ 0`, call `bsp_power_off()` immediately (rail latch release — validated today). Debounce lightly

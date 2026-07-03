@@ -81,6 +81,30 @@ as the fallback when none is loaded.
   the display — the display is the load being avoided): "CHARGE THE BATTERY." Poll the cell; bring the display
   up only once it has recovered past the floor.
 
+### 7. Avoiding SoC jumps — the anchoring rules (D1001 lessons, 2026-07-03)
+
+The whole reason to normalize (§1) is so a **state change never jumps the reading**. Getting that right
+turned on three rules, learned the hard way on the D1001 and now standard:
+
+- **Anchor base-frame 100% to the cell the instant it LEAVES a terminated charge — never to an
+  on-charger reading.** A charging/USB terminal voltage sits well above the base-frame full (D1001: 3860
+  mV on-USB vs **3796 mV** base-frame the moment USB was pulled). Anchoring the curve top to the on-charger
+  number read a *full* cell as ~72% on battery — a 28% cliff on unplug. Capture the unplug transition
+  (last on-USB sample → first on-battery sample) to get both the true base-frame full **and** the
+  near-full offset in one step.
+- **At runtime, snap SoC to 100% on the charger's DONE signal, not a voltage.** On wall + charge allowed +
+  STAT not-charging + cell above a sanity floor ⇒ the charger terminated ⇒ **100%, by the hardware's
+  definition.** Terminal voltage cannot give a trustworthy 100% (it's load/charge-state dependent right
+  where it matters least). This is the fuel-gauge "reset to full at charge termination."
+- **State offsets are SoC-DEPENDENT; a single-point measurement only cancels jumps mid-range.** The D1001
+  USB/load-sag offset is ~128 mV mid-SoC but ~52 mV near full (internal R rises toward the ends). Constant
+  offsets from one measurement are jump-free where they were measured and approximate at the extremes; the
+  top extreme is covered by the DONE anchor above, and full jump-freedom needs offsets characterized at
+  **several** SoC points (the automated harness run). Record the offsets' measurement SoC in provenance.
+
+The unplug transition is also the cheapest characterization event there is — one cable pull yields the
+base-frame full, the near-full offset, and the start of the discharge curve.
+
 ## Module decomposition (module-first, ADR-0020)
 
 Most of this is **shared firmware modules** (reused across every battery device); only board wiring is
@@ -118,7 +142,12 @@ Onboarding a new battery device produces its constants. Steps:
 2. **Verify the ADC scale** against a bench meter (divider constant, cali). Do this at a *known* load state;
    remember OCV≠loaded.
 3. **Measure the state offsets** by stepping each knob one at a time and reading the step: display on/off,
-   USB in/out, charge on/off. Record each Δmv. (D1001: +40 / +128 / +80.)
+   USB in/out, charge on/off. Record each Δmv. (D1001: +40 / +128 / +80.) **Validate the charge knob while
+   you're here:** command `/CE` off on wall and confirm STAT flips to not-charging AND the cell voltage
+   actually falls, then command on and confirm STAT + voltage recover. This proves both the actuator and
+   that STAT is trustworthy — the DONE anchor (§7) and the harness both depend on it. (D1001: off→STAT=0 +
+   12 mV drop over 4 min → on→STAT=1 + recovery, recorded in `charge_en`.) Note the offsets' SoC (they drift
+   with charge — §7).
 4. **Discharge at fixed load** (e.g. display-on, USB-out), annotating any transition, down to a *safe* stop
    above the knee — never to true empty. This is the curve shape.
 5. **Charge to termination**, watching the STAT `charging→done` edge for the true 100% anchor. Free the input
