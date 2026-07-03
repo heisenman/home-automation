@@ -16,6 +16,25 @@ firmware/
   devices/<device>/        (future) thin per-device builds: platform shim + REQUIRES-picked modules
 ```
 
+## ⛔ MODULE-FIRST — the mandate this tree exists to serve (ADR-0020)
+
+**New capability = a new module. Never new lines in a god-file, never a fourth `cp -r` copy.**
+
+This is not a style preference; it is the standing rule for all firmware work. Before adding a
+feature, extract the seam **first**:
+
+- **Shared across devices** → a real IDF component under `firmware/components/<module>/` with a
+  header contract + platform-support note (this tree). Platform differences become caller hooks/cfg
+  structs, not forks. A new device is a **column in [MATRIX.md](../edge/MATRIX.md), not a fork.**
+- **App-local** (one build's internals) → an in-app unit: its own `.c/.h`, private statics, a header
+  that states the contract. Precedent: the D1001 panel's `ui_tiles.c` went **1393→206L** behind 8
+  `ui/` modules ([panel-ui-modularization](../docs/design/panel-ui-modularization.md)) with zero
+  behavior change — and only *then* was memory-refactored cleanly.
+
+A file that has grown a second responsibility, or that a feature would bloat further, is a
+**review-blocking defect** — fix the structure before adding the behavior. When unsure where a seam
+belongs, extract app-local first; promote to a shared component when a second device needs it.
+
 ## Migration status (ADR-0020 Stage 1)
 
 | Module | Home | Consumed by | Notes |

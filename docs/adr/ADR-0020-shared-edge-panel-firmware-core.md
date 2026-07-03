@@ -1,7 +1,7 @@
 # ADR-0020 — Shared Edge/Panel Firmware Core (Module Catalog + Device Matrix)
 
 **Date:** 2026-07-01
-**Status:** Proposed
+**Status:** Accepted (2026-07-02)
 
 ## Decision
 
@@ -61,6 +61,25 @@ free, and the dictator's `edge-mapper` ingests it as just another `<node>` with 
 - Migrating live nodes carries re-validation cost → strictly gated, panel proven first.
 - **Bridges ADR-0002 ↔ ADR-0003:** build-time modules *produce* the ADR-0002 runtime traits; a clean component
   today is the exact unit ADR-0003 would later repackage as an OTA WASM module (catalog entry unchanged).
+
+## Acceptance (2026-07-02)
+
+Accepted — Stage 1 and the BLE core of Stage 2 are **live**. `firmware/components/` now holds the
+real shared components — `switchbot_decode`, `ha_ble_scan`, `ha_sdcard`, `fs_ops`, `ha_battery`,
+`ha_reach` (+ the `sgp30`/`sgp40`/`sensirion_gas_index` gas stack) — linked by both the edge nodes
+(c3/c6/s3) and the D1001 panel via `REQUIRES`; the `switchbot_decode`/`ha_ble_scan` fork copies are
+retired fleet-wide. The catalog ([edge/MODULES.md](../../edge/MODULES.md)) and device×module matrix
+([edge/MATRIX.md](../../edge/MATRIX.md)) exist. The panel links the shared core as a **peer edge
+node** (advert relay + reach), as designed — zero new server work.
+
+Remaining stages proceed under this accepted direction (not blockers to acceptance): reconciling the
+3×-drifted `ha_mqtt`/`app_main`, the shared `ha_gatt` (Stage 2 GATT), the `MATRIX.md` generator +
+CI drift-check, and the `firmware/devices/<device>/` thin builds. The **module-first** principle this
+ADR institutionalizes — new capability = new module, never a fourth copy or a fatter god-file — is
+now a standing rule in [firmware/AGENTS.md](../../firmware/AGENTS.md); the D1001 panel's in-app UI
+split (`ui_tiles.c` 1393→206L behind 8 `ui/` modules,
+[panel-ui-modularization](../design/panel-ui-modularization.md)) is the app-local face of the same
+principle.
 
 ## Rejected alternatives
 
