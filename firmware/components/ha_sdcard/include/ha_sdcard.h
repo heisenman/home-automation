@@ -30,3 +30,19 @@ esp_err_t ha_sdcard_mount(const ha_sdcard_cfg_t *cfg);
 bool        ha_sdcard_mounted(void);       // true once mounted
 const char *ha_sdcard_mount_point(void);   // the active mount point (e.g. "/sdcard")
 uint64_t    ha_sdcard_size_mb(void);        // card capacity in MB (0 if unmounted)
+
+// Presence global (== mounted+usable). The authority other modules gate on to avoid touching a
+// pulled card. Maintained by ha_sdcard_watch() when a card-detect line is supplied.
+bool ha_sdcard_present(void);
+
+// Unmount the card. Safe: consumers must presence-gate (nothing may hold an open handle across
+// this). The stored host carries a no-op deinit, so the shared SDMMC host is left untouched.
+void ha_sdcard_unmount(void);
+
+// Start a hot-plug watcher on the card-detect line (both-edge ISR + 3 s self-heal poll). On
+// insert it mounts `cfg` (NULL = D1001 defaults) and, after a *successful* mount, calls
+// on_change(true); on removal it unmounts and calls on_change(false). `active_low` = the detect
+// pin reads 0 when a card is present (D1001 SD_DETECT = GPIO45). `on_change` may be NULL. Runs
+// its own task; idempotent per boot. The current state is announced once at startup.
+void ha_sdcard_watch(const ha_sdcard_cfg_t *cfg, int detect_gpio, bool active_low,
+                     void (*on_change)(bool present));

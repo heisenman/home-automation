@@ -71,11 +71,24 @@ static void read_enable(void)   // assert the ADC sense divider once the expande
 static void batt_adc_init(void)
 {
     if (s_init) return;
+    // Serialize: this is reached from ha_battery_init, ha_battery_sample (the periodic sample
+    // task) AND ha_battery_charge_start on the dual-core P4. Without the lock two callers pass
+    // the s_init gate together, both call adc_oneshot_new_unit(ADC_UNIT_1), the loser logs
+    // "adc1 already in use" — and, worse, into a LOCAL handle so it can never clobber the good
+    // one. Only publish s_adc/s_init on full success.
+    if (s_mtx) xSemaphoreTake(s_mtx, portMAX_DELAY);
+    if (s_init) { if (s_mtx) xSemaphoreGive(s_mtx); return; }   // re-check under the lock
+
+    adc_oneshot_unit_handle_t adc = NULL;
     adc_oneshot_unit_init_cfg_t uc = { .unit_id = s_cfg.adc_unit, .ulp_mode = ADC_ULP_MODE_DISABLE };
-    if (adc_oneshot_new_unit(&uc, &s_adc) != ESP_OK) { ESP_LOGW(TAG, "adc unit fail"); return; }
+    if (adc_oneshot_new_unit(&uc, &adc) != ESP_OK) {
+        ESP_LOGW(TAG, "adc unit fail");
+        if (s_mtx) xSemaphoreGive(s_mtx);
+        return;
+    }
     adc_oneshot_chan_cfg_t cc = { .atten = s_cfg.adc_atten, .bitwidth = ADC_BITWIDTH_12 };
-    adc_oneshot_config_channel(s_adc, s_cfg.adc_ch_batt, &cc);
-    if (s_cfg.adc_ch_usb >= 0) adc_oneshot_config_channel(s_adc, s_cfg.adc_ch_usb, &cc);
+    adc_oneshot_config_channel(adc, s_cfg.adc_ch_batt, &cc);
+    if (s_cfg.adc_ch_usb >= 0) adc_oneshot_config_channel(adc, s_cfg.adc_ch_usb, &cc);
 #if ADC_CALI_SCHEME_CURVE_FITTING_SUPPORTED
     adc_cali_curve_fitting_config_t fc = { .unit_id = s_cfg.adc_unit, .atten = s_cfg.adc_atten,
                                            .bitwidth = ADC_BITWIDTH_12 };
@@ -89,7 +102,9 @@ static void batt_adc_init(void)
         gpio_config_t g = { .pin_bit_mask = mask, .mode = GPIO_MODE_INPUT, .pull_up_en = GPIO_PULLUP_ENABLE };
         gpio_config(&g);
     }
+    s_adc = adc;         // publish only on full success — losers never see a half-init handle
     s_init = true;
+    if (s_mtx) xSemaphoreGive(s_mtx);
 }
 
 static int lut_pct(int mv)

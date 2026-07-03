@@ -19,3 +19,10 @@ void ha_replica_start(const char *base);
 // replica's file swap by an internal mutex; opens sqlite on the CALLER's task, so give that task a
 // generous stack (≥16 KB).
 int ha_replica_rung_query(const char *device_id, const char *metric, int hours, double *out, int cap);
+
+// SD hot-plug hooks (driven by ha_sdcard_watch's on_change). Insert: re-inventory the local
+// replica so chart queries can use it immediately instead of waiting for the next sync cycle.
+// Remove: mark the local cache gone so ha_replica_rung_query() falls back to the network rather
+// than touching the dead mount.
+void ha_replica_sd_inserted(void);
+void ha_replica_sd_removed(void);

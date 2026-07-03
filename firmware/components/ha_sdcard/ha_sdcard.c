@@ -103,3 +103,91 @@ uint64_t ha_sdcard_size_mb(void)
     if (!s_mounted || !s_card) return 0;
     return ((uint64_t)s_card->csd.capacity * s_card->csd.sector_size) >> 20;
 }
+
+// ─────────────────────────────── hot-plug watcher ───────────────────────────────
+#include "freertos/task.h"
+
+static ha_sdcard_cfg_t s_watch_cfg;
+static bool s_watch_cfg_set;
+static int  s_detect_gpio = -1;
+static bool s_detect_active_low = true;
+static void (*s_on_change)(bool present);
+static TaskHandle_t s_watch_task;
+
+bool ha_sdcard_present(void) { return s_mounted; }
+
+void ha_sdcard_unmount(void)
+{
+    if (!s_mounted) return;
+    // card->host carries our no-op deinit (set at mount), so this frees the FAT/slot but leaves
+    // the SDMMC host shared with the C6 WiFi SDIO alone.
+    esp_vfs_fat_sdcard_unmount(s_mount ? s_mount : "/sdcard", s_card);
+    s_card = NULL;
+    s_mounted = false;
+    ESP_LOGW(TAG, "unmounted");
+}
+
+static bool detect_present(void)
+{
+    if (s_detect_gpio < 0) return s_mounted;
+    int lvl = gpio_get_level(s_detect_gpio);
+    return s_detect_active_low ? (lvl == 0) : (lvl != 0);
+}
+
+// GPIO ISR runs from flash (isr service installed with flag 0) — no IRAM_ATTR needed. Just nudge
+// the watcher task; all mount/unmount work happens there.
+static void detect_isr(void *arg)
+{
+    (void)arg;
+    BaseType_t hp = pdFALSE;
+    if (s_watch_task) vTaskNotifyGiveFromISR(s_watch_task, &hp);
+    portYIELD_FROM_ISR(hp);
+}
+
+static void watch_task(void *pv)
+{
+    (void)pv;
+    bool announced = false, last = false;
+    for (;;) {
+        bool present = detect_present();
+        if (present && !s_mounted) {
+            ESP_LOGW(TAG, "card detected -> mounting");
+            if (ha_sdcard_mount(s_watch_cfg_set ? &s_watch_cfg : NULL) != ESP_OK)
+                present = false;                    // mount failed: not usable
+        } else if (!present && s_mounted) {
+            ESP_LOGW(TAG, "card removed -> unmounting");
+            ha_sdcard_unmount();
+        }
+        bool usable = s_mounted;                     // the presence global consumers gate on
+        if (!announced || usable != last) {
+            if (s_on_change) s_on_change(usable);
+            last = usable; announced = true;
+        }
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(3000)); // edge, or self-heal poll every 3 s
+        vTaskDelay(pdMS_TO_TICKS(150));                // debounce settle before re-reading
+    }
+}
+
+void ha_sdcard_watch(const ha_sdcard_cfg_t *cfg, int detect_gpio, bool active_low,
+                     void (*on_change)(bool present))
+{
+    if (s_watch_task) return;                         // once per boot
+    if (cfg) { s_watch_cfg = *cfg; s_watch_cfg_set = true; }
+    s_detect_gpio = detect_gpio;
+    s_detect_active_low = active_low;
+    s_on_change = on_change;
+
+    xTaskCreate(watch_task, "sdwatch", 6144, NULL, 4, &s_watch_task);
+
+    if (detect_gpio >= 0) {
+        gpio_config_t g = { .pin_bit_mask = 1ULL << detect_gpio, .mode = GPIO_MODE_INPUT,
+                            .pull_up_en = GPIO_PULLUP_ENABLE, .intr_type = GPIO_INTR_ANYEDGE };
+        gpio_config(&g);
+        esp_err_t ir = gpio_install_isr_service(0);
+        if (ir != ESP_OK && ir != ESP_ERR_INVALID_STATE)
+            ESP_LOGW(TAG, "sd-detect isr service: %s", esp_err_to_name(ir));
+        gpio_isr_handler_add(detect_gpio, detect_isr, NULL);
+        ESP_LOGW(TAG, "SD-detect watch on GPIO%d (boot level=%d, active-%s)",
+                 detect_gpio, gpio_get_level(detect_gpio), active_low ? "low" : "high");
+    }
+}

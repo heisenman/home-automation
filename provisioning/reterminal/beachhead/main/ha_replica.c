@@ -164,6 +164,32 @@ static const char *pick_res(int hours, int *limit)
     return res;
 }
 
+void ha_replica_sd_removed(void)
+{
+    if (s_db_mutex) xSemaphoreTake(s_db_mutex, portMAX_DELAY);
+    s_db_ready = false;          // queries now fall back to the network
+    s_db_path[0] = '\0';
+    if (s_db_mutex) xSemaphoreGive(s_db_mutex);
+    ESP_LOGW(TAG, "SD removed — local replica offline (queries fall back to network)");
+}
+
+void ha_replica_sd_inserted(void)
+{
+    if (!ha_sdcard_mounted()) return;
+    if (s_db_mutex) xSemaphoreTake(s_db_mutex, portMAX_DELAY);
+    snprintf(s_db_path, sizeof s_db_path, "%s/%s", ha_sdcard_mount_point(), DB_NAME);
+    struct stat st;
+    if (stat(s_db_path, &st) == 0 && st.st_size > 0) {
+        s_db_ready = true;       // usable immediately; the sync task freshens it on its next cycle
+        ESP_LOGW(TAG, "SD inserted — replica inventory: %s present (%ld KB)",
+                 s_db_path, (long)(st.st_size >> 10));
+    } else {
+        s_db_ready = false;
+        ESP_LOGW(TAG, "SD inserted — no replica yet; sync will pull on next cycle");
+    }
+    if (s_db_mutex) xSemaphoreGive(s_db_mutex);
+}
+
 int ha_replica_rung_query(const char *device_id, const char *metric, int hours, double *out, int cap)
 {
     if (!s_db_ready || !s_db_mutex || !s_db_path[0]) return -1;

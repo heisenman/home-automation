@@ -40,6 +40,7 @@
 #include "fs_ops.h"
 #include "ui_tiles.h"
 #include "ha_replica.h"   // ADR-0022 Phase 1a: rung DB replica to SD
+#include "ha_sdcard.h"    // SD mount + hot-plug watcher (card-detect GPIO45)
 #include "ha_ble_scan.h"
 #include "ha_reach.h"
 #include "esp_hosted.h"
@@ -90,6 +91,14 @@ static void slave_ota_task(void *pv);   // C6 slave-OTA task (defined near start
 static void i2cscan_task(void *pv);     // I2C bus scan (fuel-gauge ID) — defined near start_mqtt
 static void battdump_task(void *pv);    // 0x36 register dump (chip ID) — defined near start_mqtt
 static volatile bool s_debug = false;         // <-- diagnostic firehose, default OFF
+
+// SD hot-plug: the watcher mounts/unmounts; we drive the replica cache off the presence change —
+// insert re-inventories the local rung DB, removal drops it (queries fall back to the network).
+static void sd_presence_changed(bool present)
+{
+    if (present) ha_replica_sd_inserted();
+    else         ha_replica_sd_removed();
+}
 // Power-aware BLE state (defined here so the cmd/ble handler can force-on; logic below).
 static volatile bool s_ble_started  = false;  // ha_ble_scan_start done once (task created)
 static volatile bool s_on_wall      = false;  // last observed wall-power state (starts battery)
@@ -224,6 +233,9 @@ static void display_task(void *pv)
         ESP_LOGW(TAG, ">>> DISPLAY ONLINE <<<");
         ui_tiles_start(BFF_BASE_URL "/api/v1/sensors");   // server-backed tiles from the BFF
         ha_replica_start(BFF_BASE_URL);                   // ADR-0022 Phase 1a: mirror the rung DB to SD
+        // Hot-plug: auto-mount + inventory on insert, drop cache on removal. GPIO45 = SD_DETECT,
+        // active-low (card present pulls it to GND; boot level is logged to confirm polarity).
+        ha_sdcard_watch(NULL, 45, true, sd_presence_changed);
     } else {
         snprintf(m, sizeof(m), "{\"display\":\"failed\",\"err\":\"%s\",\"build\":\"%s\"}", esp_err_to_name(err), APP_BUILD_TAG);
         ESP_LOGE(TAG, "display init failed: %s (device stays live on the bus)", esp_err_to_name(err));
