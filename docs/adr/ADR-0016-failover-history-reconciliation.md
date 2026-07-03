@@ -122,3 +122,12 @@ Two refinements landed with the implementation (`adr-history-reconciliation`):
    `RECONCILE_MODE=active` to let the proposed value drive the cadence. A `cluster-doctor` red flag fires if
    measured `D` approaches `I_max/2` (the cheap path can't keep pace). The device-pull rebuild estimate and
    the per-model buffer-depth deadline get the same measure→bound treatment when promoted.
+
+   **Review 1 (2026-07-02, ~1 week in) — data sane, left in shadow.** 768 cycles on `.210`: `D` = 1–4 s
+   (max 4 s ≪ `I_max/2` = 450 s, zero red flags), stable across 8 days, `rows_recent` ~900–2000/interval
+   (real work). `proposed` = **120 s (I_min) every cycle** — the *benign* pin: the reconcile is so cheap
+   (`floor = D×12.5` = 12–50 s) that the anti-thrash floor `I_min` governs, not the duty-cycle term. So the
+   tuner is validated, but "active" here would just mean a fixed 2-min cadence (I_min) vs the current 15 min.
+   Since the 15-min loss budget is already met, **kept in shadow** (no production change); revisit ~2026-07-09
+   to decide promote-to-2min vs raise `I_min` vs stay 15-min (Hugh leaning promote). No re-tune needed — the
+   formula behaves correctly; the only open question is the desired cadence given how cheap `D` is.
