@@ -88,7 +88,20 @@ esp_err_t ha_eth_connect(int timeout_ms) {
 
     esp_eth_config_t eth_cfg = ETH_DEFAULT_CONFIG(mac, phy);
     esp_eth_handle_t eth_handle = NULL;
-    ESP_ERROR_CHECK(esp_eth_driver_install(&eth_cfg, &eth_handle));
+    // NOT ESP_ERROR_CHECK: driver_install PROBES the W5500 (verifies its chip ID). On a board that has no
+    // W5500 at all — a plain ESP32-S3, not the Waveshare S3-ETH — this returns an error. Treat that as
+    // "no wired link" and return ESP_FAIL so app_main falls back to Wi-Fi, instead of panicking into a boot
+    // loop. (The has-W5500-but-no-cable case still works: driver installs, then the GOT_IP wait times out
+    // → ESP_FAIL.) Free the phy/mac/netif we allocated so the Wi-Fi fallback leaves nothing half-built.
+    esp_err_t err = esp_eth_driver_install(&eth_cfg, &eth_handle);
+    if (err != ESP_OK) {
+        ESP_LOGW(TAG, "W5500 not present / init failed (%s) — no wired Ethernet, falling back to Wi-Fi",
+                 esp_err_to_name(err));
+        phy->del(phy);
+        mac->del(mac);
+        esp_netif_destroy(eth_netif);
+        return ESP_FAIL;
+    }
 
     // The W5500 ships without a burned-in MAC — give it the chip's ETH-derived address.
     uint8_t mac_addr[6];
