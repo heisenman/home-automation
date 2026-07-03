@@ -12,23 +12,37 @@ this wins; ADR-0019 has been amended to point here.
 
 ---
 
-## 1. What the E1001 is — documented vs must-confirm
+## 1. What the E1001 is — schematic-confirmed (V1.2)
 
-**Docs-first discipline (a D1001 lesson): assert no hardware fact from recall.** The rows below marked *intake*
-come from the device-intake (`e9ee4f6`) and ADR-0019; everything must be **confirmed against the E1001
-schematic / on power-on** before any code depends on it.
+**Confirmed against the schematic** `docs/hardware/reTerminal_E1001_V1_2_SCH_251120.pdf` (Seeed, CC BY-SA, 9
+sheets, rev v1.2 2025-11-20). Docs-first — these are read off the drawing, not recall.
 
-| Aspect | From intake (ADR-0019) | Must confirm (schematic / power-on) |
-|---|---|---|
-| MCU | ESP32-**S3**, native WiFi (no C6/esp-hosted) | exact variant, flash + PSRAM size |
-| Display | 7.5" **mono ePaper**, ~800×480, seconds-slow refresh, no touch/color | EPD controller part; **partial-refresh** support; exact resolution |
-| Sensors | onboard **T/H** + buzzer | sensor part(s) + I²C address/bus; buzzer control |
-| Power | **deep-sleep**, ~3-month battery; microSD | battery **gauge/charger topology** — is there an ADC sense? a fuel-gauge IC? charger part? power-latch? |
-| Input | 3 physical **buttons** [a,b,c] | button GPIOs + wake-capability |
-| Vendor support | **ESPHome** (Seeed-supported on E-series) *or* ESP-IDF | does Seeed ship an ESPHome config **and/or** an ESP-IDF BSP? |
+| Subsystem | Part / detail | Bus / GPIO | Note |
+|---|---|---|---|
+| MCU | **ESP32-S3R8**, 8 MB PSRAM, native WiFi4/BLE5 | — | no C6/esp-hosted (unlike D1001) |
+| Flash | W25Q256 (32 MB) SPI | SPI0 | ample |
+| Console/flash | **CH340C** USB-UART + DTR/RTS **auto-reset** | UART0 → `/dev/ttyUSB0` | **esptool/ESPHome flash normally** |
+| Charger | **SY6974B** I²C power-path charger (v1.0 was ETA6003) | **I²C1** SDA IO39/SCL IO40, +STAT/CE/QON/NTC | **on I²C** — unlike D1001's off-I²C BQ; read status/current directly |
+| Battery sense | ADC via **÷2** divider (10K/10K), load-switch gated | **IO01/VBAT_ADC**, enable **IO21/VBAT_EN** | **same pattern as `ha_battery`** |
+| Sys power | VSYS → **TPS631000** buck-boost → 3V3 (1.5 A) | — | same topology family as D1001 |
+| Power latch | **CJ3407** P-FET (Q1) + physical slide switch **SW1** | ESP_RST | power-off pattern reusable |
+| Battery | 2000 mAh + NTC (J7), 0–45 °C charge window | BAT_NTC | thermal-gate is in the SY6974B (HW) |
+| **T/RH** | **SHT40-AD1B-R2** @ **0x44** | **I²C0** SDA IO19/SCL IO20 | onboard room sensor; ESPHome-native `sht4x` |
+| RTC | **PCF85063T** @ 0x51 + CR1220 coin cell | I²C0 | deep-sleep wake timing |
+| **e-Paper** | SPI EPD (50P **or** 24P FPC; on-board bias DC-DC) | SPI CS IO10/DC IO11/RST IO12/BUSY IO13/SCK IO7/MOSI IO9 | **controller part = on the panel module, NOT in this SCH → must ID** |
+| Touch (optional) | I²C touch-panel FPC connector present | I²C1 + INT IO47/RES IO48 | **HW supports touch** — intake said "no touch"; confirm if *our unit* is populated |
+| Buttons | **3 user keys** (KEY0/1/2) + BOOT + RST | IO3/IO4/IO5 | matches ADR [a,b,c] |
+| LED | 1 green user LED | IO6 | status/warn indicator |
+| Buzzer | passive MLT-8530 | IO45/BUZZER_EN | audible alerts |
+| Mic | PDM MSM261 (×2) | IO41/42, PDM_EN IO38 | **leave off** (privacy, like the D1001 camera) |
+| microSD | SPI (not SDMMC), card-detect | IO7/8/9, CS IO14, DET IO15, EN IO16 | present; E1001 not a recovery node → likely unused |
 
-**First action (docs-first):** power it on, find/point to the E1001 **schematic + Seeed BSP/ESPHome config**
-(as we had `D1001_Docs/` + `reTerminal-D1001` BSP), and confirm the table. Missing a doc → ask, don't guess.
+**Net:** the E1001 is a *standard* S3 board — everything (WiFi, ADC battery, I²C charger/sensor/RTC, SPI
+ePaper, buttons, deep-sleep) is bread-and-butter for both ESPHome and ESP-IDF. **The one genuine unknown is the
+ePaper controller** (it lives on the panel module, off this schematic) — that gates the display path (§2).
+
+**Still to confirm (small):** the exact EPD controller (power-on log / the panel module p/n / an `esptool`
+identify); whether *our unit's* touch layer is populated; and the S3 flash size in practice.
 
 ---
 
@@ -45,12 +59,21 @@ C catalog and a battery standard now in hand, it carries real weight.
 | Battery-standard (ADR-0024) consistency | ESPHome's native deep-sleep battery handling (different model) | our gauge + safety policy, characterized per ADR-0024 |
 | Maintenance | a second toolchain (YAML/lambda) | one toolchain; a new MATRIX column |
 
-**Framing / lean.** ADR-0019 intended the E1001 as *"the deliberate second implementation that validates the
-abstraction"* — which points at ESPHome, and E1001's role (status-first, read-mostly, deep-sleep, onboard T/H)
-is squarely what ESPHome + Seeed's components do well and fast. The counter-pull is firmware-reuse + one battery
-standard, which favor ESP-IDF. **Recommendation: default to ESPHome for a fast abstraction proof** (semantic
-reuse is the big reuse anyway — see §3), and reserve ESP-IDF for if/when we need the C safety modules on this
-board. **This is Hugh's call** and should be made in Phase E0 once the hardware + Seeed support are confirmed.
+**Framing / lean — the schematic strengthens the ESPHome case.** Every E1001 peripheral is bog-standard for
+ESPHome: native S3 WiFi + MQTT, `adc` battery sense (IO01, ÷2), `i2c` for the SY6974B charger / SHT40 / RTC,
+the **ESPHome-native `sht4x`** sensor, `deep_sleep`, `binary_sensor` buttons, `output` for the LED/buzzer.
+There's no exotic bring-up (unlike the D1001's P4+C6/esp-hosted, which is exactly why *that* one was forced to
+custom ESP-IDF). ADR-0019 also intended the E1001 as *"the deliberate second implementation that validates the
+abstraction"* — pointing the same way. The only counter-pull (firmware-module reuse of the battery trio) is
+smaller than it looks, because ESPHome covers the battery natively and the ADR-0024 *method* (state-normalized
+curve, charge-terminated anchoring) still applies as **calibration data in the ESPHome config**, not lost.
+
+**Recommendation: ESPHome.** The one thing to **de-risk first (the E0 spike):** confirm an ESPHome display
+platform supports this ePaper's **controller** (its part is on the panel module, off the schematic — ID it from
+the module p/n or a boot log). If a matching ESPHome EPD driver exists (Waveshare/GDEW-class are widely
+supported), ESPHome is a clear win; if the controller is unsupported, that single fact is the strongest reason
+to reconsider ESP-IDF. **This is Hugh's call**, made in E0 after the EPD-controller check. (Chart still renders
+the same BFF spec either way — §3a — so the abstraction proof holds regardless of platform.)
 
 ---
 
@@ -71,7 +94,7 @@ and possibly a status-first manifest variant.
 | Component | Reuse on ESP-IDF? | Notes |
 |---|---|---|
 | `ha_power_policy` | **Yes, whole** | board-agnostic — supply a cfg + 4 callbacks (`read_mv`/`power_off`/`warn`/`led`). The module-first payoff. |
-| `ha_battery` | **Mechanism yes** | new `_e1001_cfg()` for its ADC/charger wiring **iff** it has an ADC sense; if it has a fuel-gauge IC instead, that's a *new* driver behind the same interface. |
+| `ha_battery` | **Yes — confirmed ADC sense** | it's ADC (IO01, ÷2), not a fuel gauge → new `_e1001_cfg()`; one small addition — the read-enable is a **direct GPIO (IO21)** vs the D1001's expander pin. **Bonus:** the SY6974B charger is on **I²C**, so a tiny I²C driver gives a cleaner charge-terminated/STAT signal for the 100% anchor than the D1001 had. |
 | `ha_battery_profile` | **Yes** | new `_e1001_default()` from an ADR-0024 **characterization run** (deep-sleep changes the load model — offsets differ). |
 | `ha_sdcard`, `fs_ops` | **Skip (by role)** | E1001 is deep-sleep → **not** a gapless-recovery node (ADR-0019 §4). No rolling archive. |
 | `ha_ble_scan`, `switchbot_decode` | **Skip (by role)** | deep-sleep can't scan continuously → **not** a BLE gateway (ADR-0019 §6). |
@@ -116,8 +139,11 @@ Proposed capability descriptor (from ADR-0019 §3; **confirm with Hugh + hardwar
 
 ## 6. Phased plan (mirrors the D1001 arc, adapted)
 
-- **Phase E0 — Scoping + platform decision.** Power on; confirm §1 against the schematic/Seeed support;
-  **decide ESPHome vs ESP-IDF** (§2). *Docs-first; no code.* ← **start here**
+- **Phase E0 — Scoping + platform decision.** §1 is now schematic-confirmed. Remaining E0 tasks: **(1) back up
+  the SenseCraft factory firmware** (image the flash off-git first — the D1001 discipline); **(2) ID the ePaper
+  controller** (panel module p/n / boot log) and confirm an ESPHome display platform supports it — *the gating
+  spike*; **(3)** check whether our unit's touch layer is populated; **(4) decide ESPHome vs ESP-IDF** (§2).
+  *Docs-first; no code yet.* ← **start here**
 - **Phase E1 — Beachhead.** WiFi → MQTT (→ OTA if ESP-IDF); ePaper "hello"; **publish onboard T/H** as the
   first real value (it's a sensor immediately). Beachhead-first — prove connectivity before UI (the D1001 rule).
 - **Phase E2 — Renderer (the abstraction proof).** Render the BFF spec as **status tiles** on ePaper (partial
