@@ -10,6 +10,7 @@ set(EXTRA_COMPONENT_DIRS
     "${_shared}/ha_ble_scan"
     "${_shared}/ha_reach"
     "${_shared}/sgp40"
+    "${_shared}/sgp30"
     "${_shared}/sensirion_gas_index")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(ha-edge-c6)
