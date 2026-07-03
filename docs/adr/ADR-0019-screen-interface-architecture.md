@@ -1,15 +1,52 @@
 # ADR-0019 — Screen interface architecture (MCU display panels)
 
-**Date:** 2026-07-01 (rev-2: Phases 1–2 + full PWA parity A/B/C LIVE + HW-verified on D1001)
+**Date:** 2026-07-01 (rev-3, 2026-07-03: + BLE edge-relay §6 DONE, local-data replica via ADR-0022, a full battery subsystem via ADR-0024 — see the **Amendment** below)
 **Status:** **Accepted — Phases 1–2 IMPLEMENTED & LIVE on the D1001** (`v25-actuator`, device `.8`, committed
 `1dc438a`). Phase 1 connectivity (P4→C6/esp-hosted→WiFi→MQTT+OTA) + Phase 2 renderer (LVGL tiles + live MQTT
 state + tap-detail + actuator control) proven on real hardware, plus a full PWA-parity + shared-spec pass:
 inline 72h charts (A), scene bar + admin lock (B), actuator override + automation editor (C), auto-boot GUI,
 back-button screen toggle, and the OTA anti-strobe fix. Shared UI spec (`METRIC_CATALOG`) deployed on `.210`.
-**Next: Phase 6 — D1001 as a BLE edge node** (§6; runbook `provisioning/reterminal/BLE-EDGE-NODE-PLAN.md`).
-Phase 3 (SD recovery) + Phase 4 (E1001) still deferred.
+**Since rev-2:** Phase 6 (BLE edge relay, §6) **DONE** (`6693881`); Phase 3 local-data/recovery **shipped** as
+the ADR-0022 rung replica (`5b9d815`); a full **battery subsystem** landed (ADR-0024 — gauge / safety policy /
+loadable profile). **Next: Phase 4 — E1001**, now planned in
+[e1001-roadmap.md](../design/e1001-roadmap.md) (which supersedes this ADR's Phase-4 specifics with what we
+learned). Full history: [d1001-development-map.md](../design/d1001-development-map.md).
 **Extends:** ADR-0013 (presentation, API-first) · ADR-0003 (WASM firmware split) · ADR-0014 (device-control
 conventions) · ADR-0015 (edge-relay coverage) · ADR-0016/0018 (failover history / record-keeping nodes)
+**Amended by learnings from:** ADR-0020 (shared firmware core) · ADR-0022 (rollup ladder + replica) · ADR-0024
+(battery standard)
+
+## Amendment — learnings since Phase 0 (2026-07-03)
+
+This ADR was written as a Phase-0 design. We have since implemented D1001 Phases 1–2 + 6 and a great deal more,
+and several assumptions here should be read through that lens. **Treat this ADR as the origin architecture, not
+a definitive plan**; where it and the newer docs disagree, the newer docs win.
+
+1. **The reuse story got much stronger (ADR-0020).** This ADR framed the panel firmware as "a new platform to
+   build/maintain … real but one-time." Since then the **module-first shared core** landed: a catalog of
+   board-agnostic IDF components (`ha_ble_scan`, `ha_sdcard`, `fs_ops`, `ha_battery`, `ha_battery_profile`,
+   `ha_power_policy`, …) where **a device is a column in [MATRIX.md](../../edge/MATRIX.md), not a fork.** So a
+   second panel is now *compose from the catalog + a platform shim*, not a from-scratch port. This directly
+   reshapes the E1001 build math (see the roadmap).
+2. **There is now a battery standard (ADR-0024).** This ADR's E1001 profile says "deep-sleeps for ~3-month
+   battery" but predates any battery model. A deep-sleep, battery-powered E1001 is exactly the second adopter
+   of the [battery standard](../design/battery-power-policy.md): a **state-normalized gauge**, a **safety
+   policy** (shutdown/warn/boot-gate), and a **re-characterizable loadable profile** — reused as config + a
+   per-device characterization run, not re-invented.
+3. **The "manifest" is concretely the BFF spec.** §2's fetched manifest is realized today as the **BFF
+   view-models + the [shared-ui-spec](../design/shared-ui-spec.md)** (`vm.traits` / `vm.controls`,
+   `METRIC_CATALOG`) — both the PWA and the panel already render from it. The E1001 renderer targets the same
+   spec; a full standalone manifest endpoint remains optional.
+4. **The "data agent" is the ADR-0022 rung replica.** §4's SD data-agent shipped as the multi-resolution
+   rollup ladder + `ha_replica` local rung DB (charts render from local SD). The recovery-node role is real,
+   D1001-only (always-on), as this ADR predicted.
+5. **Hardware facts are docs-first, and the E1001's here are from intake, not a schematic.** The D1001 charge
+   saga taught us: assert no pin/register/behavior without the schematic/BSP, and our firmware is the default
+   suspect. The E1001 specifics in this ADR (S3, ePaper size, T/H, buzzer, deep-sleep, buttons) come from the
+   device intake (`e9ee4f6`) and must be **confirmed against the E1001 schematic / on power-on** before code.
+6. **The ESPHome-vs-ESP-IDF choice (§5) is now a weightier, explicit decision.** With a shared C catalog + a
+   battery standard to inherit, ESP-IDF buys real firmware reuse; ESPHome still has the "second stack proves
+   the abstraction" value. The roadmap treats this as the first decision to make, not a footnote.
 
 ## Context
 
@@ -209,8 +246,12 @@ displays.
 
 ## Phased plan
 
+> **Status (2026-07-03):** Phases 1–2 ✅ LIVE · Phase 3 shipped as the ADR-0022 rung replica · Phase 6 ✅ DONE
+> (`6693881`). **Phase 4 (E1001) is next → [e1001-roadmap.md](../design/e1001-roadmap.md)** (supersedes the
+> Phase-4 sketch below). Phase 5 (fleet) unstarted. Markers below reflect this.
+
 - **Phase 0 — Design (this ADR).** + manifest schema draft + capability-profile model + the reuse contract
-  above. *No hardware risk.*  ← **we are here**
+  above. *No hardware risk.*  ✅ **DONE** — plus everything through Phase 6 for the D1001.
 - **Phase 1 — D1001 host beachhead.** ESP-IDF image: `esp-hosted` C6 → WiFi → MQTT `.210` → **OTA proven**,
   camera disabled, display "hello". Prove connectivity + OTA *before* UI (beachhead-first, per the Levoit).
 - **Phase 2 — Renderer + manifest (server-backed, SD-independent).** LVGL tile primitives
@@ -220,8 +261,10 @@ displays.
 - **Phase 3 — Data agent + recovery node (OPTIONAL, SD-presence-gated — not a prerequisite).** When a card is
   present: background SD data agent (full-stream subscribe, batched rolling archive, `chart` tiles switch to
   `source: local` for instant/offline history); hook into reconcile tooling as a last-resort source.
-- **Phase 4 — E1001 as the abstraction proof.** Same manifest/tile model on ESPHome/ePaper (S3); onboard T/H
-  published as a sensor; deep-sleep snapshot behavior.
+- **Phase 4 — E1001 as the abstraction proof.** ← **NEXT.** Same manifest/tile model on ePaper (S3); onboard
+  T/H published as a sensor; deep-sleep snapshot behavior. **Now planned in detail (with what we learned since
+  Phase 0) in [e1001-roadmap.md](../design/e1001-roadmap.md)** — including the platform decision (ESPHome vs
+  ESP-IDF), the shared-module reuse map, and the battery-standard inheritance.
 - **Phase 5 — Fleet rollout.** Per-room panels; `provisioning/reterminal/` runbook; panel enrollment
   (per-device key); central manifest management.
 - **Phase 6 — BLE edge-relay bring-up (D1001, §6).** Enable BT-over-`esp-hosted` (NimBLE ↔ HCI over SDIO);
