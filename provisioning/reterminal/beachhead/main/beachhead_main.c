@@ -39,13 +39,14 @@
 #include "ha_battery.h"
 #include "fs_ops.h"
 #include "ui_tiles.h"
+#include "ha_replica.h"   // ADR-0022 Phase 1a: rung DB replica to SD
 #include "ha_ble_scan.h"
 #include "ha_reach.h"
 #include "esp_hosted.h"
 #include "esp_hosted_ota.h"
 #include "secrets.h"
 
-#define APP_BUILD_TAG "v55-controls"
+#define APP_BUILD_TAG "v56-replica"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -222,6 +223,7 @@ static void display_task(void *pv)
         snprintf(m, sizeof(m), "{\"display\":\"online\",\"panel\":\"jd9365\",\"res\":\"800x1280\",\"build\":\"%s\"}", APP_BUILD_TAG);
         ESP_LOGW(TAG, ">>> DISPLAY ONLINE <<<");
         ui_tiles_start(BFF_BASE_URL "/api/v1/sensors");   // server-backed tiles from the BFF
+        ha_replica_start(BFF_BASE_URL);                   // ADR-0022 Phase 1a: mirror the rung DB to SD
     } else {
         snprintf(m, sizeof(m), "{\"display\":\"failed\",\"err\":\"%s\",\"build\":\"%s\"}", esp_err_to_name(err), APP_BUILD_TAG);
         ESP_LOGE(TAG, "display init failed: %s (device stays live on the bus)", esp_err_to_name(err));
