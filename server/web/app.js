@@ -644,6 +644,8 @@ const GRAPHABLE = [
   { key: "aqi", unit: "", color: "#fbbf24", label: "AQI" },
   { key: "voc_index", unit: "", color: "#34d399", label: "VOC Index" },
   { key: "voc_raw", unit: "", color: "#6ee7b7", label: "VOC (raw)" },
+  { key: "eco2", unit: "ppm", color: "#f59e0b", label: "eCO₂" },
+  { key: "tvoc", unit: "ppb", color: "#a3e635", label: "TVOC" },
   { key: "power_w", unit: "W", color: "#f59e0b", label: "Power" },
   { key: "energy_today_kwh", unit: "kWh", color: "#eab308", label: "Energy today" },
 ];
