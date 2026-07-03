@@ -25,6 +25,7 @@
 #include "ui/ui_admin.h"    // admin session + top-bar toast/gear + idle auto-lock (ADR-0020)
 #include "ui/ui_scenes.h"   // top-bar row + whole-house scene selector (ADR-0020)
 #include "ui/ui_controls.h" // actuator cards + command overlay (ADR-0020)
+#include "ui/ui_power.h"    // top-bar power-off button + confirm (ADR-0020)
 
 static const char *TAG = "ui";
 #define REFRESH_MS 10000
@@ -171,6 +172,8 @@ void ui_tiles_start(const char *sensors_url)
     // ui_admin appended [toast, gear]; slot the battery between them (index 2 = after toast,
     // before the trailing gear) to preserve the original scenebox/toast/battery/gear order.
     lv_obj_move_to_index(s_batt_lbl, 2);
+
+    ui_power_init(topbar);                    // trailing red power-off button + confirm (ui/ui_power)
 
     s_header = lv_label_create(scr);
     lv_label_set_text(s_header, "Home  -  loading...");

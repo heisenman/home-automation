@@ -34,6 +34,16 @@ static sdmmc_card_t *s_card;
 static const char *s_mount;
 static bool s_mounted;
 
+// The P4 has ONE SDMMC host, shared: the C6 WiFi SDIO link owns slot 1 (esp-hosted), this card
+// mounts slot 0. On a mount failure (no/dead card), esp_vfs_fat_sdmmc_mount() runs its cleanup
+// and calls host.deinit_p(slot) == sdmmc_host_deinit_slot(0), which frees the host-GLOBAL
+// transaction semaphore — so the next WiFi SDIO transaction on slot 1 hits xQueueSemaphoreTake
+// (NULL) and panics (bootloops when no SD card is inserted). We do NOT own the host lifecycle
+// (esp-hosted does), so neuter both deinit hooks: a card miss then leaves the shared host — and
+// slot 1 — untouched. Nothing unmounts the card at runtime, so losing deinit costs us nothing.
+static esp_err_t sd_host_deinit_noop(void)        { return ESP_OK; }
+static esp_err_t sd_host_deinit_slot_noop(int slot){ (void)slot; return ESP_OK; }
+
 esp_err_t ha_sdcard_mount(const ha_sdcard_cfg_t *cfg)
 {
     if (s_mounted) return ESP_OK;
@@ -61,6 +71,8 @@ esp_err_t ha_sdcard_mount(const ha_sdcard_cfg_t *cfg)
     host.slot = c.slot;
     host.max_freq_khz = c.max_freq_khz;
     host.pwr_ctrl_handle = pwr;
+    host.deinit   = sd_host_deinit_noop;        // never tear down the shared host on a card miss
+    host.deinit_p = sd_host_deinit_slot_noop;   // (SDMMC_HOST_FLAG_DEINIT_ARG picks this one)
 
     sdmmc_slot_config_t slot = { .cd = SDMMC_SLOT_NO_CD, .wp = SDMMC_SLOT_NO_WP,
                                  .width = (uint8_t)c.width, .flags = 0 };

@@ -50,6 +50,17 @@ esp_err_t bsp_display_brightness(int percent);
 // Safe no-op if the display was never brought up.
 void bsp_display_off(void);
 
+// Full hardware power-off: releases the PWR_HOLD latch (PCA9535 P8) that holds the main VDD_3V3
+// rail up. On battery the rail collapses immediately and this never returns (device OFF, so
+// unplugging USB no longer drains the cell). While USB is attached, VBUS holds the rail up so
+// this RETURNS — the device stays powered until USB is unplugged. NON-BLOCKING and safe to call
+// from an LVGL callback. Power back on = physical side button (hardware latch) or plugging USB.
+void bsp_power_off(void);
+
+// Re-assert the PWR_HOLD rail latch, undoing a bsp_power_off() while USB still holds the device
+// up (i.e. the user cancelled before unplugging). After this, a USB unplug will NOT power off.
+void bsp_power_rearm(void);
+
 // Screen on/off toggle for the back button (GPIO3). UNLIKE bsp_display_off(),
 // this KEEPS the panel power rail up (only backlight + DSI display-on) so wake is
 // instant with NO re-init — LVGL and the panel config stay live. Idempotent.

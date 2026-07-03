@@ -323,6 +323,32 @@ void bsp_display_off(void)
     s_screen_on = false;
 }
 
+// Full hardware power-off: release the PWR_HOLD latch (PCA9535 P8) that holds the main
+// VDD_3V3 rail up. The rail collapses and the device is truly OFF — so unplugging USB no
+// longer just drains the battery (we no longer boot from battery). Power back ON is the
+// physical side button (a hardware CJ3407 latch, NOT firmware-reachable) or plugging USB in.
+// There is no firmware-readable power button on the D1001, so this is the only firmware
+// shutdown path. Normally does not return.
+void bsp_power_off(void)
+{
+    ESP_LOGW(TAG, "power off: releasing PWR_HOLD (vdd_3v3 latch)");
+    // Release the rail hold. On battery, VDD_3V3 collapses right here and we never return. While
+    // USB is attached, VBUS keeps PWR_ON asserted so the rail stays up and we DO return — the
+    // caller keeps the UI alive telling the user to unplug USB to finish. Deliberately
+    // NON-BLOCKING: this runs in an LVGL click callback, so it must not spin/delay (that would
+    // freeze the UI whenever the device is USB-powered, e.g. on the bench).
+    if (io_expander)
+        esp_io_expander_set_level(io_expander, EXP_PWR_HOLD, 0);
+}
+
+void bsp_power_rearm(void)
+{
+    // Undo bsp_power_off() while USB is still holding the device up (user cancelled). Re-latches
+    // the VDD_3V3 rail so a later USB unplug will NOT power the device down.
+    if (io_expander)
+        esp_io_expander_set_level(io_expander, EXP_PWR_HOLD, 1);
+}
+
 // --- Back-button screen toggle (keeps the panel rail powered => instant, no re-init) ---
 void bsp_display_sleep(void)
 {
