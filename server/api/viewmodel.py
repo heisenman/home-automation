@@ -180,6 +180,78 @@ def build_sensor_list(hot_conn, now: float, meta: dict | None = None,
 _CONTROL_METRIC_BY_STRATEGY = {"threshold_ranged": "pm25_ugm3"}
 
 
+# ── Controls spec (shared-ui-spec contract, Phase 0) — server-authored, render-ready control descriptors.
+# Both renderers (PWA `app.js` + D1001 LVGL panel) iterate `vm.controls` and switch on `kind`; neither
+# re-derives ranges, labels, admin-gating, or the action contract. Mirrors the client logic this replaces
+# (`app.js` OverrideControls/ManualControl) and the ranges `traits.validate_command` enforces (server stays
+# the authority). Raw `traits` is kept on the vm during migration for back-compat. ──
+_RANGED_LEVEL_LABELS = {2: ["Low", "High"], 3: ["Low", "Med", "High"]}   # else numeric — matches app.js
+_CMD_PATH = "/devices/{id}/command"
+
+
+def _ranged_options(cfg: dict) -> list[dict]:
+    """Enumerate a ranged trait's levels → [{value,label}], identical to app.js range()/steps()."""
+    lo, hi = int(cfg.get("min", 0)), int(cfg.get("max", 100))
+    step = cfg.get("step")
+    vals = list(range(lo, hi + 1, int(step))) if step else list(range(lo, hi + 1))   # inclusive of hi
+    names = _RANGED_LEVEL_LABELS.get(len(vals))
+    return [{"value": v, "label": names[i] if names else str(v)} for i, v in enumerate(vals)]
+
+
+def _setpoint_label(cfg: dict) -> tuple[str, str]:
+    unit = cfg.get("unit", "")
+    if unit in ("%", "%RH", "pct", "percent"):
+        return "Target humidity", "%"
+    if unit in ("degC", "°C", "C", "celsius"):
+        return "Target temperature", "°C"
+    return "Setpoint", unit
+
+
+def build_controls(traits_cfg: dict | None) -> list[dict]:
+    """Ordered, render-ready control descriptors for a controllable device (shared-ui-spec Phase 0).
+    `override` is always present (every build_display device has a control policy); setpoint/ranged/
+    indicator are emitted iff the device's traits_cfg declares that trait. Ranges/labels/admin/action are
+    fully specified so both renderers stop deriving them client-side. A per-trait cfg `label` overrides
+    the default (future device needs no client change)."""
+    controls: list[dict] = [{
+        "kind": "override", "label": "Power", "admin": True,
+        "action": {"method": "POST", "path": "/control/{id}/override"},
+        "presets": [
+            {"action": "off",      "duration_min": 60, "label": "Off 1h"},
+            {"action": "boost_on", "duration_min": 60, "label": "Boost 1h"},
+            {"action": "clear",    "label": "Resume auto", "when": "override_active"},
+        ],
+        "state": {"from": "override"},
+    }]
+    tc = traits_cfg or {}
+    if "setpoint" in tc:
+        cfg = tc.get("setpoint") or {}
+        label, unit = _setpoint_label(cfg)
+        c = {"kind": "setpoint", "trait": "setpoint", "label": cfg.get("label") or label, "unit": unit,
+             "admin": True, "now_key": "target_pct",
+             "action": {"method": "POST", "path": _CMD_PATH, "trait": "setpoint", "action": "set",
+                        "arg_key": "value"}}
+        for k in ("min", "max", "safe_value"):
+            if k in cfg:
+                c[k] = cfg[k]
+        controls.append(c)
+    if "ranged" in tc:
+        cfg = tc.get("ranged") or {}
+        controls.append({
+            "kind": "ranged", "trait": "ranged", "label": cfg.get("label") or "Fan speed", "admin": True,
+            "options": _ranged_options(cfg), "now_key": "fan_speed",
+            "action": {"method": "POST", "path": _CMD_PATH, "trait": "ranged", "action": "set",
+                       "arg_key": "level"}})
+    if "indicator" in tc:
+        cfg = tc.get("indicator") or {}
+        controls.append({
+            "kind": "indicator", "trait": "indicator", "label": cfg.get("label") or "LED / panel light",
+            "admin": True, "now_key": "led_on",
+            "action": {"method": "POST", "path": _CMD_PATH, "trait": "indicator", "action": "set",
+                       "arg_key": "on"}})
+    return controls
+
+
 def build_display(control_conn, hot_conn, device_id: str, now: float, registry=None,
                   meta: dict | None = None) -> dict | None:
     """Compose the display view-model for one controllable device. None if it has no control policy.
@@ -275,7 +347,8 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         "sensor": sensor,
         "onboard": onboard,
         "actuator": actuator,
-        "traits": traits,
+        "traits": traits,                              # raw — kept for back-compat during migration
+        "controls": build_controls(traits),            # shared-ui-spec: server-authored render-ready controls
         "recent_decisions": [{"ts": r["ts"], "source": r["source"], "reason": r["reason"],
                               "acted": r["acted"]} for r in (snap.get("recent_log") or [])[:8]],
         "override": snap["override"],
