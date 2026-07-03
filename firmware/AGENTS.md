@@ -20,8 +20,16 @@ firmware/
 
 **New capability = a new module. Never new lines in a god-file, never a fourth `cp -r` copy.**
 
-This is not a style preference; it is the standing rule for all firmware work. Before adding a
-feature, extract the seam **first**:
+This is not a style preference; it is the standing rule for all firmware work.
+
+**⛔ HARD LINE (Hugh, 2026-07-03): every new feature goes through a modularity-decomposition step
+BEFORE any code is written.** Answer "how much of this becomes modules?" up front — name the shared
+reusable modules vs. the thin device-specific glue, and the boundaries/interfaces (injected
+actuators, config) — as part of the design/ADR/plan. No decomposition, no dev. (Proven on the
+battery-power-policy work: [ADR-0024](../docs/adr/ADR-0024-battery-monitoring-standard.md) split it
+into `ha_battery` / `ha_battery_profile` / `ha_power_policy` + board glue before a line was written.)
+
+Before adding a feature, extract the seam **first**:
 
 - **Shared across devices** → a real IDF component under `firmware/components/<module>/` with a
   header contract + platform-support note (this tree). Platform differences become caller hooks/cfg
