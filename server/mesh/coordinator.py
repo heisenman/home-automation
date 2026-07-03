@@ -19,6 +19,7 @@ import logging
 import os
 import sqlite3
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -70,6 +71,7 @@ def build_directive(relay_macs: list[str], epoch: int, ttl_s: int = 3600) -> dic
 DEFAULT_DWELL_S = 900.0          # decision #5: a node's set must hold this long before we re-publish
 RELAY_TOPIC = "home/edge/{node}/relay"
 REACH_REQ_TOPIC = "home/edge/{node}/reach/req"   # ADR-0023: signed census trigger (server-push cadence)
+EVENT_TOPIC = "home/edge/+/event"                # ADR-0023 inverse: node-pushed state-change events
 
 
 def sign_envelope(secret: str, payload: dict) -> dict:
@@ -99,6 +101,102 @@ def trigger_reach(client, lut: dict) -> int:
         client.publish(REACH_REQ_TOPIC.format(node=nid), json.dumps(env), qos=1, retain=False)
         n += 1
     return n
+
+
+# ── ADR-0023 inverse: event-driven reconcile ─────────────────────────────────────────────────────────
+# The census (trigger_reach) is the server-PUSH cadence: we ask, nodes report. This is its INVERSE — a
+# node PUSHES a state-change event (retained, on home/edge/<node>/event) the instant its relay posture
+# flips, so the coordinator can reconcile *now* instead of waiting for the next --loop pass. Asymmetric by
+# design: a relay-DROP is urgent (a source just vanished — recompute promptly so a neighbour takes over),
+# a relay-RETURN is lazy (dwelled, like any steady rebalance — no need to churn epochs for a node that
+# might flap). Events are unsigned/LAN-trusted because they only ever PROMPT a recompute from already-
+# verified reach in mesh.db; they can't inject a directive. Pure decision core here, thread shell in main().
+
+def parse_event(topic: str, payload) -> tuple:
+    """home/edge/<node>/event + JSON {node,kind,state:{on_wall,relaying,censusing},ts} → (node, state).
+    Returns (None, None) on any malformed topic/payload/state so a bad publish can never crash the loop."""
+    parts = topic.split("/")
+    if len(parts) != 4 or parts[0] != "home" or parts[1] != "edge" or parts[3] != "event":
+        return None, None
+    node = parts[2]
+    try:
+        msg = json.loads(payload)
+    except (ValueError, TypeError):
+        return None, None
+    state = msg.get("state") if isinstance(msg, dict) else None
+    if not isinstance(state, dict):
+        return None, None
+    return node, state
+
+
+class EventReconciler:
+    """Maps a node's observed state to a reconcile *intent* on a `relaying` transition (nothing else).
+    Stateful only in the last-seen state per node; the very first event for a node (typically the retained
+    snapshot delivered on subscribe) is NOT a transition, so it records and returns None — this is what
+    stops a reconcile storm at startup. Pure + deterministic → unit-tested without threads or MQTT."""
+
+    def __init__(self, dwell_return: float = DEFAULT_DWELL_S):
+        self._prev: dict[str, dict] = {}
+        self._dwell_return = dwell_return
+
+    def observe(self, node: str, state: dict) -> dict | None:
+        prev = self._prev.get(node)
+        self._prev[node] = state
+        if prev is None:
+            return None                                    # first sighting / retained snapshot: no transition
+        was, now = bool(prev.get("relaying")), bool(state.get("relaying"))
+        if was and not now:                                # relay dropped → urgent, census-then-reconcile now
+            return {"node": node, "dwell_s": 0.0, "census": True, "reason": "relay-drop"}
+        if not was and now:                                # relay returned → lazy, dwelled like any rebalance
+            return {"node": node, "dwell_s": self._dwell_return, "census": False, "reason": "relay-return"}
+        return None                                        # relaying unchanged → nothing to do
+
+
+class EventDispatcher:
+    """Coalesce + per-node rate-limit around EventReconciler. Time is injected (`now`) so the whole
+    scheduler is unit-testable with a fake clock. A drop's census fires IMMEDIATELY (once per pending
+    window) so neighbour reach freshens in mesh.db *during* the coalesce delay — by the time the reconcile
+    actually runs it sees the post-drop graph. The reconcile itself is deferred `coalesce_s` (a burst of
+    events for one node collapses to a single recompute) and throttled to one per `rate_limit_s`."""
+
+    def __init__(self, reconciler: EventReconciler, coalesce_s: float = 5.0, rate_limit_s: float = 30.0):
+        self.r = reconciler
+        self.coalesce_s = coalesce_s
+        self.rate_limit_s = rate_limit_s
+        self._pending: dict[str, dict] = {}                # node -> {intent, ready_at, census_fired}
+        self._last_fire: dict[str, float] = {}
+
+    def observe(self, node: str, state: dict, now: float) -> dict | None:
+        """Feed one event. Returns {'census_now': bool} when a census should be published right now
+        (drop only, once per window), else None. The reconcile it schedules surfaces later via due()."""
+        intent = self.r.observe(node, state)
+        if intent is None:
+            return None
+        slot = self._pending.get(node, {})
+        slot["intent"] = intent                            # newest intent for a node wins
+        slot["ready_at"] = now + self.coalesce_s           # a fresh event resets the coalesce window
+        self._pending[node] = slot
+        fire = bool(intent["census"]) and not slot.get("census_fired")
+        if fire:
+            slot["census_fired"] = True
+        return {"census_now": fire} if fire else None
+
+    def due(self, now: float) -> list[dict]:
+        """Intents whose coalesce window elapsed and that pass the per-node rate-limit. Rate-limited nodes
+        stay pending (their window is pushed out), so an event is deferred, never dropped."""
+        out = []
+        for node in list(self._pending):
+            slot = self._pending[node]
+            if now < slot["ready_at"]:
+                continue
+            last = self._last_fire.get(node)
+            if last is not None and now - last < self.rate_limit_s:
+                slot["ready_at"] = last + self.rate_limit_s
+                continue
+            out.append(slot["intent"])
+            self._last_fire[node] = now
+            del self._pending[node]
+        return out
 
 
 def _state(epoch, published, pending, since) -> dict:
@@ -208,7 +306,8 @@ def _load_lut(a) -> dict:
 
 def _connect(a):
     mp = a.mesh_db if a.mesh_db.is_absolute() else REPO_ROOT / a.mesh_db
-    conn = sqlite3.connect(str(mp))
+    # check_same_thread=False: the event thread and the main --loop share this conn, serialized by a lock.
+    conn = sqlite3.connect(str(mp), check_same_thread=False)
     mesh_store.ensure_schema(conn)
     return conn
 
@@ -225,6 +324,12 @@ def main() -> None:
     p.add_argument("--dwell", type=float, default=DEFAULT_DWELL_S,
                    help="seconds a changed allowlist must hold before re-publishing (debounce)")
     p.add_argument("--only", default="", help="comma-separated node ids to limit this pass to (canary)")
+    p.add_argument("--events", dest="events", action="store_true", default=True,
+                   help="subscribe home/edge/+/event for event-driven reconcile (default on with --publish --loop)")
+    p.add_argument("--no-events", dest="events", action="store_false",
+                   help="disable event-driven reconcile; rely only on the periodic --loop backstop")
+    p.add_argument("--event-coalesce", type=float, default=5.0, help="event-driven reconcile coalesce window (s)")
+    p.add_argument("--event-rate-limit", type=float, default=30.0, help="min seconds between event-driven reconciles per node")
     p.add_argument("--broker", default=os.environ.get("HA_BROKER", "localhost"))
     p.add_argument("--port", type=int, default=int(os.environ.get("HA_BROKER_PORT", "1883")))
     p.add_argument("--log-level", default="INFO")
@@ -263,8 +368,11 @@ def main() -> None:
 
     only = {n.strip() for n in a.only.split(",") if n.strip()} or None
 
+    db_lock = threading.Lock()          # serializes conn/relay_state writes across the loop + event threads
+
     def one_pass():
-        out = publish_pass(conn, dev_to_mac, lut, client=client, dwell_s=a.dwell, only=only)
+        with db_lock:
+            out = publish_pass(conn, dev_to_mac, lut, client=client, dwell_s=a.dwell, only=only)
         # ADR-0023: after reconciling on the reach we already have, ask every node to re-census. Their
         # responses land during the --loop sleep and sharpen the NEXT pass (organic rebalance, no fossils).
         triggered = trigger_reach(client, lut) if client else 0
@@ -274,12 +382,49 @@ def main() -> None:
               f"reach-triggered={triggered}")
         return out
 
+    # ── ADR-0023 inverse: event-driven reconcile (live client + looping only) ────────────────────────
+    stop = threading.Event()
+    ev_thread = None
+    events_on = bool(client) and a.loop > 0 and a.events
+    if events_on:
+        dispatcher = EventDispatcher(EventReconciler(dwell_return=a.dwell),
+                                     coalesce_s=a.event_coalesce, rate_limit_s=a.event_rate_limit)
+
+        def on_event_message(_cl, _ud, msg):
+            node, state = parse_event(msg.topic, getattr(msg, "payload", b""))
+            if node is None:
+                return
+            res = dispatcher.observe(node, state, time.time())
+            if res and res.get("census_now"):              # drop → freshen neighbour reach during coalesce
+                trigger_reach(client, lut)
+                print(f"# event: {node} relay-drop → census fired, reconcile in {a.event_coalesce:.0f}s")
+
+        client.on_message = on_event_message
+        client.subscribe(EVENT_TOPIC, qos=1)
+
+        def event_loop():
+            while not stop.is_set():
+                for it in dispatcher.due(time.time()):
+                    with db_lock:
+                        publish_pass(conn, dev_to_mac, lut, client=client,
+                                     dwell_s=it["dwell_s"], only={it["node"]})
+                    print(f"# event-reconcile: {it['node']} ({it['reason']}) dwell={it['dwell_s']:.0f}s")
+                stop.wait(1.0)
+
+        ev_thread = threading.Thread(target=event_loop, name="event-reconcile", daemon=True)
+        ev_thread.start()
+        print(f"# event-driven reconcile ARMED: {EVENT_TOPIC} "
+              f"(coalesce {a.event_coalesce:.0f}s, rate-limit {a.event_rate_limit:.0f}s/node)")
+
     try:
         one_pass()
         while a.loop > 0:
             time.sleep(a.loop)
             one_pass()
     finally:
+        stop.set()
+        if ev_thread is not None:
+            ev_thread.join(timeout=2.0)
         if client is not None:
             client.loop_stop()
             client.disconnect()
