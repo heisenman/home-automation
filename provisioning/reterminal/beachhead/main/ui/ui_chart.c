@@ -4,18 +4,21 @@
 // discards the result safely.
 #include "ui/ui_chart.h"
 #include "ui/ui_expand.h"   // s_exp[] registry + struct expand_ref
-#include "ui/ui_http.h"     // ui_http_get / ui_http_base
+#include "ui/ui_http.h"     // ui_http_get / ui_http_base (network fallback)
 #include "ui/ui_format.h"   // struct gspec, MAX_GRAPHS, disp_val
+#include "ha_replica.h"     // ha_replica_rung_query — local SD rung replica (ADR-0022 Phase 1b)
 #include <stdio.h>
 #include <string.h>
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/queue.h"
 #include "esp_heap_caps.h"
+#include "esp_log.h"
 #include "cJSON.h"
 #include "lvgl.h"
 #include "esp_lvgl_port.h"
 
+static const char *TAG = "ui.chart";
 #define CHART_SCALE 100      // ints for lv_chart; preserves 2 decimals
 
 struct chart_req { int slot; uint32_t epoch; };   // -> chart_worker (which expansion to fill)
@@ -70,31 +73,47 @@ static void chart_worker(void *pv)
             }
             lvgl_port_unlock();
         }
+        static double raw[GRAPH_POINTS];
         for (int i = 0; i < ngraph; i++) {
-            char url[384];
-            snprintf(url, sizeof(url), "%s/devices/%s/readings?metric=%s&hours=%d&limit=%d",
-                     ui_http_base(), id, g[i].key, GRAPH_HOURS, GRAPH_POINTS);
-            int len = 0; char *buf = ui_http_get(url, &len);
             int n = 0; int32_t vmin = 0, vmax = 0;
-            if (buf && len > 0) {
-                cJSON *root = cJSON_Parse(buf);
-                cJSON *arr = root ? cJSON_GetObjectItem(root, "readings") : NULL;
-                if (cJSON_IsArray(arr)) {
-                    cJSON *r;
-                    cJSON_ArrayForEach(r, arr) {
-                        if (n >= GRAPH_POINTS) break;
-                        cJSON *v = cJSON_GetObjectItem(r, "value");
-                        if (!cJSON_IsNumber(v)) continue;
-                        int32_t sv = (int32_t)(disp_val(g[i].unit, v->valuedouble) * CHART_SCALE);   // °C→°F for temp charts
-                        vals[n] = sv;
-                        if (n == 0 || sv < vmin) vmin = sv;
-                        if (n == 0 || sv > vmax) vmax = sv;
-                        n++;
-                    }
+            // Local-first: the resolution-selected vmean series from the SD rung replica. Falls back
+            // to the BFF readings endpoint when the replica isn't present yet or has no rows for this
+            // device/metric (cold-start window + resilience). disp_val handles °C→°F for temp charts.
+            int m = ha_replica_rung_query(id, g[i].key, GRAPH_HOURS, raw, GRAPH_POINTS);
+            if (m > 0) {
+                for (int k = 0; k < m; k++) {
+                    int32_t sv = (int32_t)(disp_val(g[i].unit, raw[k]) * CHART_SCALE);
+                    vals[k] = sv;
+                    if (k == 0 || sv < vmin) vmin = sv;
+                    if (k == 0 || sv > vmax) vmax = sv;
                 }
-                if (root) cJSON_Delete(root);
+                n = m;
+            } else {
+                char url[384];
+                snprintf(url, sizeof(url), "%s/devices/%s/readings?metric=%s&hours=%d&limit=%d",
+                         ui_http_base(), id, g[i].key, GRAPH_HOURS, GRAPH_POINTS);
+                int len = 0; char *buf = ui_http_get(url, &len);
+                if (buf && len > 0) {
+                    cJSON *root = cJSON_Parse(buf);
+                    cJSON *arr = root ? cJSON_GetObjectItem(root, "readings") : NULL;
+                    if (cJSON_IsArray(arr)) {
+                        cJSON *r;
+                        cJSON_ArrayForEach(r, arr) {
+                            if (n >= GRAPH_POINTS) break;
+                            cJSON *v = cJSON_GetObjectItem(r, "value");
+                            if (!cJSON_IsNumber(v)) continue;
+                            int32_t sv = (int32_t)(disp_val(g[i].unit, v->valuedouble) * CHART_SCALE);   // °C→°F for temp charts
+                            vals[n] = sv;
+                            if (n == 0 || sv < vmin) vmin = sv;
+                            if (n == 0 || sv > vmax) vmax = sv;
+                            n++;
+                        }
+                    }
+                    if (root) cJSON_Delete(root);
+                }
+                if (buf) heap_caps_free(buf);
             }
-            if (buf) heap_caps_free(buf);
+            ESP_LOGI(TAG, "chart %s <- %s (%d pts)", g[i].key, m > 0 ? "rung(SD)" : "http", n);
             if (!chart_fill(rq.slot, rq.epoch, i, vals, n, vmin, vmax))
                 break;   // expansion closed mid-fetch — stop working this request
         }
@@ -111,5 +130,6 @@ void ui_chart_request(int slot, uint32_t epoch)
 void ui_chart_start(void)
 {
     s_chart_q = xQueueCreate(4, sizeof(struct chart_req));   // expansion chart fetches
-    xTaskCreate(chart_worker, "uichart", 8192, NULL, 4, NULL);
+    // 16 KB stack: chart_worker now opens sqlite (ha_replica_rung_query) on this task (Phase 1b).
+    xTaskCreate(chart_worker, "uichart", 16384, NULL, 4, NULL);
 }
