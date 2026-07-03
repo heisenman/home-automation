@@ -74,6 +74,11 @@ The `ha_power_policy` decisions are reused unchanged on the next device — only
    anchor + symmetric EMA (ratchet killed). **Flashed + HW-verified 2026-07-03:** first boot read `soc=100` on
    wall/terminated — first 100% in this device's history. Meter-validate the mid-band on battery; the residual
    near-extreme offset error closes with multi-point offset characterization (the harness run).
+   **v4 observation (2026-07-03, Hugh):** on unplugging a *full* cell the panel jumped 100%→91% — the
+   terminated-100% anchor dropping onto the v3 curve at the just-unplugged voltage (on battery the offsets are
+   zero, so this is OCV-vs-loaded settle + the SoC-dependent near-full offset that constant offsets can't
+   cancel). The v4 discharge log **captured this exact unplug transition** → re-anchor base-frame 100% from it
+   (as v3 did), which shrinks the jump; fully removing it needs the multi-point offset run.
 
 ### B. Shutdown at 0% (`ha_battery` → `bsp_power_off`)
 - When `SoC ≤ 0`, call `bsp_power_off()` immediately (rail latch release — validated today). Debounce lightly
