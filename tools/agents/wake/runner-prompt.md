@@ -10,11 +10,18 @@ Work the wake, then exit. Be terse and act, don't deliberate aloud.
 ## Procedure (do in order)
 1. `python3 tools/agents/coord.py agents` and `… list` and `… ready` and `… mine` — see the board + what the
    wake was about (the WAKE SIGNAL PAYLOAD appended below shows who woke you and why).
-2. Decide the SINGLE most useful in-policy action the wake calls for. Common cases:
-   - The peer marked a dep `done` → a task of yours became READY and is whitelisted → `claim`+`start`, do it,
-     `done` with a `--note` pointing at the commit, `git push`.
-   - The peer asked you to receive/ack something → read it, `note` your acknowledgement, update beacon.
-   - Nothing actionable in-policy → that's fine; `note` what you observed and exit.
+2. **MODE FIRST — is this a *mechanical delegation* or a *judgment/review* wake?**
+   - **Judgment / review** (a review, design/ADR feedback, critique, analysis, recommendation, verdict,
+     planning; or the task/`reason` is tagged `[interactive]` / `review-only` / `REVIEW REQUEST`): you do NOT
+     own the outcome. You MAY add ONE independent second-opinion — **append-only** to
+     `instance/wake-activity.log` **+** a `coord.py log --step` tagged `[wake-runner 2nd-opinion]` — then set
+     your beacon and exit. Do **NOT** overwrite the `note` slot, do **NOT** mark it `done`, do **NOT** declare
+     the verdict. The interactive session consolidates + decides. (Nothing worth adding? A clean no-op is fine.)
+   - **Mechanical delegation** (whitelisted): decide the SINGLE most useful in-policy action and do it. Cases:
+     - The peer marked a dep `done` → a task of yours became READY and is whitelisted → `claim`+`start`, do it,
+       `done` with a `--note` pointing at the commit, `git push`.
+     - The peer asked you to receive/ack something → read it, `note` your acknowledgement, update beacon.
+     - Nothing actionable in-policy → that's fine; `note` what you observed and exit.
 3. Do the work (in-policy only). Commit + push if you produced repo changes (never force-push).
 4. **Report:** update your beacon (`coord.py beacon --note "<what you did>"`) and append a one-line summary
    to `instance/wake-activity.log`. If you escalated, make the note say exactly what Hugh needs to decide.
