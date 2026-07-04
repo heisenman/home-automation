@@ -41,10 +41,20 @@ retained MQTT state on wake. HTTP snapshot is simpler, gives one coherent frame,
 wake." Retained-MQTT stays open as an optimization if wake-time latency hurts.) In **dev mode** (always awake,
 `deep_sleep` disabled) we poll on a timer so the render loop is OTA-iterable without sleep cycles.
 
-## Component decomposition (module-first; ESPHome external component `e1001_ui`)
-ESPHome gave us the platform but **no declarative tile engine** (LVGL was that for the D1001). So the renderer is
-a **custom ESPHome external component** — the supported extension path, keeps everything OTA-iterable, and lets
-"a fixed library of tile primitives" be plain C++ classes. Four seams, each independently testable:
+## Implementation vehicle — native ESPHome, not an external component (decided 2026-07-03)
+Two ways to add custom logic in ESPHome: (A) a formal **external component** (Python codegen + C++ + registration)
+or (B) **native YAML** (`http_request` + `json` + a display `lambda`). **Both compile to the same native C++ in
+one binary → identical runtime perf and power** (ESPHome codegen isn't interpreted at runtime); the only
+difference is code organization. The battery cost lives entirely in the wake cycle (WiFi + fetch + the ~5 s
+blocking ePaper refresh), which is identical either way. So we build **native (B)** — fastest to a working
+spec-driven panel on the proven OTA loop — and extract to an external component only if a *second* ePaper device
+ever needs to share the code. The four seams below still structure the work; they're just realized as
+`http_request` (fetch) → `json::parse_json` into globals (parse) → display `lambda` (layout + tiles) rather than
+C++ classes. `components/e1001_ui/` keeps the data-model header + fixtures for that potential later extraction.
+
+## Seam decomposition (module-first, realized natively)
+ESPHome gave us the platform but **no declarative tile engine** (LVGL was that for the D1001). Four seams, each
+independently reasoned:
 
 1. **Spec ingestion** (`spec_client`): an HTTP GET + JSON parse (ArduinoJson, already in ESPHome) producing an
    in-RAM `PanelModel { sensors[], metrics[], alerts[], scene }`. Pure transform, host-testable against a

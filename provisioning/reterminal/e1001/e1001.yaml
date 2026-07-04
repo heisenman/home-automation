@@ -13,6 +13,7 @@ substitutions:
   device_name: e1001-bench          # rename to e1001-<area> when it's mounted
   friendly_name: "reTerminal E1001 (bench)"
   wifi_ap_ssid: "e1001-bench-fallback"
+  bff_base_url: "http://192.168.0.210:8123"   # FastAPI BFF; read endpoints are open on the LAN (no auth on GET)
 
 esphome:
   name: ${device_name}
@@ -57,6 +58,11 @@ mqtt:
   broker: 192.168.0.210              # dictator real IP (VIP .200 unreachable from CTWap_24g wifi)
   port: 1883
 
+http_request:                        # P4c: fetch the server-authored spec (BFF) — plain GET, open on LAN
+  useragent: esphome/e1001
+  timeout: 8s
+  verify_ssl: false
+
 # --- ePaper display (UC8179, 7.5" mono 800x480) — P4b: prove the display path ---
 spi:
   clk_pin: GPIO7
@@ -85,7 +91,7 @@ display:
     busy_pin:
       number: GPIO13
       inverted: true                 # BUSY# is active-low on the schematic
-    rotation: 0
+    rotation: 270                    # portrait, USB port toward floor; lambda uses get_width/height so it reflows
     update_interval: never           # ePaper: draw on-demand (deep-sleep model), not on a timer.
     lambda: |-                       # P4b.1: live onboard values (proves the text/font path + data binding).
       int w = it.get_width(), h = it.get_height();
@@ -93,14 +99,14 @@ display:
       it.print(w / 2, 14, id(font_title), TextAlign::TOP_CENTER, "reTerminal E1001");
       it.line(0, 60, w, 60);
       int y = 96;
-      if (id(sht_temp).has_state()) it.printf(48, y, id(font_val), "Temp      %.1f C", id(sht_temp).state);
-      else it.print(48, y, id(font_val), "Temp      --");
+      if (id(sht_temp).has_state()) it.printf(24, y, id(font_val), "Temp: %.1f C", id(sht_temp).state);
+      else it.print(24, y, id(font_val), "Temp: --");
       y += 84;
-      if (id(sht_hum).has_state()) it.printf(48, y, id(font_val), "Humidity  %.0f %%", id(sht_hum).state);
-      else it.print(48, y, id(font_val), "Humidity  --");
+      if (id(sht_hum).has_state()) it.printf(24, y, id(font_val), "Hum: %.0f %%", id(sht_hum).state);
+      else it.print(24, y, id(font_val), "Hum: --");
       y += 84;
-      if (id(batt_v).has_state()) it.printf(48, y, id(font_val), "Battery   %.2f V", id(batt_v).state);
-      else it.print(48, y, id(font_val), "Battery   --");
+      if (id(batt_v).has_state()) it.printf(24, y, id(font_val), "Batt: %.2f V", id(batt_v).state);
+      else it.print(24, y, id(font_val), "Batt: --");
       it.printf(w / 2, h - 26, id(font_label), TextAlign::BOTTOM_CENTER, "uptime %.0f s", id(uptime_s).state);
 
 # --- Onboard temp/humidity (the [sensor] role, proven on first flash) ---
@@ -204,6 +210,17 @@ button:
     name: "Refresh Display"          # redraw the ePaper on demand (e1001-bench/button/refresh_display/command)
     on_press:
       - component.update: epaper
+  - platform: template
+    name: "Fetch Spec"               # P4c.0: prove the E1001 can reach the BFF over wifi (logs status/size to MQTT)
+    on_press:
+      - http_request.get:
+          url: ${bff_base_url}/api/v1/sensors
+          capture_response: true
+          max_response_buffer_size: 24kB   # /api/v1/sensors ~10KB (16 sensors); default truncates it
+          on_response:
+            - lambda: |-
+                ESP_LOGI("spec", "GET /api/v1/sensors -> HTTP %d, %d bytes, %d ms",
+                         response->status_code, body.length(), response->duration_ms);
 
 text_sensor:
   - platform: debug
