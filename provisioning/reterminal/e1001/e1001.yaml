@@ -25,6 +25,19 @@ esphome:
     - priority: -100                 # after everything is up: one-shot draw (update_interval is 'never', ePaper style)
       then:
         - component.update: epaper
+    - priority: -200                 # LAST: P4e Step 1 — read the buttons AFTER the display draw and settle time.
+      then:                          # Held button at boot => "stay awake for OTA" (the escape hatch for Step 2's sleep).
+        - delay: 300ms               # let the gpio binary_sensors publish their initial state before we read them
+        - if:
+            condition:
+              lambda: 'return id(btn_green).state || id(btn_right).state || id(btn_left).state;'
+            then:
+              - lambda: 'id(g_stay_awake) = true;'
+              - lambda: 'ESP_LOGW("ota", "BUTTON HELD AT BOOT -> STAY-AWAKE (OTA mode). Deep-sleep will be gated.");'
+              - binary_sensor.template.publish: { id: ota_hold, state: true }
+            else:
+              - lambda: 'ESP_LOGI("ota", "no button held at boot -> normal wake (Step 2: would deep-sleep).");'
+              - binary_sensor.template.publish: { id: ota_hold, state: false }
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -80,6 +93,10 @@ globals:                             # parsed tiles as parallel string vectors (
   - id: g_alert_crit                 # any critical alert present -> inverted banner
     type: bool
     restore_value: false
+    initial_value: 'false'
+  - id: g_stay_awake                 # P4e Step 1: set true when a button is HELD at boot -> gate deep-sleep.
+    type: bool                       # The OTA escape hatch on a deep-sleep device. Step 1 only DETECTS + reports
+    restore_value: false             # this (no sleep yet); Step 2's deep_sleep will consult it before sleeping.
     initial_value: 'false'
 
 # --- ePaper display (UC8179, 7.5" mono 800x480) — P4b: prove the display path ---
@@ -209,9 +226,16 @@ light:
       inverted: false
 
 binary_sensor:
+  # P4e Step 1: reports whether a button was HELD at boot (=> stay-awake/OTA mode). Observable over MQTT at
+  # e1001-bench/binary_sensor/ota_hold_mode/state — this is how we prove the escape hatch BEFORE enabling sleep.
+  - platform: template
+    name: "OTA Hold Mode"
+    id: ota_hold
+
   # Short vs long press (on_click duration ranges) → 3 buttons give 6 actions. Retune freely.
   - platform: gpio
     name: "Button Green"
+    id: btn_green
     pin: { number: GPIO3, mode: { input: true, pullup: true }, inverted: true }
     on_click:
       - min_length: 30ms             # Green short = re-fetch the spec + redraw
@@ -225,6 +249,7 @@ binary_sensor:
           - component.update: epaper
   - platform: gpio
     name: "Button Right"
+    id: btn_right
     pin: { number: GPIO4, mode: { input: true, pullup: true }, inverted: true }
     on_click:
       - min_length: 30ms             # Right short = next page
@@ -242,6 +267,7 @@ binary_sensor:
           - component.update: epaper
   - platform: gpio
     name: "Button Left"
+    id: btn_left
     pin: { number: GPIO5, mode: { input: true, pullup: true }, inverted: true }
     on_click:
       - min_length: 30ms             # Left short = previous page
