@@ -7,17 +7,55 @@ Builds on [ADR-0020](ADR-0020-shared-edge-panel-firmware-core.md) (shared module
 (`tools/gen_module_matrix.py` → `edge/MATRIX.md`, guarded by `tests/test_module_matrix.py`).
 **Reviewed-by:** dev (STRONG ACCEPT, 2026-07-04) — see [agent-navigation-doc-tree.md](../design/agent-navigation-doc-tree.md) for the RFC + full review.
 
+## Intent (the declaration)
+
+**Reuse is the default, and the map must lead there without a human pointing the way.** Two failure modes are
+unacceptable, and both have already happened in this repo:
+
+1. **An agent rebuilds what already exists** because nothing led it to prior art. This session nearly
+   re-invented an entire reflash-free profile-deploy path that already lived in the `cmd/fs` handler +
+   `ha_battery_profile`'s own contract — reuse happened only because a human pointed the way.
+2. **The project's hard-won principles ride in one agent's private memory instead of the repo**, so they
+   evaporate the moment a fresh session, a cloud run, or a new collaborator starts — the map resets to blank.
+
+The intent of this ADR is to make the **principles unmissable** and **prior work discoverable from the entry
+point itself**, so the correct first move — *find what exists, reuse or justify* — happens whether or not
+anyone remembers to prompt it. Documentation that is merely correct still fails if it is read too late;
+therefore this decision optimizes for **read-order and least resistance**, not just for being written down.
+
+## Read this if you are an LLM starting work here — answer honestly, before you build
+
+This ADR exists because a doc that is correct but unread changes nothing. So, directly, to you — the agent
+reading this:
+
+> **If you were just handed a task in this repo, would your opening moves actually (a) put these principles in
+> front of you, and (b) hand you a catalog of what already exists to reuse? Or would you start building and
+> hope to grep your way to prior art?**
+
+If you cannot honestly answer *"yes — I would discover and reuse before building,"* then that uncertainty **is
+the gap this ADR closes.** Do this now, before writing code: open [`docs/REUSE.md`](../REUSE.md) and the ADR
+nearest your task, and scan `firmware/components/`, existing `cmd/*` handlers, and `tools/`. Reuse what fits;
+justify in your commit if you don't.
+
+And report back — **this is the acceptance test**: *did the entry path (root `AGENTS.md` → here / `REUSE.md`)
+lead you to reuse on its own, or did a human have to point you?* If you had to be pointed, the gate is not
+loud or early enough yet — say so, and we move it earlier. Every honest answer is a data point that tunes
+where this lives. **This question is asked of every reader on purpose; do not skip it.**
+
 ## Decision
 
 Make **reuse the default and navigation grep-free**, and guarantee it mechanically:
 
-1. **Emphatic principles at the root.** A *Principles (non-negotiable)* block at the top of the root
-   `AGENTS.md`: **docs-first · decompose/module-first · reuse-first.** These are the first thing any agent
-   reads, repo-wide. `firmware/AGENTS.md` **links up** to them (never duplicates → can't re-rot);
+1. **Principles first, unmissable.** A *Principles (non-negotiable)* block as the **opening** of the root
+   `AGENTS.md` — the first content in the auto-loaded entry file, *before* routing or contracts:
+   **docs-first · decompose/module-first · reuse-first.** Not a section an agent might scroll to — the first
+   thing it reads. `firmware/AGENTS.md` **links up** to them (never duplicates → can't re-rot);
    `firmware-is-the-default-cause` stays firmware-scoped.
-2. **A reuse-first gate.** *Starting a task* gains a "discover prior art" step: before building, search the
-   reusable surfaces (`firmware/components/`, the relevant ADR/design doc, existing `cmd/*` handlers,
-   `tools/`) — **reuse or explicitly justify not.**
+2. **Reuse-first as an opening imperative, catalog one hop away.** The root's first task-instruction is a
+   command, not a suggestion: *before building anything, scan [`docs/REUSE.md`] and the ADR nearest your task;
+   reuse or justify in the commit.* `REUSE.md` is **one hop** from the entry point and named there by *what it
+   contains*, so scanning it is cheaper than grepping — reuse is the path of least resistance, not a detour.
+   The self-test above is embedded in this ADR so every reader is forced to confront it, not just informed of it.
 3. **Two navigation axes, both rooted at the top map, both link-traversable (never grep):**
    - **Location** — the ADR-0021 `AGENTS.md` tree, made **bidirectional** (every node links *up* to its
      parent and *down* to its modules) and complete **to the module level**.
@@ -72,3 +110,9 @@ Ownership: firmware side + Pass 1 → ops; server side (Pass 3) + the `run_all.p
 - Operationalizes ADR-0021 → **ADR-0021 moves to Accepted** once Pass 1 lands.
 - Small new surface: `gen_reuse.py`, `REUSE.md`, `test_agents_nav.py`, and the header convention — all mirroring
   patterns the repo already runs.
+- **The acceptance test is behavioral, not textual.** Success is *not* "`REUSE.md` exists" — it is: **a fresh
+  agent handed a task reaches the principles + prior-art catalog before it builds, unprompted.** Validate by
+  trial (a fresh session as guinea pig; the embedded self-test above collects each reader's honest answer). If a
+  fresh agent still builds-before-searching, the gate is not early/loud enough — move it earlier until the
+  behavior changes. The doc-drift test keeps the map *honest*; only read-order + this behavioral check keep it
+  *effective*.
