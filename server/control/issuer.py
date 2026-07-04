@@ -29,6 +29,7 @@ class DeviceCtl:
     node: str
     area: str
     traits_cfg: dict[str, dict[str, Any]]
+    device_type: str | None = None   # ADR-0014 R7 registry field; e.g. "panel" (scene-following display)
 
 
 @dataclass

@@ -12,6 +12,7 @@ import yaml
 from server.control.host_led import HostLedTransport
 from server.control.issuer import CommandIssuer, MqttTransport, RoutingTransport
 from server.control.levoit_driver import LevoitMqttTransport, load_levoit_devices
+from server.control.panel_driver import PanelMqttTransport, load_panel_devices
 from server.control.midea_driver import MideaTransport, load_drivers_from_env
 from server.control.policy import PolicyStore
 from server.control.registry import (check_secrets_present, load_control_registry, load_secrets,
@@ -36,7 +37,7 @@ def parse_env_file(path: Path) -> dict:
 def build_issuer(master: str, *, control_registry: Path, node_secrets_lut: Path, control_policy: Path,
                  control_secrets: Path, midea_device_env: Path, broker: str = "localhost",
                  port: int = 1883, midea_device_id: str = "dehumidifier_office",
-                 levoit_registry: Path | None = None):
+                 levoit_registry: Path | None = None, panel_registry: Path | None = None):
     """Return (issuer, registry, midea_drivers). Secrets = per-NODE cmd_secret (encrypted LUT) +
     per-device secrets (control_secrets.yaml, for local-driver appliances). Transport routes each
     device to its backend: Midea LAN appliances -> MideaTransport, BLE nodes -> MqttTransport."""
@@ -57,6 +58,13 @@ def build_issuer(master: str, *, control_registry: Path, node_secrets_lut: Path,
     if levoit_devices:
         lt = LevoitMqttTransport(levoit_devices, broker=broker, port=port)
         overrides.update({d: lt for d in levoit_devices})
+    # reTerminal wall panels (D1001/E1001): plain-MQTT scene-following display actuators, routed by
+    # device_id like the Levoit purifier. Interim unsigned posture until roadmap #4 (cmd enrollment).
+    panel_registry = panel_registry or (control_registry.parent / "panel-devices.yaml")
+    panel_devices = load_panel_devices(panel_registry)
+    if panel_devices:
+        pt = PanelMqttTransport(panel_devices, broker=broker, port=port)
+        overrides.update({d: pt for d in panel_devices})
     # host indicator LEDs: device_id host_* -> HostLedTransport (runs tools/host-leds.sh locally via sudo).
     host_led_ids = [d for d in registry if d.startswith("host_")]
     if host_led_ids:

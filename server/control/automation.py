@@ -230,3 +230,17 @@ def apply_scene(pol: dict, scene: str | None) -> tuple[dict, bool]:
         return pol, scene_off
     eff = {**pol, "control": {**(pol.get("control") or {}), **over}}
     return eff, scene_off
+
+
+def scene_brightness(pol: dict, scene: str | None) -> int | None:
+    """Per-scene backlight setpoint for a display actuator (wall panel), 0..100 (0 = screen off). Pure.
+
+    Resolution order: the active scene's `brightness` patch → the base policy `brightness` → None. None
+    means "no opinion" and the scene-follower leaves the panel's current brightness alone. Unlike a
+    hysteresis actuator, a panel is not sensor-driven: this is its entire control rule."""
+    patch = ((pol.get("scenes") or {}).get(scene) if scene else None) or {}
+    if "brightness" in patch:
+        return int(patch["brightness"])
+    if "brightness" in (pol or {}):
+        return int(pol["brightness"])
+    return None

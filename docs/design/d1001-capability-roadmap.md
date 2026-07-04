@@ -47,6 +47,8 @@ clockless. With chrony now live on .210, add SNTP + RTC → a wall clock that **
 - **Deps:** none (unblocked). **Unblocks #4.**
 
 ### SHOULD #2 — Panel display as a trait-based actuator  ▸ ability B
+**✅ CODE SHIPPED (interim/unsigned, fw `v60-panel-actuator`).** Registration + live-validate pending →
+[d1001-panel-actuator-registration.md](d1001-panel-actuator-registration.md).
 Today `cmd/screen` (on/off/brightness) is a bespoke ops command. Expose it as `switchable` + `setpoint` traits
 so the **Sleep scene dims/kills the panel through the normal PEP**, not a side channel — making the panel a
 first-class controllable *device*.

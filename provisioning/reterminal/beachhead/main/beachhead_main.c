@@ -62,7 +62,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v59-clock-presence"
+#define APP_BUILD_TAG "v60-panel-actuator"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -91,6 +91,8 @@ static const char *TAG = "beachhead";
 #define T_FS     "d1001-beachhead/fs"              // <- JSON file-op result
 #define T_PWR    "d1001-beachhead/power"           // <- power-context change (on_wall / ble_relay), retained
 #define T_SCRC   "d1001-beachhead/cmd/screen"      // -> off/on/toggle (or 0/1): control backlight+panel power
+#define T_BRTC   "d1001-beachhead/cmd/brightness"  // -> N (0-100): setpoint trait -> backlight %; 0 = screen off
+#define T_SCRST  "d1001-beachhead/state/screen"    // <- retained {"on":bool,"level":pct}: screen actuator state (ADR-0014 R3)
 #define T_GPIOC  "d1001-beachhead/cmd/gpio"        // -> "N" read P4 GPIO N | "N 0|1" drive it. Result -> pin
 #define T_EXPC   "d1001-beachhead/cmd/exp"         // -> "N" read PCA9535 pin N | "N 0|1" drive it. Result -> pin
 #define T_PIN    "d1001-beachhead/pin"             // <- {gpio|exp, level|set} readback for cmd/gpio + cmd/exp
@@ -112,6 +114,7 @@ static void i2cscan_task(void *pv);     // I2C bus scan (fuel-gauge ID) — defi
 static void battdump_task(void *pv);    // 0x36 register dump (chip ID) — defined near start_mqtt
 static void profile_apply_task(void *pv);   // apply/persist a pushed battery profile (JSON) off the mqtt stack
 static void publish_profile(void);          // retained /profile status of the active curve
+static void publish_screen_state(void);     // retained /state/screen mirror of the screen actuator
 static char s_profile_source[12] = "default";   // how the active curve was set: "nvs" | "default" | "pushed"
 static volatile bool s_batt_ready = false;       // ha_battery_init done — safe to publish /profile
 static volatile bool s_debug = false;         // <-- diagnostic firehose, default OFF
@@ -224,6 +227,7 @@ static void button_task(void *pv)
                     if (s_client && s_mqtt_up)
                         esp_mqtt_client_publish(s_client, T_ACK,
                             bsp_display_is_on() ? "button:screen-on" : "button:screen-off", 0, 0, 0);
+                    publish_screen_state();
                 }
                 // wait for release so a held button = one toggle
                 while (gpio_get_level(BSP_BUTTON_IN) == 0) vTaskDelay(pdMS_TO_TICKS(20));
@@ -232,6 +236,22 @@ static void button_task(void *pv)
         prev = lvl;
         vTaskDelay(pdMS_TO_TICKS(30));
     }
+}
+
+// Retained mirror of the screen as a trait-based actuator: `switchable` (on) + `setpoint`
+// (level %). The server-side panel driver reads this back to reconcile intended-vs-reported
+// (ADR-0014 R3), exactly as the Levoit driver reads the ESPHome state topic. Re-published on
+// every screen change (button, cmd/screen, cmd/brightness) and re-asserted on MQTT (re)connect.
+static void publish_screen_state(void)
+{
+    if (!s_client || !s_mqtt_up) return;
+    char m[48];
+    // level = EFFECTIVE backlight (0 when off), so a setpoint(0) reconciles against readback honestly;
+    // the last non-zero level is still remembered internally (bsp) for wake.
+    int lvl = bsp_display_is_on() ? bsp_display_brightness_get() : 0;
+    snprintf(m, sizeof(m), "{\"on\":%s,\"level\":%d}",
+             bsp_display_is_on() ? "true" : "false", lvl);
+    esp_mqtt_client_publish(s_client, T_SCRST, m, 0, 1, 1);   // qos1 retained
 }
 
 // Bring up the panel on demand (triggered by cmd/display "on"), NOT at boot, so
@@ -354,6 +374,7 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
         ESP_LOGW(TAG, "MQTT connected (reconnect #%d) — subscribed cmd/# + home/+/+/state", s_mqtt_rc);
         publish_status();
         if (s_batt_ready) publish_profile();   // re-assert the retained active-profile status on (re)connect
+        publish_screen_state();                // re-assert the retained screen actuator state (ADR-0014 R3)
         esp_ota_mark_app_valid_cancel_rollback();
         // Auto-boot the GUI now that the net + OTA lifeline is CONFIRMED live (marked valid above).
         // The panel is reliable enough (Hugh, 2026-07-01) and predark held it dark since boot, so there
@@ -413,6 +434,25 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
                 else if (c0 == '0') { if (bsp_display_is_on()) bsp_display_toggle(); }
                 else if (c0 == '1') { if (!bsp_display_is_on()) bsp_display_toggle(); }
                 esp_mqtt_client_publish(e->client, T_ACK, bsp_display_is_on() ? "screen:on" : "screen:off", 0, 0, 0);
+                publish_screen_state();
+            }
+        } else if (tl == (int)strlen(T_BRTC) && strncmp(e->topic, T_BRTC, tl) == 0) {
+            // setpoint (brightness) trait: N in 0..100. 0 = screen off (sleep); N>0 = wake if needed + set %.
+            // The scene-following server driver sends this per house scene (Sleep=0, Home/Away=configured %).
+            if (bsp_display_ready()) {
+                char b[8]; int nb = dl < 7 ? dl : 7; memcpy(b, e->data, nb); b[nb] = 0;
+                int n = atoi(b);
+                if (n < 0) n = 0;
+                if (n > 100) n = 100;
+                if (n == 0) {
+                    if (bsp_display_is_on()) bsp_display_sleep();          // 0 -> off
+                } else {
+                    if (!bsp_display_is_on()) bsp_display_wake();          // relight before setting level
+                    bsp_display_brightness(n);
+                }
+                char ack[24]; snprintf(ack, sizeof(ack), "brightness:%d", n);
+                esp_mqtt_client_publish(e->client, T_ACK, ack, 0, 0, 0);
+                publish_screen_state();
             }
         } else if (tl == (int)strlen(T_GPIOC) && strncmp(e->topic, T_GPIOC, tl) == 0) {
             char b[24]; int nb = dl < 23 ? dl : 23; memcpy(b, e->data, nb); b[nb] = 0;

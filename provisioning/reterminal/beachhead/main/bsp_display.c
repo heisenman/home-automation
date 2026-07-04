@@ -125,6 +125,9 @@ esp_err_t bsp_display_brightness(int percent)
     return ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CH);
 }
 
+// Last non-zero backlight % (the "setpoint" the panel actuator reports as its level).
+int bsp_display_brightness_get(void) { return s_brightness; }
+
 // Power the panel rails via the PCA9535 (leaving the camera OFF).
 static esp_err_t power_rails(void)
 {

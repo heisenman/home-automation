@@ -129,7 +129,9 @@ def read_control_state(conn, device_id: str, now: float) -> dict:
 from server.control.automation import HOUSE_SCENES                       # noqa: E402
 
 _SCENE_NUM_KEYS = ("on_above", "off_below", "min_on_min", "min_off_min")
-_SCENE_KEYS = {"off", *_SCENE_NUM_KEYS}
+# `brightness` (0..100) is the per-scene setpoint for display actuators (wall panels): the scene-follower
+# drives the panel backlight to this level (0 = screen off). Ignored by hysteresis (sensor) devices.
+_SCENE_KEYS = {"off", "brightness", *_SCENE_NUM_KEYS}
 
 
 def handle_set_scene(conn, body: dict[str, Any]) -> tuple[int, dict]:
@@ -176,6 +178,8 @@ def _validate_scenes(sc, bad):
             return bad(f"scene {name!r} has unknown keys {sorted(extra)}")
         if "off" in prof and not isinstance(prof["off"], bool):
             return bad(f"scene {name!r}.off must be a boolean")
+        if "brightness" in prof and not (_is_num(prof["brightness"]) and 0 <= float(prof["brightness"]) <= 100):
+            return bad(f"scene {name!r}.brightness must be a number in 0..100")
         for k in _SCENE_NUM_KEYS:
             if k in prof and not _is_num(prof[k]):
                 return bad(f"scene {name!r}.{k} must be a number")

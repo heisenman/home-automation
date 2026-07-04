@@ -144,6 +144,18 @@ def test_policy_update_rejects_bad_scene_name_and_deadband():
     assert code == 400          # unknown key
 
 
+def test_policy_update_scene_brightness_setpoint():
+    c = _ctrl_db()
+    # panel per-scene backlight setpoint (0..100); 0 = screen off
+    ok = {"scenes": {"Home": {"brightness": 100}, "Away": {"brightness": 40}, "Sleep": {"brightness": 0}}}
+    code, body = C.handle_policy_update(c, "dehumidifier_office", ok, {"dehumidifier_office"})
+    assert code == 200 and body["policy"]["scenes"]["Away"]["brightness"] == 40, body
+    for bad in (101, -1, "dim"):
+        code, _ = C.handle_policy_update(c, "dehumidifier_office",
+                                         {"scenes": {"Home": {"brightness": bad}}}, {"dehumidifier_office"})
+        assert code == 400, f"brightness {bad!r} should be rejected"
+
+
 def test_read_control_state_surfaces_active_scene():
     c = _ctrl_db()
     C.handle_policy_update(c, "dehumidifier_office",
