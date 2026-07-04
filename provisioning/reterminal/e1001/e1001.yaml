@@ -74,6 +74,13 @@ globals:                             # parsed tiles as parallel string vectors (
     type: int
     restore_value: false
     initial_value: '0'
+  - id: g_alerts                     # active alerts (formatted strings) from /api/v1/alerts
+    type: std::vector<std::string>
+    restore_value: false
+  - id: g_alert_crit                 # any critical alert present -> inverted banner
+    type: bool
+    restore_value: false
+    initial_value: 'false'
 
 # --- ePaper display (UC8179, 7.5" mono 800x480) — P4b: prove the display path ---
 spi:
@@ -108,17 +115,30 @@ display:
     lambda: |-                       # P4c.1: paginated house sensor tiles (buttons navigate; e-ink = discrete pages).
       int w = it.get_width(), h = it.get_height();
       it.rectangle(0, 0, w, h);
+      int bh = 0;                                 // alert banner height (0 = no active alerts)
+      if (!id(g_alerts).empty()) {
+        bh = 48;
+        std::string bt = id(g_alerts)[0];
+        if (id(g_alerts).size() > 1) bt += "  (+" + std::to_string(id(g_alerts).size() - 1) + ")";
+        if (id(g_alert_crit)) {
+          it.filled_rectangle(0, 0, w, bh);       // critical: inverted strip
+          it.print(w / 2, bh / 2, id(font_label), COLOR_OFF, TextAlign::CENTER, bt.c_str());
+        } else {
+          it.rectangle(0, 0, w, bh);              // warning/info: outlined
+          it.print(w / 2, bh / 2, id(font_label), TextAlign::CENTER, bt.c_str());
+        }
+      }
       const int per = 6;                          // tiles per page
       int n = (int) id(g_tile_labels).size();
       int maxp = n == 0 ? 0 : (n - 1) / per;
       int page = id(g_page);
       if (page > maxp) { page = maxp; id(g_page) = maxp; }
-      it.printf(w / 2, 12, id(font_title), TextAlign::TOP_CENTER, "House  %d/%d", page + 1, maxp + 1);
-      it.line(0, 52, w, 52);
+      it.printf(w / 2, bh + 12, id(font_title), TextAlign::TOP_CENTER, "House  %d/%d", page + 1, maxp + 1);
+      it.line(0, bh + 52, w, bh + 52);
       if (n == 0) {
         it.print(w / 2, h / 2, id(font_label), TextAlign::CENTER, "press Green to fetch");
       } else {
-        int top = 60, bot = h - 34, rowh = (bot - top) / per, y = top;
+        int top = bh + 60, bot = h - 34, rowh = (bot - top) / per, y = top;
         for (int i = page * per; i < n && i < (page + 1) * per; i++) {
           it.print(16, y + 6, id(font_label), id(g_tile_labels)[i].c_str());
           it.print(16, y + 30, id(font_val), id(g_tile_lines)[i].c_str());
@@ -314,7 +334,37 @@ button:
                   return true;
                 });
                 ESP_LOGI("spec", "parsed %d tiles (ok=%d)", id(g_tile_labels).size(), ok);
+      - http_request.get:                          # sibling (not nested): pull active alerts for the banner
+          url: ${bff_base_url}/api/v1/alerts
+          capture_response: true
+          max_response_buffer_size: 8kB
+          on_response:
+            - lambda: |-
+                id(g_alerts).clear();
+                id(g_alert_crit) = false;
+                json::parse_json(body, [](JsonObject root) -> bool {
+                  for (JsonObject a : root["alerts"].as<JsonArray>()) {
+                    if (id(g_alerts).size() >= 6) break;
+                    const char *sev = a["severity"] | "";
+                    const char *name = a["name"].isNull() ? (a["device_id"] | "?") : (a["name"] | "?");
+                    const char *detail = a["detail"] | "";
+                    if (std::string(sev) == "critical") id(g_alert_crit) = true;
+                    std::string line = name;
+                    if (detail[0]) { line += " - "; line += detail; }
+                    id(g_alerts).push_back(line);
+                  }
+                  return true;
+                });
+                ESP_LOGI("spec", "parsed %d alerts (crit=%d)", id(g_alerts).size(), id(g_alert_crit));
             - component.update: epaper
+  - platform: template
+    name: "Test Alert"               # dev affordance: inject a fake critical alert to preview the banner
+    on_press:
+      - lambda: |-
+          id(g_alerts).clear();
+          id(g_alerts).push_back("TEST - low battery 8%");
+          id(g_alert_crit) = true;
+      - component.update: epaper
 
 text_sensor:
   - platform: debug
