@@ -15,6 +15,8 @@ substitutions:
   wifi_ap_ssid: "e1001-bench-fallback"
   bff_base_url: "http://192.168.0.210:8123"   # FastAPI BFF; read endpoints are open on the LAN (no auth on GET)
   edge_node: "e1001"                 # edge-node id for home/edge/<node>/event (rename per-area on deploy)
+  ntp_server: "192.168.0.210"        # dictator = LAN time anchor (holdover source; router serves NTP once onboarded)
+  timezone: "America/Los_Angeles"    # display wall-clock zone; change to the house zone
   # P4e deep-sleep RUNTIME hooks — no reflash to toggle. These are first-boot DEFAULTS only; thereafter the
   # Sleep Enable switch + Sleep Duration / Awake Grace numbers are MQTT-settable and PERSIST across sleeps.
   sleep_default: "false"            # DEV first-boot: never sleep -> OTA always reachable. Flip live over MQTT.
@@ -109,6 +111,13 @@ wifi:
     password: !secret fallback_ap_password
 
 captive_portal:
+
+time:                                # clock sync off the dictator (SNTP) — mirrors the edge ha_sntp pattern.
+  - platform: sntp                   # E1001 shows a wall clock (unlike the clockless D1001 panel); every render
+    id: sntp_time                    # is guarded by .is_valid() so an unsynced clock degrades gracefully (no hang,
+    timezone: "${timezone}"          # no bad time). On a deep-sleep wake it re-syncs after wifi; dev-mode syncs once.
+    servers:
+      - ${ntp_server}
 
 external_components:
   - source: components               # local: components/sy6974b (charger driver) + e1001_ui scaffold
@@ -247,6 +256,13 @@ globals:                             # parsed tiles as parallel string vectors (
     type: bool
     restore_value: false
     initial_value: 'false'
+  - id: g_scene                      # active house scene (Home/Away/Sleep) from /api/v1/house, for the header
+    type: std::string
+    restore_value: false
+  - id: g_fetch_uptime               # uptime_s (s) at last successful fetch -> footer "updated Xs ago"
+    type: float
+    restore_value: false
+    initial_value: '0'
   - id: g_edge_wall                  # edge-node: last-published on_wall (-1 unknown / 0 batt / 1 wall) for edge-only pub
     type: int
     restore_value: false
@@ -359,26 +375,45 @@ display:
           it.print(w / 2, bh / 2, id(font_label), TextAlign::CENTER, bt.c_str());
         }
       }
+      // --- scene header: active house scene (left) + wall clock (right, only if SNTP-synced) ---
+      int sh = 44, hy = bh;
+      std::string scene = id(g_scene).empty() ? "House" : id(g_scene);
+      it.print(16, hy + 6, id(font_title), scene.c_str());
+      if (id(sntp_time).now().is_valid())
+        it.strftime(w - 16, hy + 6, id(font_title), TextAlign::TOP_RIGHT, "%H:%M", id(sntp_time).now());
+      it.line(0, hy + sh, w, hy + sh);
+      // --- sensor grid (paginated; e-ink = discrete pages, buttons navigate) ---
       const int per = 6;                          // tiles per page
       int n = (int) id(g_tile_labels).size();
       int maxp = n == 0 ? 0 : (n - 1) / per;
       int page = id(g_page);
       if (page > maxp) { page = maxp; id(g_page) = maxp; }
-      it.printf(w / 2, bh + 12, id(font_title), TextAlign::TOP_CENTER, "House  %d/%d", page + 1, maxp + 1);
-      it.line(0, bh + 52, w, bh + 52);
+      int gtop = hy + sh, ftop = h - 30;          // grid band [gtop, ftop); footer below ftop
+      it.printf(w - 16, gtop + 4, id(font_label), TextAlign::TOP_RIGHT, "%d/%d", page + 1, maxp + 1);
       if (n == 0) {
-        it.print(w / 2, h / 2, id(font_label), TextAlign::CENTER, "press Green to fetch");
+        it.print(w / 2, (gtop + ftop) / 2, id(font_label), TextAlign::CENTER, "press Green to fetch");
       } else {
-        int top = bh + 60, bot = h - 34, rowh = (bot - top) / per, y = top;
+        int top = gtop + 30, bot = ftop - 4, rowh = (bot - top) / per, y = top;
         for (int i = page * per; i < n && i < (page + 1) * per; i++) {
-          it.print(16, y + 6, id(font_label), id(g_tile_labels)[i].c_str());
-          it.print(16, y + 30, id(font_val), id(g_tile_lines)[i].c_str());
+          it.print(16, y + 4, id(font_label), id(g_tile_labels)[i].c_str());
+          it.print(16, y + 26, id(font_val), id(g_tile_lines)[i].c_str());
           it.line(0, y + rowh, w, y + rowh);
           y += rowh;
         }
       }
-      it.printf(w / 2, h - 6, id(font_label), TextAlign::BOTTOM_CENTER,
-                "%d sensors   up %.0fs", n, id(uptime_s).state);
+      // --- status footer: last-update (relative) + wifi RSSI + battery % (provisional linear V->%, pre-fit) ---
+      it.line(0, ftop, w, ftop);
+      float bv = id(batt_v).state;
+      int bpct = (int) ((bv - 3.45f) / (4.20f - 3.45f) * 100.0f + 0.5f);
+      if (bpct < 0) bpct = 0;
+      if (bpct > 100) bpct = 100;
+      char ft[56];
+      if (id(g_fetch_uptime).state > 0)
+        snprintf(ft, sizeof(ft), "updated %ds ago    wifi %.0f    %d%%",
+                 (int)(id(uptime_s).state - id(g_fetch_uptime).state), id(wifi_rssi).state, bpct);
+      else
+        snprintf(ft, sizeof(ft), "no data yet    wifi %.0f    %d%%", id(wifi_rssi).state, bpct);
+      it.print(w / 2, h - 4, id(font_label), TextAlign::BOTTOM_CENTER, ft);
 
 # --- Onboard temp/humidity (the [sensor] role, proven on first flash) ---
 i2c:
@@ -475,6 +510,7 @@ sensor:
     id: uptime_s
   - platform: wifi_signal
     name: "WiFi RSSI"
+    id: wifi_rssi
     update_interval: 60s
   - platform: debug
     free:
@@ -725,6 +761,20 @@ button:
                   return true;
                 });
                 ESP_LOGI("spec", "parsed %d tiles (ok=%d)", id(g_tile_labels).size(), ok);
+                id(g_fetch_uptime) = id(uptime_s).state;   // stamp: footer shows "updated Xs ago"
+      - http_request.get:                          # sibling: active house scene for the header (Home/Away/Sleep)
+          url: ${bff_base_url}/api/v1/house
+          capture_response: true
+          max_response_buffer_size: 2kB
+          on_response:
+            - lambda: |-
+                if (response->status_code != 200) return;
+                json::parse_json(body, [](JsonObject root) -> bool {
+                  const char *sc = root["scene"] | "";
+                  id(g_scene) = sc;
+                  return true;
+                });
+                ESP_LOGI("spec", "scene=%s", id(g_scene).c_str());
       - http_request.get:                          # sibling (not nested): pull active alerts for the banner
           url: ${bff_base_url}/api/v1/alerts
           capture_response: true
