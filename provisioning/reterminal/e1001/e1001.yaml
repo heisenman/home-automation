@@ -136,6 +136,11 @@ script:
 # If THIS loop ever stops (crash/hang), the un-kicked watchdog expires (~40s) and the charger resets EN_HIZ->0 =
 # hardware auto-recovery. Telemetry loop (5s) streams state to e1001-bench/battprofile for host capture (Module 3).
 interval:
+  - interval: 1s                     # external discharge-load gate: ON only while DISCHARGE + Prof Load Level>0, OFF
+    then:                            # in every other state (so it can never fight the charge leg or over-drain at rest).
+      - lambda: |-
+          if (id(g_prof_state) == 1 && id(g_load_lvl) > 0) id(ext_load)->turn_on();
+          else                                              id(ext_load)->turn_off();
   - interval: 100ms                  # profiler discharge-LOAD (radio): at Prof Load Level>=2, keep the WiFi TX chain
     then:                            # hot with a steady 256B publish (radio TX is the biggest current lever on the S3).
       - lambda: |-
@@ -150,6 +155,7 @@ interval:
           if (id(g_prof_state) == 1) {                // DISCHARGE: floor-gate = safety AND end-of-discharge
             float v = id(batt_v).state;
             if (!std::isnan(v) && v <= id(g_v_floor)) {
+              id(ext_load)->turn_off();                // drop the external load AT the floor (don't wait for the 1s gate)
               id(charger)->set_hiz(false);            // recover to USB
               id(charger)->set_charge_enable(false);  // rest (no charge yet) for a clean OCV
               id(g_prof_state) = 2; id(g_state_ms) = millis();   // -> REST_D
@@ -474,6 +480,10 @@ output:
   - platform: gpio
     pin: GPIO21
     id: vbat_adc_en
+  - platform: gpio                     # external discharge-load gate (N-ch MOSFET on the J2 header, GPIO17/TX1).
+    pin: GPIO17                        # Drives a ~4.7Ω/10W resistor across V_BAT to burn the cell down in ~hours,
+    id: ext_load                       # not days (an ePaper S3 can't self-sink enough). HW gate pulldown keeps it
+    # starts LOW (default) — off until the discharge logic drives it; a reset can't strand the load on the cell.
 
 # --- Connectivity indicator + input sanity (nice-to-have, still beachhead-cheap) ---
 light:
