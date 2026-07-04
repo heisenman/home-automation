@@ -411,6 +411,12 @@ button:
                 ESP_LOGI("spec", "parsed %d alerts (crit=%d)", id(g_alerts).size(), id(g_alert_crit));
             - component.update: epaper
   - platform: template
+    name: "Test Sleep"               # P4e bisect: isolate the deep_sleep MECHANISM from the on_boot wake-cycle.
+    on_press:                        # trigger over MQTT; device should drop offline then return after sleep_duration.
+      - lambda: 'ESP_LOGW("sleep", "Test Sleep pressed -> allow+enter deep sleep now");'
+      - deep_sleep.allow: ds
+      - deep_sleep.enter: ds
+  - platform: template
     name: "Test Alert"               # dev affordance: inject a fake critical alert to preview the banner
     on_press:
       - lambda: |-
