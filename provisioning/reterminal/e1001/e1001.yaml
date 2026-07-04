@@ -18,9 +18,12 @@ esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
   on_boot:
-    priority: 600                    # NOT 800: at 800 the gpio output isn't constructed yet → turn_on no-ops →
-    then:                            # rail never powered → ADC reads 0. 600 = after components, per the ref config.
-      - output.turn_on: vbat_adc_en  # power the battery-sense divider (held on in beachhead; gated in deep-sleep later)
+    - priority: 600                  # NOT 800: at 800 the gpio output isn't constructed yet → turn_on no-ops →
+      then:                          # rail never powered → ADC reads 0. 600 = after components, per the ref config.
+        - output.turn_on: vbat_adc_en  # power the battery-sense divider (held on in beachhead; gated later)
+    - priority: -100                 # after everything is up: one-shot draw (update_interval is 'never', ePaper style)
+      then:
+        - component.update: epaper
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -54,6 +57,52 @@ mqtt:
   broker: 192.168.0.210              # dictator real IP (VIP .200 unreachable from CTWap_24g wifi)
   port: 1883
 
+# --- ePaper display (UC8179, 7.5" mono 800x480) — P4b: prove the display path ---
+spi:
+  clk_pin: GPIO7
+  mosi_pin: GPIO9
+
+font:
+  - file: "fonts/DejaVuSans-Bold.ttf"
+    id: font_title
+    size: 30
+  - file: "fonts/DejaVuSans-Bold.ttf"
+    id: font_val
+    size: 40
+  - file: "fonts/DejaVuSans.ttf"
+    id: font_label
+    size: 20
+
+display:
+  - platform: waveshare_epaper
+    id: epaper
+    model: 7.50inv2                  # UC8179, 800x480 (confirmed: panel HT075A04)
+    cs_pin: GPIO10
+    dc_pin: GPIO11
+    reset_pin:
+      number: GPIO12
+      inverted: false
+    busy_pin:
+      number: GPIO13
+      inverted: true                 # BUSY# is active-low on the schematic
+    rotation: 0
+    update_interval: never           # ePaper: draw on-demand (deep-sleep model), not on a timer.
+    lambda: |-                       # P4b.1: live onboard values (proves the text/font path + data binding).
+      int w = it.get_width(), h = it.get_height();
+      it.rectangle(0, 0, w, h);
+      it.print(w / 2, 14, id(font_title), TextAlign::TOP_CENTER, "reTerminal E1001");
+      it.line(0, 60, w, 60);
+      int y = 96;
+      if (id(sht_temp).has_state()) it.printf(48, y, id(font_val), "Temp      %.1f C", id(sht_temp).state);
+      else it.print(48, y, id(font_val), "Temp      --");
+      y += 84;
+      if (id(sht_hum).has_state()) it.printf(48, y, id(font_val), "Humidity  %.0f %%", id(sht_hum).state);
+      else it.print(48, y, id(font_val), "Humidity  --");
+      y += 84;
+      if (id(batt_v).has_state()) it.printf(48, y, id(font_val), "Battery   %.2f V", id(batt_v).state);
+      else it.print(48, y, id(font_val), "Battery   --");
+      it.printf(w / 2, h - 26, id(font_label), TextAlign::BOTTOM_CENTER, "uptime %.0f s", id(uptime_s).state);
+
 # --- Onboard temp/humidity (the [sensor] role, proven on first flash) ---
 i2c:
   - id: bus_i2c0
@@ -72,8 +121,10 @@ sensor:
     address: 0x44
     temperature:
       name: "Temperature"
+      id: sht_temp
     humidity:
       name: "Humidity"
+      id: sht_hum
     update_interval: 60s
 
   # Battery cell voltage. Divider is x2 (ADC reads Vbat/2); enable held on above.
@@ -81,6 +132,7 @@ sensor:
   - platform: adc
     pin: GPIO1
     name: "Battery Voltage"
+    id: batt_v
     attenuation: 12db
     update_interval: 60s
     filters:
@@ -89,6 +141,7 @@ sensor:
   # diagnostics
   - platform: uptime
     name: "Uptime"
+    id: uptime_s
   - platform: wifi_signal
     name: "WiFi RSSI"
     update_interval: 60s
@@ -147,6 +200,10 @@ button:
           if (out.empty()) out = "none";
           ESP_LOGI("i2cscan", "found: %s", out.c_str());
           id(i2c_found).publish_state(out);
+  - platform: template
+    name: "Refresh Display"          # redraw the ePaper on demand (e1001-bench/button/refresh_display/command)
+    on_press:
+      - component.update: epaper
 
 text_sensor:
   - platform: debug
