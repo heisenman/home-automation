@@ -3,6 +3,9 @@
 Everything the dictator runs. Python; services are the `ha-*` units in [`../systemd/`](../systemd/). Real
 config lives in `../instance/` (git-ignored); templates in [`../config-examples/`](../config-examples/).
 
+*↑ The by-location node for `server/` in the [root AGENTS.md](../AGENTS.md) tree (ADR-0021/0025); the
+by-capability index is [`docs/REUSE.md`](../docs/REUSE.md). Link up, don't duplicate.*
+
 ## Layout
 
 | Dir/file | Role | ADR |
@@ -13,6 +16,7 @@ config lives in `../instance/` (git-ignored); templates in [`../config-examples/
 | `storage/` | Two-tier: sqlite **hot** + parquet **archive** (compactor, hash manifest) | 0004,0006,0009 |
 | `control/` | Actuator control loop, override/policy/scenes; trait-based | 0002,0011,0014 |
 | `device_registry.py` | The registry the dictator owns (devices, traits, areas) | 0001,0002 |
+| `maintenance/` | `device_migrate.py`: idempotent device **rename/retire across EVERY store on both boxes** (registry/hot/parquet/rungs/ntfy) — guards the `reconcile-history` merge from resurrecting a deleted id; pure `run_migration` report-dict backend for a future admin control. Runbook: [`../docs/runbook-device-migrate.md`](../docs/runbook-device-migrate.md) | 0016,0022 |
 | `cluster/` | Heartbeat / failover coordination (pairs with `../failover/`) | 0016,0018 |
 | `comms/`, `mesh/` | Event/resource abstraction; mesh topology + relay-coverage assignment; `coordinator.py` also **pushes** the reach-census trigger (`home/edge/<node>/reach/req`, signed, sig-only) each pass | 0012,0015,0023 |
 | `notify/` | Alert engine → MQTT `home/_alerts` → ntfy bridge (web-push dropped) | — |
