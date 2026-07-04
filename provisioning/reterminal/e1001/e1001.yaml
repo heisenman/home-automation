@@ -88,6 +88,9 @@ wifi:
 
 captive_portal:
 
+external_components:
+  - source: components               # local: components/sy6974b (charger driver) + e1001_ui scaffold
+
 mqtt:
   broker: 192.168.0.210              # dictator real IP (VIP .200 unreachable from CTWap_24g wifi)
   port: 1883
@@ -224,6 +227,22 @@ i2c:
     frequency: 100kHz
     scan: true
 
+# --- SY6974B charger (module: components/sy6974b) — status readout + control API for battery profiling ---
+sy6974b:
+  id: charger
+  i2c_id: bus_i2c1
+  address: 0x6B
+  update_interval: 30s
+  disable_watchdog: true             # hold HIZ/charge states across a profiling run (see component setup note)
+  charge_status:
+    name: "Charge Status"            # not_charging / pre_charge / fast_charge / done (REG08 CHRG_STAT)
+  bus_status:
+    name: "Input Source"             # no_input / usb_sdp / usb_cdp / usb_dcp / ... (REG08 BUS_STAT)
+  power_good:
+    name: "Power Good"               # REG08 PG_STAT — valid input present
+  charging:
+    name: "Charging"                 # derived: fast/pre-charge phase
+
 sensor:
   - platform: sht4x
     i2c_id: bus_i2c0
@@ -339,6 +358,26 @@ switch:
       - lambda: 'id(g_sleep_enable) = true;  ESP_LOGW("sleep", "battery mode ON (runtime)");'
     turn_off_action:
       - lambda: 'id(g_sleep_enable) = false; ESP_LOGW("sleep", "battery mode OFF (runtime, always-awake)");'
+
+  # SY6974B charger control (bench profiling). SAFETY: the safety state machine is module 2; these are raw.
+  - platform: template
+    name: "Charger HIZ"              # ON = disconnect USB input -> system runs on battery (the DISCHARGE lever)
+    id: sw_hiz
+    lambda: 'return id(charger)->hiz();'
+    restore_mode: DISABLED           # never auto-assert HIZ on boot; the charger's own state is the truth
+    turn_on_action:
+      - lambda: 'id(charger)->set_hiz(true);'
+    turn_off_action:
+      - lambda: 'id(charger)->set_hiz(false);'
+  - platform: template
+    name: "Charge Enable"           # OFF = stop charging (REG01 CHG_CONFIG=0) while leaving USB connected
+    id: sw_charge_en
+    lambda: 'return id(charger)->charge_enabled();'
+    restore_mode: DISABLED
+    turn_on_action:
+      - lambda: 'id(charger)->set_charge_enable(true);'
+    turn_off_action:
+      - lambda: 'id(charger)->set_charge_enable(false);'
 
 number:
   - platform: template
