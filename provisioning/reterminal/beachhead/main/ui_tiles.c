@@ -26,6 +26,7 @@
 #include "ui/ui_scenes.h"   // top-bar row + whole-house scene selector (ADR-0020)
 #include "ui/ui_controls.h" // actuator cards + command overlay (ADR-0020)
 #include "ui/ui_power.h"    // top-bar power-off button + confirm (ADR-0020)
+#include "ui/ui_clock.h"    // top-bar wall clock (ADR-0020; roadmap #1, ability G)
 
 static const char *TAG = "ui";
 #define REFRESH_MS 10000
@@ -173,6 +174,7 @@ void ui_tiles_start(const char *sensors_url)
     // before the trailing gear) to preserve the original scenebox/toast/battery/gear order.
     lv_obj_move_to_index(s_batt_lbl, 2);
 
+    ui_clock_init(topbar);                    // wall clock (ui/ui_clock; roadmap #1, ability G)
     ui_power_init(topbar);                    // trailing red power-off button + confirm (ui/ui_power)
 
     s_header = lv_label_create(scr);

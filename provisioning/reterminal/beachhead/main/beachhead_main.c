@@ -48,6 +48,18 @@
 #include "esp_hosted.h"
 #include "esp_hosted_ota.h"
 #include "secrets.h"
+#include <time.h>
+#include <sys/time.h>
+#include "esp_netif_sntp.h"
+#include "esp_sntp.h"
+#include "ha_rtc.h"                 // roadmap #1 (ability G): PCF8563 wall clock
+
+#ifndef NTP_SERVER
+#define NTP_SERVER "192.168.0.210"  // dictator LAN IP — serves NTP via chrony (unblocks the wall clock)
+#endif
+#ifndef PANEL_TZ
+#define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
+#endif
 
 #define APP_BUILD_TAG "v58-battpolicy"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
@@ -842,6 +854,42 @@ static void profile_apply_task(void *pv)
 }
 
 
+// SNTP sync callback (roadmap #1): the system clock is already set by SNTP when this fires; persist
+// the wall-clock time into the PCF8563 so the RTC becomes the reboot-holdover source (clears VL).
+static void on_time_synced(struct timeval *tv)
+{
+    struct tm local;
+    localtime_r(&tv->tv_sec, &local);          // store local time (mktime-symmetric on boot)
+    esp_err_t e = ha_rtc_set(&local);
+    ESP_LOGI(TAG, "clock: SNTP synced -> RTC set (%s)", esp_err_to_name(e));
+}
+
+// RTC + SNTP wall-clock backbone (ability G). Called from app_main after I2C1 + WiFi are up: seed the
+// system clock from the RTC's holdover immediately (so the clock is right before SNTP returns), then
+// start SNTP against the dictator; on_time_synced writes freshly-synced time back to the RTC.
+static void clock_backbone_start(void)
+{
+    ha_rtc_init(&(ha_rtc_cfg_t){ .bus = bsp_i2c1(), .addr = HA_RTC_PCF8563_ADDR });
+    setenv("TZ", PANEL_TZ, 1);
+    tzset();
+    if (!ha_rtc_present()) { ESP_LOGW(TAG, "clock: RTC not responding on I2C1"); return; }
+
+    struct tm rtc_tm; bool rtc_valid = false;
+    if (ha_rtc_get(&rtc_tm, &rtc_valid) == ESP_OK && rtc_valid) {
+        rtc_tm.tm_isdst = -1;                  // let mktime resolve DST for the stored local time
+        struct timeval tv = { .tv_sec = mktime(&rtc_tm), .tv_usec = 0 };
+        settimeofday(&tv, NULL);
+        ESP_LOGI(TAG, "clock: seeded system time from RTC holdover");
+    } else {
+        ESP_LOGW(TAG, "clock: RTC time not valid yet (VL set) — awaiting SNTP");
+    }
+
+    esp_sntp_config_t sc = ESP_NETIF_SNTP_DEFAULT_CONFIG(NTP_SERVER);
+    sc.sync_cb = on_time_synced;
+    esp_netif_sntp_init(&sc);
+    ESP_LOGI(TAG, "clock: SNTP -> %s", NTP_SERVER);
+}
+
 void app_main(void)
 {
     bsp_display_predark();   // FIRST: hold the panel dark across boot (kills the OTA-reboot strobe)
@@ -902,6 +950,7 @@ void app_main(void)
     publish_profile();                         // retained active-profile status (guards on s_mqtt_up)
     ha_battery_charge_start();                 // thermal-gated charger + restart watchdog
     ha_power_policy_monitor_start(&s_pp_cfg, &s_pp_io, 5000);   // battery safety monitor: warn @5-10%, hard-off @0%
+    clock_backbone_start();                    // roadmap #1 (ability G): RTC holdover + SNTP wall clock
     xTaskCreate(heartbeat_task, "hb", 4096, NULL, 3, NULL);
     xTaskCreate(button_task, "btn", 3072, NULL, 3, NULL);   // back-button screen toggle
     xTaskCreate(power_task, "pwr", 4096, NULL, 3, NULL);    // power-aware BLE: on wall / off battery + notify
