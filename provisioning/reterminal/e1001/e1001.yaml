@@ -14,6 +14,7 @@ substitutions:
   friendly_name: "reTerminal E1001 (bench)"
   wifi_ap_ssid: "e1001-bench-fallback"
   bff_base_url: "http://192.168.0.210:8123"   # FastAPI BFF; read endpoints are open on the LAN (no auth on GET)
+  edge_node: "e1001"                 # edge-node id for home/edge/<node>/event (rename per-area on deploy)
   # P4e deep-sleep RUNTIME hooks — no reflash to toggle. These are first-boot DEFAULTS only; thereafter the
   # Sleep Enable switch + Sleep Duration / Awake Grace numbers are MQTT-settable and PERSIST across sleeps.
   sleep_default: "false"            # DEV first-boot: never sleep -> OTA always reachable. Flip live over MQTT.
@@ -92,8 +93,26 @@ external_components:
   - source: components               # local: components/sy6974b (charger driver) + e1001_ui scaffold
 
 mqtt:
+  id: mqtt_client                    # referenced by the edge-node event publisher (home/edge/<node>/event)
   broker: 192.168.0.210              # dictator real IP (VIP .200 unreachable from CTWap_24g wifi)
   port: 1883
+
+# Edge-node event publisher (Stage 1). Reusable script: emits the canonical home/edge/<node>/event envelope
+# (schema 1, kind:power). Called on real power_good transitions AND from the Test Edge buttons. Mirrors the
+# D1001's power_ctx_publish (beachhead_main.c:597); the coordinator's event-reconcile consumes home/edge/+/event
+# and rebalances coverage on relaying->false (rollup-ladder-and-replica-sync.md:190).
+script:
+  - id: publish_edge_event           # emits the envelope for id(g_pub_wall); caller sets g_pub_wall then executes
+    then:
+      - lambda: |-
+          bool w = id(g_pub_wall);
+          std::string p = std::string(
+            "{\"schema\":1,\"node\":\"${edge_node}\",\"kind\":\"power\",\"ts\":\"\",\"state\":{\"on_wall\":")
+            + (w ? "true" : "false")
+            + ",\"relaying\":" + (w ? "true" : "false")   // relaying gated on wall power (BLE = Stage 2)
+            + ",\"censusing\":false}}";                    // E1001 is not a recovery/census node (ADR-0019)
+          id(mqtt_client)->publish("home/edge/${edge_node}/event", p, 1, true);
+          ESP_LOGW("edge", "published home/edge/${edge_node}/event on_wall=%s", w ? "true" : "false");
 
 deep_sleep:                          # P4e Step 2: timer + button wake. Prevented at boot (pri 900); entered
   id: ds                             # explicitly at the end of the wake cycle, only when g_sleep_enable.
@@ -128,6 +147,14 @@ globals:                             # parsed tiles as parallel string vectors (
     type: std::vector<std::string>
     restore_value: false
   - id: g_alert_crit                 # any critical alert present -> inverted banner
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: g_edge_wall                  # edge-node: last-published on_wall (-1 unknown / 0 batt / 1 wall) for edge-only pub
+    type: int
+    restore_value: false
+    initial_value: '-1'
+  - id: g_pub_wall                   # edge-node: the on_wall value the publish script should emit (set by caller)
     type: bool
     restore_value: false
     initial_value: 'false'
@@ -239,7 +266,16 @@ sy6974b:
   bus_status:
     name: "Input Source"             # no_input / usb_sdp / usb_cdp / usb_dcp / ... (REG08 BUS_STAT)
   power_good:
-    name: "Power Good"               # REG08 PG_STAT — valid input present
+    name: "Power Good"               # REG08 PG_STAT — valid input present = ON WALL POWER
+    # EDGE-NODE presence (Stage 1). Edge-only publish (change, not level — mirrors the D1001 power_ctx), and it
+    # fires on the boot state-publish too (g_edge_wall starts -1) so the coordinator gets our state on join.
+    on_state:
+      - lambda: |-
+          int n = x ? 1 : 0;
+          if (n == id(g_edge_wall)) return;   // publish only on a real wall<->battery transition
+          id(g_edge_wall) = n;
+          id(g_pub_wall) = (n == 1);
+          id(publish_edge_event)->execute();
   charging:
     name: "Charging"                 # derived: fast/pre-charge phase
 
@@ -519,6 +555,19 @@ button:
           id(g_alerts).push_back("TEST - low battery 8%");
           id(g_alert_crit) = true;
       - component.update: epaper
+  # Edge-node test hooks: simulate a wall<->battery transition WITHOUT physically unplugging (HIZ won't fake it
+  # — VBUS stays present in HIZ, so power_good stays ON, which is correct). Validates the envelope + the
+  # coordinator's rebalance end-to-end. Does NOT touch g_edge_wall, so the next real transition still fires.
+  - platform: template
+    name: "Test Edge On-Battery"     # e1001-bench/button/test_edge_on_battery/command PRESS -> going-offline event
+    on_press:
+      - lambda: 'id(g_pub_wall) = false;'
+      - script.execute: publish_edge_event
+  - platform: template
+    name: "Test Edge On-Wall"
+    on_press:
+      - lambda: 'id(g_pub_wall) = true;'
+      - script.execute: publish_edge_event
 
 text_sensor:
   - platform: debug
