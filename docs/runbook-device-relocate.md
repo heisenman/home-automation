@@ -50,17 +50,44 @@ like `office→h_office`). Use `device` to override *one* device to an area diff
 **NOT touched:** `rungs.db` / `summaries` — neither has an `area` column (they key off `device_id`, which a
 relocate does not change), so they stay correct automatically.
 
-## After the run — reload the mapper (required)
+## After the run — reload EVERY ingest service, then sweep (required)
 
-The registry is the mapper's source of truth, so it must reload for new readings to carry the new area, and
-both APIs must reload the catalog:
+**The registry is read by many services, each holding it in memory.** Restarting only the mapper is NOT
+enough — every ingest path that stamps `area` will keep emitting the OLD area (and re-regress
+`device_last_seen`) until it reloads. Restart the full set that reads a registry:
 
 ```bash
-sudo systemctl restart ha-edge-mapper ha-api ha-api-tls
+sudo systemctl restart ha-scanner ha-writer ha-edge-mapper ha-edge-history \
+                       ha-tasmota-bridge ha-levoit-bridge ha-controller ha-relay-coordinator \
+                       ha-api ha-api-tls
+```
+(`ha-scanner`/`ha-writer` = BLE meters via devices.yaml; `ha-edge-mapper`/`ha-edge-history` = edge nodes;
+`ha-tasmota-bridge`/`ha-levoit-bridge` = their own side-registries; `ha-controller` = control.yaml;
+`ha-api`/`ha-api-tls` = the catalog. Confirm with `systemctl is-active`.)
+
+Then **sweep** — because rows were still being ingested under the old area during the migration window
+(migrate-while-live race), re-run the same op; it's idempotent and converges to clean:
+
+```bash
+venv/bin/python -m server.maintenance.device_relocate crosswalk instance/area-migration.yaml --no-peer
 ```
 
-Then confirm the guard is green: `venv/bin/python -m tests.test_areas` (goes GREEN once every config `area:`
-resolves to an `instance/areas.yaml` id — the ADR-0026 acceptance).
+Then **clear any stale retained topics under the OLD area paths.** Once `device_last_seen` has moved, the
+tool can no longer derive the old `home/<old_area>/<id>/state` path, so a message republished during the race
+window lingers. Find and clear them:
+
+```bash
+mosquitto_sub -h localhost -W 3 -t 'home/<old_area>/#' -v | grep '/state ' | awk '{print $1}' | sort -u \
+  | while read t; do mosquitto_pub -h localhost -t "$t" -r -n; done
+```
+
+Finally confirm: `venv/bin/python -m tests.test_areas` is **GREEN** (every config `area:` resolves to an
+`instance/areas.yaml` id — the ADR-0026 acceptance), and no new readings land under an old area
+(`SELECT area,COUNT(*) FROM readings WHERE id>$BASELINE GROUP BY area`).
+
+> **Sequencing note / TODO:** the race + stale-retained cleanup are the sharp edges of relocating *live*. A
+> future tool improvement is to clear retained by wildcard under each crosswalk *source* area (not from
+> `device_last_seen`), and/or to fold the restart+sweep into the CLI. Until then, follow the three steps above.
 
 ## Gotchas this encodes
 
