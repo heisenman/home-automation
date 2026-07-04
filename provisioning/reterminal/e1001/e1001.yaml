@@ -298,6 +298,22 @@ sensor:
     temperature:
       name: "Temperature"
       id: sht_temp
+      # SENSOR role: relay the E1001's own room reading on the edge onboard-sensor path (mirrors edge/ ha_gas.c
+      # ha_mqtt_publish_node_sensor: home/edge/<node>/<key>/adv, transport i2c-local, mac=<reg_key>). The
+      # already-running edge_mapper looks up mac in instance/devices.yaml and republishes canonical
+      # home/<area>/e1001/state — no new server service. NOT power-gated (unlike the BLE relay): the device's
+      # own reading is its primary [sensor] role, publish whenever awake. Needs a 1-line registry entry (gated).
+      on_value:
+        - lambda: |-
+            float t = x, h = id(sht_hum).state;
+            if (std::isnan(t) || std::isnan(h)) return;
+            char p[256];
+            snprintf(p, sizeof(p),
+              "{\"schema\":1,\"node\":\"${edge_node}\",\"mac\":\"${edge_node}-sht40\",\"device_type\":\"sht40\","
+              "\"ts\":\"\",\"transport\":\"i2c-local\",\"metrics\":{\"temperature_c\":%.2f,\"humidity_pct\":%.1f},"
+              "\"meta\":{}}", t, h);
+            // std::string(p): the char* publish() overload treats arg3 as payload_length (would send 1 byte)
+            id(mqtt_client)->publish("home/edge/${edge_node}/sht40/adv", std::string(p), 1, false);
     humidity:
       name: "Humidity"
       id: sht_hum
