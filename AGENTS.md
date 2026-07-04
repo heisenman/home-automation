@@ -71,7 +71,8 @@ here, so the bin gets empty wifi/command-secret and can't reconnect or be signed
 | `systemd/` | `ha-*` unit files (the dictator services) | — |
 | `config-examples/` | `*.example.yaml` templates (real configs live in `instance/`, git-ignored) | — |
 
-Runbooks (how-to recipes): [SKILLS.md](SKILLS.md).
+Runbooks (how-to recipes): [SKILLS.md](SKILLS.md). Bringing in a new device (capability survey → conformance →
+reuse → decompose → build → test): [docs/DEVICE-INTAKE.md](docs/DEVICE-INTAKE.md).
 
 ## Standing contracts (do not break)
 
