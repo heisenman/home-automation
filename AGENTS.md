@@ -5,7 +5,7 @@ terse; it **routes** to the deep docs, it doesn't duplicate them. (Conventions: 
 
 ## Principles (non-negotiable — read before you build)
 
-These three govern all work here; they are first on purpose. Detail lives in the ADRs they cite.
+These four govern all work here; they are first on purpose. Detail lives in the ADRs they cite.
 
 1. **Reuse-first.** Before building anything, find what already exists: [`docs/REUSE.md`](docs/REUSE.md) (the
    capability catalog), the ADR nearest your task, `firmware/components/`, existing `cmd/*` handlers, and
@@ -16,6 +16,12 @@ These three govern all work here; they are first on purpose. Detail lives in the
 3. **Decompose / module-first.** New capability = a new module, named in a decomposition step *before* code —
    no god-files, no `cp -r` forks. ([ADR-0020](docs/adr/ADR-0020-shared-edge-panel-firmware-core.md); firmware
    detail in [firmware/AGENTS.md](firmware/AGENTS.md).)
+4. **Conform by ability.** A device's obligations follow from *what it does*, not what it's called. Accepted
+   ADRs are **normative directives**, not just design records. Before building or onboarding a device — or
+   adding an ability to an existing one — **DO** enumerate its abilities, **CHECK** each against
+   [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md) (the ability→ADR conformance catalog), and **ADHERE** to every
+   SHALL it binds. It isn't done until it conforms; a forgotten device-registration can't excuse a missed
+   contract.
 
 **If your task writes or changes code, take the reuse self-test in [ADR-0025](docs/adr/ADR-0025-reuse-first-navigation.md)
 — honestly, before you build.** If you cannot say *"yes, I'd discover and reuse before building,"* you are the
@@ -84,7 +90,9 @@ Runbooks (how-to recipes): [SKILLS.md](SKILLS.md).
 
 1. **Reuse-first (if you'll write code):** scan [`docs/REUSE.md`](docs/REUSE.md) + the ADR nearest your task +
    `firmware/components/` for prior art — **reuse or justify** (Principle 1). Don't build until you've looked.
-2. Check the **coord board** — `python3 tools/agents/coord.py --as <ops|dev> list|ready|mine` (MQTT ledger on
+2. **Conform by ability (if you'll build/onboard a device):** DO enumerate what it does; CHECK each ability in
+   [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md); ADHERE to every SHALL it binds (Principle 4).
+3. Check the **coord board** — `python3 tools/agents/coord.py --as <ops|dev> list|ready|mine` (MQTT ledger on
    VIP `.200`; two-Claude coordination, see [tools/AGENTS.md](tools/AGENTS.md)).
-3. Read the subsystem `AGENTS.md` for where you're working; follow its ADR links.
-4. Honor the standing contracts above. At task end: commit+push, update FOLLOWUPS/board, checkpoint.
+4. Read the subsystem `AGENTS.md` for where you're working; follow its ADR links.
+5. Honor the standing contracts above. At task end: commit+push, update FOLLOWUPS/board, checkpoint.
