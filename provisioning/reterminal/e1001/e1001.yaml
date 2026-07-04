@@ -63,6 +63,18 @@ http_request:                        # P4c: fetch the server-authored spec (BFF)
   timeout: 8s
   verify_ssl: false
 
+globals:                             # parsed tiles as parallel string vectors (std types → no custom-type include)
+  - id: g_tile_labels
+    type: std::vector<std::string>
+    restore_value: false
+  - id: g_tile_lines
+    type: std::vector<std::string>
+    restore_value: false
+  - id: g_page                       # current page (buttons paginate; e-ink = discrete pages, not scroll)
+    type: int
+    restore_value: false
+    initial_value: '0'
+
 # --- ePaper display (UC8179, 7.5" mono 800x480) — P4b: prove the display path ---
 spi:
   clk_pin: GPIO7
@@ -93,21 +105,29 @@ display:
       inverted: true                 # BUSY# is active-low on the schematic
     rotation: 270                    # portrait, USB port toward floor; lambda uses get_width/height so it reflows
     update_interval: never           # ePaper: draw on-demand (deep-sleep model), not on a timer.
-    lambda: |-                       # P4b.1: live onboard values (proves the text/font path + data binding).
+    lambda: |-                       # P4c.1: paginated house sensor tiles (buttons navigate; e-ink = discrete pages).
       int w = it.get_width(), h = it.get_height();
       it.rectangle(0, 0, w, h);
-      it.print(w / 2, 14, id(font_title), TextAlign::TOP_CENTER, "reTerminal E1001");
-      it.line(0, 60, w, 60);
-      int y = 96;
-      if (id(sht_temp).has_state()) it.printf(24, y, id(font_val), "Temp: %.1f C", id(sht_temp).state);
-      else it.print(24, y, id(font_val), "Temp: --");
-      y += 84;
-      if (id(sht_hum).has_state()) it.printf(24, y, id(font_val), "Hum: %.0f %%", id(sht_hum).state);
-      else it.print(24, y, id(font_val), "Hum: --");
-      y += 84;
-      if (id(batt_v).has_state()) it.printf(24, y, id(font_val), "Batt: %.2f V", id(batt_v).state);
-      else it.print(24, y, id(font_val), "Batt: --");
-      it.printf(w / 2, h - 26, id(font_label), TextAlign::BOTTOM_CENTER, "uptime %.0f s", id(uptime_s).state);
+      const int per = 6;                          // tiles per page
+      int n = (int) id(g_tile_labels).size();
+      int maxp = n == 0 ? 0 : (n - 1) / per;
+      int page = id(g_page);
+      if (page > maxp) { page = maxp; id(g_page) = maxp; }
+      it.printf(w / 2, 12, id(font_title), TextAlign::TOP_CENTER, "House  %d/%d", page + 1, maxp + 1);
+      it.line(0, 52, w, 52);
+      if (n == 0) {
+        it.print(w / 2, h / 2, id(font_label), TextAlign::CENTER, "press Green to fetch");
+      } else {
+        int top = 60, bot = h - 34, rowh = (bot - top) / per, y = top;
+        for (int i = page * per; i < n && i < (page + 1) * per; i++) {
+          it.print(16, y + 6, id(font_label), id(g_tile_labels)[i].c_str());
+          it.print(16, y + 30, id(font_val), id(g_tile_lines)[i].c_str());
+          it.line(0, y + rowh, w, y + rowh);
+          y += rowh;
+        }
+      }
+      it.printf(w / 2, h - 6, id(font_label), TextAlign::BOTTOM_CENTER,
+                "%d sensors   up %.0fs", n, id(uptime_s).state);
 
 # --- Onboard temp/humidity (the [sensor] role, proven on first flash) ---
 i2c:
@@ -169,15 +189,51 @@ light:
       inverted: false
 
 binary_sensor:
+  # Short vs long press (on_click duration ranges) → 3 buttons give 6 actions. Retune freely.
   - platform: gpio
     name: "Button Green"
     pin: { number: GPIO3, mode: { input: true, pullup: true }, inverted: true }
+    on_click:
+      - min_length: 30ms             # Green short = re-fetch the spec + redraw
+        max_length: 450ms
+        then:
+          - button.press: fetch_spec
+      - min_length: 600ms            # Green long = home (page 0)
+        max_length: 5000ms
+        then:
+          - lambda: 'id(g_page) = 0;'
+          - component.update: epaper
   - platform: gpio
     name: "Button Right"
     pin: { number: GPIO4, mode: { input: true, pullup: true }, inverted: true }
+    on_click:
+      - min_length: 30ms             # Right short = next page
+        max_length: 450ms
+        then:
+          - lambda: |-
+              int per = 6;
+              int maxp = id(g_tile_labels).empty() ? 0 : ((int) id(g_tile_labels).size() - 1) / per;
+              if (id(g_page) < maxp) id(g_page) += 1;
+          - component.update: epaper
+      - min_length: 600ms            # Right long = last page
+        max_length: 5000ms
+        then:
+          - lambda: 'id(g_page) = id(g_tile_labels).empty() ? 0 : ((int) id(g_tile_labels).size() - 1) / 6;'
+          - component.update: epaper
   - platform: gpio
     name: "Button Left"
     pin: { number: GPIO5, mode: { input: true, pullup: true }, inverted: true }
+    on_click:
+      - min_length: 30ms             # Left short = previous page
+        max_length: 450ms
+        then:
+          - lambda: 'if (id(g_page) > 0) id(g_page) -= 1;'
+          - component.update: epaper
+      - min_length: 600ms            # Left long = first page
+        max_length: 5000ms
+        then:
+          - lambda: 'id(g_page) = 0;'
+          - component.update: epaper
 
 # ── In-flight diagnostics (query over MQTT/API — no reflash, no serial) ────────────────
 # The lesson from bring-up: don't reflash to inspect state, and don't chase boot-time serial logs.
@@ -211,7 +267,8 @@ button:
     on_press:
       - component.update: epaper
   - platform: template
-    name: "Fetch Spec"               # P4c.0: prove the E1001 can reach the BFF over wifi (logs status/size to MQTT)
+    name: "Fetch Spec"               # P4c: pull the BFF spec, parse into tiles, redraw (also bound to the Green button)
+    id: fetch_spec
     on_press:
       - http_request.get:
           url: ${bff_base_url}/api/v1/sensors
@@ -219,8 +276,38 @@ button:
           max_response_buffer_size: 24kB   # /api/v1/sensors ~10KB (16 sensors); default truncates it
           on_response:
             - lambda: |-
-                ESP_LOGI("spec", "GET /api/v1/sensors -> HTTP %d, %d bytes, %d ms",
+                ESP_LOGI("spec", "GET -> HTTP %d, %d bytes, %d ms",
                          response->status_code, body.length(), response->duration_ms);
+                if (response->status_code != 200) return;
+                id(g_tile_labels).clear();
+                id(g_tile_lines).clear();
+                bool ok = json::parse_json(body, [](JsonObject root) -> bool {
+                  for (JsonObject s : root["sensors"].as<JsonArray>()) {
+                    if (id(g_tile_labels).size() >= 40) break;   // safety cap; buttons paginate the full set
+                    const char *room = !s["room"].isNull() ? s["room"].as<const char *>()
+                                                           : s["device_id"].as<const char *>();
+                    JsonObject m = s["metrics"].as<JsonObject>();
+                    char line[48];
+                    if (!m["temperature_c"].isNull() && !m["humidity_pct"].isNull())
+                      snprintf(line, sizeof(line), "%.1f C   %.0f %%",
+                               m["temperature_c"].as<float>(), m["humidity_pct"].as<float>());
+                    else if (!m["radon_bqm3"].isNull())
+                      snprintf(line, sizeof(line), "radon %.0f Bq", m["radon_bqm3"].as<float>());
+                    else if (!m["power_w"].isNull())
+                      snprintf(line, sizeof(line), "%.0f W", m["power_w"].as<float>());
+                    else if (!m["voc_index"].isNull())
+                      snprintf(line, sizeof(line), "VOC %.0f", m["voc_index"].as<float>());
+                    else if (!m["eco2"].isNull())
+                      snprintf(line, sizeof(line), "eCO2 %.0f ppm", m["eco2"].as<float>());
+                    else
+                      snprintf(line, sizeof(line), "--");
+                    id(g_tile_labels).push_back(room ? room : "?");
+                    id(g_tile_lines).push_back(line);
+                  }
+                  return true;
+                });
+                ESP_LOGI("spec", "parsed %d tiles (ok=%d)", id(g_tile_labels).size(), ok);
+            - component.update: epaper
 
 text_sensor:
   - platform: debug
