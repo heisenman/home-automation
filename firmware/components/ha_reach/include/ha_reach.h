@@ -1,3 +1,6 @@
+// BREADCRUMB: firmware/components > ha_reach - mesh reach census - per-MAC RSSI-EWMA of every heard endpoint, independent of the relay allowlist. Contract: ADR-0023. Parent: firmware/AGENTS.md.
+// REUSE-WHEN: a node should report full-neighborhood BLE reachability for coordinator rebalancing, without the advert firehose
+//
 #pragma once
 #include <stdint.h>
 #include <stdbool.h>

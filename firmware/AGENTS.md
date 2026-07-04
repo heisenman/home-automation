@@ -18,6 +18,9 @@ firmware/
 
 ## ⛔ MODULE-FIRST — the mandate this tree exists to serve (ADR-0020)
 
+*This is Principle 3 (decompose / module-first) from the [root AGENTS.md](../AGENTS.md) — stated once there,
+repo-wide; its firmware detail lives here. Link up, don't duplicate.*
+
 **New capability = a new module. Never new lines in a god-file, never a fourth `cp -r` copy.**
 
 This is not a style preference; it is the standing rule for all firmware work.

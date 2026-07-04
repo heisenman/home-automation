@@ -1,3 +1,6 @@
+// BREADCRUMB: firmware/components > ha_battery_profile - versioned, loadable V->SoC profile - offsets+LUT+floors as DATA, not compiled constants. Contract: ADR-0024. Parent: firmware/AGENTS.md.
+// REUSE-WHEN: a device needs its battery curve/offsets/safety-floors as loadable, testable, deployable data (no reflash)
+//
 // Versioned, loadable battery profile (ADR-0024 §5). The gauge's numbers — state offsets, the
 // V→SoC LUT, and the safety floors — are DATA, not compiled constants, so a better curve deploys
 // without a firmware reflash and is comparable / rollback-able / improvable in the field.

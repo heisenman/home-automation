@@ -1,3 +1,6 @@
+// BREADCRUMB: firmware/components > ha_ble_scan - shared passive BLE observer - NimBLE host + continuous scan + advert parse + SwitchBot decode + debounce. Contract: ADR-0020. Parent: firmware/AGENTS.md.
+// REUSE-WHEN: an edge node needs to observe/relay BLE adverts (SwitchBot meters etc.)
+//
 #pragma once
 #include <stdbool.h>
 #include <stdint.h>

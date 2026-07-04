@@ -1,3 +1,6 @@
+// BREADCRUMB: firmware/components > ha_sdcard - microSD mount over SDMMC+FAT, board power/slot/width/freq as config; hot-plug presence. Contract: ADR-0020. Parent: firmware/AGENTS.md.
+// REUSE-WHEN: a device needs mounted microSD storage that adapts to new boards without forking
+//
 // SD card mount (ADR-0020).
 //
 // Brings up a microSD over SDMMC and mounts a FAT filesystem, with the board-specific bits

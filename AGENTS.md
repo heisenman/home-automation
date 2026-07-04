@@ -1,7 +1,25 @@
 # AGENTS.md — start here
 
 Orientation for any agent/LLM working this repo. Read this, then the relevant subsystem `AGENTS.md`. Keep it
-terse; it **routes** to the deep docs, it doesn't duplicate them. (Convention: ADR-0021.)
+terse; it **routes** to the deep docs, it doesn't duplicate them. (Conventions: ADR-0021, ADR-0025.)
+
+## Principles (non-negotiable — read before you build)
+
+These three govern all work here; they are first on purpose. Detail lives in the ADRs they cite.
+
+1. **Reuse-first.** Before building anything, find what already exists: [`docs/REUSE.md`](docs/REUSE.md) (the
+   capability catalog), the ADR nearest your task, `firmware/components/`, existing `cmd/*` handlers, and
+   `tools/`. **Reuse it, or justify in your commit why not.** ([ADR-0025](docs/adr/ADR-0025-reuse-first-navigation.md)
+   — this repo has *already* nearly rebuilt capabilities that existed; that is the failure this rule exists to stop.)
+2. **Docs-first.** Before asserting any knowable fact (a pin, register, wire format, API contract), read the
+   authoritative doc — schematic, datasheet, spec, ADR. Recall or probing may *confirm* a doc; it never *replaces* one.
+3. **Decompose / module-first.** New capability = a new module, named in a decomposition step *before* code —
+   no god-files, no `cp -r` forks. ([ADR-0020](docs/adr/ADR-0020-shared-edge-panel-firmware-core.md); firmware
+   detail in [firmware/AGENTS.md](firmware/AGENTS.md).)
+
+**If your task writes or changes code, take the reuse self-test in [ADR-0025](docs/adr/ADR-0025-reuse-first-navigation.md)
+— honestly, before you build.** If you cannot say *"yes, I'd discover and reuse before building,"* you are the
+reason this section is first: open [`docs/REUSE.md`](docs/REUSE.md) now.
 
 ## What this system is
 
@@ -64,7 +82,9 @@ Runbooks (how-to recipes): [SKILLS.md](SKILLS.md).
 
 ## Starting a task
 
-1. Check the **coord board** — `python3 tools/agents/coord.py --as <ops|dev> list|ready|mine` (MQTT ledger on
+1. **Reuse-first (if you'll write code):** scan [`docs/REUSE.md`](docs/REUSE.md) + the ADR nearest your task +
+   `firmware/components/` for prior art — **reuse or justify** (Principle 1). Don't build until you've looked.
+2. Check the **coord board** — `python3 tools/agents/coord.py --as <ops|dev> list|ready|mine` (MQTT ledger on
    VIP `.200`; two-Claude coordination, see [tools/AGENTS.md](tools/AGENTS.md)).
-2. Read the subsystem `AGENTS.md` for where you're working; follow its ADR links.
-3. Honor the standing contracts above. At task end: commit+push, update FOLLOWUPS/board, checkpoint.
+3. Read the subsystem `AGENTS.md` for where you're working; follow its ADR links.
+4. Honor the standing contracts above. At task end: commit+push, update FOLLOWUPS/board, checkpoint.

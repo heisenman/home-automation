@@ -1,3 +1,6 @@
+// BREADCRUMB: firmware/components > fs_ops - remote SD filesystem over MQTT (ls/stat/read/write/rm/mkdir/df), JSON on cmd/fs, base64-chunked, /sdcard-scoped. Contract: beachhead cmd/fs. Parent: firmware/AGENTS.md.
+// REUSE-WHEN: you must read or write a device's microSD live, no reflash (e.g. pull a log/CSV off the card)
+//
 // SD file-ops over MQTT (D1001).
 //
 // A small remote filesystem surface so the microSD can be driven live — list, stat, read,

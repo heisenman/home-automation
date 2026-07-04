@@ -1,3 +1,6 @@
+// BREADCRUMB: firmware/components > ha_battery - fuel-gauge-less battery gauge: ADC->SoC (loadable LUT), IMU board-temp, thermal-gated charge manager. Contract: ADR-0020/0024. Parent: firmware/AGENTS.md.
+// REUSE-WHEN: reading battery voltage/SoC/charge-state on a panel-class ESP node with no fuel-gauge IC
+//
 // Battery gauge + thermal-gated charging (ADR-0020).
 //
 // Fuel-gauge-less battery support for panel-class nodes: ADC voltage → SoC (LUT), board temp

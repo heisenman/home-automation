@@ -1,3 +1,6 @@
+// BREADCRUMB: firmware/components > switchbot_decode - pure SwitchBot BLE advertisement decoder (C port of the server decoder), host-testable, no ESP deps. Contract: server/ingest port. Parent: firmware/AGENTS.md.
+// REUSE-WHEN: decoding SwitchBot meter/sensor adverts on-device or host (shared with server/ingest)
+//
 // SwitchBot BLE advertisement decoder (C port of server/ingest/decoders/switchbot.py).
 // Pure, no ESP/Bluetooth deps — unit-testable on the host.
 #pragma once

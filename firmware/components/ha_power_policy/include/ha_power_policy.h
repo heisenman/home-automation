@@ -1,3 +1,6 @@
+// BREADCRUMB: firmware/components > ha_power_policy - board-agnostic battery SAFETY policy: mV thresholds -> hard-off / warn / boot-gate, via injected actuators. Contract: ADR-0024. Parent: firmware/AGENTS.md.
+// REUSE-WHEN: a battery device needs low-power safety behavior that holds even before an accurate SoC curve exists
+//
 // Battery low-power SAFETY policy (ADR-0024 §3/§4/§6) — the board-agnostic "safety heart".
 //
 // Decides, from a single normalized cell voltage, when to: hard power-off at the run floor
