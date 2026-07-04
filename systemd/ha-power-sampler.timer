@@ -1,15 +1,18 @@
-# Fires the Layer-1 sampler every ~5 min. AccuracySec coalesces the wake with other timers so the box
+# Fires the Layer-1 sampler every ~15 min. AccuracySec coalesces the wake with other timers so the box
 # wakes once for several jobs (the very thing the campaign optimizes for). Persistent=false: a missed
 # fire (box off) just resumes next interval; no catch-up storm.
+# Cadence relaxed 5min -> 15min 2026-07-04 (Hugh): the day-9 campaign readout characterized the box
+# (docs/reviews/2026-07-04-power-optimization-day9.md); low-cadence regression-watch only from here, and
+# the sampler perturbs the dataset less at 15min. Wider AccuracySec = more coalescing = fewer dedicated wakes.
 [Unit]
-Description=Run the HA power/idle sampler every 5 min
+Description=Run the HA power/idle sampler every 15 min
 Documentation=file:///home/visko/home_automation/docs/power-optimization.md
 
 [Timer]
 OnBootSec=2min
-OnUnitActiveSec=5min
-AccuracySec=30s
-RandomizedDelaySec=15s
+OnUnitActiveSec=15min
+AccuracySec=90s
+RandomizedDelaySec=30s
 
 [Install]
 WantedBy=timers.target
