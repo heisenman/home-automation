@@ -112,5 +112,36 @@ def test_firmware_breadcrumb_parent_links_resolve():
     assert not broken, "breadcrumb Parent links unresolved:\n  " + "\n  ".join(broken)
 
 
+# --- Conformance axis (docs/CONFORMANCE.md) — the 3rd nav axis (by-contract) -----------------------
+# Integrity drift-guard only: keeps the catalog's own references honest. The big declared-abilities ×
+# catalog enforcement generator is a separate ops follow-on (see CONFORMANCE.md "Enforcement — Next").
+
+CONFORMANCE = ROOT / "docs" / "CONFORMANCE.md"
+
+
+def test_conformance_axis_wired_to_root():
+    """The by-contract axis stays reachable from the entry point: root AGENTS.md links to CONFORMANCE.md."""
+    assert CONFORMANCE.exists(), "docs/CONFORMANCE.md is missing"
+    assert "docs/CONFORMANCE.md" in (ROOT / "AGENTS.md").read_text(), \
+        "root AGENTS.md no longer links docs/CONFORMANCE.md — the conformance axis is orphaned from the map"
+
+
+def test_conformance_links_resolve():
+    """Every relative link in CONFORMANCE.md resolves — a broken normative pointer is a broken contract."""
+    broken = [f"CONFORMANCE.md -> {shown}"
+              for shown, path_part in _relative_link_targets(CONFORMANCE.read_text())
+              if not (CONFORMANCE.parent / path_part).resolve().exists()]
+    assert not broken, "CONFORMANCE.md links point at missing targets:\n  " + "\n  ".join(broken)
+
+
+def test_conformance_bound_adrs_exist():
+    """Every ADR the catalog `Binds:` resolves to a file in docs/adr/ — a normative directive cannot
+    cite an ADR that doesn't exist."""
+    refs = sorted(set(re.findall(r"ADR-\d{4}", CONFORMANCE.read_text())))
+    adr_dir = ROOT / "docs" / "adr"
+    missing = [a for a in refs if not list(adr_dir.glob(f"{a}*.md"))]
+    assert not missing, f"CONFORMANCE.md cites ADR(s) with no file in docs/adr/: {missing}"
+
+
 if __name__ == "__main__":
     run_module(globals())
