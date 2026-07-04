@@ -1,0 +1,29 @@
+# Canonical area taxonomy — GENERIC EXAMPLE (ADR-0026, Phase 1).
+#
+# This is the committable *shape* only, a fictional house. The real registry lives at
+# instance/areas.yaml (gitignored) — real room names + the floor-plan never enter this
+# public repo (privacy rule; see docs/design/area-migration-runbook.md).
+#
+# One entry per area, keyed by `id` (the string every config + code reference uses):
+#   name:  display label the UI renders
+#   level: main_floor | attic | crawlspace | ...        (physical stratum)
+#   zone:  h_suite | c_suite | common | circulation | utility | exterior | none
+#          (first-class: rollups + house-scenes target a whole zone)
+#   type:  kitchen | living | bedroom | bathroom | office | dining | entry |
+#          closet | mechanical | circulation | porch | monolithic
+#
+# Load-bearing choices (ADR-0026 / ops review): zone is first-class not a tag; closets are
+# their own addressable id; non-room areas are allowed via `type` (e.g. a network rack);
+# monolithic levels (attic, crawlspace) = one area sitting at its own level.
+areas:
+  kitchen:        { name: Kitchen,       level: main_floor, zone: common,      type: kitchen }
+  living_room:    { name: Living Room,   level: main_floor, zone: common,      type: living }
+  hall:           { name: Hall,          level: main_floor, zone: circulation, type: circulation }
+  suite_a_office: { name: Office A,      level: main_floor, zone: suite_a,     type: office }
+  suite_a_bed:    { name: Bedroom A,     level: main_floor, zone: suite_a,     type: bedroom }
+  suite_a_bath:   { name: Bath A,        level: main_floor, zone: suite_a,     type: bathroom }
+  suite_b_bed:    { name: Bedroom B,     level: main_floor, zone: suite_b,     type: bedroom }
+  mech_closet:    { name: Mechanical,    level: main_floor, zone: utility,     type: mechanical }
+  porch:          { name: Porch,         level: main_floor, zone: exterior,    type: porch }
+  attic:          { name: Attic,         level: attic,      zone: none,        type: monolithic }
+  crawlspace:     { name: Crawlspace,    level: crawlspace, zone: none,        type: monolithic }
