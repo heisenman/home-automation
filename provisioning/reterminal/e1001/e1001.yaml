@@ -36,17 +36,21 @@ esphome:
         - lambda: |-                 # duty scales with level (lvl3 = full burn). Priority 1 so WiFi/BT (much higher) never starve.
             for (int core = 0; core < 2; core++) {
               xTaskCreatePinnedToCore(+[](void *) {
+                const size_t N = 96 * 1024;                              // >L2 cache: forces real octal-PSRAM bus traffic
+                uint8_t *buf = (uint8_t *) heap_caps_malloc(N, MALLOC_CAP_SPIRAM);
+                uint32_t k = 0;
                 for (;;) {
                   if (id(g_prof_state) == 1 && id(g_load_lvl) > 0) {
                     volatile float x = 1.0001f;
-                    for (int i = 0; i < 60000; i++) x = x * 1.0000001f + 0.0000001f;
+                    for (int i = 0; i < 60000; i++) x = x * 1.0000001f + 0.0000001f;   // FPU/core burn
+                    if (buf) for (size_t i = 0; i < N; i += 16) buf[i] = (uint8_t)(k++);  // PSRAM-bus thrash
                     int lvl = id(g_load_lvl);
                     if (lvl >= 3) taskYIELD(); else vTaskDelay(pdMS_TO_TICKS(3 - lvl));
                   } else {
                     vTaskDelay(pdMS_TO_TICKS(200));   // idle when not discharging / load off
                   }
                 }
-              }, core ? "profburn1" : "profburn0", 2560, nullptr, 1, nullptr, core);
+              }, core ? "profburn1" : "profburn0", 3072, nullptr, 1, nullptr, core);
             }
     - priority: -100                 # after everything is up: one-shot draw (update_interval is 'never', ePaper style)
       then:
@@ -141,11 +145,11 @@ interval:
       - lambda: |-
           if (id(g_prof_state) == 1 && id(g_load_lvl) > 0) id(ext_load)->turn_on();
           else                                              id(ext_load)->turn_off();
-  - interval: 100ms                  # profiler discharge-LOAD (radio): at Prof Load Level>=2, keep the WiFi TX chain
-    then:                            # hot with a steady 256B publish (radio TX is the biggest current lever on the S3).
-      - lambda: |-
+  - interval: 10ms                   # profiler discharge-LOAD (radio): at Prof Load Level>=2, keep the WiFi PA near-
+    then:                            # continuously TX'ing — a fat 1400B publish every 10ms (~140 KB/s). The PA is the
+      - lambda: |-                   # biggest single current lever on the S3; sipping (256B/100ms) barely keyed it.
           if (id(g_prof_state) != 1 || id(g_load_lvl) < 2) return;
-          static const std::string pay(256, 'x');
+          static const std::string pay(1400, 'x');
           id(mqtt_client)->publish("${device_name}/loadgen", pay);   // std::string overload (avoid the char*,len trap)
   - interval: 2s
     then:
