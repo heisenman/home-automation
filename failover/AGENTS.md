@@ -22,6 +22,9 @@ Concepts + operations: [README.md](README.md), [failover-runbook.md](failover-ru
 - **⚠️ `.245` is the CRITICAL FILESERVER** — a live drill makes it briefly act as controller; that's **gated
   on Hugh + a window.** Building/dry-running the harness is not gated.
 - Reconcile services are **VIP-gated** (only the active dictator runs the proactive loop).
-- Reconcile-history tuner is in **shadow mode** (logs a proposed adaptive interval; fixed 15 min stays live)
-  pending review — flip `RECONCILE_MODE=active` only if the proposed data looks sane.
+- Reconcile-history tuner is in **shadow mode** (logs a proposed adaptive interval; fixed 15 min stays live).
+  Week-long review DONE 2026-07-03 = SANE (proposed floored at 120 s, `D`≤4 s) — see
+  [docs/reviews/2026-07-03-reconcile-shadow-tuning.md](../docs/reviews/2026-07-03-reconcile-shadow-tuning.md).
+  Flip to `RECONCILE_MODE=active` is **staged for the new-NUC dictator bring-up** (reconcile pair 210⇄new-NUC),
+  not the current 210⇄.245 pair.
 - Real configs live in `../instance/`; commit only `*.example`/`.tmpl`.

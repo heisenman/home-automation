@@ -134,9 +134,12 @@ Verified against the live cluster + source this date. Repo `801545f`.
   single-bridge design fixes vip-from-wifi); **add-device-flow** DONE (dev: sensor/actuator/node-enroll).
 
 **ACTUALLY OPEN / NEXT:**
-1. **Reconcile shadow-tuning review — SCHEDULED 2026-07-02** (cloud routine `trig_01WsViJjLPtMsu3i93qqKCk4`,
-   reminder only — runs LAN-side). Read `instance/ha-reconcile-tuning.log`; sane → flip `RECONCILE_MODE=active`
-   on 210+.245; weird → revisit tuner (ADR-0016).
+1. **Reconcile shadow-tuning review — DONE 2026-07-03** ([docs/reviews/2026-07-03-reconcile-shadow-tuning.md](reviews/2026-07-03-reconcile-shadow-tuning.md)).
+   Verdict **SANE**: 767 samples / 8.01 d, `proposed`=120 s flat (floored), `D`≤4 s — tuner saturated at the
+   `I_min` floor, ~100× clear of the `cluster-doctor` red-flag (`I_max/2`=450 s). **Flip DEFERRED** (not for data):
+   the new NUC becomes the next dictator (fail over to it, not `.245`), so the reconcile pair becomes 210⇄new-NUC.
+   Carry-forward: set `RECONCILE_MODE=active` (opt. `RECONCILE_INTERVAL_S=120`) as a step in the **new-NUC dictator
+   bring-up**, validated by the first failover-drill on that pair. Staged, not open.
 2. **Failover DRILL** (dev harness, `failover-drill`) — now meaningful for the data plane; seize→release→
    confirm zero history hole = the live end-to-end proof. Gated on Hugh OK + window.
 3. **OpenWRT cutover** (theme B, router ETA ~2026-07-09, Hugh + window) — prestage READY; clears

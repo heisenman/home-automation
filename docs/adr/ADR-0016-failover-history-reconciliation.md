@@ -131,3 +131,12 @@ Two refinements landed with the implementation (`adr-history-reconciliation`):
    Since the 15-min loss budget is already met, **kept in shadow** (no production change); revisit ~2026-07-09
    to decide promote-to-2min vs raise `I_min` vs stay 15-min (Hugh leaning promote). No re-tune needed — the
    formula behaves correctly; the only open question is the desired cadence given how cheap `D` is.
+
+   **Review 2 (2026-07-03, dev — the scheduled read-out) — confirms Review 1; flip re-sequenced, not revisited.**
+   Full write-up: [docs/reviews/2026-07-03-reconcile-shadow-tuning.md](../reviews/2026-07-03-reconcile-shadow-tuning.md).
+   Same verdict (767 cycles, `proposed`=120 s floored, `D`≤4 s, ~100× clear of the red flag). Supersedes the
+   "revisit 2026-07-09 to pick a cadence" open item with a concrete carry-forward: a **new NUC is now the intended
+   next dictator** (Hugh, 2026-07-03 — fail over to it, not to the `.245` fileserver), so the reconcile pair
+   becomes **210⇄new-NUC**. Decision: enable `RECONCILE_MODE=active` (opt. `RECONCILE_INTERVAL_S=120`) as a step
+   in the **new-NUC dictator bring-up**, validated by the first failover-drill on that pair — one config touch on
+   the right box, base path proven first, and no churn on `.245` which is about to shed standby duty.
