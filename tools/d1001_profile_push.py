@@ -20,6 +20,7 @@ import argparse
 import json
 import subprocess
 import sys
+import time
 
 REQ_TOPIC = "d1001-beachhead/cmd/profile"
 RES_TOPIC = "d1001-beachhead/profile"
@@ -57,6 +58,33 @@ def build(args):
 
 def pub(broker, payload):
     subprocess.run(["mosquitto_pub", "-h", broker, "-t", REQ_TOPIC, "-m", payload], check=True)
+
+
+def pub_confirm(broker, payload):
+    """Publish, and CATCH the panel's async response: subscribe to ack + profile BEFORE publishing (the
+    apply is async on-device — parse+NVS+republish), then print what the panel actually says. This is the
+    definitive applied/rejected signal; a bare --get right after a --push races the retained update."""
+    sub = subprocess.Popen(
+        ["mosquitto_sub", "-h", broker, "-v", "-t", "d1001-beachhead/ack", "-t", RES_TOPIC],
+        stdout=subprocess.PIPE, text=True)
+    time.sleep(0.4)                      # let the subscriber connect before we publish
+    pub(broker, payload)
+    time.sleep(2.5)                      # let the panel validate + hot-swap + persist + republish
+    sub.terminate()
+    lines = (sub.stdout.read() or "").strip().splitlines()
+    applied = rejected = None
+    for ln in lines:
+        topic, _, body = ln.partition(" ")
+        if topic.endswith("/ack") and '"profile"' in body:
+            if "applied" in body:  applied = body
+            if "rejected" in body: rejected = body
+    if rejected:
+        print(f"REJECTED by panel: {rejected}", file=sys.stderr)
+    elif applied:
+        print(f"APPLIED: {applied}")
+    else:
+        print("no applied/rejected ack seen in 2.5s — is the NEW firmware flashed and the panel online?\n"
+              "  (raw ack/profile traffic below)\n  " + "\n  ".join(lines), file=sys.stderr)
 
 
 def get(broker):
@@ -97,8 +125,10 @@ def main():
         payload = json.dumps(build(a), separators=(",", ":"))
         if a.dry_run:
             print(payload); return
-        pub(a.broker, payload)
-        print(f"pushed {json.loads(payload)['version']} ({len(payload)} bytes) — confirm with --get")
+        print(f"pushing {json.loads(payload)['version']} ({len(payload)} bytes) …")
+        pub_confirm(a.broker, payload)
+        print("--- panel now reports ---")
+        get(a.broker)   # retained is settled by now (pub_confirm already waited)
     elif a.get:
         get(a.broker)
     else:
