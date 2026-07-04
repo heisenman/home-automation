@@ -84,6 +84,17 @@ int  ha_battery_charge_mode_get(void);
 void ha_battery_charge_reset_pulse(int ms);   // one clean /CE-high pulse of `ms`, then resume the mode
 
 esp_err_t ha_battery_init(const ha_battery_cfg_t *cfg);   // once, before sampling
+
+// Hot-swap the state-normalized profile at runtime (ADR-0024 §5: profile is loadable data). Validated
+// (ha_batt_profile_valid) and copied under the sampler mutex, so a concurrent ha_battery_sample() sees
+// either the whole old or the whole new profile — never a torn LUT. Returns ESP_ERR_INVALID_ARG (profile
+// untouched) if p fails validation. This is the runtime deploy path: a better curve without a reflash.
+esp_err_t ha_battery_set_profile(const ha_batt_profile_t *p);
+
+// Copy the active profile into *out (under the mutex). False if none is set. For publishing the live
+// profile's provenance and for persisting the currently-active curve.
+bool ha_battery_get_profile(ha_batt_profile_t *out);
+
 esp_err_t ha_battery_sample(ha_batt_sample_t *out);       // thread-safe (internal mutex)
 esp_err_t ha_battery_read(int *soc_pct, float *volts, bool *charging);  // convenience
 void      ha_battery_charge_start(void);                  // start the thermal-gated charge task

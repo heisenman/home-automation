@@ -48,6 +48,20 @@ ha_batt_profile_t ha_batt_profile_d1001_default(void)
     return p;
 }
 
+bool ha_batt_profile_valid(const ha_batt_profile_t *p)
+{
+    if (!p) return false;
+    if (p->version[0] == '\0') return false;                          // must carry provenance
+    if (p->lut_n < 2 || p->lut_n > HA_BATT_PROFILE_LUT_MAX) return false;
+    for (int i = 1; i < p->lut_n; i++)
+        if (p->lut[i] <= p->lut[i - 1]) return false;                 // strictly ascending => SoC never inverts
+    if (p->run_floor_mv <= 0) return false;
+    if (p->warn_mv < p->run_floor_mv) return false;                   // warn at or above the hard floor
+    if (p->warn_clear_mv < p->warn_mv) return false;                  // clear >= entry (hysteresis)
+    if (p->boot_release_mv < p->boot_gate_mv) return false;           // release >= gate (hysteresis)
+    return true;
+}
+
 int ha_batt_profile_normalize(const ha_batt_profile_t *p, int v_meas,
                               bool display_on, bool on_usb, bool charging)
 {

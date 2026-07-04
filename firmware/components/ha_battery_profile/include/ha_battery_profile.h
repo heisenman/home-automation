@@ -41,6 +41,12 @@ typedef struct {
 // This is the fallback when no profile is loaded (ADR-0024 §5).
 ha_batt_profile_t ha_batt_profile_d1001_default(void);
 
+// True iff p is a sane, loadable profile: non-empty version tag, lut_n in [2, HA_BATT_PROFILE_LUT_MAX],
+// a strictly-ascending LUT, and ordered safety floors (run <= warn <= warn_clear, boot_gate <= boot_release).
+// EVERY load/parse path (NVS blob, MQTT-pushed JSON) MUST call this before accepting a profile, so a
+// corrupt or hostile blob can never brick SoC or the safety gates. Pure; host-tested.
+bool ha_batt_profile_valid(const ha_batt_profile_t *p);
+
 // Remove the state offsets: raw ADC mV -> base-frame mV. `display_on`/`on_usb`/`charging` describe
 // the state the reading was taken in. Pure; the gauge calls this before the LUT.
 int ha_batt_profile_normalize(const ha_batt_profile_t *p, int v_meas,

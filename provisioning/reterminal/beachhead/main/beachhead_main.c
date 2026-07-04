@@ -37,6 +37,7 @@
 #include "esp_io_expander.h"
 #include "bat_profile.h"
 #include "ha_battery.h"
+#include "ha_battery_profile_rt.h"   // runtime profile load/save/push — deploy a curve as data (ADR-0024 §5)
 #include "ha_power_policy.h"   // battery safety policy: shutdown/warn/boot-gate (ADR-0024)
 #include "fs_ops.h"
 #include "ui_tiles.h"
@@ -85,6 +86,8 @@ static const char *TAG = "beachhead";
 #define T_ALERT  "d1001-beachhead/alert"           // <- low-battery warn (retained) -> ntfy bridge
 #define T_BRATE  "d1001-beachhead/cmd/battrate"    // -> N: battery telemetry sample period in ms (finer-cadence hook)
 #define T_PPTEST "d1001-beachhead/cmd/pptest"      // -> "mv N": inject a policy reading to bench-test warn/shutdown (0=resume)
+#define T_PROFC  "d1001-beachhead/cmd/profile"     // -> JSON profile (hot-swap+persist to NVS) | "get" | "default" (ADR-0024 §5)
+#define T_PROF   "d1001-beachhead/profile"         // <- active battery profile (provenance+offsets+lut+source), retained
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
@@ -94,6 +97,10 @@ static void power_task(void *pv);       // power-context watcher: BLE on wall / 
 static void slave_ota_task(void *pv);   // C6 slave-OTA task (defined near start_mqtt)
 static void i2cscan_task(void *pv);     // I2C bus scan (fuel-gauge ID) — defined near start_mqtt
 static void battdump_task(void *pv);    // 0x36 register dump (chip ID) — defined near start_mqtt
+static void profile_apply_task(void *pv);   // apply/persist a pushed battery profile (JSON) off the mqtt stack
+static void publish_profile(void);          // retained /profile status of the active curve
+static char s_profile_source[12] = "default";   // how the active curve was set: "nvs" | "default" | "pushed"
+static volatile bool s_batt_ready = false;       // ha_battery_init done — safe to publish /profile
 static volatile bool s_debug = false;         // <-- diagnostic firehose, default OFF
 
 // SD hot-plug: the watcher mounts/unmounts; we drive the replica cache off the presence change —
@@ -333,6 +340,7 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
         esp_mqtt_client_subscribe(e->client, "home/+/+/state", 0);   // live device state -> tiles
         ESP_LOGW(TAG, "MQTT connected (reconnect #%d) — subscribed cmd/# + home/+/+/state", s_mqtt_rc);
         publish_status();
+        if (s_batt_ready) publish_profile();   // re-assert the retained active-profile status on (re)connect
         esp_ota_mark_app_valid_cancel_rollback();
         // Auto-boot the GUI now that the net + OTA lifeline is CONFIRMED live (marked valid above).
         // The panel is reliable enough (Hugh, 2026-07-01) and predark held it dark since boot, so there
@@ -450,6 +458,9 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
             char out[64]; snprintf(out, sizeof(out), "{\"pptest_mv\":%d,\"note\":\"%s\"}",
                                    s_pp_test_mv, s_pp_test_mv ? "policy sees this reading" : "real reading");
             esp_mqtt_client_publish(e->client, T_ACK, out, 0, 0, 0);
+        } else if (tl == (int)strlen(T_PROFC) && strncmp(e->topic, T_PROFC, tl) == 0) {
+            char *j = strndup(e->data, dl);   // JSON / "get" / "default" — apply task frees it
+            if (j) xTaskCreate(profile_apply_task, "profapply", 6144, j, 4, NULL);
         } else if (tl == (int)strlen(T_FSC) && strncmp(e->topic, T_FSC, tl) == 0) {
             char *j = strndup(e->data, dl);
             if (j) { fs_ops_submit(j); free(j); }   // SD file op; worker copies + runs off this stack
@@ -782,6 +793,54 @@ static void fs_publish(const char *json)
     if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_FS, json, 0, 0, 0);
 }
 
+// Retained status of the ACTIVE battery profile (provenance + offsets + LUT + how it was set). Lets an
+// operator confirm which curve a device is running and where it came from (ADR-0024: comparable/auditable).
+static void publish_profile(void)
+{
+    ha_batt_profile_t p;
+    if (!ha_battery_get_profile(&p)) return;
+    char buf[640];
+    int n = ha_batt_profile_rt_to_json(&p, s_profile_source, buf, sizeof(buf));
+    if (n > 0 && s_client && s_mqtt_up)
+        esp_mqtt_client_publish(s_client, T_PROF, buf, 0, 1, 1);   // qos1, retained
+}
+
+// Apply a pushed battery profile off the mqtt-callback stack (JSON parse + NVS write + hot-swap are too
+// heavy for the event stack). Payload is a JSON profile, or the keyword "get" (re-publish status) or
+// "default" (drop the stored profile, revert to the baked-in curve). Frees pv. This is the reflash-free
+// deploy path (ADR-0024 §5): push a better curve as data; it hot-swaps live and persists across reboot.
+static void profile_apply_task(void *pv)
+{
+    char *payload = (char *)pv;
+    char res[96];
+    if (strcmp(payload, "get") == 0) {
+        publish_profile();
+    } else if (strcmp(payload, "default") == 0) {
+        ha_batt_profile_rt_clear();
+        ha_batt_profile_t d = ha_batt_profile_d1001_default();
+        ha_battery_set_profile(&d);
+        strncpy(s_profile_source, "default", sizeof(s_profile_source) - 1);
+        publish_profile();
+        if (s_client && s_mqtt_up)
+            esp_mqtt_client_publish(s_client, T_ACK, "{\"profile\":\"reset-to-default\"}", 0, 0, 0);
+    } else {
+        ha_batt_profile_t np;
+        char err[64] = {0};
+        if (ha_batt_profile_rt_from_json(payload, &np, err, sizeof(err)) == ESP_OK) {
+            ha_battery_set_profile(&np);        // hot-swap into the gauge (race-safe under its mutex)
+            ha_batt_profile_rt_save(&np);       // persist so it survives reboot
+            strncpy(s_profile_source, "pushed", sizeof(s_profile_source) - 1);
+            publish_profile();
+            snprintf(res, sizeof(res), "{\"profile\":\"applied\",\"version\":\"%s\"}", np.version);
+        } else {
+            snprintf(res, sizeof(res), "{\"profile\":\"rejected\",\"err\":\"%s\"}", err);
+        }
+        if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_ACK, res, 0, 0, 0);
+    }
+    free(payload);
+    vTaskDelete(NULL);
+}
+
 
 void app_main(void)
 {
@@ -831,7 +890,16 @@ void app_main(void)
     start_mqtt();
     ha_battery_cfg_t bcfg = ha_battery_d1001_cfg(bsp_io_expander(), bsp_i2c1());
     bcfg.display_on_fn = bsp_display_is_on;   // display state for SoC normalization (ADR-0024)
+    // A profile persisted from an earlier MQTT push (ADR-0024 §5) wins over the baked-in default; a
+    // missing/corrupt blob falls back to it. This is the reflash-free deploy path: the curve is data.
+    static ha_batt_profile_t s_boot_prof;
+    if (ha_batt_profile_rt_load(&s_boot_prof) == ESP_OK) {
+        bcfg.profile = &s_boot_prof;
+        strncpy(s_profile_source, "nvs", sizeof(s_profile_source) - 1);
+    }
     ha_battery_init(&bcfg);                    // ADC/IMU/charge config (handles from the display BSP)
+    s_batt_ready = true;
+    publish_profile();                         // retained active-profile status (guards on s_mqtt_up)
     ha_battery_charge_start();                 // thermal-gated charger + restart watchdog
     ha_power_policy_monitor_start(&s_pp_cfg, &s_pp_io, 5000);   // battery safety monitor: warn @5-10%, hard-off @0%
     xTaskCreate(heartbeat_task, "hb", 4096, NULL, 3, NULL);

@@ -194,6 +194,25 @@ esp_err_t ha_battery_init(const ha_battery_cfg_t *cfg)
     return s_adc ? ESP_OK : ESP_FAIL;
 }
 
+esp_err_t ha_battery_set_profile(const ha_batt_profile_t *p)
+{
+    if (!ha_batt_profile_valid(p)) return ESP_ERR_INVALID_ARG;   // never accept a torn/corrupt curve
+    if (s_mtx) xSemaphoreTake(s_mtx, portMAX_DELAY);
+    s_profile = *p;                 // whole-struct copy: a concurrent sample sees old-or-new, never torn
+    s_have_profile = true;
+    if (s_mtx) xSemaphoreGive(s_mtx);
+    return ESP_OK;
+}
+
+bool ha_battery_get_profile(ha_batt_profile_t *out)
+{
+    if (!out || !s_have_profile) return false;
+    if (s_mtx) xSemaphoreTake(s_mtx, portMAX_DELAY);
+    *out = s_profile;
+    if (s_mtx) xSemaphoreGive(s_mtx);
+    return true;
+}
+
 esp_err_t ha_battery_sample(ha_batt_sample_t *out)
 {
     if (!s_have_cfg) return ESP_FAIL;

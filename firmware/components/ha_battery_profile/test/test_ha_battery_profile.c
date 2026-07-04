@@ -62,6 +62,19 @@ int main(void) {
     ha_batt_profile_t bad = p; bad.lut_n = 1;
     check("n<2 -> -1", ha_batt_profile_soc(&bad, 3700) == -1);
 
+    // --- ha_batt_profile_valid: the gate every load/parse path runs before accepting a profile ---
+    check("valid: default is valid", ha_batt_profile_valid(&p));
+    check("valid: NULL rejected", !ha_batt_profile_valid(NULL));
+    ha_batt_profile_t v;
+    v = p; v.version[0] = '\0';                 check("valid: empty version rejected", !ha_batt_profile_valid(&v));
+    v = p; v.lut_n = 1;                         check("valid: lut_n<2 rejected", !ha_batt_profile_valid(&v));
+    v = p; v.lut_n = HA_BATT_PROFILE_LUT_MAX+1; check("valid: lut_n>max rejected", !ha_batt_profile_valid(&v));
+    v = p; v.lut[10] = v.lut[9];               check("valid: non-ascending LUT rejected", !ha_batt_profile_valid(&v));
+    v = p; v.run_floor_mv = 0;                  check("valid: zero floor rejected", !ha_batt_profile_valid(&v));
+    v = p; v.warn_mv = v.run_floor_mv - 1;      check("valid: warn below floor rejected", !ha_batt_profile_valid(&v));
+    v = p; v.warn_clear_mv = v.warn_mv - 1;     check("valid: clear below warn rejected", !ha_batt_profile_valid(&v));
+    v = p; v.boot_release_mv = v.boot_gate_mv-1; check("valid: boot release<gate rejected", !ha_batt_profile_valid(&v));
+
     printf(fails ? "\n%d CHECK(S) FAILED\n" : "\nALL CHECKS PASS\n", fails);
     return fails ? 1 : 0;
 }
