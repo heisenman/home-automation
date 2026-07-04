@@ -37,6 +37,7 @@
 #include "esp_io_expander.h"
 #include "bat_profile.h"
 #include "ha_battery.h"
+#include "ha_imu.h"                 // roadmap #3 (ability A): IMU presence + tap-to-wake
 #include "ha_battery_profile_rt.h"   // runtime profile load/save/push — deploy a curve as data (ADR-0024 §5)
 #include "ha_power_policy.h"   // battery safety policy: shutdown/warn/boot-gate (ADR-0024)
 #include "fs_ops.h"
@@ -890,6 +891,33 @@ static void clock_backbone_start(void)
     ESP_LOGI(TAG, "clock: SNTP -> %s", NTP_SERVER);
 }
 
+// Presence + tap-to-wake (roadmap #3, ability A). ha_imu is already init'd (ha_battery_init composes
+// on it); enable its hardware wake/tap engine and poll: a tap relights the panel, and motion publishes
+// a presence pulse the coordinator times out with asymmetric dwell (mirrors the edge event-reconcile
+// pattern — the panel reports "motion seen", the dictator owns the presence decision, ADR-0001).
+static void presence_task(void *pv)
+{
+    ha_imu_events_enable(150);              // ~150 mg wake threshold (approach/touch)
+    int64_t last_pub_us = 0;
+    for (;;) {
+        bool motion = false, tap = false;
+        if (ha_imu_poll(&motion, &tap) == ESP_OK) {
+            if (tap) bsp_display_wake();
+            int64_t now = esp_timer_get_time();
+            if (motion && now - last_pub_us > 15LL * 1000 * 1000 && s_client && s_mqtt_up) {
+                last_pub_us = now;          // rate-limit the pulse to once / 15 s while motion continues
+                char topic[64], js[112];
+                snprintf(topic, sizeof topic, "home/edge/%s/presence", BLE_NODE);
+                snprintf(js, sizeof js,
+                         "{\"schema\":1,\"kind\":\"presence\",\"node\":\"%s\",\"present\":true}", BLE_NODE);
+                esp_mqtt_client_publish(s_client, topic, js, 0, 0, false);
+                ESP_LOGI(TAG, "presence: motion -> published");
+            }
+        }
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
+}
+
 void app_main(void)
 {
     bsp_display_predark();   // FIRST: hold the panel dark across boot (kills the OTA-reboot strobe)
@@ -951,6 +979,7 @@ void app_main(void)
     ha_battery_charge_start();                 // thermal-gated charger + restart watchdog
     ha_power_policy_monitor_start(&s_pp_cfg, &s_pp_io, 5000);   // battery safety monitor: warn @5-10%, hard-off @0%
     clock_backbone_start();                    // roadmap #1 (ability G): RTC holdover + SNTP wall clock
+    xTaskCreate(presence_task, "presence", 3072, NULL, 3, NULL);   // roadmap #3 (ability A): IMU presence + tap-wake
     xTaskCreate(heartbeat_task, "hb", 4096, NULL, 3, NULL);
     xTaskCreate(button_task, "btn", 3072, NULL, 3, NULL);   // back-button screen toggle
     xTaskCreate(power_task, "pwr", 4096, NULL, 3, NULL);    // power-aware BLE: on wall / off battery + notify
