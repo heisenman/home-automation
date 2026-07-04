@@ -2,6 +2,14 @@
 instance/
 venv/
 
+# ESPHome / device real secrets — only the tracked *.example.yaml carries placeholders.
+# Public repo: a real secrets.yaml must never be committable.
+secrets.yaml
+**/secrets.yaml
+# Vendor firmware images (factory backups live off-git per D1001 discipline)
+*.factory.bin
+e1001-sensecraft-factory.bin
+
 # Python
 __pycache__/
 *.py[cod]
@@ -35,3 +43,6 @@ ca/
 /bugreport-*.zip
 /screenshot-*.png
 *.btsnoop*
+
+# ESPHome build artifacts
+.esphome/

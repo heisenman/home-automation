@@ -1,0 +1,8 @@
+{
+  "_comment": "Hand-authored capture of GET /api/v1/alerts (envelope: main.py:929 = {alerts}); build_alerts() severity-sorts critical>warning>info. Same shape rides the retained MQTT alerts topic (main.py:124, wrapped as {schema,ts,alerts}). Feeds the alert_banner tile.",
+  "alerts": [
+    { "severity": "critical", "kind": "low_battery",       "device_id": "aranet_office",    "name": "Office",   "detail": "battery 8%" },
+    { "severity": "warning",  "kind": "unreachable",        "device_id": "airthings_bedroom","name": "Bedroom",  "detail": "no data for 41 min" },
+    { "severity": "info",     "kind": "override_expiring",  "device_id": "dehumidifier",     "name": "Dehumidifier", "detail": "boost override ends in 3 min" }
+  ]
+}

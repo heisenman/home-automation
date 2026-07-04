@@ -1,0 +1,37 @@
+{
+  "_comment": "Hand-authored capture of GET /api/v1/sensors (envelope: main.py:881 = {sensors, metrics}). Feeds parse_sensors() host tests. Refresh from a live .210 capture once the beachhead is up.",
+  "sensors": [
+    {
+      "device_id": "aranet_office",
+      "name": "Office",
+      "area": "office",
+      "age_s": 42,
+      "metrics": { "co2_ppm": 812, "temperature_c": 22.7, "humidity_pct": 44.5, "dewpoint_c": 10.1, "pressure_hpa": 1013 }
+    },
+    {
+      "device_id": "airthings_bedroom",
+      "name": "Bedroom",
+      "area": "bedroom",
+      "age_s": 118,
+      "metrics": { "radon_bqm3": 37, "temperature_c": 21.3, "humidity_pct": 48.0, "co2_ppm": 640 }
+    },
+    {
+      "device_id": "levoit_office",
+      "name": "Air Purifier",
+      "area": "office",
+      "age_s": 12,
+      "metrics": { "pm25_ugm3": 6, "aqi": 21, "voc_index": 98 }
+    }
+  ],
+  "metrics": [
+    { "key": "temperature_c", "label": "Temperature", "unit": "°C",    "color": "#f87171", "precision": 1, "graph": true },
+    { "key": "humidity_pct",  "label": "Humidity",    "unit": "%RH",   "color": "#4aa3ff", "precision": 1, "graph": true },
+    { "key": "dewpoint_c",    "label": "Dew point",   "unit": "°C",    "color": "#22d3ee", "precision": 1, "graph": true },
+    { "key": "co2_ppm",       "label": "CO₂",         "unit": "ppm",   "color": "#fbbf24", "precision": 0, "graph": true },
+    { "key": "radon_bqm3",    "label": "Radon",       "unit": "Bq",    "color": "#a78bfa", "precision": 0, "graph": true },
+    { "key": "pressure_hpa",  "label": "Pressure",    "unit": "hPa",   "color": "#34d399", "precision": 0, "graph": true },
+    { "key": "pm25_ugm3",     "label": "PM2.5",       "unit": "µg/m³", "color": "#fb7185", "precision": 0, "graph": true },
+    { "key": "aqi",           "label": "AQI",         "unit": "",      "color": "#fbbf24", "precision": 0, "graph": true },
+    { "key": "voc_index",     "label": "VOC Index",   "unit": "",      "color": "#34d399", "precision": 0, "graph": true }
+  ]
+}
