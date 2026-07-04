@@ -31,6 +31,23 @@ esphome:
     - priority: 600                  # NOT 800: at 800 the gpio output isn't constructed yet → turn_on no-ops →
       then:                          # rail never powered → ADC reads 0. 600 = after components, per the ref config.
         - output.turn_on: vbat_adc_en  # power the battery-sense divider (held on in beachhead; gated later)
+    - priority: 250                  # profiler discharge-LOAD burners: one low-pri CPU spinner per core, each self-
+      then:                          # gated on DISCHARGE + Prof Load Level>0. Captureless lambdas (-> TaskFunction_t);
+        - lambda: |-                 # duty scales with level (lvl3 = full burn). Priority 1 so WiFi/BT (much higher) never starve.
+            for (int core = 0; core < 2; core++) {
+              xTaskCreatePinnedToCore(+[](void *) {
+                for (;;) {
+                  if (id(g_prof_state) == 1 && id(g_load_lvl) > 0) {
+                    volatile float x = 1.0001f;
+                    for (int i = 0; i < 60000; i++) x = x * 1.0000001f + 0.0000001f;
+                    int lvl = id(g_load_lvl);
+                    if (lvl >= 3) taskYIELD(); else vTaskDelay(pdMS_TO_TICKS(3 - lvl));
+                  } else {
+                    vTaskDelay(pdMS_TO_TICKS(200));   // idle when not discharging / load off
+                  }
+                }
+              }, core ? "profburn1" : "profburn0", 2560, nullptr, 1, nullptr, core);
+            }
     - priority: -100                 # after everything is up: one-shot draw (update_interval is 'never', ePaper style)
       then:
         - component.update: epaper
@@ -119,6 +136,12 @@ script:
 # If THIS loop ever stops (crash/hang), the un-kicked watchdog expires (~40s) and the charger resets EN_HIZ->0 =
 # hardware auto-recovery. Telemetry loop (5s) streams state to e1001-bench/battprofile for host capture (Module 3).
 interval:
+  - interval: 100ms                  # profiler discharge-LOAD (radio): at Prof Load Level>=2, keep the WiFi TX chain
+    then:                            # hot with a steady 256B publish (radio TX is the biggest current lever on the S3).
+      - lambda: |-
+          if (id(g_prof_state) != 1 || id(g_load_lvl) < 2) return;
+          static const std::string pay(256, 'x');
+          id(mqtt_client)->publish("${device_name}/loadgen", pay);   // std::string overload (avoid the char*,len trap)
   - interval: 2s
     then:
       - lambda: |-
@@ -247,6 +270,10 @@ globals:                             # parsed tiles as parallel string vectors (
     type: int
     restore_value: false
     initial_value: '1'
+  - id: g_load_lvl                   # extra discharge LOAD 0..3 (0=off). Runtime-dialable (Prof Load Level number);
+    type: int                        # active only during DISCHARGE (g_prof_state==1). Speeds a slow low-power run.
+    restore_value: false             # Capacity is from the charge-leg coulomb count (load-independent) so it stays
+    initial_value: '0'               # correct; the loaded V-curve just reads at higher current. Burners in on_boot.
   - id: g_charge_mah                 # coulomb accumulator (charge leg: I_set 500mA * dt, CC-accurate)
     type: float
     restore_value: false
@@ -595,6 +622,15 @@ number:
     lambda: 'return id(g_num_cycles);'
     set_action:
       - lambda: 'id(g_num_cycles) = (int) x;'
+  - platform: template
+    name: "Prof Load Level"          # extra load during DISCHARGE to speed a slow low-power run: 0=off .. 3=max.
+    id: num_load_lvl                 # 1-2 = CPU burn (both cores); >=2 also streams WiFi TX. Dial live over MQTT, no
+    min_value: 0                     # reflash. Higher load sags loaded V (curve reads at a higher current); capacity
+    max_value: 3                     # is from the charge-leg coulomb count so it's unaffected. avg I = capacity/discharge_h.
+    step: 1
+    lambda: 'return id(g_load_lvl);'
+    set_action:
+      - lambda: 'id(g_load_lvl) = (int) x;'
 
 # ── In-flight diagnostics (query over MQTT/API — no reflash, no serial) ────────────────
 # The lesson from bring-up: don't reflash to inspect state, and don't chase boot-time serial logs.
