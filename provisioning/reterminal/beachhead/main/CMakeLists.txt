@@ -9,7 +9,7 @@ idf_component_register(SRCS "beachhead_main.c" "bsp_display.c" "ui_tiles.c" "ui/
                                 esp_lcd_jd9365_8 esp_lcd_touch_gsl3670 mbedtls json
                                 esp_wifi_remote bt esp_hosted
                                 switchbot_decode ha_ble_scan fs_ops ha_sdcard ha_battery ha_reach
-                                ha_battery_profile ha_power_policy ha_rtc sqlite3)
+                                ha_battery_profile ha_power_policy ha_rtc ha_imu sqlite3)
 
 # lv_mem_psram.c defines LVGL's custom allocator core (lv_malloc_core/lv_free_core/…). Those
 # symbols are referenced only by lvgl.a (cross-archive), so static link-order would drop the

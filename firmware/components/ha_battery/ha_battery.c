@@ -11,6 +11,7 @@
 #include "esp_adc/adc_oneshot.h"
 #include "esp_adc/adc_cali.h"
 #include "esp_adc/adc_cali_scheme.h"
+#include "ha_imu.h"          // board temp now comes from the shared IMU component (see ha_imu/README: composition)
 
 static const char *TAG = "ha_batt";
 
@@ -51,17 +52,12 @@ static int  s_win[AVG_WIN], s_win_n, s_win_i;
 static int      s_trend_ref_mv;    // ~60 s-ago smoothed mV, for the "gaining" trend
 static int64_t  s_trend_ref_us;
 static bool     s_gaining;         // cell voltage rising (actively charging), see ha_battery_sample
-static i2c_master_dev_handle_t s_imu;
-static bool s_imu_ok, s_imu_tried;
 static volatile bool s_charge_en;
 static volatile int  s_charge_mode = 0;   // HA_CHG_AUTO
 static volatile int  s_pulse_ms = 0;      // one-shot /CE reset-pulse request (ms)
 static SemaphoreHandle_t s_mtx;
 
-// LSM6DS3 registers
-#define LSM6_WHOAMI    0x0F
-#define LSM6_CTRL1_XL  0x10
-#define LSM6_OUT_TEMP  0x20
+// (LSM6DS3TR-C IMU register access lives in the ha_imu shared component now)
 
 static void read_enable(void)   // assert the ADC sense divider once the expander is up
 {
@@ -152,39 +148,15 @@ static int adc_read_mv(int ch, adc_cali_handle_t cali, int *raw_out)
     return mv;
 }
 
-static void imu_init(void)
-{
-    if (s_imu_tried) return;
-    if (!s_cfg.i2c_bus || !s_cfg.imu_addr) { s_imu_tried = true; return; }
-    s_imu_tried = true;
-    i2c_device_config_t dc = { .dev_addr_length = I2C_ADDR_BIT_LEN_7,
-                               .device_address = s_cfg.imu_addr, .scl_speed_hz = 400000 };
-    if (i2c_master_bus_add_device(s_cfg.i2c_bus, &dc, &s_imu) != ESP_OK) { s_imu = NULL; return; }
-    uint8_t reg = LSM6_WHOAMI, who = 0;
-    if (i2c_master_transmit_receive(s_imu, &reg, 1, &who, 1, 100) != ESP_OK || who != s_cfg.imu_addr) {
-        ESP_LOGW(TAG, "IMU whoami=0x%02x (want 0x%02x) — temp gating off", who, s_cfg.imu_addr);
-        return;
-    }
-    uint8_t c1[2] = { LSM6_CTRL1_XL, 0x10 };   // ODR 12.5Hz → temp register updates
-    i2c_master_transmit(s_imu, c1, 2, 100);
-    s_imu_ok = true;
-}
-
-static bool imu_temp_dc(int *dc)
-{
-    imu_init();
-    if (!s_imu_ok) return false;
-    uint8_t reg = LSM6_OUT_TEMP, b[2] = { 0, 0 };
-    if (i2c_master_transmit_receive(s_imu, &reg, 1, b, 2, 100) != ESP_OK) return false;
-    int16_t raw = (int16_t)((b[1] << 8) | b[0]);
-    *dc = (raw * 10) / 256 + 250;   // deci-°C = raw/256*10 + 25.0*10
-    return true;
-}
+// Board temp is now read through the ha_imu shared component (ha_imu_temp_dc). ha_battery no longer
+// owns the IMU device handle or config — ha_imu owns the one physical chip; both compose on it (both
+// call the idempotent ha_imu_init). See ha_imu/README.md "Composition".
 
 esp_err_t ha_battery_init(const ha_battery_cfg_t *cfg)
 {
     if (!cfg) return ESP_ERR_INVALID_ARG;
     s_cfg = *cfg;
+    ha_imu_init(&(ha_imu_cfg_t){ .bus = s_cfg.i2c_bus, .addr = s_cfg.imu_addr });  // shared IMU (idempotent)
     if (!s_cfg.lut) { s_cfg.lut = D1001_LUT; s_cfg.lut_n = 21; }
     s_profile = cfg->profile ? *cfg->profile : ha_batt_profile_d1001_default();
     s_have_profile = true;
@@ -252,7 +224,7 @@ esp_err_t ha_battery_sample(ha_batt_sample_t *out)
         s_trend_ref_us = now_us;
     }
 
-    int tdc = 0; bool ht = imu_temp_dc(&tdc);
+    int tdc = 0; bool ht = (ha_imu_temp_dc(&tdc) == ESP_OK);
     if (out) {
         out->raw_ch2 = raw2;
         out->cali_mv = cali_mv;
