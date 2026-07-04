@@ -46,3 +46,10 @@ ca/
 
 # ESPHome build artifacts
 .esphome/
+
+# Vendor datasheets: local reference only, NEVER committed to the PUBLIC repo (some are marked confidential,
+# e.g. DS_SY6974B.pdf = "Silergy Corp. Confidential - Prepared for Customer Use Only"). Blanket-ignore every PDF
+# in docs/hardware/ so any datasheet dropped in is auto-excluded; the ONE exception is the Seeed schematic
+# (CC BY-SA, explicitly shareable). Drop datasheets here locally for docs-first; they don't sync via git.
+docs/hardware/*.pdf
+!docs/hardware/reTerminal_E1001_V1_2_SCH_251120.pdf

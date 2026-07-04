@@ -275,9 +275,21 @@ sy6974b:
           if (n == id(g_edge_wall)) return;   // publish only on a real wall<->battery transition
           id(g_edge_wall) = n;
           id(g_pub_wall) = (n == 1);
+          id(sb_relay)->set_enabled(n == 1);  // Stage 2: only relay BLE on wall power (pause on battery)
           id(publish_edge_event)->execute();
   charging:
     name: "Charging"                 # derived: fast/pre-charge phase
+
+# --- Edge-node Stage 2: BLE coverage (SwitchBot meter relay), wall-power-gated (components/switchbot_ble) ---
+esp32_ble_tracker:
+  scan_parameters:
+    active: false                    # passive: SwitchBot meters advertise; lighter + coexists with WiFi
+    interval: 320ms
+    window: 30ms                     # ~9% duty so BLE doesn't starve the shared 2.4GHz radio (edge gotcha)
+
+switchbot_ble:
+  id: sb_relay
+  node: ${edge_node}                 # decodes SwitchBot adverts -> home/edge/${edge_node}/<mac>/adv
 
 sensor:
   - platform: sht4x
