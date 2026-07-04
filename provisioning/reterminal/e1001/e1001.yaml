@@ -14,11 +14,11 @@ substitutions:
   friendly_name: "reTerminal E1001 (bench)"
   wifi_ap_ssid: "e1001-bench-fallback"
   bff_base_url: "http://192.168.0.210:8123"   # FastAPI BFF; read endpoints are open on the LAN (no auth on GET)
-  # P4e Step 2 — deep-sleep knobs. DEV DEFAULT = never sleep (OTA always reachable on USB). Flip sleep_enable
-  # to "true" (and reflash) for battery mode: wake -> fetch -> render -> stay up awake_grace -> timer-sleep.
-  sleep_enable: "false"             # "true" = battery mode. Gated so the current always-awake OTA loop is untouched.
-  sleep_duration: "15min"           # timer wake cadence in battery mode (the freshness/battery-life knob)
-  awake_grace: "25s"                # awake window per wake: wifi-join + fetch + ~5s ePaper render + read time
+  # P4e deep-sleep RUNTIME hooks — no reflash to toggle. These are first-boot DEFAULTS only; thereafter the
+  # Sleep Enable switch + Sleep Duration / Awake Grace numbers are MQTT-settable and PERSIST across sleeps.
+  sleep_default: "false"            # DEV first-boot: never sleep -> OTA always reachable. Flip live over MQTT.
+  sleep_dur_default_s: "900"        # 15 min timer cadence (battery/freshness knob), runtime-tunable
+  grace_default_s: "25"             # awake window per wake (wifi + fetch + ~5s render + read), runtime-tunable
 
 esphome:
   name: ${device_name}
@@ -53,10 +53,12 @@ esphome:
               lambda: 'return id(g_sleep_enable) && !id(g_stay_awake);'
             then:
               - button.press: fetch_spec         # wake -> fetch fresh spec + alerts (fetch_spec redraws the ePaper)
-              - delay: ${awake_grace}            # hold the frame up long enough to join wifi, render (~5s), be read
-              - lambda: 'ESP_LOGW("sleep", "wake cycle done -> deep-sleep for ${sleep_duration}");'
+              - delay: !lambda 'return (uint32_t) id(g_awake_grace_s) * 1000;'  # runtime awake window (s->ms)
+              - lambda: 'ESP_LOGW("sleep", "wake cycle done -> deep-sleep for %ds", id(g_sleep_dur_s));'
               - deep_sleep.allow: ds             # clear the boot-time prevent, then enter timer sleep
-              - deep_sleep.enter: ds
+              - deep_sleep.enter:
+                  id: ds
+                  sleep_duration: !lambda 'return (uint32_t) id(g_sleep_dur_s) * 1000;'  # runtime cadence (s->ms)
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -90,9 +92,18 @@ mqtt:
   broker: 192.168.0.210              # dictator real IP (VIP .200 unreachable from CTWap_24g wifi)
   port: 1883
 
-deep_sleep:                          # P4e Step 2: timer wake. Prevented at boot (pri 900); entered explicitly at
-  id: ds                             # the end of the wake cycle, only when sleep_enable=true. Button-wake (ext1)
-  sleep_duration: ${sleep_duration}  # is Step 2b — needs the RTC-pullup HW check on GPIO3/4/5 first (design doc).
+deep_sleep:                          # P4e Step 2: timer + button wake. Prevented at boot (pri 900); entered
+  id: ds                             # explicitly at the end of the wake cycle, only when g_sleep_enable.
+  sleep_duration: 15min              # static fallback; the runtime g_sleep_dur_s overrides this at each enter()
+  esp32_ext1_wakeup:                 # Step 2b: press ANY user button to wake. Schematic sheet 6/9 confirms
+    mode: ANY_LOW                    # external 10K pull-ups (R30/R34/R36) to SYS_3V3 on KEY0/1/2 -> pins held HIGH
+    pins:                            # through deep sleep (SYS_3V3 stays up) -> ANY_LOW is spurious-wake-safe with
+      - number: GPIO3                # NO RTC pull-up needed. A held button at wake still trips the OTA escape hatch;
+        allow_other_uses: true       # a quick tap just wakes -> fetch -> render -> re-sleep after awake_grace.
+      - number: GPIO4
+        allow_other_uses: true
+      - number: GPIO5
+        allow_other_uses: true
 
 http_request:                        # P4c: fetch the server-authored spec (BFF) — plain GET, open on LAN
   useragent: esphome/e1001
@@ -121,10 +132,18 @@ globals:                             # parsed tiles as parallel string vectors (
     type: bool                       # The OTA escape hatch on a deep-sleep device. Step 1 only DETECTS + reports
     restore_value: false             # this (no sleep yet); Step 2's deep_sleep will consult it before sleeping.
     initial_value: 'false'
-  - id: g_sleep_enable               # P4e Step 2: battery-mode flag, seeded from the sleep_enable substitution.
-    type: bool                       # DEV: false -> the wake-cycle-then-sleep path never runs -> always awake.
-    restore_value: false
-    initial_value: '${sleep_enable}'
+  - id: g_sleep_enable               # P4e battery-mode flag. RUNTIME (Sleep Enable switch) + PERSISTED across the
+    type: bool                       # deep-sleep reboots (restore_value). DEV first-boot=false -> always awake.
+    restore_value: true
+    initial_value: '${sleep_default}'
+  - id: g_sleep_dur_s                # timer sleep duration (s); RUNTIME (Sleep Duration number), persisted.
+    type: int
+    restore_value: true
+    initial_value: '${sleep_dur_default_s}'
+  - id: g_awake_grace_s              # awake window (s) per wake; RUNTIME (Awake Grace number), persisted.
+    type: int
+    restore_value: true
+    initial_value: '${grace_default_s}'
 
 # --- ePaper display (UC8179, 7.5" mono 800x480) — P4b: prove the display path ---
 spi:
@@ -263,7 +282,7 @@ binary_sensor:
   - platform: gpio
     name: "Button Green"
     id: btn_green
-    pin: { number: GPIO3, mode: { input: true, pullup: true }, inverted: true }
+    pin: { number: GPIO3, mode: { input: true, pullup: true }, inverted: true, allow_other_uses: true }
     on_click:
       - min_length: 30ms             # Green short = re-fetch the spec + redraw
         max_length: 450ms
@@ -277,7 +296,7 @@ binary_sensor:
   - platform: gpio
     name: "Button Right"
     id: btn_right
-    pin: { number: GPIO4, mode: { input: true, pullup: true }, inverted: true }
+    pin: { number: GPIO4, mode: { input: true, pullup: true }, inverted: true, allow_other_uses: true }
     on_click:
       - min_length: 30ms             # Right short = next page
         max_length: 450ms
@@ -295,7 +314,7 @@ binary_sensor:
   - platform: gpio
     name: "Button Left"
     id: btn_left
-    pin: { number: GPIO5, mode: { input: true, pullup: true }, inverted: true }
+    pin: { number: GPIO5, mode: { input: true, pullup: true }, inverted: true, allow_other_uses: true }
     on_click:
       - min_length: 30ms             # Left short = previous page
         max_length: 450ms
@@ -307,6 +326,41 @@ binary_sensor:
         then:
           - lambda: 'id(g_page) = 0;'
           - component.update: epaper
+
+# ── Runtime deep-sleep controls (toggle/tune battery mode over MQTT — NO reflash) ──────
+# g_sleep_enable / g_sleep_dur_s / g_awake_grace_s are the persisted source of truth; these just view+set them.
+switch:
+  - platform: template
+    name: "Sleep Enable"             # e1001-bench/switch/sleep_enable/command  ON|OFF
+    id: sw_sleep_enable              # ON = battery mode (sleeps between wakes); OFF = always awake (dev/OTA)
+    lambda: 'return id(g_sleep_enable);'
+    restore_mode: DISABLED           # the global is persisted (restore_value), so the switch must not fight it
+    turn_on_action:
+      - lambda: 'id(g_sleep_enable) = true;  ESP_LOGW("sleep", "battery mode ON (runtime)");'
+    turn_off_action:
+      - lambda: 'id(g_sleep_enable) = false; ESP_LOGW("sleep", "battery mode OFF (runtime, always-awake)");'
+
+number:
+  - platform: template
+    name: "Sleep Duration"           # e1001-bench/number/sleep_duration/command  (seconds); applies next sleep
+    id: num_sleep_dur
+    unit_of_measurement: s
+    min_value: 20
+    max_value: 3600
+    step: 5
+    lambda: 'return id(g_sleep_dur_s);'
+    set_action:
+      - lambda: 'id(g_sleep_dur_s) = (int) x;'
+  - platform: template
+    name: "Awake Grace"              # e1001-bench/number/awake_grace/command  (seconds); awake window per wake
+    id: num_awake_grace
+    unit_of_measurement: s
+    min_value: 5
+    max_value: 300
+    step: 5
+    lambda: 'return id(g_awake_grace_s);'
+    set_action:
+      - lambda: 'id(g_awake_grace_s) = (int) x;'
 
 # ── In-flight diagnostics (query over MQTT/API — no reflash, no serial) ────────────────
 # The lesson from bring-up: don't reflash to inspect state, and don't chase boot-time serial logs.
@@ -413,9 +467,11 @@ button:
   - platform: template
     name: "Test Sleep"               # P4e bisect: isolate the deep_sleep MECHANISM from the on_boot wake-cycle.
     on_press:                        # trigger over MQTT; device should drop offline then return after sleep_duration.
-      - lambda: 'ESP_LOGW("sleep", "Test Sleep pressed -> allow+enter deep sleep now");'
+      - lambda: 'ESP_LOGW("sleep", "Test Sleep pressed -> allow+enter deep sleep now (%ds)", id(g_sleep_dur_s));'
       - deep_sleep.allow: ds
-      - deep_sleep.enter: ds
+      - deep_sleep.enter:
+          id: ds
+          sleep_duration: !lambda 'return (uint32_t) id(g_sleep_dur_s) * 1000;'
   - platform: template
     name: "Test Alert"               # dev affordance: inject a fake critical alert to preview the banner
     on_press:
