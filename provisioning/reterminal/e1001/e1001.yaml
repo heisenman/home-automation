@@ -114,6 +114,33 @@ script:
           id(mqtt_client)->publish("home/edge/${edge_node}/event", p, 1, true);
           ESP_LOGW("edge", "published home/edge/${edge_node}/event on_wall=%s", w ? "true" : "false");
 
+# battery_profiler (Module 2) — safety core. FAST loop (2s): while a discharge run is active, kick the charger
+# watchdog (WD_RST) so HIZ holds, AND guard the floor — clear HIZ before brown-out so the ESP survives to recover.
+# If THIS loop ever stops (crash/hang), the un-kicked watchdog expires (~40s) and the charger resets EN_HIZ->0 =
+# hardware auto-recovery. Telemetry loop (5s) streams state to e1001-bench/battprofile for host capture (Module 3).
+interval:
+  - interval: 2s
+    then:
+      - lambda: |-
+          if (!id(g_prof_active)) return;
+          id(charger)->kick_watchdog();
+          float v = id(batt_v).state;
+          if (!std::isnan(v) && v <= id(g_v_floor)) {
+            id(charger)->set_hiz(false);              // SAFETY: recover to USB before brown-out
+            id(charger)->set_charge_enable(true);
+            id(g_prof_active) = false;
+            ESP_LOGW("prof", "V %.3f <= floor %.3f -> HIZ off, RECOVERED", v, id(g_v_floor));
+          }
+  - interval: 5s
+    then:
+      - lambda: |-
+          char p[192];
+          snprintf(p, sizeof(p),
+            "{\"v\":%.3f,\"active\":%s,\"hiz\":%s,\"floor\":%.3f,\"chg\":%d,\"pg\":%s}",
+            id(batt_v).state, id(g_prof_active) ? "true" : "false", id(charger)->hiz() ? "true" : "false",
+            id(g_v_floor), (int) id(charger)->charge_status(), id(charger)->power_good() ? "true" : "false");
+          id(mqtt_client)->publish("e1001-bench/battprofile", std::string(p), 0, false);
+
 deep_sleep:                          # P4e Step 2: timer + button wake. Prevented at boot (pri 900); entered
   id: ds                             # explicitly at the end of the wake cycle, only when g_sleep_enable.
   sleep_duration: 15min              # static fallback; the runtime g_sleep_dur_s overrides this at each enter()
@@ -158,6 +185,15 @@ globals:                             # parsed tiles as parallel string vectors (
     type: bool
     restore_value: false
     initial_value: 'false'
+  # --- battery_profiler (Module 2) safety-core state ---
+  - id: g_prof_active                # a HIZ discharge run is active -> the 2s safety loop kicks WD + guards floor
+    type: bool
+    restore_value: false             # NEVER restore: a reboot must land in the safe (not-discharging) state
+    initial_value: 'false'
+  - id: g_v_floor                    # HIZ-clear threshold (V). Conservative, ABOVE brown-out (D1001 floor=3.45V).
+    type: float
+    restore_value: false
+    initial_value: '3.45'
   - id: g_stay_awake                 # P4e Step 1: set true when a button is HELD at boot -> gate deep-sleep.
     type: bool                       # The OTA escape hatch on a deep-sleep device. Step 1 only DETECTS + reports
     restore_value: false             # this (no sleep yet); Step 2's deep_sleep will consult it before sleeping.
@@ -260,7 +296,8 @@ sy6974b:
   i2c_id: bus_i2c1
   address: 0x6B
   update_interval: 30s
-  disable_watchdog: true             # hold HIZ/charge states across a profiling run (see component setup note)
+  disable_watchdog: false            # watchdog stays at 40s HW default; the profiler kicks it during a run so a
+                                     # profiler crash auto-recovers (WD expiry -> EN_HIZ=0 -> input reconnects)
   charge_status:
     name: "Charge Status"            # not_charging / pre_charge / fast_charge / done (REG08 CHRG_STAT)
   bus_status:
@@ -464,6 +501,16 @@ number:
     lambda: 'return id(g_awake_grace_s);'
     set_action:
       - lambda: 'id(g_awake_grace_s) = (int) x;'
+  - platform: template
+    name: "Prof V Floor"             # battery_profiler HIZ-clear threshold (V). Set ABOVE current V to trip the
+    id: num_v_floor                  # safety gate instantly for validation; normal run = ~3.45 (above brown-out).
+    unit_of_measurement: V
+    min_value: 3.2
+    max_value: 4.3
+    step: 0.01
+    lambda: 'return id(g_v_floor);'
+    set_action:
+      - lambda: 'id(g_v_floor) = x;'
 
 # ── In-flight diagnostics (query over MQTT/API — no reflash, no serial) ────────────────
 # The lesson from bring-up: don't reflash to inspect state, and don't chase boot-time serial logs.
@@ -596,6 +643,32 @@ button:
     on_press:
       - lambda: 'id(g_pub_wall) = true;'
       - script.execute: publish_edge_event
+
+  # battery_profiler (Module 2) safety-core controls + validation hooks
+  - platform: template
+    name: "Prof Start Discharge"     # HIZ on -> run on battery; the 2s loop kicks WD + guards the floor
+    on_press:
+      - lambda: |-
+          id(charger)->set_watchdog_seconds(40);   // ensure WD on so a crash auto-recovers
+          id(charger)->kick_watchdog();
+          id(charger)->set_hiz(true);
+          id(g_prof_active) = true;
+          ESP_LOGW("prof", "discharge run started (HIZ on, floor %.3f)", id(g_v_floor));
+  - platform: template
+    name: "Prof Stop"                # clean stop -> safe state
+    on_press:
+      - lambda: |-
+          id(g_prof_active) = false;
+          id(charger)->set_hiz(false);
+          id(charger)->set_charge_enable(true);
+          ESP_LOGW("prof", "run stopped -> safe (HIZ off, charge on)");
+  - platform: template
+    name: "Prof Sim Crash"           # VALIDATION: set HIZ but DON'T kick (g_prof_active stays false) -> the
+    on_press:                        # un-kicked watchdog must expire in ~40s and auto-clear HIZ. Proves the net.
+      - lambda: |-
+          id(charger)->set_watchdog_seconds(40);
+          id(charger)->set_hiz(true);
+          ESP_LOGW("prof", "SIM CRASH: HIZ on, NOT kicking -> WD should recover in ~40s");
 
 text_sensor:
   - platform: debug

@@ -23,8 +23,10 @@ CONFIG_SCHEMA = (
     cv.Schema(
         {
             cv.GenerateID(): cv.declare_id(SY6974B),
-            # default True: this is a profiling device, states must hold. See setup() note.
-            cv.Optional(CONF_DISABLE_WATCHDOG, default=True): cv.boolean,
+            # default False: leave the I2C watchdog at its 40s HW default. Holding HIZ/charge states during a
+            # profiling run is the PROFILER's job (it kicks WD_RST) — keeping the watchdog ON means a profiler
+            # crash auto-recovers (WD expiry resets EN_HIZ->0, input reconnects). See battery_profiler safety loop.
+            cv.Optional(CONF_DISABLE_WATCHDOG, default=False): cv.boolean,
             cv.Optional(CONF_CHARGE_STATUS): text_sensor.text_sensor_schema(),
             cv.Optional(CONF_BUS_STATUS): text_sensor.text_sensor_schema(),
             cv.Optional(CONF_POWER_GOOD): binary_sensor.binary_sensor_schema(),
