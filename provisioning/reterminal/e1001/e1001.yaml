@@ -14,11 +14,19 @@ substitutions:
   friendly_name: "reTerminal E1001 (bench)"
   wifi_ap_ssid: "e1001-bench-fallback"
   bff_base_url: "http://192.168.0.210:8123"   # FastAPI BFF; read endpoints are open on the LAN (no auth on GET)
+  # P4e Step 2 — deep-sleep knobs. DEV DEFAULT = never sleep (OTA always reachable on USB). Flip sleep_enable
+  # to "true" (and reflash) for battery mode: wake -> fetch -> render -> stay up awake_grace -> timer-sleep.
+  sleep_enable: "false"             # "true" = battery mode. Gated so the current always-awake OTA loop is untouched.
+  sleep_duration: "15min"           # timer wake cadence in battery mode (the freshness/battery-life knob)
+  awake_grace: "25s"                # awake window per wake: wifi-join + fetch + ~5s ePaper render + read time
 
 esphome:
   name: ${device_name}
   friendly_name: ${friendly_name}
   on_boot:
+    - priority: 900                  # EARLIEST: block auto deep-sleep so OTA is always reachable. We enter sleep
+      then:                          # EXPLICITLY at the end of the wake cycle (priority -200) and only if enabled.
+        - deep_sleep.prevent: ds
     - priority: 600                  # NOT 800: at 800 the gpio output isn't constructed yet → turn_on no-ops →
       then:                          # rail never powered → ADC reads 0. 600 = after components, per the ref config.
         - output.turn_on: vbat_adc_en  # power the battery-sense divider (held on in beachhead; gated later)
@@ -38,6 +46,17 @@ esphome:
             else:
               - lambda: 'ESP_LOGI("ota", "no button held at boot -> normal wake (Step 2: would deep-sleep).");'
               - binary_sensor.template.publish: { id: ota_hold, state: false }
+        # P4e Step 2 — battery-mode wake cycle. Same automation as the button check above (sequential, no race):
+        # only sleeps if enabled AND no button held. In DEV (sleep_enable=false) this whole branch is skipped.
+        - if:
+            condition:
+              lambda: 'return id(g_sleep_enable) && !id(g_stay_awake);'
+            then:
+              - button.press: fetch_spec         # wake -> fetch fresh spec + alerts (fetch_spec redraws the ePaper)
+              - delay: ${awake_grace}            # hold the frame up long enough to join wifi, render (~5s), be read
+              - lambda: 'ESP_LOGW("sleep", "wake cycle done -> deep-sleep for ${sleep_duration}");'
+              - deep_sleep.allow: ds             # clear the boot-time prevent, then enter timer sleep
+              - deep_sleep.enter: ds
 
 esp32:
   board: esp32-s3-devkitc-1
@@ -71,6 +90,10 @@ mqtt:
   broker: 192.168.0.210              # dictator real IP (VIP .200 unreachable from CTWap_24g wifi)
   port: 1883
 
+deep_sleep:                          # P4e Step 2: timer wake. Prevented at boot (pri 900); entered explicitly at
+  id: ds                             # the end of the wake cycle, only when sleep_enable=true. Button-wake (ext1)
+  sleep_duration: ${sleep_duration}  # is Step 2b — needs the RTC-pullup HW check on GPIO3/4/5 first (design doc).
+
 http_request:                        # P4c: fetch the server-authored spec (BFF) — plain GET, open on LAN
   useragent: esphome/e1001
   timeout: 8s
@@ -98,6 +121,10 @@ globals:                             # parsed tiles as parallel string vectors (
     type: bool                       # The OTA escape hatch on a deep-sleep device. Step 1 only DETECTS + reports
     restore_value: false             # this (no sleep yet); Step 2's deep_sleep will consult it before sleeping.
     initial_value: 'false'
+  - id: g_sleep_enable               # P4e Step 2: battery-mode flag, seeded from the sleep_enable substitution.
+    type: bool                       # DEV: false -> the wake-cycle-then-sleep path never runs -> always awake.
+    restore_value: false
+    initial_value: '${sleep_enable}'
 
 # --- ePaper display (UC8179, 7.5" mono 800x480) — P4b: prove the display path ---
 spi:
