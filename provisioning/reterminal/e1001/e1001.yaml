@@ -287,20 +287,27 @@ button:
                     const char *room = !s["room"].isNull() ? s["room"].as<const char *>()
                                                            : s["device_id"].as<const char *>();
                     JsonObject m = s["metrics"].as<JsonObject>();
-                    char line[48];
-                    if (!m["temperature_c"].isNull() && !m["humidity_pct"].isNull())
-                      snprintf(line, sizeof(line), "%.1f C   %.0f %%",
-                               m["temperature_c"].as<float>(), m["humidity_pct"].as<float>());
-                    else if (!m["radon_bqm3"].isNull())
-                      snprintf(line, sizeof(line), "radon %.0f Bq", m["radon_bqm3"].as<float>());
-                    else if (!m["power_w"].isNull())
-                      snprintf(line, sizeof(line), "%.0f W", m["power_w"].as<float>());
-                    else if (!m["voc_index"].isNull())
-                      snprintf(line, sizeof(line), "VOC %.0f", m["voc_index"].as<float>());
-                    else if (!m["eco2"].isNull())
-                      snprintf(line, sizeof(line), "eCO2 %.0f ppm", m["eco2"].as<float>());
-                    else
-                      snprintf(line, sizeof(line), "--");
+                    std::string line;
+                    int shown = 0;
+                    for (JsonObject g : s["graphs"].as<JsonArray>()) {   // spec-driven: value + server precision + unit
+                      if (shown >= 2) break;
+                      const char *key = g["key"];
+                      if (!key || m[key].isNull()) continue;
+                      int prec = g["precision"] | 0;
+                      const char *u = g["unit"] | "";
+                      std::string unit;                                  // ASCII-strip for the mono font: "°C"->"C"
+                      for (const char *p = u; *p; p++) if ((unsigned char) *p < 0x80) unit += *p;
+                      float v = m[key].as<float>();
+                      if (unit == "C") { v = v * 9.0f / 5.0f + 32.0f; unit = "F"; }   // C -> F
+                      char fmt[8], val[16];
+                      snprintf(fmt, sizeof(fmt), "%%.%df", prec);
+                      snprintf(val, sizeof(val), fmt, v);
+                      if (shown) line += "   ";
+                      line += val;
+                      if (!unit.empty()) { line += " "; line += unit; }
+                      shown++;
+                    }
+                    if (line.empty()) line = "--";
                     id(g_tile_labels).push_back(room ? room : "?");
                     id(g_tile_lines).push_back(line);
                   }
