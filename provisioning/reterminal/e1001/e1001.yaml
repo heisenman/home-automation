@@ -122,23 +122,60 @@ interval:
   - interval: 2s
     then:
       - lambda: |-
-          if (!id(g_prof_active)) return;
-          id(charger)->kick_watchdog();
-          float v = id(batt_v).state;
-          if (!std::isnan(v) && v <= id(g_v_floor)) {
-            id(charger)->set_hiz(false);              // SAFETY: recover to USB before brown-out
-            id(charger)->set_charge_enable(true);
-            id(g_prof_active) = false;
-            ESP_LOGW("prof", "V %.3f <= floor %.3f -> HIZ off, RECOVERED", v, id(g_v_floor));
+          if (id(g_prof_state) == 0) return;          // IDLE: no kick -> WD free to reset-to-default (safe)
+          id(charger)->kick_watchdog();               // hold register config for ANY active cycle state
+          if (id(g_prof_state) == 1) {                // DISCHARGE: floor-gate = safety AND end-of-discharge
+            float v = id(batt_v).state;
+            if (!std::isnan(v) && v <= id(g_v_floor)) {
+              id(charger)->set_hiz(false);            // recover to USB
+              id(charger)->set_charge_enable(false);  // rest (no charge yet) for a clean OCV
+              id(g_prof_state) = 2; id(g_state_ms) = millis();   // -> REST_D
+              ESP_LOGW("prof", "V %.3f <= floor %.3f -> HIZ off -> REST_D", v, id(g_v_floor));
+            }
           }
   - interval: 5s
     then:
       - lambda: |-
-          char p[192];
+          uint32_t now = millis();
+          int st = id(g_prof_state);
+          if (st == 2) {                               // REST_D: settle -> measure OCV -> CHARGE
+            if (now - id(g_state_ms) >= (uint32_t) id(g_rest_s) * 1000) {
+              id(g_ocv_d) = id(batt_v).state;
+              id(g_charge_mah) = 0;
+              id(charger)->set_hiz(false);
+              id(charger)->set_charge_enable(true);
+              id(g_prof_state) = 3; id(g_state_ms) = now;
+              ESP_LOGW("prof", "REST_D done OCV=%.3f -> CHARGE", id(g_ocv_d));
+            }
+          } else if (st == 3) {                        // CHARGE: coulomb-count fast-charge; done -> REST_C
+            if (id(charger)->charge_status() == 2) id(g_charge_mah) += 500.0f * (5.0f / 3600.0f);  // I_set*dt
+            if (id(charger)->charge_status() == 3) {
+              id(charger)->set_charge_enable(false);   // stop for a clean full OCV
+              id(g_prof_state) = 4; id(g_state_ms) = now;
+              ESP_LOGW("prof", "CHARGE done %.1f mAh -> REST_C", id(g_charge_mah));
+            }
+          } else if (st == 4) {                        // REST_C: settle -> OCV_full (100% anchor) -> next/done
+            if (now - id(g_state_ms) >= (uint32_t) id(g_rest_s) * 1000) {
+              id(g_ocv_c) = id(batt_v).state;
+              id(g_cycle) += 1;
+              ESP_LOGW("prof", "REST_C done OCV_full=%.3f cycle %d/%d", id(g_ocv_c), id(g_cycle), id(g_num_cycles));
+              if (id(g_cycle) < id(g_num_cycles)) {
+                id(charger)->set_charge_enable(false); id(charger)->set_hiz(true);   // next cycle: discharge
+                id(g_prof_state) = 1; id(g_state_ms) = now;
+              } else {
+                id(charger)->set_hiz(false); id(charger)->set_charge_enable(true);   // done -> safe
+                id(g_prof_state) = 0;
+                ESP_LOGW("prof", "CYCLE RUN COMPLETE (%.1f mAh)", id(g_charge_mah));
+              }
+            }
+          }
+          char p[224];
           snprintf(p, sizeof(p),
-            "{\"v\":%.3f,\"active\":%s,\"hiz\":%s,\"floor\":%.3f,\"chg\":%d,\"pg\":%s}",
-            id(batt_v).state, id(g_prof_active) ? "true" : "false", id(charger)->hiz() ? "true" : "false",
-            id(g_v_floor), (int) id(charger)->charge_status(), id(charger)->power_good() ? "true" : "false");
+            "{\"st\":%d,\"v\":%.3f,\"hiz\":%s,\"chg\":%d,\"pg\":%s,\"mah\":%.1f,\"cyc\":%d,"
+            "\"ocv_d\":%.3f,\"ocv_c\":%.3f,\"floor\":%.3f}",
+            id(g_prof_state), id(batt_v).state, id(charger)->hiz() ? "true" : "false",
+            (int) id(charger)->charge_status(), id(charger)->power_good() ? "true" : "false",
+            id(g_charge_mah), id(g_cycle), id(g_ocv_d), id(g_ocv_c), id(g_v_floor));
           id(mqtt_client)->publish("e1001-bench/battprofile", std::string(p), 0, false);
 
 deep_sleep:                          # P4e Step 2: timer + button wake. Prevented at boot (pri 900); entered
@@ -185,15 +222,43 @@ globals:                             # parsed tiles as parallel string vectors (
     type: bool
     restore_value: false
     initial_value: 'false'
-  # --- battery_profiler (Module 2) safety-core state ---
-  - id: g_prof_active                # a HIZ discharge run is active -> the 2s safety loop kicks WD + guards floor
-    type: bool
-    restore_value: false             # NEVER restore: a reboot must land in the safe (not-discharging) state
-    initial_value: 'false'
-  - id: g_v_floor                    # HIZ-clear threshold (V). Conservative, ABOVE brown-out (D1001 floor=3.45V).
+  # --- battery_profiler (Module 2) state ---
+  - id: g_prof_state                 # 0 IDLE / 1 DISCHARGE / 2 REST_D / 3 CHARGE / 4 REST_C. NEVER restore
+    type: int                        # (a reboot must land IDLE = safe, not mid-discharge).
+    restore_value: false
+    initial_value: '0'
+  - id: g_v_floor                    # discharge end / HIZ-clear threshold (V). Above brown-out (D1001=3.45V).
     type: float
     restore_value: false
     initial_value: '3.45'
+  - id: g_state_ms                   # millis() at state entry (for rest timing)
+    type: uint32_t
+    restore_value: false
+    initial_value: '0'
+  - id: g_rest_s                     # rest duration (s) at REST_D/REST_C for OCV settle
+    type: int
+    restore_value: false
+    initial_value: '120'
+  - id: g_cycle                      # completed cycles this run
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: g_num_cycles                 # cycles to run
+    type: int
+    restore_value: false
+    initial_value: '1'
+  - id: g_charge_mah                 # coulomb accumulator (charge leg: I_set 500mA * dt, CC-accurate)
+    type: float
+    restore_value: false
+    initial_value: '0'
+  - id: g_ocv_d                      # rested OCV at the discharge floor
+    type: float
+    restore_value: false
+    initial_value: '0'
+  - id: g_ocv_c                      # rested OCV at full (the 100% anchor)
+    type: float
+    restore_value: false
+    initial_value: '0'
   - id: g_stay_awake                 # P4e Step 1: set true when a button is HELD at boot -> gate deep-sleep.
     type: bool                       # The OTA escape hatch on a deep-sleep device. Step 1 only DETECTS + reports
     restore_value: false             # this (no sleep yet); Step 2's deep_sleep will consult it before sleeping.
@@ -511,6 +576,25 @@ number:
     lambda: 'return id(g_v_floor);'
     set_action:
       - lambda: 'id(g_v_floor) = x;'
+  - platform: template
+    name: "Prof Rest Seconds"        # OCV-settle duration at REST_D/REST_C (short for validation, ~120s real)
+    id: num_rest_s
+    unit_of_measurement: s
+    min_value: 10
+    max_value: 600
+    step: 5
+    lambda: 'return id(g_rest_s);'
+    set_action:
+      - lambda: 'id(g_rest_s) = (int) x;'
+  - platform: template
+    name: "Prof Num Cycles"          # how many discharge->charge cycles per run
+    id: num_cycles
+    min_value: 1
+    max_value: 10
+    step: 1
+    lambda: 'return id(g_num_cycles);'
+    set_action:
+      - lambda: 'id(g_num_cycles) = (int) x;'
 
 # ── In-flight diagnostics (query over MQTT/API — no reflash, no serial) ────────────────
 # The lesson from bring-up: don't reflash to inspect state, and don't chase boot-time serial logs.
@@ -646,29 +730,32 @@ button:
 
   # battery_profiler (Module 2) safety-core controls + validation hooks
   - platform: template
-    name: "Prof Start Discharge"     # HIZ on -> run on battery; the 2s loop kicks WD + guards the floor
+    name: "Prof Start Cycle"         # full discharge->rest->charge->rest cycle(s) on the safe core
     on_press:
       - lambda: |-
           id(charger)->set_watchdog_seconds(40);   // ensure WD on so a crash auto-recovers
           id(charger)->kick_watchdog();
-          id(charger)->set_hiz(true);
-          id(g_prof_active) = true;
-          ESP_LOGW("prof", "discharge run started (HIZ on, floor %.3f)", id(g_v_floor));
+          id(g_cycle) = 0; id(g_charge_mah) = 0;
+          id(charger)->set_charge_enable(false);
+          id(charger)->set_hiz(true);              // enter DISCHARGE
+          id(g_prof_state) = 1; id(g_state_ms) = millis();
+          ESP_LOGW("prof", "cycle run started: %d cycle(s), floor %.3f, rest %ds",
+                   id(g_num_cycles), id(g_v_floor), id(g_rest_s));
   - platform: template
-    name: "Prof Stop"                # clean stop -> safe state
+    name: "Prof Stop"                # clean stop -> IDLE safe state
     on_press:
       - lambda: |-
-          id(g_prof_active) = false;
+          id(g_prof_state) = 0;
           id(charger)->set_hiz(false);
           id(charger)->set_charge_enable(true);
-          ESP_LOGW("prof", "run stopped -> safe (HIZ off, charge on)");
+          ESP_LOGW("prof", "STOPPED -> safe (HIZ off, charge on)");
   - platform: template
-    name: "Prof Sim Crash"           # VALIDATION: set HIZ but DON'T kick (g_prof_active stays false) -> the
-    on_press:                        # un-kicked watchdog must expire in ~40s and auto-clear HIZ. Proves the net.
+    name: "Prof Sim Crash"           # VALIDATION: set HIZ but leave state IDLE (nothing kicks) -> the un-kicked
+    on_press:                        # watchdog must expire in ~40s and auto-clear HIZ. Proves the recovery net.
       - lambda: |-
           id(charger)->set_watchdog_seconds(40);
           id(charger)->set_hiz(true);
-          ESP_LOGW("prof", "SIM CRASH: HIZ on, NOT kicking -> WD should recover in ~40s");
+          ESP_LOGW("prof", "SIM CRASH: HIZ on, state IDLE (no kick) -> WD should recover in ~40s");
 
 text_sensor:
   - platform: debug
