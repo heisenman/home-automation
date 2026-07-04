@@ -111,14 +111,60 @@ def fit(path, csv_out=None):
             print(",".join(map(str, row)))
 
 
+def d1001(path):
+    """Summarize a D1001 SD battprofile.csv for the v4 regression. Columns:
+    uptime_s,raw_ch2,cali_mv,batt_mv,batt_mv_smooth,usb_mv,vsys_pg,charging,soc,temp_dc,charge_en
+    The discharge ended in a HARD SHUTDOWN, so uptime_s resets across boots -> segment by uptime reset,
+    then report each session's on-wall/on-battery structure, V range, and any unplug transition (the
+    base-frame 100% anchor = batt_mv the instant usb_mv drops)."""
+    import csv as _csv
+    rows = []
+    with open(path) as f:
+        for d in _csv.DictReader(f):
+            try:
+                rows.append({k: int(float(d[k])) for k in
+                             ("uptime_s", "batt_mv", "batt_mv_smooth", "usb_mv", "charging", "soc", "charge_en")})
+            except (ValueError, KeyError, TypeError):
+                continue
+    if not rows:
+        print("no rows (check CSV header matches the expected columns)", file=sys.stderr)
+        return
+    USB_ON = 4000  # mV: usb_mv above this = wall power present
+    # split into boot sessions on uptime reset
+    sessions, cur = [], [rows[0]]
+    for a, b in zip(rows, rows[1:]):
+        if b["uptime_s"] >= a["uptime_s"]:
+            cur.append(b)
+        else:
+            sessions.append(cur)
+            cur = [b]
+    sessions.append(cur)
+    print(f"{len(rows)} rows, {len(sessions)} boot session(s)")
+    for i, s in enumerate(sessions):
+        wall = [r for r in s if r["usb_mv"] > USB_ON]
+        batt = [r for r in s if r["usb_mv"] <= USB_ON]
+        dur = (s[-1]["uptime_s"] - s[0]["uptime_s"]) / 60.0
+        mv = [r["batt_mv"] for r in s]
+        print(f"  session {i}: {len(s)} rows, {dur:.1f} min, batt_mv {min(mv)}..{max(mv)}, "
+              f"soc {s[0]['soc']}->{s[-1]['soc']}, wall={len(wall)} batt={len(batt)} rows")
+        # unplug transitions inside this session (wall -> battery): 100% anchor candidates
+        for a, b in zip(s, s[1:]):
+            if a["usb_mv"] > USB_ON and b["usb_mv"] <= USB_ON:
+                print(f"    UNPLUG @ up={b['uptime_s']}s: batt_mv={b['batt_mv']} (smooth={b['batt_mv_smooth']}) "
+                      f"= 100% anchor candidate")
+    print("# next: pick the discharge session (long, on-battery, falling V) + its unplug anchor -> v4 fit")
+
+
 def main():
-    ap = argparse.ArgumentParser(description="E1001 battery-profiler analysis")
-    ap.add_argument("cmd", choices=["fit", "summary"])
+    ap = argparse.ArgumentParser(description="E1001/D1001 battery-profiler analysis")
+    ap.add_argument("cmd", choices=["fit", "summary", "d1001"])
     ap.add_argument("path")
     ap.add_argument("--csv")
     a = ap.parse_args()
     if a.cmd == "summary":
         summary(a.path)
+    elif a.cmd == "d1001":
+        d1001(a.path)
     else:
         fit(a.path, a.csv)
 
