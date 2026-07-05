@@ -69,7 +69,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v71-otagate"
+#define APP_BUILD_TAG "v72-replica-trigger"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -83,6 +83,7 @@ static const char *TAG = "beachhead";
 #define T_ACK    "d1001-beachhead/ack"
 #define T_OTA    "d1001-beachhead/cmd/ota"
 #define T_PING   "d1001-beachhead/cmd/ping"
+#define T_REPLC  "d1001-beachhead/cmd/replica"     // -> (any) force the #7 instance-backup files lane to run now
 #define T_DEBUG  "d1001-beachhead/cmd/debug"
 #define T_DISP   "d1001-beachhead/display"       // <- retained display bring-up result
 #define T_DISPC  "d1001-beachhead/cmd/display"    // -> "on" triggers display bring-up (default off)
@@ -601,6 +602,9 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
             esp_mqtt_client_publish(e->client, T_ACK, "{\"ota\":\"refused\",\"why\":\"unsigned; use signed cmd\"}", 0, 0, 0);
         } else if (tl == (int)strlen(T_PING) && strncmp(e->topic, T_PING, tl) == 0) {
             publish_status();
+        } else if (tl == (int)strlen(T_REPLC) && strncmp(e->topic, T_REPLC, tl) == 0) {
+            ha_replica_sync_files_now();     // #7: run the instance-backup files lane now (off the cb stack)
+            if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_ACK, "{\"cmd\":\"replica:triggered\"}", 0, 1, 0);
         } else if (tl == (int)strlen(T_DISPC) && strncmp(e->topic, T_DISPC, tl) == 0) {
             bool on = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
                                    e->data[0] == 't' || e->data[0] == 'T'));

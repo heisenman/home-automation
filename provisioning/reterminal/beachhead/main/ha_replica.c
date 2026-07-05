@@ -357,16 +357,35 @@ static void sync_files_once(void)
     cJSON_Delete(j);
 }
 
+static volatile bool s_files_busy;      // best-effort guard so a manual trigger can't overlap the scheduled run
+
 static void replica_task(void *pv)
 {
     vTaskDelay(pdMS_TO_TICKS(BOOT_MS));
     int cycle = 0;
     for (;;) {
         sync_once();                                        // rung ladder (ADR-0022)
-        if (cycle % FILES_POLL_EVERY == 0) sync_files_once();  // #7 instance/ backup lane
+        if (cycle % FILES_POLL_EVERY == 0 && !s_files_busy) {   // #7 instance/ backup lane
+            s_files_busy = true; sync_files_once(); s_files_busy = false;
+        }
         cycle++;
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
     }
+}
+
+// One-shot files-lane trigger (cmd/replica): run the #7 backup pull NOW instead of waiting for the ~hourly
+// cycle. Runs on its own task — sync_files_once does blocking HTTP, which must never sit on the mqtt-callback
+// stack (the v11/v17 lesson). Guarded against overlapping the scheduled run.
+static void files_trigger_task(void *pv)
+{
+    if (!s_files_busy) { s_files_busy = true; sync_files_once(); s_files_busy = false; }
+    else ESP_LOGW(TAG, "files lane: sync already running — trigger ignored");
+    vTaskDelete(NULL);
+}
+
+void ha_replica_sync_files_now(void)
+{
+    xTaskCreate(files_trigger_task, "replfiles", 8192, NULL, 4, NULL);
 }
 
 void ha_replica_start(const char *base)

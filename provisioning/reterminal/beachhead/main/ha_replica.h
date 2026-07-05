@@ -12,6 +12,10 @@
 // waits for the SD mount itself, so ordering vs ha_sdcard_mount() does not matter.
 void ha_replica_start(const char *base);
 
+// Force the #7 instance-backup files lane to run NOW (cmd/replica), instead of waiting for its ~hourly
+// cycle. Spawns a one-shot task (blocking HTTP off the caller's stack); no-op if a sync is already running.
+void ha_replica_sync_files_now(void);
+
 // Query the local rung replica (Phase 1b): the resolution-selected `vmean` series for
 // (device_id, metric) over the last `hours`, written oldest→newest into out[cap]. Returns the row
 // count (0 if the device/metric has no rung rows in any resolution, or -1 if no replica is present
