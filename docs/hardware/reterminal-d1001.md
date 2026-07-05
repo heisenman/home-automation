@@ -156,3 +156,27 @@ hardware (ICHG resistor + VINDPM), which firmware cannot change.
 - ❌ "The charger might be I2C-programmable / we can raise the input current limit" → **no, it is
   standalone; ILIM/ICHG are resistors.**
 - ✅ "No I2C fuel gauge" — this old note was CORRECT (no MAX17048); 0x36 is some other device, TBD.
+
+## Audio subsystem (roadmap #6 audible alerts — DOCS-FIRST, from `Audio.kicad_sch` + Seeed BSP)
+Authoritative sources: `docs/D1001_Docs/.../Audio.kicad_sch` and the Seeed BSP header
+`~/reterminal-dev/reTerminal-D1001/components/esp32_p4_re_terminal_d1001/include/esp32_p4_re_terminal_d1001.h`
+(+ the proven `driver_examples/01_I2SCodec` reference).
+
+**Signal chain (playback/alerts):** ESP32-P4 I2S → **ES8311** mono codec (DAC) → **NS4150B** Class-D
+power amp → speaker. (**ES7210** is a *4-channel mic ADC* — INPUT only, NOT the alert path. This is the
+chip earlier mis-called an "INA219 current monitor"; see the corrections list above.)
+
+| element | detail |
+|---|---|
+| Codec | **ES8311**, I2C addr **0x18** (`ES8311_ADDRESS_0`, CE low) on **I2C_1** (SCL=GPIO21, SDA=GPIO20) |
+| Amp | **NS4150B** Class-D mono; **enable = PCA9535 expander pin 11** (`BSP_POWER_AMP_EN = 1<<11`), NOT a P4 GPIO |
+| DAC I2S | MCLK=GPIO33, BCLK=GPIO32, WS/LRCK=GPIO31, **DOUT=GPIO30** (P4→codec) |
+| Mic ADC | ES7210 (4-ch, AMIC1-4) on same I2C_1; I2S MCLK=29/SCLK=28/LRCK=27/SDIN=26 — input path, unused for #6 |
+
+**Key integration constraint (why the BSP example isn't drop-in):** the BSP's `es8311_create(port, addr)`
+uses the **legacy** IDF i2c driver (`i2c_driver_install`), but the panel already drives I2C_1 with the
+**new** `i2c_master` driver (`bsp_i2c1()` → `i2c_master_bus_handle_t`, shared by ha_rtc/ha_imu/expander).
+Legacy + new cannot coexist on one port. So `ha_audio` must init the ES8311 either via a new-driver codec
+path (esp_codec_dev / a bus-handle es8311) or via raw register writes on `bsp_i2c1()` (register set in the
+BSP `es8311_reg.h`). The I2S TX side (new `i2s_std` driver) is unaffected. PA-enable reuses the existing
+`bsp_io_expander()` (PCA9535) the panel already controls — set expander pin 11 high before playback.

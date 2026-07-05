@@ -15,6 +15,9 @@ The rested OCV anchors are ocv_d (~floor SoC) and ocv_c (100%). True OCV lies be
 
   usage: tools/e1001_profile.py fit <capture.jsonl> [--csv out.csv]
          tools/e1001_profile.py summary <capture.jsonl>
+         tools/e1001_profile.py e1001lut <capture.jsonl> [--csv out.csv] [--write-yaml e1001.yaml]
+             derive the v1 V->SoC LUT and (with --write-yaml) inject it into the ESPHome config's
+             batt_soc_lut substitution — the fully-programmatic "process + load" path.
 """
 import argparse
 import json
@@ -229,16 +232,111 @@ def d1001(path, csv_out=None):
         print(f"# wrote 21-point LUT -> {csv_out}")
 
 
+# E1001 provisional safety floors + state offsets (base-frame mV) for the ADR-0024 profile schema. Floors
+# mirror the Li-ion knee the D1001 characterized (same chemistry); OFFSETS ARE 0 — the E1001's display/USB/
+# charging offsets are UNCHARACTERIZED (needs the §3 step-each-knob run), so v1 normalizes to a no-op and the
+# footer reads the loaded base frame directly (which is exactly what the LUT was fit against). Refine + re-push.
+E1001_FLOORS = {
+    "off_display_off_mv": 0, "off_usb_mv": 0, "off_charging_mv": 0,
+    "run_floor_mv": 3450, "warn_mv": 3520, "warn_clear_mv": 3580,
+    "boot_gate_mv": 3600, "boot_release_mv": 3700,   # boot gate > run floor: cold-start inrush needs headroom
+}
+
+
+def e1001lut(path, csv_out=None, write_yaml=None, write_json=None, version="v1", date="2026-07-05"):
+    """Derive the E1001 V->SoC LUT from a battprofile capture and emit it as an ADR-0024 battery profile —
+    the reuse-correct "process + load" path. The profile is the SAME schema the D1001 uses
+    (ha_batt_profile_t); deploy it with tools/d1001_profile_push.py --node e1001-bench --from-json ... (no
+    reflash, ADR-0024 §5). --write-yaml bakes the LUT as the config's default fallback; --write-json writes
+    the pushable seed profile.
+
+    Base frame = the on-battery DISCHARGE leg (display+wifi awake, the same load the panel reads under at a
+    deep-sleep wake), so the LUT maps the LOADED terminal V the footer actually sees. Under the near-constant
+    load the profiler ran (ext-load / natural awake draw), coulombs ~ time, so SoC is time-linear across the
+    leg; capacity is cross-checked against the charge-leg coulomb count. _binned_lut anchors 100% at the
+    unplugged/loaded top and 0% at the shutdown floor with narrow endpoint windows, median-robust, monotonic.
+    """
+    import re
+    rows = load(path)
+    segs = segments(rows)
+    disch = [s for st, s in segs if st == 1]
+    charge = [s for st, s in segs if st == 3]
+    if not disch:
+        print("no DISCHARGE leg — need a full discharge->charge cycle capture", file=sys.stderr)
+        return
+    d = max(disch, key=len)
+    if len(d) < 50:
+        print(f"discharge leg too short ({len(d)} samples)", file=sys.stderr)
+        return
+    t0, t1 = d[0]["t"], d[-1]["t"]
+    span = max(t1 - t0, 1e-6)
+    # base frame: SoC time-linear 100->0 across the loaded discharge, V in mV (the footer reads loaded V)
+    samples = [(100.0 * (1.0 - (r["t"] - t0) / span), r["v"] * 1000.0) for r in d]
+    lut, counts = _binned_lut(samples, 21)
+    dur_min = span / 60.0
+    total = charge[-1][-1].get("mah", 0) if charge else 0
+    print(f"# E1001 DISCHARGE fit: {len(d)} on-battery samples over {dur_min:.1f} min "
+          f"({dur_min * 60 / len(d):.1f}s cadence), ~{total * 60.0 / dur_min:.0f} mA avg (charge-leg {total:.0f} mAh)")
+    print(f"# anchors: 100% (loaded top) = {lut[-1]} mV   0% (shutdown floor) = {lut[0]} mV")
+    thin = [i * 5 for i, c in enumerate(counts) if c < 3]
+    if thin:
+        print(f"# NOTE thin bins (<3 samples, interpolated): {thin}%")
+    # hysteresis cross-check vs the charge leg (coulomb-referenced SoC)
+    if charge and total > 0:
+        c = charge[-1]
+        csamp = [(100.0 * r.get("mah", 0) / total, r["v"] * 1000.0) for r in c]
+        clut, _ = _binned_lut(csamp, 21)
+        print(f"# hysteresis: charge leg reads ~{clut[10] - lut[10]} mV above discharge at 50% "
+              f"(base-frame LUT correctly uses the loaded discharge leg)")
+
+    lut_csv = ", ".join(str(v) for v in lut)          # the substitution value the ESPHome lambda consumes
+    print(f"\n# batt_soc_lut (21 pts mV, ascending, index i -> SoC 5*i %):\n{lut_csv}")
+    if csv_out:
+        with open(csv_out, "w") as f:
+            f.write("soc_pct,v_mv\n")
+            for i, v in enumerate(lut):
+                f.write(f"{i * 5},{v}\n")
+        print(f"# wrote 21-point LUT -> {csv_out}")
+    if write_yaml:
+        text = open(write_yaml).read()
+        new, n = re.subn(r'(?m)^(\s*batt_soc_lut:\s*).*$', rf'\g<1>"{lut_csv}"', text)
+        if n != 1:
+            print(f"# ERROR: expected exactly one 'batt_soc_lut:' substitution in {write_yaml}, found {n}. "
+                  f"Add a placeholder line under substitutions: first.", file=sys.stderr)
+            sys.exit(1)
+        open(write_yaml, "w").write(new)
+        print(f"# wrote batt_soc_lut substitution -> {write_yaml}")
+    if write_json:
+        prof = {"version": version, "date": date, "method": "auto-discharge", **E1001_FLOORS, "lut": lut}
+        # key order = the ADR-0024 schema (ha_batt_profile_rt_to_json); the panel parses by key, order is cosmetic
+        prof = {"version": prof["version"], "date": prof["date"], "method": prof["method"],
+                "off_display_off_mv": prof["off_display_off_mv"], "off_usb_mv": prof["off_usb_mv"],
+                "off_charging_mv": prof["off_charging_mv"], "run_floor_mv": prof["run_floor_mv"],
+                "warn_mv": prof["warn_mv"], "warn_clear_mv": prof["warn_clear_mv"],
+                "boot_gate_mv": prof["boot_gate_mv"], "boot_release_mv": prof["boot_release_mv"], "lut": lut}
+        with open(write_json, "w") as f:
+            json.dump(prof, f, indent=2)
+            f.write("\n")
+        print(f"# wrote ADR-0024 seed profile {version} -> {write_json}  "
+              f"(push: tools/d1001_profile_push.py --node e1001-bench --from-json {write_json} --push)")
+
+
 def main():
     ap = argparse.ArgumentParser(description="E1001/D1001 battery-profiler analysis")
-    ap.add_argument("cmd", choices=["fit", "summary", "d1001"])
+    ap.add_argument("cmd", choices=["fit", "summary", "d1001", "e1001lut"])
     ap.add_argument("path")
     ap.add_argument("--csv")
+    ap.add_argument("--write-yaml", help="e1001lut: rewrite the batt_soc_lut substitution in this ESPHome yaml")
+    ap.add_argument("--write-json", help="e1001lut: write the pushable ADR-0024 seed profile to this file")
+    ap.add_argument("--version", default="v1")
+    ap.add_argument("--date", default="2026-07-05")
     a = ap.parse_args()
     if a.cmd == "summary":
         summary(a.path)
     elif a.cmd == "d1001":
         d1001(a.path, a.csv)
+    elif a.cmd == "e1001lut":
+        e1001lut(a.path, a.csv, a.write_yaml, a.write_json, a.version, a.date)
     else:
         fit(a.path, a.csv)
 

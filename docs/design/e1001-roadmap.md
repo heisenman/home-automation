@@ -1,6 +1,8 @@
 # E1001 roadmap — bringing the ePaper panel into the system
 
-**Status:** Planning (2026-07-03). Board is on the bench, not yet powered.
+**Status:** LIVE on the bench (192.168.0.71). E0–E2 done; deep-sleep mechanism + **battery profile v1 (loadable,
+ADR-0024)** done (2026-07-05, `d910374`). **▶ For the remaining work — implemented-vs-stored-vs-missing audit +
+the step-by-step implementation procedure — see [e1001-gap-register.md](e1001-gap-register.md).**
 **Goal.** Onboard the Seeed reTerminal **E1001** as ADR-0019's **Phase 4 — the abstraction proof**: show that
 one server-authored spec drives *both* a P4/LVGL color-touch panel (D1001) and an S3/ePaper status panel
 (E1001). Along the way, cash in the D1001 investment ([d1001-development-map.md](d1001-development-map.md)).

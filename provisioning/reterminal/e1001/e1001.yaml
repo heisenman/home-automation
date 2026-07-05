@@ -22,6 +22,30 @@ substitutions:
   sleep_default: "false"            # DEV first-boot: never sleep -> OTA always reachable. Flip live over MQTT.
   sleep_dur_default_s: "900"        # 15 min timer cadence (battery/freshness knob), runtime-tunable
   grace_default_s: "25"             # awake window per wake (wifi + fetch + ~5s render + read), runtime-tunable
+  # Battery profile BAKED DEFAULT (ADR-0024 §5 fallback when no profile is loaded/pushed). The LUT is
+  # GENERATED — do not hand-edit; regenerate from a battprofile capture with:
+  #   tools/e1001_profile.py e1001lut <capture.jsonl> --write-yaml e1001.yaml --write-json battery_profile_v1.json
+  # A refined profile deploys as DATA over MQTT with NO reflash (like the D1001 ha_battery_profile_rt):
+  #   tools/d1001_profile_push.py --node e1001-bench --from-json battery_profile_v1.json --push
+  # Base frame = the loaded discharge leg (the load the panel reads under at a deep-sleep wake). v1 2026-07-05.
+  batt_soc_lut: "3478, 3530, 3572, 3626, 3674, 3724, 3756, 3778, 3798, 3812, 3836, 3858, 3892, 3922, 3956, 3970, 3988, 3992, 4010, 4046, 4100"
+  # State offsets (base-frame mV) — E1001 UNCHARACTERIZED, 0 = normalize is a no-op (footer reads loaded V,
+  # which is what the LUT was fit against). Safety floors mirror the Li-ion knee; boot gate > run (inrush).
+  prof_off_display_off: "0"
+  prof_off_usb: "0"
+  prof_off_charging: "0"
+  prof_run_floor: "3450"
+  prof_warn: "3520"
+  prof_warn_clear: "3580"
+  prof_boot_gate: "3600"
+  prof_boot_release: "3700"
+  prof_date: "2026-07-05"
+  # ADR-0024 §3/§4/§6 safety policy. Thresholds REUSE the loaded profile's floors (g_run_floor_mv / g_warn_mv /
+  # g_boot_gate_mv ...). B1 (schematic sheet 4): no firmware rail-kill — Q1/CJ3407 is gated by physical SW1 — so
+  # §3 "hard-off" = deep-sleep-at-floor (paint CHARGE ME, e-ink holds it, long re-check). Boot-gate holds the
+  # ePaper dark below the cold-start floor (the display inrush is the load being avoided).
+  pp_debounce: "3"                  # consecutive sub-run-floor 10s samples before deep-sleep-at-floor (~30s)
+  pp_recheck_s: "3600"              # deep-sleep re-check cadence while parked at the floor (1h)
 
 esphome:
   name: ${device_name}
@@ -33,6 +57,32 @@ esphome:
     - priority: 600                  # NOT 800: at 800 the gpio output isn't constructed yet → turn_on no-ops →
       then:                          # rail never powered → ADC reads 0. 600 = after components, per the ref config.
         - output.turn_on: vbat_adc_en  # power the battery-sense divider (held on in beachhead; gated later)
+    - priority: 500                  # battery-profile self-heal: if the restored LUT is ever corrupt (bad
+      then:                          # persist / first boot race), revert to the baked default so SoC can't brick.
+        - lambda: |-
+            bool ok = id(g_soc_lut)[0] >= 2500 && id(g_soc_lut)[20] <= 4400;
+            for (int i = 1; i < 21 && ok; i++) if (id(g_soc_lut)[i] <= id(g_soc_lut)[i - 1]) ok = false;
+            if (!ok) {
+              static const int dl[21] = {${batt_soc_lut}};
+              for (int i = 0; i < 21; i++) id(g_soc_lut)[i] = dl[i];
+              id(g_prof_version) = "v1"; id(g_prof_method) = "baked"; id(g_prof_pushed) = false;
+              ESP_LOGW("battprof", "restored LUT invalid -> reverted to baked default");
+            }
+    - priority: 450                  # ADR-0024 §6 boot-gate: below the cold-start floor ON BATTERY, hold the ePaper
+      then:                          # dark (its inrush is the load we're gating). Force one ADC sample first (vbat_adc_en
+        - component.update: batt_v   # is on at pri 600). Safe default: if no reading / on wall, allow the display.
+        - delay: 300ms
+        - lambda: |-
+            float bv = id(batt_v).state;
+            if (std::isnan(bv)) return;
+            int mv = (int)(bv * 1000.0f + 0.5f);
+            if (!id(charger)->power_good() && mv < id(g_boot_gate_mv)) {
+              id(g_pp_dark) = true;
+              ESP_LOGW("battpp", "boot-gate: cell %dmV < gate %dmV on battery -> holding display DARK", mv, id(g_boot_gate_mv));
+            }
+    - priority: 400                  # RTC holdover: sync the system clock FROM the PCF85063T at boot (i2c + the rtc
+      then:                          # component are up by now) so the pri-100 first frame already shows the wall clock.
+        - pcf85063.read_time: rtc_time
     - priority: 250                  # profiler discharge-LOAD burners: one low-pri CPU spinner per core, each self-
       then:                          # gated on DISCHARGE + Prof Load Level>0. Captureless lambdas (-> TaskFunction_t);
         - lambda: |-                 # duty scales with level (lvl3 = full burn). Priority 1 so WiFi/BT (much higher) never starve.
@@ -55,8 +105,11 @@ esphome:
               }, core ? "profburn1" : "profburn0", 3072, nullptr, 1, nullptr, core);
             }
     - priority: -100                 # after everything is up: one-shot draw (update_interval is 'never', ePaper style)
-      then:
-        - component.update: epaper
+      then:                          # ...unless the boot-gate (pri 450) held us dark to avoid the display inrush.
+        - if:
+            condition: { lambda: 'return !id(g_pp_dark);' }
+            then:
+              - component.update: epaper
     - priority: -200                 # LAST: P4e Step 1 — read the buttons AFTER the display draw and settle time.
       then:                          # Held button at boot => "stay awake for OTA" (the escape hatch for Step 2's sleep).
         - delay: 300ms               # let the gpio binary_sensors publish their initial state before we read them
@@ -112,12 +165,22 @@ wifi:
 
 captive_portal:
 
-time:                                # clock sync off the dictator (SNTP) — mirrors the edge ha_sntp pattern.
-  - platform: sntp                   # E1001 shows a wall clock (unlike the clockless D1001 panel); every render
-    id: sntp_time                    # is guarded by .is_valid() so an unsynced clock degrades gracefully (no hang,
-    timezone: "${timezone}"          # no bad time). On a deep-sleep wake it re-syncs after wifi; dev-mode syncs once.
+time:                                # clock: PCF85063T RTC (coin-cell holdover) as the boot source + SNTP to correct.
+  - platform: pcf85063               # RTC @0x51: read at boot (on_boot pri 400) so the FIRST ePaper frame has the
+    id: rtc_time                     # wall clock INSTANTLY on wake — before WiFi/SNTP — and it survives battery removal.
+    address: 0x51
+    i2c_id: bus_i2c0
+    timezone: "${timezone}"
+    update_interval: never           # read once explicitly at boot; SNTP owns correction thereafter (no RTC-read stomp)
+  - platform: sntp                   # LAN time authority (.210): corrects RTC drift + writes it back on each sync.
+    id: sntp_time                    # renders guard on .is_valid(); the RTC keeps the system clock valid across sleeps.
+    timezone: "${timezone}"
     servers:
       - ${ntp_server}
+    on_time_sync:
+      then:
+        - pcf85063.write_time:
+            id: rtc_time
 
 external_components:
   - source: components               # local: components/sy6974b (charger driver) + e1001_ui scaffold
@@ -126,12 +189,84 @@ mqtt:
   id: mqtt_client                    # referenced by the edge-node event publisher (home/edge/<node>/event)
   broker: 192.168.0.210              # dictator real IP (VIP .200 unreachable from CTWap_24g wifi)
   port: 1883
+  on_connect:                        # re-assert the retained active-profile status on every (re)connect. The
+    - delay: 5s                      # 5s settle: publishing INSIDE the connect callback races the client setup
+    - script.execute: publish_profile   # and gets dropped — let MQTT fully come up first, then publish retained.
+  # ADR-0024 §5 loadable battery profile — same cmd/profile protocol as the D1001 (profile_apply_task):
+  #   "get"     -> republish the retained /profile status
+  #   "default" -> revert to the baked-in default (baked ${...}) and clear the pushed flag
+  #   <JSON>    -> validate (21-pt ascending LUT + ordered floors) -> hot-swap + persist -> ack applied/rejected
+  on_message:
+    - topic: ${device_name}/cmd/profile
+      then:
+        - lambda: |-
+            if (x == "get") { id(publish_profile)->execute(); return; }
+            if (x == "default") {
+              static const int dl[21] = {${batt_soc_lut}};
+              for (int i = 0; i < 21; i++) id(g_soc_lut)[i] = dl[i];
+              id(g_off_display_off_mv) = ${prof_off_display_off}; id(g_off_usb_mv) = ${prof_off_usb};
+              id(g_off_charging_mv) = ${prof_off_charging}; id(g_run_floor_mv) = ${prof_run_floor};
+              id(g_warn_mv) = ${prof_warn}; id(g_warn_clear_mv) = ${prof_warn_clear};
+              id(g_boot_gate_mv) = ${prof_boot_gate}; id(g_boot_release_mv) = ${prof_boot_release};
+              id(g_prof_version) = "v1"; id(g_prof_date) = "${prof_date}"; id(g_prof_method) = "baked";
+              id(g_prof_pushed) = false;
+              id(mqtt_client)->publish("${device_name}/ack", std::string("{\"profile\":\"reset-to-default\"}"));
+              id(publish_profile)->execute();
+              id(epaper)->update();
+              return;
+            }
+            // else: a pushed profile JSON. Extract into temporaries, validate, THEN commit (never half-apply).
+            int tmp[21]; int nlut = 0;
+            int od = 0, ou = 0, oc = 0, rf = 0, wm = 0, wc = 0, bg = 0, br = 0;
+            std::string ver, dat, met, err;
+            bool ok = json::parse_json(x, [&](JsonObject root) -> bool {
+              ver = root["version"] | ""; if (ver.empty()) { err = "no version"; return false; }
+              dat = root["date"] | ""; met = root["method"] | "";
+              od = root["off_display_off_mv"] | 0; ou = root["off_usb_mv"] | 0; oc = root["off_charging_mv"] | 0;
+              rf = root["run_floor_mv"] | 0; wm = root["warn_mv"] | 0; wc = root["warn_clear_mv"] | 0;
+              bg = root["boot_gate_mv"] | 0; br = root["boot_release_mv"] | 0;
+              JsonArray lut = root["lut"].as<JsonArray>();
+              if (lut.isNull()) { err = "no lut"; return false; }
+              for (JsonVariant v : lut) { if (nlut < 21) tmp[nlut] = v.as<int>(); nlut++; }
+              if (nlut != 21) { err = "lut must be 21 pts"; return false; }
+              for (int i = 1; i < 21; i++) if (tmp[i] <= tmp[i - 1]) { err = "lut not ascending"; return false; }
+              if (!(rf <= wm && wm <= wc)) { err = "floors unordered"; return false; }
+              if (bg > br) { err = "boot floors unordered"; return false; }
+              return true;
+            });
+            char ack[96];
+            if (!ok) {
+              snprintf(ack, sizeof(ack), "{\"profile\":\"rejected\",\"err\":\"%s\"}",
+                       err.empty() ? "bad json" : err.c_str());
+              id(mqtt_client)->publish("${device_name}/ack", std::string(ack));
+              ESP_LOGW("battprof", "rejected pushed profile: %s", err.empty() ? "bad json" : err.c_str());
+              return;
+            }
+            for (int i = 0; i < 21; i++) id(g_soc_lut)[i] = tmp[i];
+            id(g_off_display_off_mv) = od; id(g_off_usb_mv) = ou; id(g_off_charging_mv) = oc;
+            id(g_run_floor_mv) = rf; id(g_warn_mv) = wm; id(g_warn_clear_mv) = wc;
+            id(g_boot_gate_mv) = bg; id(g_boot_release_mv) = br;
+            id(g_prof_version) = ver; id(g_prof_date) = dat;
+            id(g_prof_method) = met.empty() ? std::string("pushed") : met;
+            id(g_prof_pushed) = true;
+            snprintf(ack, sizeof(ack), "{\"profile\":\"applied\",\"version\":\"%s\"}", ver.c_str());
+            id(mqtt_client)->publish("${device_name}/ack", std::string(ack));
+            ESP_LOGW("battprof", "applied profile %s (%s): lut %d..%d mV", ver.c_str(),
+                     id(g_prof_method).c_str(), tmp[0], tmp[20]);
+            id(publish_profile)->execute();
+            id(epaper)->update();
 
 # Edge-node event publisher (Stage 1). Reusable script: emits the canonical home/edge/<node>/event envelope
 # (schema 1, kind:power). Called on real power_good transitions AND from the Test Edge buttons. Mirrors the
 # D1001's power_ctx_publish (beachhead_main.c:597); the coordinator's event-reconcile consumes home/edge/+/event
 # and rebalances coverage on relaying->false (rollup-ladder-and-replica-sync.md:190).
 script:
+  - id: buzzer_chime                 # fire a short chime for a critical alert / low-battery warn. EASY-DISABLE
+    then:                            # ([[feedback-audio-easy-disable]]): silent no-op unless g_buzzer_en (Buzzer Enable).
+      - if:
+          condition: { lambda: 'return id(g_buzzer_en);' }
+          then:
+            - rtttl.play: "chime:d=8,o=6,b=180:c,e"
   - id: publish_edge_event           # emits the envelope for id(g_pub_wall); caller sets g_pub_wall then executes
     then:
       - lambda: |-
@@ -144,11 +279,70 @@ script:
           id(mqtt_client)->publish("home/edge/${edge_node}/event", p, 1, true);
           ESP_LOGW("edge", "published home/edge/${edge_node}/event on_wall=%s", w ? "true" : "false");
 
+  # ADR-0024 §5: publish the active battery profile RETAINED on ${device_name}/profile (mirrors the D1001's
+  # publish_profile). Full schema + a `source` tag so tools/d1001_profile_push.py --get can read it back.
+  - id: publish_profile
+    then:
+      - lambda: |-
+          auto n = [](int v) { return std::to_string(v); };
+          std::string j = "{\"version\":\"" + id(g_prof_version) + "\",\"date\":\"" + id(g_prof_date) +
+            "\",\"method\":\"" + id(g_prof_method) + "\",\"source\":\"" +
+            (id(g_prof_pushed) ? std::string("pushed") : std::string("default")) + "\"," +
+            "\"off_display_off_mv\":" + n(id(g_off_display_off_mv)) + ",\"off_usb_mv\":" + n(id(g_off_usb_mv)) +
+            ",\"off_charging_mv\":" + n(id(g_off_charging_mv)) + ",\"run_floor_mv\":" + n(id(g_run_floor_mv)) +
+            ",\"warn_mv\":" + n(id(g_warn_mv)) + ",\"warn_clear_mv\":" + n(id(g_warn_clear_mv)) +
+            ",\"boot_gate_mv\":" + n(id(g_boot_gate_mv)) + ",\"boot_release_mv\":" + n(id(g_boot_release_mv)) +
+            ",\"lut\":[";
+          for (int i = 0; i < 21; i++) { if (i) j += ","; j += n(id(g_soc_lut)[i]); }
+          j += "]}";
+          id(mqtt_client)->publish("${device_name}/profile", j, 1, true);   // qos1, retained
+          ESP_LOGW("battprof", "published /profile %s source=%s", id(g_prof_version).c_str(),
+                   id(g_prof_pushed) ? "pushed" : "default");
+
 # battery_profiler (Module 2) — safety core. FAST loop (2s): while a discharge run is active, kick the charger
 # watchdog (WD_RST) so HIZ holds, AND guard the floor — clear HIZ before brown-out so the ESP survives to recover.
 # If THIS loop ever stops (crash/hang), the un-kicked watchdog expires (~40s) and the charger resets EN_HIZ->0 =
 # hardware auto-recovery. Telemetry loop (5s) streams state to e1001-bench/battprofile for host capture (Module 3).
 interval:
+  # ADR-0024 §3/§4/§6 safety monitor. On-battery only (on wall = charging = safe -> inert during USB dev). The
+  # lambda folds one reading into the state machine + sets intent flags; the if-blocks actuate (a bare lambda
+  # can't call components). Thresholds come from the loaded profile's floors (g_*_mv), so this holds pre-curve.
+  - interval: 10s
+    then:
+      - lambda: |-
+          float bv = id(batt_v).state;
+          if (std::isnan(bv)) return;
+          int mv = (int)(bv * 1000.0f + 0.5f);
+          bool wall = id(charger)->power_good();
+          // recover a boot-gate dark hold once charging or climbed past the release floor
+          if (id(g_pp_dark) && (wall || mv >= id(g_boot_release_mv))) { id(g_pp_dark) = false; id(g_pp_do_redraw) = true; }
+          if (wall) {                                   // plugged/charging: safe -> clear warn, reset streak
+            id(g_pp_low_streak) = 0;
+            if (id(g_pp_warned)) { id(g_pp_warned) = false; id(g_pp_do_redraw) = true; }
+            return;
+          }
+          if (mv <= id(g_warn_mv) && !id(g_pp_warned)) { id(g_pp_warned) = true; id(g_pp_do_warn) = true; }
+          else if (mv >= id(g_warn_clear_mv) && id(g_pp_warned)) { id(g_pp_warned) = false; id(g_pp_do_redraw) = true; }
+          if (mv <= id(g_run_floor_mv)) { if (++id(g_pp_low_streak) >= ${pp_debounce}) id(g_pp_do_shutdown) = true; }
+          else                         { id(g_pp_low_streak) = 0; }
+      - if:
+          condition: { lambda: 'return id(g_pp_do_warn);' }   # chime on entering the low-battery warn band
+          then:
+            - script.execute: buzzer_chime
+      - if:
+          condition: { lambda: 'return id(g_pp_do_warn) || id(g_pp_do_redraw);' }
+          then:
+            - lambda: 'id(g_pp_do_warn) = false; id(g_pp_do_redraw) = false;'
+            - component.update: epaper
+      - if:
+          condition: { lambda: 'return id(g_pp_do_shutdown);' }
+          then:
+            - lambda: |-
+                id(g_pp_do_shutdown) = false; id(g_pp_charge_me) = true;
+                ESP_LOGW("battpp", "run floor reached on battery -> CHARGE ME + deep-sleep-at-floor %ds", ${pp_recheck_s});
+            - component.update: epaper                 # paint CHARGE ME once; e-ink then holds it at ~0 power
+            - deep_sleep.allow: ds
+            - deep_sleep.enter: { id: ds, sleep_duration: !lambda 'return (uint32_t) ${pp_recheck_s} * 1000;' }
   - interval: 1s                     # external discharge-load gate: ON only while DISCHARGE + Prof Load Level>0, OFF
     then:                            # in every other state (so it can never fight the charge leg or over-drain at rest).
       - lambda: |-
@@ -328,6 +522,100 @@ globals:                             # parsed tiles as parallel string vectors (
     type: int
     restore_value: true
     initial_value: '${grace_default_s}'
+  # --- ADR-0024 battery profile: versioned, runtime-loadable DATA (push over MQTT, no reflash). Same schema
+  # + cmd/profile protocol as the D1001 (ha_battery_profile_rt). All restore_value: true -> a pushed profile
+  # PERSISTS across reboots via ESPHome preferences (RestoringGlobals: int[]/int/bool memcpy-persist, std::string
+  # via RestoringGlobalStringComponent). Baked ${...} defaults are used only on first boot / after "default". ---
+  - id: g_soc_lut                    # V->SoC LUT: 21 pts base-frame mV, ascending; index i -> SoC 5*i %
+    type: int[21]
+    restore_value: true
+    initial_value: '{${batt_soc_lut}}'
+  - id: g_off_display_off_mv         # state offsets (mV above base frame); normalize removes them before the LUT
+    type: int
+    restore_value: true
+    initial_value: '${prof_off_display_off}'
+  - id: g_off_usb_mv
+    type: int
+    restore_value: true
+    initial_value: '${prof_off_usb}'
+  - id: g_off_charging_mv
+    type: int
+    restore_value: true
+    initial_value: '${prof_off_charging}'
+  - id: g_run_floor_mv               # safety floors (base-frame mV) — stored for the E3 power policy (ADR-0024 §3/4/6)
+    type: int
+    restore_value: true
+    initial_value: '${prof_run_floor}'
+  - id: g_warn_mv
+    type: int
+    restore_value: true
+    initial_value: '${prof_warn}'
+  - id: g_warn_clear_mv
+    type: int
+    restore_value: true
+    initial_value: '${prof_warn_clear}'
+  - id: g_boot_gate_mv
+    type: int
+    restore_value: true
+    initial_value: '${prof_boot_gate}'
+  - id: g_boot_release_mv
+    type: int
+    restore_value: true
+    initial_value: '${prof_boot_release}'
+  - id: g_prof_version               # provenance (ADR-0024: every profile is auditable) — persisted strings
+    type: std::string
+    restore_value: true
+    initial_value: '"v1"'
+  - id: g_prof_date
+    type: std::string
+    restore_value: true
+    initial_value: '"${prof_date}"'
+  - id: g_prof_method
+    type: std::string
+    restore_value: true
+    initial_value: '"baked"'
+  - id: g_prof_pushed                # false = baked default is live, true = a runtime-pushed profile is live
+    type: bool
+    restore_value: true
+    initial_value: 'false'
+  # --- ADR-0024 safety-policy runtime state (LUT-free: acts on the profile's mV floors, valid before any curve) ---
+  - id: g_pp_low_streak              # consecutive sub-run-floor samples (debounce before deep-sleep-at-floor)
+    type: int
+    restore_value: false
+    initial_value: '0'
+  - id: g_pp_warned                  # in the warn band -> renderer shows a LOW BATTERY banner
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: g_pp_dark                    # boot-gate held the ePaper dark (cell below cold-start floor at boot)
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: g_pp_charge_me               # at the run floor -> renderer paints the full-screen CHARGE ME frame
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: g_pp_do_warn                 # monitor->action intent flags (lambda decides; if-blocks actuate the components)
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: g_pp_do_redraw
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: g_pp_do_shutdown
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  # --- buzzer (roadmap COULD #3): easy-disable master gate + critical-alert rising-edge tracking ---
+  - id: g_buzzer_en                  # master enable (VERY easy to disable): Buzzer Enable switch, persisted
+    type: bool
+    restore_value: true
+    initial_value: 'true'
+  - id: g_alert_crit_prev            # previous critical-alert state -> chime only on the rising edge (not each fetch)
+    type: bool
+    restore_value: false
+    initial_value: 'false'
 
 # --- ePaper display (UC8179, 7.5" mono 800x480) — P4b: prove the display path ---
 spi:
@@ -361,13 +649,22 @@ display:
     update_interval: never           # ePaper: draw on-demand (deep-sleep model), not on a timer.
     lambda: |-                       # P4c.1: paginated house sensor tiles (buttons navigate; e-ink = discrete pages).
       int w = it.get_width(), h = it.get_height();
+      if (id(g_pp_charge_me)) {                    // ADR-0024 §3 deep-sleep-at-floor: full-screen low-battery notice
+        it.rectangle(0, 0, w, h);
+        it.print(w / 2, h / 2 - 34, id(font_val), TextAlign::CENTER, "LOW BATTERY");
+        it.print(w / 2, h / 2 + 24, id(font_title), TextAlign::CENTER, "CHARGE ME");
+        return;
+      }
       it.rectangle(0, 0, w, h);
-      int bh = 0;                                 // alert banner height (0 = no active alerts)
-      if (!id(g_alerts).empty()) {
+      // ADR-0024 §4 warn: a critical LOW BATTERY banner takes the top slot while in the warn band (device-local,
+      // independent of the server /api/v1/alerts feed so a fetch can't clear it).
+      bool warn = id(g_pp_warned);
+      int bh = 0;                                 // banner height (0 = none)
+      if (warn || !id(g_alerts).empty()) {
         bh = 48;
-        std::string bt = id(g_alerts)[0];
-        if (id(g_alerts).size() > 1) bt += "  (+" + std::to_string(id(g_alerts).size() - 1) + ")";
-        if (id(g_alert_crit)) {
+        std::string bt = warn ? std::string("LOW BATTERY - charge me") : id(g_alerts)[0];
+        if (!warn && id(g_alerts).size() > 1) bt += "  (+" + std::to_string(id(g_alerts).size() - 1) + ")";
+        if (warn || id(g_alert_crit)) {
           it.filled_rectangle(0, 0, w, bh);       // critical: inverted strip
           it.print(w / 2, bh / 2, id(font_label), COLOR_OFF, TextAlign::CENTER, bt.c_str());
         } else {
@@ -401,16 +698,26 @@ display:
           y += rowh;
         }
       }
-      // --- status footer: last-update (relative) + wifi RSSI + battery % (provisional linear V->%, pre-fit) ---
+      // --- status footer: last-update (relative) + wifi RSSI + battery % (ADR-0024 profile: normalize to the
+      // base frame by the charge/USB state offset, then interpolate the loadable V->SoC LUT in g_soc_lut) ---
       it.line(0, ftop, w, ftop);
       float bv = id(batt_v).state;
-      int bpct = (int) ((bv - 3.45f) / (4.20f - 3.45f) * 100.0f + 0.5f);
-      if (bpct < 0) bpct = 0;
-      if (bpct > 100) bpct = 100;
+      int bpct;
+      {
+        int mv = (int) (bv * 1000.0f + 0.5f);
+        int cs = (int) id(charger)->charge_status();            // 1 pre / 2 fast = charging (elevates V)
+        if (cs == 1 || cs == 2)         mv -= id(g_off_charging_mv);
+        else if (id(charger)->power_good()) mv -= id(g_off_usb_mv);  // on-wall, not charging (USB I·R offset)
+        auto &lut = id(g_soc_lut);
+        if (std::isnan(bv) || mv <= lut[0]) bpct = 0;
+        else if (mv >= lut[20]) bpct = 100;
+        else { int i = 0; while (i < 20 && mv > lut[i + 1]) i++;
+               bpct = 5 * i + (int) (5.0f * (mv - lut[i]) / (lut[i + 1] - lut[i]) + 0.5f); }
+      }
       char ft[56];
-      if (id(g_fetch_uptime).state > 0)
+      if (id(g_fetch_uptime) > 0)     // g_fetch_uptime is a float global (snapshot of uptime_s), not a sensor
         snprintf(ft, sizeof(ft), "updated %ds ago    wifi %.0f    %d%%",
-                 (int)(id(uptime_s).state - id(g_fetch_uptime).state), id(wifi_rssi).state, bpct);
+                 (int)(id(uptime_s).state - id(g_fetch_uptime)), id(wifi_rssi).state, bpct);
       else
         snprintf(ft, sizeof(ft), "no data yet    wifi %.0f    %d%%", id(wifi_rssi).state, bpct);
       it.print(w / 2, h - 4, id(font_label), TextAlign::BOTTOM_CENTER, ft);
@@ -500,9 +807,13 @@ sensor:
     name: "Battery Voltage"
     id: batt_v
     attenuation: 12db
-    update_interval: 60s
+    update_interval: 10s             # 10s: feeds the ADR-0024 safety monitor (was 60s)
     filters:
-      - multiply: 2.0
+      - multiply: 2.0                # divider x2 -> cell V
+      - median:                      # ADR-0024 §1: symmetric filter, robust to a load-step spike (NOT one-way/latching)
+          window_size: 5
+          send_every: 1
+          send_first_at: 1
 
   # diagnostics
   - platform: uptime
@@ -524,6 +835,13 @@ output:
     pin: GPIO17                        # Drives a ~4.7Ω/10W resistor across V_BAT to burn the cell down in ~hours,
     id: ext_load                       # not days (an ePaper S3 can't self-sink enough). HW gate pulldown keeps it
     # starts LOW (default) — off until the discharge logic drives it; a reset can't strand the load on the cell.
+  - platform: ledc                     # buzzer PWM. Schematic sheet 6: BUZ1 MLT-8530 (passive magnetic) via Q7
+    pin: GPIO45                        # (BC817 NPN, base<-R98<-IO45, NON-inverted: IO45 high = tone). rtttl sets freq.
+    id: buzzer_out                     # GPIO45 is a strapping pin -> only driven post-boot (buzzer idle = safe).
+
+rtttl:                               # tone/melody player on the buzzer PWM output (roadmap COULD #3)
+  id: buzzer
+  output: buzzer_out
 
 # --- Connectivity indicator + input sanity (nice-to-have, still beachhead-cheap) ---
 light:
@@ -601,6 +919,16 @@ switch:
       - lambda: 'id(g_sleep_enable) = true;  ESP_LOGW("sleep", "battery mode ON (runtime)");'
     turn_off_action:
       - lambda: 'id(g_sleep_enable) = false; ESP_LOGW("sleep", "battery mode OFF (runtime, always-awake)");'
+
+  - platform: template
+    name: "Buzzer Enable"            # VERY easy to disable: e1001-bench/switch/buzzer_enable/command  ON|OFF
+    id: sw_buzzer_enable             # master gate for the critical-alert / low-battery chime (persisted)
+    lambda: 'return id(g_buzzer_en);'
+    restore_mode: DISABLED           # g_buzzer_en is the persisted source of truth; the switch just views/sets it
+    turn_on_action:
+      - lambda: 'id(g_buzzer_en) = true;  ESP_LOGW("buzzer", "alerts audible (runtime)");'
+    turn_off_action:
+      - lambda: 'id(g_buzzer_en) = false; ESP_LOGW("buzzer", "alerts MUTED (runtime)");'
 
   # SY6974B charger control (bench profiling). SAFETY: the safety state machine is module 2; these are raw.
   - platform: template
@@ -689,6 +1017,21 @@ debug:
   update_interval: 30s
 
 button:
+  # ADR-0024 safety-policy validation on USB (the monitor is inert on wall power): exercise the render actions.
+  - platform: template
+    name: "Test PP Warn"             # toggle the LOW BATTERY warn banner (e1001-bench/button/test_pp_warn/command)
+    on_press:
+      - lambda: 'id(g_pp_warned) = !id(g_pp_warned); id(g_pp_charge_me) = false;'
+      - component.update: epaper
+  - platform: template
+    name: "Test PP ChargeMe"         # toggle the full-screen CHARGE ME floor frame (no sleep, for eyeballing)
+    on_press:
+      - lambda: 'id(g_pp_charge_me) = !id(g_pp_charge_me); id(g_pp_warned) = false;'
+      - component.update: epaper
+  - platform: template
+    name: "Test Buzzer"              # fire the chime (respects Buzzer Enable) — e1001-bench/button/test_buzzer/command
+    on_press:
+      - script.execute: buzzer_chime
   - platform: restart
     name: "Restart"                  # reboot over MQTT (e1001-bench/button/restart/command <- "PRESS")
   - platform: template
@@ -797,6 +1140,11 @@ button:
                   return true;
                 });
                 ESP_LOGI("spec", "parsed %d alerts (crit=%d)", id(g_alerts).size(), id(g_alert_crit));
+            - if:                                     # chime once on the rising edge of a critical alert
+                condition: { lambda: 'return id(g_alert_crit) && !id(g_alert_crit_prev);' }
+                then:
+                  - script.execute: buzzer_chime
+            - lambda: 'id(g_alert_crit_prev) = id(g_alert_crit);'
             - component.update: epaper
   - platform: template
     name: "Test Sleep"               # P4e bisect: isolate the deep_sleep MECHANISM from the on_boot wake-cycle.
