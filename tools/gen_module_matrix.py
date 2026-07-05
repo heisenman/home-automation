@@ -52,7 +52,7 @@ MODULES = [
     ("ble_scan", {"sources": ["ble_scan.c"], "component": "ha_ble_scan"}),
     ("switchbot_decode", {"sources": ["switchbot_decode.c"], "component": "switchbot_decode"}),
     ("ha_reach", {"sources": [], "component": "ha_reach"}),
-    ("gatt_history", {"sources": ["gatt_history.c"], "component": None}),
+    ("gatt_history", {"sources": ["gatt_history.c"], "component": "ha_gatt"}),
     ("gatt_exec", {"sources": ["gatt_exec.c"], "component": None}),
     ("ha_ota", {"sources": ["ha_ota.c"], "component": "ha_ota"}),
     ("ha_led", {"sources": ["ha_led.c"], "component": None}),

@@ -1,6 +1,7 @@
 #include "ha_mqtt.h"
 #include "ha_sntp.h"
-#include "gatt_history.h"
+#include "ha_gatt.h"            // shared GATT-central history client (ADR-0020) — was fork gatt_history.c
+#include "ha_ble_scan.h"        // ha_ble_scan_pause/resume — wired into the shared ha_ota radio seam
 #include "gatt_exec.h"
 #include "ha_ota.h"
 #include "ha_relay.h"
@@ -25,6 +26,10 @@
 #endif
 #ifndef HA_MQTT_PASS
 #define HA_MQTT_PASS ""
+#endif
+
+#ifndef HA_OTA_HOST
+#define HA_OTA_HOST "192.168.0.245"   // pinned image host (default dictator) — wired into ha_ota cfg
 #endif
 
 #ifndef HA_FW_VERSION
@@ -104,7 +109,7 @@ static void dispatch_cmd(const cJSON *cmd) {
         const char *profile = cJSON_IsString(prof) ? prof->valuestring : "outdoor";
         ESP_LOGI(TAG, "cmd: history pull mac=%s profile=%s", mac->valuestring, profile);
         if (gatt_exec_busy()) ESP_LOGW(TAG, "central busy; dropping history pull");
-        else gatt_history_pull(mac->valuestring, profile);
+        else ha_gatt_history_pull(mac->valuestring, profile, 0);   // 0 = full range (edge backfill; native radio)
     } else if (cJSON_IsString(op) && strcmp(op->valuestring, "gatt") == 0 && cJSON_IsString(mac)) {
         // Generic GATT forwarder: {"op":"gatt","reqid":"..","mac":"..","steps":[...]}
         const cJSON *reqid = cJSON_GetObjectItem(cmd, "reqid");
@@ -113,7 +118,7 @@ static void dispatch_cmd(const cJSON *cmd) {
         char *steps_json = cJSON_PrintUnformatted(steps);   // re-serialise just the steps array
         const char *rid = cJSON_IsString(reqid) ? reqid->valuestring : "0";
         ESP_LOGI(TAG, "cmd: gatt exec mac=%s reqid=%s", mac->valuestring, rid);
-        if (gatt_history_busy() || gatt_exec_busy()) ESP_LOGW(TAG, "central busy; dropping gatt exec");
+        if (ha_gatt_busy() || gatt_exec_busy()) ESP_LOGW(TAG, "central busy; dropping gatt exec");
         else if (steps_json) gatt_exec_run(rid, mac->valuestring, steps_json);
         if (steps_json) cJSON_free(steps_json);
     } else if (cJSON_IsString(op) && strcmp(op->valuestring, "ota") == 0) {
@@ -221,7 +226,21 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
     }
 }
 
+// ha_gatt platform seams: relay -> the canonical history topic; diagnostics -> ha_mqtt_log. (The shared
+// component was ported FROM this node's gatt_history.c, so these forward to the exact same sinks it used.)
+static void edge_gatt_publish(const char *mac, const char *json, void *user) { (void)user; ha_mqtt_publish_history(mac, json); }
+static void edge_gatt_log(const char *msg, void *user) { (void)user; ha_mqtt_log("%s", msg); }
+
+// ha_ota platform seams: self-test = broker reachable; radio pause/resume = the single-radio BLE scanner.
+static bool edge_ota_healthy(void *user) { (void)user; return ha_mqtt_is_connected(); }
+static void edge_ota_radio_pause(void *user) { (void)user; ha_ble_scan_pause(); }
+static void edge_ota_radio_resume(void *user) { (void)user; ha_ble_scan_resume(); }
+
 void ha_mqtt_start(const char *broker_uri, const char *node_id) {
+    ha_gatt_init(&(ha_gatt_cfg_t){ .publish = edge_gatt_publish, .log = edge_gatt_log });
+    ha_ota_init(&(ha_ota_cfg_t){ .node_id = node_id, .ota_host = HA_OTA_HOST, .log = edge_gatt_log,
+                                 .is_healthy = edge_ota_healthy,
+                                 .radio_pause = edge_ota_radio_pause, .radio_resume = edge_ota_radio_resume });
     snprintf(s_node, sizeof(s_node), "%s", node_id);
     snprintf(s_status_topic, sizeof(s_status_topic), "home/edge/%s/status", s_node);
     snprintf(s_cmd_topic, sizeof(s_cmd_topic), "home/edge/%s/cmd", s_node);
