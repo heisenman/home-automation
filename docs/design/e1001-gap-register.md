@@ -53,7 +53,15 @@ Stage 1, recovery-asymmetry (correctly *not* a recovery/BLE-census node), OTA-ov
 | 10 | Gauge + renderer polish | **Partial** | Low | ops | SoC **unsmoothed** (single 60 s ADC sample) → add symmetric/median filter (ADR-0024 §1); metric selection truncated to first-2 graphs; `°` glyph |
 | 11 | Production hardening | **Missing** | Med (pre-deploy) | ops | strip/gate bench affordances (`Test Sleep/Alert/Edge`, `Prof Sim Crash`, charger switches); delete dead `components/e1001_ui/` scaffold (uncompiled, no `__init__.py`); fix stale header (`:1` "NO display yet") |
 | 12 | ePaper visual QA | **Unverified** | — | **Hugh's eyes** | — |
-| 13 | Local SD logging | **Deferred** (low value; dictator owns history) | Low | Skip | — |
+| 13 | SD data-backup / logging | **Future-explore** (capability gap accepted 2026-07-05) | Low | Hugh-flagged | see note ↓ |
+
+**#13 SD backup — findings (2026-07-05, docs-first).** E1001 has a microSD (SPI, CS IO14, shared bus w/ the ePaper).
+NOT a good full-backup node on ESPHome: (a) **stock ESPHome has no SD filesystem component** (external component
+needed); (b) **`http_request` buffers the whole response in RAM** (no streaming) → cannot pull MB-sized parquet/
+`hot.db` — the very files a backup needs; (c) deep-sleep = periodic-only; (d) ADR-0019 assigns data-of-record to
+always-on nodes → the **D1001 is the replica/warm-standby** (#7 `instance-replica-lane.md`). *Could* do a small-file
+cold copy (config/manifests/rung ladder, which fit the RAM buffer) or buffer its own SHT40. **Accepted as a
+future action item to explore** once the SD card is in hand; not on the critical path. Board `e1001-sd-backup-explore`.
 
 ## Two docs-first blockers to resolve *first* (cheap; scope #1 and #2)
 - **B1 — Can the E1001 firmware trigger a hard power-off? → RESOLVED 2026-07-05 (schematic sheet 4 "Power"): NO.**
