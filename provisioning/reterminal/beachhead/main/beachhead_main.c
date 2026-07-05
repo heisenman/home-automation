@@ -42,6 +42,8 @@
 #include "ha_power_policy.h"   // battery safety policy: shutdown/warn/boot-gate (ADR-0024)
 #include "fs_ops.h"
 #include "ui_tiles.h"
+#include "ui/ui_scenes.h"   // scene on-change hook (device-side per-scene dimming, roadmap #2 pivot)
+#include "scene_dim.h"      // device-local scene->backlight policy (roadmap #2 pivot; feedback-cnc-local-settings)
 #include "ha_replica.h"   // ADR-0022 Phase 1a: rung DB replica to SD
 #include "ha_sdcard.h"    // SD mount + hot-plug watcher (card-detect GPIO45)
 #include "ha_ble_scan.h"
@@ -62,7 +64,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v60-panel-actuator"
+#define APP_BUILD_TAG "v61-scene-dim"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -103,6 +105,8 @@ static const char *TAG = "beachhead";
 #define T_PPTEST "d1001-beachhead/cmd/pptest"      // -> "mv N": inject a policy reading to bench-test warn/shutdown (0=resume)
 #define T_PROFC  "d1001-beachhead/cmd/profile"     // -> JSON profile (hot-swap+persist to NVS) | "get" | "default" (ADR-0024 §5)
 #define T_PROF   "d1001-beachhead/profile"         // <- active battery profile (provenance+offsets+lut+source), retained
+#define T_SDIMC  "d1001-beachhead/cmd/scene-brightness" // -> JSON {"Home":N,...} (persist to NVS) | "get" | "default": device-local per-scene backlight (roadmap #2 pivot)
+#define T_SDIM   "d1001-beachhead/scene-brightness" // <- retained {"source","table":{...}}: active per-scene backlight policy
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
@@ -113,8 +117,12 @@ static void slave_ota_task(void *pv);   // C6 slave-OTA task (defined near start
 static void i2cscan_task(void *pv);     // I2C bus scan (fuel-gauge ID) — defined near start_mqtt
 static void battdump_task(void *pv);    // 0x36 register dump (chip ID) — defined near start_mqtt
 static void profile_apply_task(void *pv);   // apply/persist a pushed battery profile (JSON) off the mqtt stack
+static void scene_dim_apply_task(void *pv);  // apply/persist a pushed per-scene backlight table (JSON) off the mqtt stack
 static void publish_profile(void);          // retained /profile status of the active curve
 static void publish_screen_state(void);     // retained /state/screen mirror of the screen actuator
+static void screen_set_level(int n);        // apply a backlight setpoint (0=sleep, N>0=wake+level); shared by cmd/brightness + scene-dim
+static void publish_scene_dim(void);        // retained /scene-brightness status of the active per-scene policy
+static void on_scene_change(const char *scene);   // ui_scenes hook -> device-local scene->backlight (roadmap #2 pivot)
 static char s_profile_source[12] = "default";   // how the active curve was set: "nvs" | "default" | "pushed"
 static volatile bool s_batt_ready = false;       // ha_battery_init done — safe to publish /profile
 static volatile bool s_debug = false;         // <-- diagnostic firehose, default OFF
@@ -241,7 +249,7 @@ static void button_task(void *pv)
 // Retained mirror of the screen as a trait-based actuator: `switchable` (on) + `setpoint`
 // (level %). The server-side panel driver reads this back to reconcile intended-vs-reported
 // (ADR-0014 R3), exactly as the Levoit driver reads the ESPHome state topic. Re-published on
-// every screen change (button, cmd/screen, cmd/brightness) and re-asserted on MQTT (re)connect.
+// every screen change (button, cmd/screen, cmd/brightness, scene-dim) and re-asserted on (re)connect.
 static void publish_screen_state(void)
 {
     if (!s_client || !s_mqtt_up) return;
@@ -252,6 +260,45 @@ static void publish_screen_state(void)
     snprintf(m, sizeof(m), "{\"on\":%s,\"level\":%d}",
              bsp_display_is_on() ? "true" : "false", lvl);
     esp_mqtt_client_publish(s_client, T_SCRST, m, 0, 1, 1);   // qos1 retained
+}
+
+// Apply a backlight setpoint (0..100). 0 => sleep the screen; N>0 => wake if dark, then set the level.
+// Single source of truth for the setpoint semantics, shared by the cmd/brightness handler and the
+// device-local scene-dim hook. Caller is responsible for any ack + publish_screen_state().
+static void screen_set_level(int n)
+{
+    if (!bsp_display_ready()) return;
+    if (n < 0) n = 0;
+    if (n > 100) n = 100;
+    if (n == 0) {
+        if (bsp_display_is_on()) bsp_display_sleep();          // 0 -> off
+    } else {
+        if (!bsp_display_is_on()) bsp_display_wake();          // relight before setting level
+        bsp_display_brightness(n);
+    }
+}
+
+// Retained status of the active per-scene backlight policy (source + table). Lets an operator see
+// what the panel will do on each scene without reflashing. Guards on the MQTT link like the others.
+static void publish_scene_dim(void)
+{
+    if (!s_client || !s_mqtt_up) return;
+    char buf[192];
+    if (scene_dim_to_json(buf, sizeof(buf)) > 0)
+        esp_mqtt_client_publish(s_client, T_SDIM, buf, 0, 1, 1);   // qos1 retained
+}
+
+// ui_scenes on-change hook: the active house scene changed -> look it up in the device-local policy
+// and drive our OWN backlight. A panel's backlight is a device-local control (feedback-cnc-local-settings),
+// so this reaction happens IN the device off broadcast house-state, not via a server actuator command.
+// An unknown scene (not in the table) leaves the current brightness untouched.
+static void on_scene_change(const char *scene)
+{
+    int pct = scene_dim_lookup(scene);
+    if (pct < 0) { ESP_LOGI(TAG, "scene '%s' not in dim table -> leave brightness", scene); return; }
+    ESP_LOGI(TAG, "scene '%s' -> backlight %d%% (device-local)", scene, pct);
+    screen_set_level(pct);
+    publish_screen_state();
 }
 
 // Bring up the panel on demand (triggered by cmd/display "on"), NOT at boot, so
@@ -275,6 +322,10 @@ static void display_task(void *pv)
     if (err == ESP_OK) {
         snprintf(m, sizeof(m), "{\"display\":\"online\",\"panel\":\"jd9365\",\"res\":\"800x1280\",\"build\":\"%s\"}", APP_BUILD_TAG);
         ESP_LOGW(TAG, ">>> DISPLAY ONLINE <<<");
+        // Device-local per-scene dimming (roadmap #2 pivot): wire the scene->backlight policy to the
+        // scene-selector's on-change hook BEFORE the tile fetch loop starts, so the panel adopts the
+        // active scene's brightness on the very first /api/v1/house fetch (see on_scene_change).
+        ui_scenes_set_on_change(on_scene_change);
         ui_tiles_start(BFF_BASE_URL "/api/v1/sensors");   // server-backed tiles from the BFF
         ha_replica_start(BFF_BASE_URL);                   // ADR-0022 Phase 1a: mirror the rung DB to SD
         // Hot-plug: auto-mount + inventory on insert, drop cache on removal. GPIO45 = SD_DETECT,
@@ -375,6 +426,7 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
         publish_status();
         if (s_batt_ready) publish_profile();   // re-assert the retained active-profile status on (re)connect
         publish_screen_state();                // re-assert the retained screen actuator state (ADR-0014 R3)
+        publish_scene_dim();                   // re-assert the retained per-scene backlight policy
         esp_ota_mark_app_valid_cancel_rollback();
         // Auto-boot the GUI now that the net + OTA lifeline is CONFIRMED live (marked valid above).
         // The panel is reliable enough (Hugh, 2026-07-01) and predark held it dark since boot, so there
@@ -438,18 +490,14 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
             }
         } else if (tl == (int)strlen(T_BRTC) && strncmp(e->topic, T_BRTC, tl) == 0) {
             // setpoint (brightness) trait: N in 0..100. 0 = screen off (sleep); N>0 = wake if needed + set %.
-            // The scene-following server driver sends this per house scene (Sleep=0, Home/Away=configured %).
+            // Device-LOCAL manual override (a person poking the panel); the per-scene policy that reacts to
+            // house scenes lives in scene_dim + on_scene_change. Both actuate via the same screen_set_level.
             if (bsp_display_ready()) {
                 char b[8]; int nb = dl < 7 ? dl : 7; memcpy(b, e->data, nb); b[nb] = 0;
                 int n = atoi(b);
                 if (n < 0) n = 0;
                 if (n > 100) n = 100;
-                if (n == 0) {
-                    if (bsp_display_is_on()) bsp_display_sleep();          // 0 -> off
-                } else {
-                    if (!bsp_display_is_on()) bsp_display_wake();          // relight before setting level
-                    bsp_display_brightness(n);
-                }
+                screen_set_level(n);
                 char ack[24]; snprintf(ack, sizeof(ack), "brightness:%d", n);
                 esp_mqtt_client_publish(e->client, T_ACK, ack, 0, 0, 0);
                 publish_screen_state();
@@ -514,6 +562,9 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
         } else if (tl == (int)strlen(T_PROFC) && strncmp(e->topic, T_PROFC, tl) == 0) {
             char *j = strndup(e->data, dl);   // JSON / "get" / "default" — apply task frees it
             if (j) xTaskCreate(profile_apply_task, "profapply", 6144, j, 4, NULL);
+        } else if (tl == (int)strlen(T_SDIMC) && strncmp(e->topic, T_SDIMC, tl) == 0) {
+            char *j = strndup(e->data, dl);   // JSON table / "get" / "default" — apply task frees it (NVS write off this stack)
+            if (j) xTaskCreate(scene_dim_apply_task, "sdimapply", 4096, j, 4, NULL);
         } else if (tl == (int)strlen(T_FSC) && strncmp(e->topic, T_FSC, tl) == 0) {
             char *j = strndup(e->data, dl);
             if (j) { fs_ops_submit(j); free(j); }   // SD file op; worker copies + runs off this stack
@@ -894,6 +945,42 @@ static void profile_apply_task(void *pv)
     vTaskDelete(NULL);
 }
 
+// Apply a pushed per-scene backlight table off the mqtt-callback stack (NVS write shouldn't run on the
+// event stack). Payload is a JSON object {"Home":N,...}, or "get" (re-publish status) or "default"
+// (drop the override, revert to the baked-in table). Reflash-free deploy of the device-local dim policy;
+// re-applies the CURRENT scene immediately so a pushed table takes effect without waiting for a change.
+static void scene_dim_apply_task(void *pv)
+{
+    char *payload = (char *)pv;
+    char res[128];
+    bool table_changed = false;
+    if (strcmp(payload, "get") == 0) {
+        publish_scene_dim();
+    } else if (strcmp(payload, "default") == 0) {
+        scene_dim_reset_default();
+        publish_scene_dim();
+        table_changed = true;
+        if (s_client && s_mqtt_up)
+            esp_mqtt_client_publish(s_client, T_ACK, "{\"scene_dim\":\"reset-to-default\"}", 0, 0, 0);
+    } else {
+        char err[64] = {0};
+        if (scene_dim_set_from_json(payload, err, sizeof(err)) == ESP_OK) {
+            publish_scene_dim();
+            table_changed = true;
+            snprintf(res, sizeof(res), "{\"scene_dim\":\"applied\"}");
+        } else {
+            snprintf(res, sizeof(res), "{\"scene_dim\":\"rejected\",\"err\":\"%s\"}", err);
+        }
+        if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_ACK, res, 0, 0, 0);
+    }
+    // A new table takes effect on the next scene change AND right now: re-apply the live scene so the
+    // operator sees the pushed policy immediately without waiting for a house-scene transition.
+    char scene[16];
+    if (table_changed && ui_scenes_active_scene(scene, sizeof(scene))) on_scene_change(scene);
+    free(payload);
+    vTaskDelete(NULL);
+}
+
 
 // SNTP sync callback (roadmap #1): the system clock is already set by SNTP when this fires; persist
 // the wall-clock time into the PCF8563 so the RTC becomes the reboot-holdover source (clears VL).
@@ -979,6 +1066,7 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_erase());
         ESP_ERROR_CHECK(nvs_flash_init());
     }
+    scene_dim_init();   // load the device-local per-scene backlight table (NVS override or baked default)
 
     s_evt = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_netif_init());

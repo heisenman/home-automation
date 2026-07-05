@@ -16,8 +16,19 @@ static lv_obj_t *s_scene_btn[MAX_SCENES];
 static char s_scene_name[MAX_SCENES][16];
 static int s_nscenes;
 static char s_scene_active[16];    // currently-active scene (from /api/v1/house)
+static char s_scene_notified[16];  // last scene the on-change hook fired for
+static void (*s_on_change)(const char *scene);   // device-local scene->backlight hook (composition root)
 
 lv_obj_t *ui_scenes_topbar(void) { return s_topbar; }
+
+void ui_scenes_set_on_change(void (*cb)(const char *scene)) { s_on_change = cb; }
+
+bool ui_scenes_active_scene(char *out, size_t len)
+{
+    if (!out || len == 0) return false;
+    snprintf(out, len, "%s", s_scene_active);
+    return s_scene_active[0] != 0;
+}
 
 // scene button: request the scene (admin only). Runs in LVGL/click ctx — enqueue only.
 static void scene_btn_cb(lv_event_t *e)
@@ -57,7 +68,14 @@ void ui_scenes_render(cJSON *house)
     for (int i = 0; i < s_nscenes; i++)          // highlight the active scene
         lv_obj_set_style_bg_color(s_scene_btn[i],
             lv_color_hex(strcmp(s_scene_name[i], s_scene_active) == 0 ? 0x2563eb : 0x1e293b), 0);
+    // Detect an active-scene change under the lock, but fire the hook AFTER unlocking so the
+    // callback may drive bsp_display_* / MQTT without nesting the LVGL lock.
+    bool changed = s_on_change && s_scene_active[0] && strcmp(s_scene_active, s_scene_notified) != 0;
+    char newscene[16];
+    if (changed) { snprintf(newscene, sizeof(newscene), "%s", s_scene_active);
+                   snprintf(s_scene_notified, sizeof(s_scene_notified), "%s", s_scene_active); }
     lvgl_port_unlock();
+    if (changed && s_on_change) s_on_change(newscene);
 }
 
 void ui_scenes_init(lv_obj_t *scr)
