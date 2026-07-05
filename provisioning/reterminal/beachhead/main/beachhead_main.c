@@ -46,7 +46,7 @@
 #include "ui/ui_sleep.h"    // Sleep-mode faint screen + centered "Wake" affordance (roadmap #2 pivot)
 #include "scene_dim.h"      // device-local scene->backlight policy (roadmap #2 pivot; feedback-cnc-local-settings)
 #include "ha_cmd.h"        // ADR-0010 signed-directive verify (HMAC + freshness + NVS anti-replay), roadmap #4
-#include "gatt_probe.h"    // roadmap #5 Spike 0: GATT-central connect+discover over the C6 HCI
+#include "ha_gatt.h"       // roadmap #5: shared GATT-central SwitchBot history client (probe + full pull)
 #include "ha_replica.h"   // ADR-0022 Phase 1a: rung DB replica to SD
 #include "ha_sdcard.h"    // SD mount + hot-plug watcher (card-detect GPIO45)
 #include "ha_ble_scan.h"
@@ -67,7 +67,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v65-gatt-probe"
+#define APP_BUILD_TAG "v67-gatt-window"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -187,10 +187,25 @@ static void ota_report(const char *s)   // OTA lifecycle — always visible, ind
     if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_OTAST, s, 0, 1, 0);
 }
 
-// Reporter seam for the GATT-central probe (roadmap #5 Spike 0): each progress line -> d1001-beachhead/gatt.
-static void gatt_probe_report(const char *line)
+// ha_gatt platform seams (roadmap #5). log -> d1001-beachhead/gatt (probe/pull diagnostics); publish ->
+// the canonical edge history topic home/edge/<node>/<macflat>/history, byte-for-byte the shape the c6 node
+// emits so server/ingest/edge_history.py decodes the panel's pull with ZERO server change (it subscribes
+// home/edge/+/+/history and maps mac->device via the registry — node-agnostic).
+static void gatt_log_cb(const char *msg, void *user)
 {
-    if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_GATT, line, 0, 0, 0);
+    (void)user;
+    if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_GATT, msg, 0, 0, 0);
+}
+static void gatt_hist_publish(const char *mac_str, const char *json, void *user)
+{
+    (void)user;
+    if (!s_client || !s_mqtt_up) return;
+    char mf[13]; int j = 0;                       // macflat: strip the colons
+    for (const char *p = mac_str; *p && j < 12; p++) if (*p != ':') mf[j++] = *p;
+    mf[j] = '\0';
+    char topic[80];
+    snprintf(topic, sizeof(topic), "home/edge/%s/%s/history", BLE_NODE, mf);
+    esp_mqtt_client_publish(s_client, topic, json, 0, 1, false);   // QoS1, matches the edge relay
 }
 
 static void publish_status(void)
@@ -475,7 +490,20 @@ static const char *dispatch_signed_cmd(const cJSON *inner, esp_mqtt_client_handl
         // roadmap #5 Spike 0: GATT-central connect+discover to a SwitchBot mac (progress -> T_GATT).
         const cJSON *mac = cJSON_GetObjectItem(inner, "mac");
         if (!cJSON_IsString(mac)) return "gattprobe:no-mac";
-        return gatt_probe_start(mac->valuestring) ? "gattprobe:started" : "gattprobe:busy-or-uncached";
+        return ha_gatt_probe(mac->valuestring) ? "gattprobe:started" : "gattprobe:busy-or-uncached";
+    } else if (strcmp(op->valuestring, "gathist") == 0) {
+        // roadmap #5 full pull: connect to a SwitchBot meter + relay its on-device history to the server
+        // (home/edge/<node>/<mac>/history). profile = "meter_pro" (indoor) | "outdoor" (default).
+        // window = most-recent N records (default 1024, ~17h): the panel's coexistence-throttled shared
+        // radio can't finish a full multi-thousand-read pull before a link-layer timeout, so it bounds to
+        // a recent window (keeps the newest records so the server's freshness guard passes). 0 = full.
+        const cJSON *mac = cJSON_GetObjectItem(inner, "mac");
+        const cJSON *prof = cJSON_GetObjectItem(inner, "profile");
+        const cJSON *win = cJSON_GetObjectItem(inner, "window");
+        if (!cJSON_IsString(mac)) return "gathist:no-mac";
+        const char *p = cJSON_IsString(prof) ? prof->valuestring : "outdoor";
+        int w = cJSON_IsNumber(win) ? (int)win->valuedouble : 1024;
+        return ha_gatt_history_pull(mac->valuestring, p, w) ? "gathist:started" : "gathist:busy-or-uncached";
     }
     return "unknown-op";
 }
@@ -1160,7 +1188,7 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_init());
     }
     scene_dim_init();   // load the device-local per-scene backlight table (NVS override or baked default)
-    gatt_probe_set_reporter(gatt_probe_report);   // roadmap #5 Spike 0: GATT-probe progress -> d1001-beachhead/gatt
+    ha_gatt_init(&(ha_gatt_cfg_t){ .publish = gatt_hist_publish, .log = gatt_log_cb });   // roadmap #5
 
     s_evt = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_netif_init());

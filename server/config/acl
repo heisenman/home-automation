@@ -16,6 +16,19 @@ topic write home/edge/c6-bench/+/history
 topic write home/edge/c6-bench/+/reply
 topic read  home/edge/c6-bench/cmd
 
+# ── D1001 panel d1001-beachhead: telemetry + BLE relay up, only its own cmd down ──
+# The panel is an unmanaged extra BLE relay (ADR-0019 / roadmap #5): it publishes its own status/telemetry
+# under d1001-beachhead/*, canonical edge adverts, and — since roadmap #5 — pulled SwitchBot on-device
+# history, both under home/edge/d1001-beachhead/. The signed authority directives (d1001-beachhead/cmd,
+# ADR-0010) are dictator-PUBLISHED and panel-READ; the firmware never writes its own cmd topics.
+# STAGED only — the panel connects anonymously until the broker-auth cutover.
+user d1001-beachhead
+topic write d1001-beachhead/#
+topic write home/edge/d1001-beachhead/+/adv
+topic write home/edge/d1001-beachhead/+/history
+topic read  d1001-beachhead/cmd
+topic read  d1001-beachhead/cmd/#
+
 # ── template for future actuator nodes (state up + ack up, only own cmd down) ──
 # user <node-id>
 # topic write home/<area>/<device_id>/state

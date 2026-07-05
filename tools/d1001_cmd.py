@@ -16,6 +16,9 @@ in this file.
   python3 tools/d1001_cmd.py gpio 22 1      # write; omit value to read
   python3 tools/d1001_cmd.py exp 8          # read expander pin 8
 
+  # roadmap #5: pull a SwitchBot meter's on-device history over GATT (relays home/edge/<node>/<mac>/history)
+  python3 tools/d1001_cmd.py gathist B0:E9:FE:54:A8:02 outdoor
+
 Broker + secret source override with $HA_BROKER (default 192.168.0.210) / $HA_CMD_SECRET.
 """
 import json
@@ -67,7 +70,17 @@ def build_inner(argv: list[str]) -> dict:
         if len(argv) < 2:
             sys.exit("gattprobe needs a mac (AA:BB:CC:DD:EE:FF)")
         return {"op": "gattprobe", "mac": argv[1]}
-    sys.exit(f"unknown op '{op}' (ota|fs|gpio|exp|gattprobe)")
+    if op == "gathist":                         # roadmap #5 full pull: relay a meter's on-device history
+        if len(argv) < 2:
+            sys.exit("gathist needs a mac [profile] [window] "
+                     "(profile = meter_pro | outdoor, default outdoor; window = recent-N records, default 1024)")
+        inner = {"op": "gathist", "mac": argv[1]}
+        if len(argv) >= 3:
+            inner["profile"] = argv[2]
+        if len(argv) >= 4:
+            inner["window"] = int(argv[3])
+        return inner
+    sys.exit(f"unknown op '{op}' (ota|fs|gpio|exp|gattprobe|gathist)")
 
 
 def main() -> None:
