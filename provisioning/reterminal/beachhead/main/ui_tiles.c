@@ -163,15 +163,15 @@ void ui_tiles_start(const char *sensors_url)
     // ── top bar: [ scene buttons ]  … toast …  [ battery ]  [ admin gear ] ──
     ui_scenes_init(scr);                      // top-bar row + scene box (ui/ui_scenes)
     lv_obj_t *topbar = ui_scenes_topbar();
-    ui_admin_init(topbar);                    // toast + gear + password keyboard (ui/ui_admin)
+    ui_admin_init(topbar);                    // shared toast line + auto-admin worker (ui/ui_admin; displays unlocked, no gear)
 
     s_batt_lbl = lv_label_create(topbar);     // battery indicator (MAX17048)
     lv_label_set_text(s_batt_lbl, "");
     lv_obj_set_style_text_font(s_batt_lbl, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_batt_lbl, lv_color_hex(0xcbd5e1), 0);
     lv_obj_set_style_pad_right(s_batt_lbl, 10, 0);
-    // ui_admin appended [toast, gear]; slot the battery between them (index 2 = after toast,
-    // before the trailing gear) to preserve the original scenebox/toast/battery/gear order.
+    // ui_admin appended [toast]; place the battery just after it (index 2 = after scenebox+toast),
+    // keeping the scenebox/toast/battery/clock/power order.
     lv_obj_move_to_index(s_batt_lbl, 2);
 
     ui_clock_init(topbar);                    // wall clock (ui/ui_clock; roadmap #1, ability G)
