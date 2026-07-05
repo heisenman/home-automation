@@ -3,7 +3,10 @@
 **Date:** 2026-07-04  **Status:** Plan (decompose-before-dev; no code until an item is picked up).  **Owner:** ops.
 **Method:** [DEVICE-INTAKE.md](../DEVICE-INTAKE.md), the same walk applied to the D1001
 ([d1001-capability-roadmap.md](d1001-capability-roadmap.md)). Amends [ADR-0019](../adr/ADR-0019-screen-interface-architecture.md).
-See also [e1001-roadmap.md](e1001-roadmap.md), [e1001-epaper-renderer.md](e1001-epaper-renderer.md).
+See also [e1001-roadmap.md](e1001-roadmap.md), [e1001-epaper-renderer.md](e1001-epaper-renderer.md),
+and **[e1001-gap-register.md](e1001-gap-register.md)** — the 2026-07-05 finish-the-E1001 audit (implemented-vs-
+stored-vs-missing against ADR-0019/0024) + the step-by-step implementation procedure. **Battery profile v1 is now
+DONE** (`d910374`, item #2 below): the loadable ADR-0024 profile shipped; the footer is a measured curve, no longer linear.
 
 ## Why this exists
 
