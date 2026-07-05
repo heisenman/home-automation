@@ -26,7 +26,8 @@ full summary note.
 | Tool | Purpose |
 |------|---------|
 | `node_bringup.py` | Gated one-shot edge-node bring-up (FIRMWARE-GUIDE §7 as a tool) |
-| `enroll_node.py`, `edge_sign.py` | Enroll a node / mint its command secret (never hand-write secrets) |
+| `enroll_node.py`, `edge_sign.py` | Enroll / mint a node's command secret + emit its per-device `secrets.h` (never hand-write secrets). `--from-manifest` fills board wiring; `--reuse` re-emits an enrolled node from its existing secret (rebuild path, no re-mint). |
+| `edge_nodes.py` | Loader for the per-node manifest `edge/esp32c6/nodes.yaml` (node_id→{mac,target,sensor,area,broker,ota_host}) — the cross-provisioning source of truth (ADR-0020), consumed by `enroll_node`/`node_bringup` + the OTA/flash identity gate. |
 | `edge_ota.py`, `edge_pull_history.py`, `edge_gatt.py` | OTA / GATT history / GATT ops against a node |
 | `mint_panel_token.py` | Panel operator token (reTerminal) |
 | `aranet_history.py`, `import_*_csv.py` | History backfill/import |

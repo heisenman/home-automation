@@ -7,3 +7,7 @@ dependencies.lock
 
 # Secrets (Wi-Fi creds, broker) — never commit. Copy from secrets.example.h.
 main/secrets.h
+
+# Per-node PROJECT_VER identity ("<node_id>@<fw>" -> app_desc.version, OTA gate). Emitted by
+# enroll_node alongside secrets.h; per-node so never committed.
+version.txt

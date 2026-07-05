@@ -25,6 +25,8 @@ import http.server
 import json
 import os
 import socketserver
+import struct
+import sys
 import threading
 import time
 
@@ -104,6 +106,36 @@ def push_ota(node, bin_path, serve_ip, broker, serve_port=8090, broker_port=1883
     return result["outcome"], start_slot["val"]
 
 
+def image_app_version(bin_path):
+    """app_desc.version from a built app .bin (esp_app_desc magic 0xABCD5432 at file offset 0x20,
+    version[32] at +16). Returns the string, or None if no descriptor is found."""
+    with open(bin_path, "rb") as f:
+        f.seek(0x20)
+        hdr = f.read(0x60)
+    if len(hdr) < 0x30 or struct.unpack("<I", hdr[:4])[0] != 0xABCD5432:
+        return None
+    return hdr[16:48].split(b"\0", 1)[0].decode("utf-8", "replace")
+
+
+def assert_image_matches_node(bin_path, node, force=False):
+    """Cross-provisioning guard (ADR-0020): the image is branded '<node>@<ver>' in app_desc.version.
+    Refuse to push an image built for a different node (this is the 2026-07-05 cbed<-coffice class of bug)."""
+    ver = image_app_version(bin_path)
+    if ver is None:
+        print(f"  WARNING: no app_desc in {bin_path} — cannot verify image identity", file=sys.stderr)
+        return
+    if ver.startswith(f"{node}@"):
+        print(f"  identity OK: image '{ver}' is built for '{node}'")
+        return
+    msg = (f"REFUSING OTA: image is branded '{ver}' but target node is '{node}' "
+           f"(expected '{node}@…'). Cross-provisioning guard (ADR-0020) — rebuild for {node} via "
+           f"`enroll_node.py --node-id {node} --from-manifest --reuse` then rebuild, or pass --force.")
+    if force:
+        print(f"  --force: {msg}", file=sys.stderr)
+    else:
+        sys.exit(msg)
+
+
 def main() -> None:
     p = argparse.ArgumentParser(description="Push a firmware OTA to an edge node")
     p.add_argument("--node", required=True)
@@ -113,7 +145,10 @@ def main() -> None:
     p.add_argument("--broker", default=os.environ.get("HA_BROKER", "localhost"))
     p.add_argument("--broker-port", type=int, default=int(os.environ.get("HA_BROKER_PORT", "1883")))
     p.add_argument("--timeout", type=float, default=180.0)
+    p.add_argument("--force", action="store_true", help="override the image↔node identity guard")
     a = p.parse_args()
+
+    assert_image_matches_node(os.path.abspath(a.bin), a.node, a.force)
 
     outcome, start = push_ota(a.node, a.bin, a.serve_ip, a.broker,
                               serve_port=a.serve_port, broker_port=a.broker_port, timeout=a.timeout)
