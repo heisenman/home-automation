@@ -69,7 +69,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v73-hotdb-cadence"
+#define APP_BUILD_TAG "v74-lean-defaults"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -415,6 +415,7 @@ static void ha_ota_fail_cb(void *user) { bsp_display_wake(); }       // any reje
 // flash), fs (SD file ops), gpio, exp (drive P4 GPIO / PCA9535 pins). Device-local benign knobs stay on
 // their raw cmd/* topics. Mirrors the edge node's dispatch_cmd. Returns a short outcome string for the ack.
 static void audio_enabled_store(bool on);   // defined near audio_start(); used by op:audio below
+static void audio_start(void);              // lazy codec init on cmd/audio on (default-off skips boot init)
 
 static const char *dispatch_signed_cmd(const cJSON *inner, esp_mqtt_client_handle_t client)
 {
@@ -493,8 +494,9 @@ static const char *dispatch_signed_cmd(const cJSON *inner, esp_mqtt_client_handl
         // roadmap #6: the "very easy to disable" master switch. {op:audio, on:0|1} — persisted, device-local.
         const cJSON *on = cJSON_GetObjectItem(inner, "on");
         bool en = cJSON_IsBool(on) ? cJSON_IsTrue(on) : (cJSON_IsNumber(on) ? on->valuedouble != 0 : true);
-        ha_audio_set_enabled(en);
         audio_enabled_store(en);
+        if (en && !ha_audio_ready()) audio_start();   // lazy codec init on first enable (default-off skipped boot init)
+        else ha_audio_set_enabled(en);                // already init'd → just gate the output
         return en ? "audio:on" : "audio:off";
     } else if (strcmp(op->valuestring, "beep") == 0) {
         // roadmap #6: audible test tone. {op:beep, freq?:Hz, ms?:dur, amp?:0-100} — omit for a chime.
@@ -872,14 +874,17 @@ static void power_task(void *pv)
             bool wall = bs.on_wall;
             if (wall != s_on_wall) {
                 s_on_wall = wall;
+                // BLE relay is DEFAULT OFF on this device (poor host: WiFi+BLE both cross esp_hosted to the
+                // C6, no native coexistence — only a duty-cycle workaround + ~290ms/read transport tax; edge
+                // nodes do BLE properly). No auto-arm on wall; only a manual `cmd/ble on` starts it. When NOT
+                // armed the controller is never initialized, so its RAM is never allocated. We still track the
+                // power edge (below) + manage an already-armed scan's pause/resume so a manual relay behaves.
                 if (wall) {
-                    if (!s_ble_started) ble_ensure_started();  // fresh start already scans
-                    else                ha_ble_scan_resume();  // was paused on battery
-                    s_ble_relaying = true;
+                    if (s_ble_started) ha_ble_scan_resume();   // resume ONLY a manually-armed scan
                 } else {
-                    if (s_ble_started)  ha_ble_scan_pause();   // stop burning the cell
-                    s_ble_relaying = false;
+                    if (s_ble_started) ha_ble_scan_pause();     // stop burning the cell
                 }
+                s_ble_relaying = s_ble_started && wall;
                 power_ctx_publish(wall);   // tell the coordinator NOW (retained)
                 publish_status();          // status carries on_wall/gaining too
                 if (wall && s_ble_started) ha_reach_report();  // push fresh reach so best_relay re-adds us
@@ -1139,7 +1144,7 @@ static void panel_pa_enable(bool on, void *user)
 // Default ON; a signed op:audio persists a change; loaded at boot so a disabled panel stays silent.
 static bool audio_enabled_load(void)
 {
-    nvs_handle_t h; uint8_t v = 1;
+    nvs_handle_t h; uint8_t v = 0;   // DEFAULT OFF on this device (was 1); cmd/audio on lazy-inits the codec
     if (nvs_open("audiocfg", NVS_READONLY, &h) == ESP_OK) { nvs_get_u8(h, "en", &v); nvs_close(h); }
     return v != 0;
 }
@@ -1154,6 +1159,9 @@ static void audio_enabled_store(bool on)
 // Bring up audible alerts (ES8311 -> NS4150B -> speaker). Runs after bsp_i2c1() + the io-expander are up.
 static void audio_start(void)
 {
+    // Default-off: skip codec init entirely when disabled, so ES8311/I2S DMA buffers are never allocated
+    // (honors "no memory impact"). cmd/audio on stores enabled=1 then calls back here to lazy-init.
+    if (!audio_enabled_load()) { ESP_LOGI(TAG, "audio disabled by default — codec NOT initialized"); return; }
     esp_err_t e = ha_audio_init(&(ha_audio_cfg_t){
         .i2c_bus = bsp_i2c1(), .codec_addr = 0x18,
         .mclk_io = 33, .bclk_io = 32, .ws_io = 31, .dout_io = 30,   // D1001 DAC I2S (docs-first)
@@ -1287,11 +1295,16 @@ void app_main(void)
     ha_power_policy_monitor_start(&s_pp_cfg, &s_pp_io, 5000);   // battery safety monitor: warn @5-10%, hard-off @0%
     clock_backbone_start();                    // roadmap #1 (ability G): RTC holdover + SNTP wall clock
     audio_start();                             // roadmap #6 (ability): audible alerts + boot chime
-    xTaskCreate(presence_task, "presence", 3072, NULL, 3, NULL);   // roadmap #3 (ability A): IMU presence + tap-wake
+    // Device prefs (default OFF, kept compiled + re-enablable by flipping the flag). The IMU DRIVER stays
+    // (ha_battery_init composes it); only the presence/tap-wake FEATURE is gated. Battery discharge logging
+    // is done (v4 LUT) — its 15 s SD writes were also feeding the DSI-underrun flicker.
+    static const bool s_presence_enabled = false;   // roadmap #3 tap-wake — off (no presence_task stack)
+    static const bool s_battlog_enabled  = false;   // bat_profile CSV logger — off (profiling complete)
+    if (s_presence_enabled) xTaskCreate(presence_task, "presence", 3072, NULL, 3, NULL);
     xTaskCreate(heartbeat_task, "hb", 4096, NULL, 3, NULL);
     xTaskCreate(button_task, "btn", 3072, NULL, 3, NULL);   // back-button screen toggle
-    xTaskCreate(power_task, "pwr", 4096, NULL, 3, NULL);    // power-aware BLE: on wall / off battery + notify
-    bat_profile_start(battprofile_publish);   // mount SD + log the battery discharge curve (non-fatal)
+    xTaskCreate(power_task, "pwr", 4096, NULL, 3, NULL);    // power-context watcher (BLE now default-off; still tracks wall/notify)
+    if (s_battlog_enabled) bat_profile_start(battprofile_publish);   // discharge-curve CSV (profiling done → off)
     fs_ops_start(fs_publish);                 // SD file-ops over MQTT (cmd/fs)
     // Display is NOT started here — trigger it over MQTT with cmd/display "on"
     // once the device is confirmed live, so a failed bring-up can't brick boot.
