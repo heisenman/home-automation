@@ -22,6 +22,24 @@ substitutions:
   sleep_default: "false"            # DEV first-boot: never sleep -> OTA always reachable. Flip live over MQTT.
   sleep_dur_default_s: "900"        # 15 min timer cadence (battery/freshness knob), runtime-tunable
   grace_default_s: "25"             # awake window per wake (wifi + fetch + ~5s render + read), runtime-tunable
+  # Battery profile BAKED DEFAULT (ADR-0024 §5 fallback when no profile is loaded/pushed). The LUT is
+  # GENERATED — do not hand-edit; regenerate from a battprofile capture with:
+  #   tools/e1001_profile.py e1001lut <capture.jsonl> --write-yaml e1001.yaml --write-json battery_profile_v1.json
+  # A refined profile deploys as DATA over MQTT with NO reflash (like the D1001 ha_battery_profile_rt):
+  #   tools/d1001_profile_push.py --node e1001-bench --from-json battery_profile_v1.json --push
+  # Base frame = the loaded discharge leg (the load the panel reads under at a deep-sleep wake). v1 2026-07-05.
+  batt_soc_lut: "3478, 3530, 3572, 3626, 3674, 3724, 3756, 3778, 3798, 3812, 3836, 3858, 3892, 3922, 3956, 3970, 3988, 3992, 4010, 4046, 4100"
+  # State offsets (base-frame mV) — E1001 UNCHARACTERIZED, 0 = normalize is a no-op (footer reads loaded V,
+  # which is what the LUT was fit against). Safety floors mirror the Li-ion knee; boot gate > run (inrush).
+  prof_off_display_off: "0"
+  prof_off_usb: "0"
+  prof_off_charging: "0"
+  prof_run_floor: "3450"
+  prof_warn: "3520"
+  prof_warn_clear: "3580"
+  prof_boot_gate: "3600"
+  prof_boot_release: "3700"
+  prof_date: "2026-07-05"
 
 esphome:
   name: ${device_name}
@@ -33,6 +51,17 @@ esphome:
     - priority: 600                  # NOT 800: at 800 the gpio output isn't constructed yet → turn_on no-ops →
       then:                          # rail never powered → ADC reads 0. 600 = after components, per the ref config.
         - output.turn_on: vbat_adc_en  # power the battery-sense divider (held on in beachhead; gated later)
+    - priority: 500                  # battery-profile self-heal: if the restored LUT is ever corrupt (bad
+      then:                          # persist / first boot race), revert to the baked default so SoC can't brick.
+        - lambda: |-
+            bool ok = id(g_soc_lut)[0] >= 2500 && id(g_soc_lut)[20] <= 4400;
+            for (int i = 1; i < 21 && ok; i++) if (id(g_soc_lut)[i] <= id(g_soc_lut)[i - 1]) ok = false;
+            if (!ok) {
+              static const int dl[21] = {${batt_soc_lut}};
+              for (int i = 0; i < 21; i++) id(g_soc_lut)[i] = dl[i];
+              id(g_prof_version) = "v1"; id(g_prof_method) = "baked"; id(g_prof_pushed) = false;
+              ESP_LOGW("battprof", "restored LUT invalid -> reverted to baked default");
+            }
     - priority: 250                  # profiler discharge-LOAD burners: one low-pri CPU spinner per core, each self-
       then:                          # gated on DISCHARGE + Prof Load Level>0. Captureless lambdas (-> TaskFunction_t);
         - lambda: |-                 # duty scales with level (lvl3 = full burn). Priority 1 so WiFi/BT (much higher) never starve.
@@ -126,6 +155,72 @@ mqtt:
   id: mqtt_client                    # referenced by the edge-node event publisher (home/edge/<node>/event)
   broker: 192.168.0.210              # dictator real IP (VIP .200 unreachable from CTWap_24g wifi)
   port: 1883
+  on_connect:                        # re-assert the retained active-profile status on every (re)connect. The
+    - delay: 5s                      # 5s settle: publishing INSIDE the connect callback races the client setup
+    - script.execute: publish_profile   # and gets dropped — let MQTT fully come up first, then publish retained.
+  # ADR-0024 §5 loadable battery profile — same cmd/profile protocol as the D1001 (profile_apply_task):
+  #   "get"     -> republish the retained /profile status
+  #   "default" -> revert to the baked-in default (baked ${...}) and clear the pushed flag
+  #   <JSON>    -> validate (21-pt ascending LUT + ordered floors) -> hot-swap + persist -> ack applied/rejected
+  on_message:
+    - topic: ${device_name}/cmd/profile
+      then:
+        - lambda: |-
+            if (x == "get") { id(publish_profile)->execute(); return; }
+            if (x == "default") {
+              static const int dl[21] = {${batt_soc_lut}};
+              for (int i = 0; i < 21; i++) id(g_soc_lut)[i] = dl[i];
+              id(g_off_display_off_mv) = ${prof_off_display_off}; id(g_off_usb_mv) = ${prof_off_usb};
+              id(g_off_charging_mv) = ${prof_off_charging}; id(g_run_floor_mv) = ${prof_run_floor};
+              id(g_warn_mv) = ${prof_warn}; id(g_warn_clear_mv) = ${prof_warn_clear};
+              id(g_boot_gate_mv) = ${prof_boot_gate}; id(g_boot_release_mv) = ${prof_boot_release};
+              id(g_prof_version) = "v1"; id(g_prof_date) = "${prof_date}"; id(g_prof_method) = "baked";
+              id(g_prof_pushed) = false;
+              id(mqtt_client)->publish("${device_name}/ack", std::string("{\"profile\":\"reset-to-default\"}"));
+              id(publish_profile)->execute();
+              id(epaper)->update();
+              return;
+            }
+            // else: a pushed profile JSON. Extract into temporaries, validate, THEN commit (never half-apply).
+            int tmp[21]; int nlut = 0;
+            int od = 0, ou = 0, oc = 0, rf = 0, wm = 0, wc = 0, bg = 0, br = 0;
+            std::string ver, dat, met, err;
+            bool ok = json::parse_json(x, [&](JsonObject root) -> bool {
+              ver = root["version"] | ""; if (ver.empty()) { err = "no version"; return false; }
+              dat = root["date"] | ""; met = root["method"] | "";
+              od = root["off_display_off_mv"] | 0; ou = root["off_usb_mv"] | 0; oc = root["off_charging_mv"] | 0;
+              rf = root["run_floor_mv"] | 0; wm = root["warn_mv"] | 0; wc = root["warn_clear_mv"] | 0;
+              bg = root["boot_gate_mv"] | 0; br = root["boot_release_mv"] | 0;
+              JsonArray lut = root["lut"].as<JsonArray>();
+              if (lut.isNull()) { err = "no lut"; return false; }
+              for (JsonVariant v : lut) { if (nlut < 21) tmp[nlut] = v.as<int>(); nlut++; }
+              if (nlut != 21) { err = "lut must be 21 pts"; return false; }
+              for (int i = 1; i < 21; i++) if (tmp[i] <= tmp[i - 1]) { err = "lut not ascending"; return false; }
+              if (!(rf <= wm && wm <= wc)) { err = "floors unordered"; return false; }
+              if (bg > br) { err = "boot floors unordered"; return false; }
+              return true;
+            });
+            char ack[96];
+            if (!ok) {
+              snprintf(ack, sizeof(ack), "{\"profile\":\"rejected\",\"err\":\"%s\"}",
+                       err.empty() ? "bad json" : err.c_str());
+              id(mqtt_client)->publish("${device_name}/ack", std::string(ack));
+              ESP_LOGW("battprof", "rejected pushed profile: %s", err.empty() ? "bad json" : err.c_str());
+              return;
+            }
+            for (int i = 0; i < 21; i++) id(g_soc_lut)[i] = tmp[i];
+            id(g_off_display_off_mv) = od; id(g_off_usb_mv) = ou; id(g_off_charging_mv) = oc;
+            id(g_run_floor_mv) = rf; id(g_warn_mv) = wm; id(g_warn_clear_mv) = wc;
+            id(g_boot_gate_mv) = bg; id(g_boot_release_mv) = br;
+            id(g_prof_version) = ver; id(g_prof_date) = dat;
+            id(g_prof_method) = met.empty() ? std::string("pushed") : met;
+            id(g_prof_pushed) = true;
+            snprintf(ack, sizeof(ack), "{\"profile\":\"applied\",\"version\":\"%s\"}", ver.c_str());
+            id(mqtt_client)->publish("${device_name}/ack", std::string(ack));
+            ESP_LOGW("battprof", "applied profile %s (%s): lut %d..%d mV", ver.c_str(),
+                     id(g_prof_method).c_str(), tmp[0], tmp[20]);
+            id(publish_profile)->execute();
+            id(epaper)->update();
 
 # Edge-node event publisher (Stage 1). Reusable script: emits the canonical home/edge/<node>/event envelope
 # (schema 1, kind:power). Called on real power_good transitions AND from the Test Edge buttons. Mirrors the
@@ -143,6 +238,26 @@ script:
             + ",\"censusing\":false}}";                    // E1001 is not a recovery/census node (ADR-0019)
           id(mqtt_client)->publish("home/edge/${edge_node}/event", p, 1, true);
           ESP_LOGW("edge", "published home/edge/${edge_node}/event on_wall=%s", w ? "true" : "false");
+
+  # ADR-0024 §5: publish the active battery profile RETAINED on ${device_name}/profile (mirrors the D1001's
+  # publish_profile). Full schema + a `source` tag so tools/d1001_profile_push.py --get can read it back.
+  - id: publish_profile
+    then:
+      - lambda: |-
+          auto n = [](int v) { return std::to_string(v); };
+          std::string j = "{\"version\":\"" + id(g_prof_version) + "\",\"date\":\"" + id(g_prof_date) +
+            "\",\"method\":\"" + id(g_prof_method) + "\",\"source\":\"" +
+            (id(g_prof_pushed) ? std::string("pushed") : std::string("default")) + "\"," +
+            "\"off_display_off_mv\":" + n(id(g_off_display_off_mv)) + ",\"off_usb_mv\":" + n(id(g_off_usb_mv)) +
+            ",\"off_charging_mv\":" + n(id(g_off_charging_mv)) + ",\"run_floor_mv\":" + n(id(g_run_floor_mv)) +
+            ",\"warn_mv\":" + n(id(g_warn_mv)) + ",\"warn_clear_mv\":" + n(id(g_warn_clear_mv)) +
+            ",\"boot_gate_mv\":" + n(id(g_boot_gate_mv)) + ",\"boot_release_mv\":" + n(id(g_boot_release_mv)) +
+            ",\"lut\":[";
+          for (int i = 0; i < 21; i++) { if (i) j += ","; j += n(id(g_soc_lut)[i]); }
+          j += "]}";
+          id(mqtt_client)->publish("${device_name}/profile", j, 1, true);   // qos1, retained
+          ESP_LOGW("battprof", "published /profile %s source=%s", id(g_prof_version).c_str(),
+                   id(g_prof_pushed) ? "pushed" : "default");
 
 # battery_profiler (Module 2) — safety core. FAST loop (2s): while a discharge run is active, kick the charger
 # watchdog (WD_RST) so HIZ holds, AND guard the floor — clear HIZ before brown-out so the ESP survives to recover.
@@ -328,6 +443,62 @@ globals:                             # parsed tiles as parallel string vectors (
     type: int
     restore_value: true
     initial_value: '${grace_default_s}'
+  # --- ADR-0024 battery profile: versioned, runtime-loadable DATA (push over MQTT, no reflash). Same schema
+  # + cmd/profile protocol as the D1001 (ha_battery_profile_rt). All restore_value: true -> a pushed profile
+  # PERSISTS across reboots via ESPHome preferences (RestoringGlobals: int[]/int/bool memcpy-persist, std::string
+  # via RestoringGlobalStringComponent). Baked ${...} defaults are used only on first boot / after "default". ---
+  - id: g_soc_lut                    # V->SoC LUT: 21 pts base-frame mV, ascending; index i -> SoC 5*i %
+    type: int[21]
+    restore_value: true
+    initial_value: '{${batt_soc_lut}}'
+  - id: g_off_display_off_mv         # state offsets (mV above base frame); normalize removes them before the LUT
+    type: int
+    restore_value: true
+    initial_value: '${prof_off_display_off}'
+  - id: g_off_usb_mv
+    type: int
+    restore_value: true
+    initial_value: '${prof_off_usb}'
+  - id: g_off_charging_mv
+    type: int
+    restore_value: true
+    initial_value: '${prof_off_charging}'
+  - id: g_run_floor_mv               # safety floors (base-frame mV) — stored for the E3 power policy (ADR-0024 §3/4/6)
+    type: int
+    restore_value: true
+    initial_value: '${prof_run_floor}'
+  - id: g_warn_mv
+    type: int
+    restore_value: true
+    initial_value: '${prof_warn}'
+  - id: g_warn_clear_mv
+    type: int
+    restore_value: true
+    initial_value: '${prof_warn_clear}'
+  - id: g_boot_gate_mv
+    type: int
+    restore_value: true
+    initial_value: '${prof_boot_gate}'
+  - id: g_boot_release_mv
+    type: int
+    restore_value: true
+    initial_value: '${prof_boot_release}'
+  - id: g_prof_version               # provenance (ADR-0024: every profile is auditable) — persisted strings
+    type: std::string
+    restore_value: true
+    initial_value: '"v1"'
+  - id: g_prof_date
+    type: std::string
+    restore_value: true
+    initial_value: '"${prof_date}"'
+  - id: g_prof_method
+    type: std::string
+    restore_value: true
+    initial_value: '"baked"'
+  - id: g_prof_pushed                # false = baked default is live, true = a runtime-pushed profile is live
+    type: bool
+    restore_value: true
+    initial_value: 'false'
 
 # --- ePaper display (UC8179, 7.5" mono 800x480) — P4b: prove the display path ---
 spi:
@@ -401,16 +572,26 @@ display:
           y += rowh;
         }
       }
-      // --- status footer: last-update (relative) + wifi RSSI + battery % (provisional linear V->%, pre-fit) ---
+      // --- status footer: last-update (relative) + wifi RSSI + battery % (ADR-0024 profile: normalize to the
+      // base frame by the charge/USB state offset, then interpolate the loadable V->SoC LUT in g_soc_lut) ---
       it.line(0, ftop, w, ftop);
       float bv = id(batt_v).state;
-      int bpct = (int) ((bv - 3.45f) / (4.20f - 3.45f) * 100.0f + 0.5f);
-      if (bpct < 0) bpct = 0;
-      if (bpct > 100) bpct = 100;
+      int bpct;
+      {
+        int mv = (int) (bv * 1000.0f + 0.5f);
+        int cs = (int) id(charger)->charge_status();            // 1 pre / 2 fast = charging (elevates V)
+        if (cs == 1 || cs == 2)         mv -= id(g_off_charging_mv);
+        else if (id(charger)->power_good()) mv -= id(g_off_usb_mv);  // on-wall, not charging (USB I·R offset)
+        auto &lut = id(g_soc_lut);
+        if (std::isnan(bv) || mv <= lut[0]) bpct = 0;
+        else if (mv >= lut[20]) bpct = 100;
+        else { int i = 0; while (i < 20 && mv > lut[i + 1]) i++;
+               bpct = 5 * i + (int) (5.0f * (mv - lut[i]) / (lut[i + 1] - lut[i]) + 0.5f); }
+      }
       char ft[56];
-      if (id(g_fetch_uptime).state > 0)
+      if (id(g_fetch_uptime) > 0)     // g_fetch_uptime is a float global (snapshot of uptime_s), not a sensor
         snprintf(ft, sizeof(ft), "updated %ds ago    wifi %.0f    %d%%",
-                 (int)(id(uptime_s).state - id(g_fetch_uptime).state), id(wifi_rssi).state, bpct);
+                 (int)(id(uptime_s).state - id(g_fetch_uptime)), id(wifi_rssi).state, bpct);
       else
         snprintf(ft, sizeof(ft), "no data yet    wifi %.0f    %d%%", id(wifi_rssi).state, bpct);
       it.print(w / 2, h - 4, id(font_label), TextAlign::BOTTOM_CENTER, ft);
