@@ -178,6 +178,82 @@ def build_sensor_list(hot_conn, now: float, meta: dict | None = None,
     return out
 
 
+def build_rooms(sensors: list[dict], areas: dict | None = None, geometry: dict | None = None,
+                placement: dict | None = None, controllable_ids: set | None = None) -> dict:
+    """The canonical room graph (ADR-0026 Phase 3 UI) — supersedes the bare `/areas` string list.
+
+    Groups the live `sensors` (from build_sensor_list) into the canonical `areas` registry, attaching
+    per-room geometry and per-device in-room placement so a renderer can draw the house map + room zoom
+    without stitching four sources itself.
+
+    Inputs (all optional; a missing file just degrades that facet, never errors):
+      areas       {id: {name, level, zone, type}} in file order (instance/areas.yaml → `areas:`).
+      geometry    {"rooms": {id: {...polygon/label/flags...}}} (instance/house-geometry.json).
+      placement   {device_id: {x, y, anchor}} (instance/device-placement.yaml → `placements:`).
+      controllable_ids  device_ids in the control registry → role "actuator" (else "sensor").
+
+    Returns {schema_version, levels[], zones[], rooms[], unlocated[]}. `rooms` covers EVERY canonical
+    area (incl. empty ones, ordered by file order); `unlocated` holds any device whose room isn't a
+    canonical area (== "make sure all devices are properly located" — this list should be empty)."""
+    from collections import defaultdict
+
+    areas = areas or {}
+    geo_rooms = (geometry or {}).get("rooms", {}) or {}
+    placement = placement or {}
+    ctl = controllable_ids or set()
+
+    by_room: dict[str, list] = defaultdict(list)
+    unlocated: list[dict] = []
+    for s in sensors:
+        room_id = s.get("room") or s.get("area") or "unknown"
+
+        def _dev(rid: str) -> dict:
+            return {
+                "device_id": s["device_id"],
+                "device_type": s.get("device_type"),
+                "role": "actuator" if s["device_id"] in ctl else "sensor",
+                "name": s.get("name"),
+                "metrics": s.get("metrics", {}),
+                "age_s": s.get("age_s"),
+                "placement": placement.get(s["device_id"]) or {"x": None, "y": None, "anchor": "auto"},
+            }
+
+        if room_id in areas:
+            by_room[room_id].append(_dev(room_id))
+        else:
+            unlocated.append({**_dev(room_id), "area": room_id})   # not a canonical area → surface it
+
+    rooms = []
+    for order, (aid, meta) in enumerate(areas.items()):
+        devs = by_room.get(aid, [])
+        rooms.append({
+            "id": aid,
+            "name": (meta or {}).get("name", aid),
+            "level": (meta or {}).get("level"),
+            "zone": (meta or {}).get("zone"),
+            "type": (meta or {}).get("type"),
+            "order": order,
+            "geometry": geo_rooms.get(aid),                     # null for rooms without a polygon (yet)
+            "devices": devs,
+            # "edge" bucket stays 0 until a node-census source exists (edge nodes aren't in the sensor roster)
+            "counts": {"sensors": sum(d["role"] == "sensor" for d in devs),
+                       "actuators": sum(d["role"] == "actuator" for d in devs),
+                       "edge": 0},
+        })
+
+    levels: list[str] = []
+    zones: list[str] = []
+    for meta in areas.values():
+        lv, zn = (meta or {}).get("level"), (meta or {}).get("zone")
+        if lv and lv not in levels:
+            levels.append(lv)
+        if zn and zn not in zones and zn != "none":
+            zones.append(zn)
+
+    return {"schema_version": 1, "levels": levels, "zones": zones,
+            "rooms": rooms, "unlocated": unlocated}
+
+
 # control INPUT metric per strategy (the value the loop drives on). Default = RH (hysteresis/setpoint).
 _CONTROL_METRIC_BY_STRATEGY = {"threshold_ranged": "pm25_ugm3"}
 

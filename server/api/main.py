@@ -192,6 +192,9 @@ MIDEA_DEVICE_ENV = Path(os.environ.get("HA_MIDEA_DEVICE_ENV", "instance/midea-de
 CONTROL_DB = Path(os.environ.get("HA_CONTROL_DB", "instance/db/control.db"))
 AUTH_KEY_PATH = Path(os.environ.get("HA_AUTH_KEY", "instance/auth_key"))   # R9 JWT signing key (gitignored, 0600)
 DEVICES_REGISTRY = Path(os.environ.get("HA_DEVICES", "instance/devices.yaml"))   # sensor registry (add-device flow)
+AREAS_YAML = Path(os.environ.get("HA_AREAS", "instance/areas.yaml"))             # ADR-0026 canonical area registry
+HOUSE_GEOMETRY = Path(os.environ.get("HA_HOUSE_GEOMETRY", "instance/house-geometry.json"))  # room polygons (render source)
+DEVICE_PLACEMENT = Path(os.environ.get("HA_DEVICE_PLACEMENT", "instance/device-placement.yaml"))  # per-device in-room (x,y)
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"   # server/web — the no-build PWA
 
 
@@ -880,6 +883,52 @@ def sensor_list():
     # `metrics` = shared UI spec catalog (ADR-0019): both the PWA and the D1001 panel render
     # from it. Additive/top-level — existing clients read `.sensors` and ignore the extra key.
     return {"sensors": sensors, "metrics": ui_metric_catalog()}
+
+
+def _load_yaml_section(path: Path, section: str) -> dict:
+    """Read `section:` out of a small instance YAML; {} on any absence/parse error (never fatal)."""
+    if not path.exists():
+        return {}
+    try:
+        import yaml
+        return (yaml.safe_load(path.read_text()) or {}).get(section, {}) or {}
+    except Exception:
+        log.warning("could not parse %s", path, exc_info=True)
+        return {}
+
+
+@app.get("/api/v1/rooms", include_in_schema=True)
+def rooms_list():
+    """Canonical room graph (ADR-0026 Phase 3 UI) — the house→room→device nav source for the D1001 panel
+    and the PWA. Supersedes the bare `/areas` string list: every canonical area (incl. empty ones) with
+    level/zone/type/order + geometry + its devices grouped + counts, plus `unlocated` = any device whose
+    room isn't a canonical area (should be empty). Read-only; joins areas.yaml + house-geometry.json +
+    device-placement.yaml + the live sensor list."""
+    import time
+
+    from server.api.viewmodel import build_rooms, build_sensor_list
+    from server.control import control_store as store
+    areas = _load_yaml_section(AREAS_YAML, "areas")
+    placement = _load_yaml_section(DEVICE_PLACEMENT, "placements")
+    geometry = {}
+    if HOUSE_GEOMETRY.exists():
+        try:
+            geometry = json.loads(HOUSE_GEOMETRY.read_text())
+        except Exception:
+            log.warning("could not parse %s", HOUSE_GEOMETRY, exc_info=True)
+    hc = _hot_conn() if DB_PATH.exists() else None
+    cc = _control_conn()
+    try:
+        meta = store.all_device_meta(cc) if cc is not None else {}
+        calib = store.all_calibration(cc) if cc is not None else {}
+        sensors = build_sensor_list(hc, time.time(), meta=meta, calib=calib)
+    finally:
+        if hc is not None:
+            hc.close()
+        if cc is not None:
+            cc.close()
+    ctl = set(getattr(app.state, "control_registry", {}) or {})
+    return build_rooms(sensors, areas, geometry=geometry, placement=placement, controllable_ids=ctl)
 
 
 def _build_current_alerts(now: float) -> list[dict]:
