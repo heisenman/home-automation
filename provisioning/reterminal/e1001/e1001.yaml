@@ -80,6 +80,9 @@ esphome:
               id(g_pp_dark) = true;
               ESP_LOGW("battpp", "boot-gate: cell %dmV < gate %dmV on battery -> holding display DARK", mv, id(g_boot_gate_mv));
             }
+    - priority: 400                  # RTC holdover: sync the system clock FROM the PCF85063T at boot (i2c + the rtc
+      then:                          # component are up by now) so the pri-100 first frame already shows the wall clock.
+        - pcf85063.read_time: rtc_time
     - priority: 250                  # profiler discharge-LOAD burners: one low-pri CPU spinner per core, each self-
       then:                          # gated on DISCHARGE + Prof Load Level>0. Captureless lambdas (-> TaskFunction_t);
         - lambda: |-                 # duty scales with level (lvl3 = full burn). Priority 1 so WiFi/BT (much higher) never starve.
@@ -162,12 +165,22 @@ wifi:
 
 captive_portal:
 
-time:                                # clock sync off the dictator (SNTP) — mirrors the edge ha_sntp pattern.
-  - platform: sntp                   # E1001 shows a wall clock (unlike the clockless D1001 panel); every render
-    id: sntp_time                    # is guarded by .is_valid() so an unsynced clock degrades gracefully (no hang,
-    timezone: "${timezone}"          # no bad time). On a deep-sleep wake it re-syncs after wifi; dev-mode syncs once.
+time:                                # clock: PCF85063T RTC (coin-cell holdover) as the boot source + SNTP to correct.
+  - platform: pcf85063               # RTC @0x51: read at boot (on_boot pri 400) so the FIRST ePaper frame has the
+    id: rtc_time                     # wall clock INSTANTLY on wake — before WiFi/SNTP — and it survives battery removal.
+    address: 0x51
+    i2c_id: bus_i2c0
+    timezone: "${timezone}"
+    update_interval: never           # read once explicitly at boot; SNTP owns correction thereafter (no RTC-read stomp)
+  - platform: sntp                   # LAN time authority (.210): corrects RTC drift + writes it back on each sync.
+    id: sntp_time                    # renders guard on .is_valid(); the RTC keeps the system clock valid across sleeps.
+    timezone: "${timezone}"
     servers:
       - ${ntp_server}
+    on_time_sync:
+      then:
+        - pcf85063.write_time:
+            id: rtc_time
 
 external_components:
   - source: components               # local: components/sy6974b (charger driver) + e1001_ui scaffold
