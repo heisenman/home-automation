@@ -31,15 +31,18 @@ Stage 1, recovery-asymmetry (correctly *not* a recovery/BLE-census node), OTA-ov
 | 13 | Local SD logging | **Deferred** (low value; dictator owns history) | Low | Skip | — |
 
 ## Two docs-first blockers to resolve *first* (cheap; scope #1 and #2)
-- **B1 — Can the E1001 firmware trigger a hard power-off?** The D1001 kills its rail via a firmware GPIO
-  (`bsp_power_off` → expander `PWR_HOLD` P8). The E1001 latch is `CJ3407` P-FET (Q1) + **physical slide switch
-  SW1** + `ESP_RST` — no documented firmware-reachable rail-kill. **Read `docs/hardware/
-  reTerminal_E1001_V1_2_SCH_251120.pdf` sheet 6 / ask Hugh.** If physical-only → §3 "hard-off" degrades to
-  `deep_sleep.enter` (ePaper holds its last image, no timer wake); **boot-gate (§6) + warn (§4) are implementable
-  regardless** and are the highest-safety-value pieces.
-- **B2 — Is there a burst telemetry cadence?** ADR-0024 §3 wants 250 ms–1 s sampling for the offset/transition
-  capture; the E1001 publishes `e1001-bench/battprofile` at a fixed 5 s. Confirm/add a burst-rate knob before the
-  §3 offset run (#2).
+- **B1 — Can the E1001 firmware trigger a hard power-off? → RESOLVED 2026-07-05 (schematic sheet 4 "Power"): NO.**
+  Q1 (CJ3407 P-FET) is the main-rail load switch; its gate is driven by the **physical slide switch SW1
+  (MK-2201Q) + `ESP_RST`**, with **no ESP GPIO**. The only GPIO-controlled switch on the sheet (U3 TPS22916,
+  `EN = ESP_IO21/VBAT_EN`) is the battery-**sense** divider, not the system rail. **Consequence:** §3 "hard-off"
+  degrades to **deep-sleep-at-floor** — at the run floor, render a static "CHARGE ME" frame (e-ink holds it at
+  ~0 power) and `deep_sleep.enter` with a long re-check interval; slows discharge + preserves reserve without a
+  true power cut. Boot-gate (§6) + warn (§4) unchanged and fully doable. (Ultimate over-discharge net = the
+  battery pack's own PCM, well below the 3.45 V run floor.)
+- **B2 — Is there a burst telemetry cadence? → RESOLVED: NO runtime knob.** Telemetry publishes on a fixed
+  `interval: 5s` (`e1001.yaml:293`); ESPHome `interval:` cadence isn't runtime-tunable. **Plan:** add a gated
+  `interval: 500ms` block that publishes `battprofile` only while a `Burst Capture` switch (`g_burst`, default
+  off) is on — added in **Step 4** where the offset run needs 250 ms–1 s.
 
 ## Reuse map (build X → reuse Y)
 - **Safety policy (#1):** `firmware/components/ha_power_policy/include/ha_power_policy.h` — pure `eval()` (NONE/
