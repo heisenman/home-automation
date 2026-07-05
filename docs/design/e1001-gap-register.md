@@ -11,9 +11,10 @@ built until an item is picked up + decomposed.
 Executed the procedure in order. **Blockers B1/B2 resolved** (above). **Shipped + live-validated on .71:**
 - **Step 1 — ADR-0024 safety policy** (`0b20c56`): on-battery monitor (warn banner + deep-sleep-at-floor CHARGE ME),
   boot-gate (hold ePaper dark below cold-start floor), gauge smoothing (median filter). Monitor inert on wall; no
-  heap leak. Warn/CHARGE-ME *visuals* + on-battery decision path pending Hugh's eyes / a battery run.
+  heap leak. **Warn banner CONFIRMED on-screen by Hugh.** Remaining: CHARGE-ME full-screen frame (Test PP ChargeMe)
+  + the on-battery decision path (warn→floor→deep-sleep) validate on an actual battery run.
 - **Step 2 — PCF85063T RTC holdover** (`57a9dbd`): boot read (instant wake-time) + SNTP writes the RTC. Chip healthy,
-  write path fires. Instant-wake read is pre-MQTT → confirm on serial / eyeball.
+  write path fires. **Clock CONFIRMED up-to-date on-screen by Hugh** (time chain end-to-end).
 - **Step 3 — buzzer** (`2bec635`): MLT-8530 via ledc+rtttl, chime on critical-alert/low-battery, **Buzzer Enable**
   easy-disable. `rtttl Playing song chime → finished`; **Hugh heard it**.
 
