@@ -38,6 +38,7 @@ DB_PATH = Path(os.environ.get("HA_DB", "instance/db/hot.db"))
 PARQUET_GLOB = Path(os.environ.get("HA_PARQUET_DIR", "instance/db/parquet"))
 WEATHER_DB = Path(os.environ.get("HA_WEATHER_DB", "instance/db/weather.db"))
 RUNG_DB = Path(os.environ.get("HA_RUNG_DB", "instance/db/rungs.db"))   # ADR-0022 rollup ladder (panel replica)
+INSTANCE_DIR = Path(os.environ.get("HA_INSTANCE_DIR", "instance"))     # data-of-record root (#7 replica lane)
 WEATHER_TABLE = os.environ.get("HA_WEATHER_TABLE", "weather")
 MAX_DEEP_ROWS: int = int(os.environ.get("HA_MAX_DEEP_ROWS", "50000"))
 VAPID_PATH = Path(os.environ.get("HA_VAPID", "instance/vapid.json"))   # PWA web-push keys (gitignored)
@@ -1082,6 +1083,141 @@ def rung_since(res: str = Query(..., description="rung name: 1min|1hour|1day|1we
             conn.close()
 
     return StreamingResponse(gen(), media_type="application/x-ndjson")
+
+
+# ── #7 instance-replica lane (deepen recovery — docs/design/instance-replica-lane.md) ───────────────────
+# The panel's ha_replica files-lane mirrors the dictator's data-of-record to SD as a cold, provenance-tagged
+# warm-standby backup: house-state config + parquet cold-history + a hot.db snapshot. Whole-file-by-sha256.
+# GATED on source-of-record (VIP holder) so a demoted standby can never poison the panel's good backup.
+
+# House-state config the panel may back up — an EXPLICIT ALLOWLIST, not a glob, so a NEW secret file can never
+# leak onto the panel's (physically-accessible) SD. control_secrets.yaml / node_secrets.enc / *.env / the
+# master pass are deliberately EXCLUDED: a restore that needs credentials pulls them from the controlled box,
+# not the panel. (Security decision — revisit only if encrypted-secret replication is explicitly wanted.)
+REPLICA_CONFIG_ALLOW = ("control.yaml", "control_policy.yaml", "areas.yaml", "devices.yaml")
+# Cap the manifest to the newest N parquet day-files: the panel's manifest buffer is 8 KB (ha_replica.c), and
+# day-files accumulate 1/day. Newest = most valuable; older are omitted from the backup set (logged, not silent).
+REPLICA_PARQUET_MAX = int(os.environ.get("HA_REPLICA_PARQUET_MAX", "30"))
+_replica_sha_cache: dict = {}   # (path, mtime_ns, size) -> sha256; parquet is immutable once sealed, so cache hits
+
+
+def _file_sha256(p: Path) -> str:
+    """Chunked sha256 (hot.db can be tens of MB — don't slurp). Cached by (path, mtime, size) so an unchanged
+    parquet day-file isn't re-hashed every manifest; hot.db's mtime moves each call so it always recomputes."""
+    import hashlib
+    st = p.stat()
+    key = (str(p), st.st_mtime_ns, st.st_size)
+    hit = _replica_sha_cache.get(key)
+    if hit:
+        return hit
+    h = hashlib.sha256()
+    with p.open("rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    d = h.hexdigest()
+    _replica_sha_cache[key] = d
+    return d
+
+
+def _replica_source_tag() -> str:
+    """Provenance a restore records: which box/role authored these bytes (e.g. 'primary@g11')."""
+    import socket
+    from server.cluster.state import read_cluster_env
+    role = read_cluster_env().get("ROLE", "primary")
+    return f"{role}@{socket.gethostname()}"
+
+
+def _replica_is_source_of_record() -> bool:
+    """ADR-0016/0018 gate: only the current source-of-record (the VIP-holding dictator, the failover/reconcile
+    winner) serves a trustworthy backup. A standby returns False and the panel keeps its last good copy."""
+    from server.cluster.state import read_cluster_env, vip_held
+    return vip_held(read_cluster_env().get("VIP", "192.168.0.200"))
+
+
+def _iso(ts: float) -> str:
+    return datetime.fromtimestamp(ts, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+@app.get("/api/v1/replica/manifest.json", include_in_schema=True)
+def replica_manifest():
+    """Instance-replica lane (#7): the backup set the panel diffs against — house-state config + newest parquet
+    + a hot.db snapshot, each by sha256. `is_source_of_record` tells the panel whether it may overwrite its
+    copy (only the VIP-holding dictator is trustworthy). Mirrors the /rung/manifest.json shape."""
+    arts = []
+    for name in REPLICA_CONFIG_ALLOW:                       # config — allowlist only, never secrets
+        p = INSTANCE_DIR / name
+        if p.is_file():
+            st = p.stat()
+            arts.append({"kind": "config", "name": name, "sha256": _file_sha256(p),
+                         "size": st.st_size, "mtime": _iso(st.st_mtime)})
+    if PARQUET_GLOB.exists():                               # parquet — newest N (immutable once sealed)
+        pqs = sorted(PARQUET_GLOB.rglob("*.parquet"), key=lambda q: q.stat().st_mtime, reverse=True)
+        if len(pqs) > REPLICA_PARQUET_MAX:
+            log.info("replica manifest: %d parquet files present, offering newest %d (older omitted from backup)",
+                     len(pqs), REPLICA_PARQUET_MAX)
+        for p in pqs[:REPLICA_PARQUET_MAX]:
+            st = p.stat()
+            arts.append({"kind": "parquet", "name": p.relative_to(PARQUET_GLOB).as_posix(),
+                         "sha256": _file_sha256(p), "size": st.st_size, "mtime": _iso(st.st_mtime)})
+    if DB_PATH.is_file():                                   # hot.db — sha of the live file; served as a snapshot
+        st = DB_PATH.stat()
+        arts.append({"kind": "hotdb", "name": "hot.db", "sha256": _file_sha256(DB_PATH),
+                     "size": st.st_size, "mtime": _iso(st.st_mtime)})
+    return {"source_tag": _replica_source_tag(),
+            "is_source_of_record": _replica_is_source_of_record(),
+            "generated_ts": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "artifacts": arts}
+
+
+@app.get("/api/v1/replica/file", include_in_schema=True)
+def replica_file(kind: str = Query(..., description="config|parquet|hotdb"),
+                 name: str = Query(..., description="artifact name from the manifest")):
+    """Serve one replica artifact, path-validated. config is allowlist-only (never secrets/arbitrary files);
+    parquet is resolved strictly under the parquet dir (no traversal); hot.db is a CONSISTENT snapshot
+    (sqlite backup API), not the live-mutating file."""
+    if kind == "config":
+        if name not in REPLICA_CONFIG_ALLOW:               # allowlist is the whole security boundary here
+            raise HTTPException(status_code=404, detail="unknown config artifact")
+        p = INSTANCE_DIR / name
+        if not p.is_file():
+            raise HTTPException(status_code=404, detail="not found")
+        return FileResponse(str(p), media_type="application/octet-stream", filename=name)
+    if kind == "parquet":
+        base = PARQUET_GLOB.resolve()
+        p = (base / name).resolve()
+        if base not in p.parents or not p.name.endswith(".parquet") or not p.is_file():
+            raise HTTPException(status_code=404, detail="not found")   # traversal / non-parquet / missing
+        return FileResponse(str(p), media_type="application/octet-stream", filename=p.name)
+    if kind == "hotdb":
+        if name != "hot.db" or not DB_PATH.is_file():
+            raise HTTPException(status_code=404, detail="not found")
+        return _hotdb_snapshot_response()
+    raise HTTPException(status_code=400, detail=f"bad kind {kind!r}")
+
+
+def _hotdb_snapshot_response():
+    """A consistent hot.db copy via SQLite's backup API (reads under the DB's lock — no torn snapshot of the
+    always-changing live file). Streamed as a temp file, deleted after the response is sent."""
+    import tempfile
+
+    from starlette.background import BackgroundTask
+    fd, tmp = tempfile.mkstemp(prefix="hotdb-replica-", suffix=".db")
+    os.close(fd)
+    try:
+        src = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
+        dst = sqlite3.connect(tmp)
+        with dst:
+            src.backup(dst)
+        dst.close()
+        src.close()
+    except Exception as exc:
+        try:
+            os.remove(tmp)
+        except OSError:
+            pass
+        raise HTTPException(status_code=500, detail=f"hot.db snapshot failed: {exc}")
+    return FileResponse(tmp, media_type="application/octet-stream", filename="hot.db",
+                        background=BackgroundTask(os.remove, tmp))
 
 
 @app.get("/devices")
