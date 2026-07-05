@@ -80,9 +80,14 @@ Only `main/ha_mqtt.c` on each of c3/c6/s3-eth (verified: `app_main` does not ref
 today. A future cleanup could hoist a shared `ha_ble_central` lock, but that's out of scope here.
 
 ## 6. Risk + validation — why this is OTA-GATED
-- **c6 (`coffice_c6`) and s3-eth (`s3-crawlspace`) are LIVE** and both run the GATT-central path (history pulls today,
-  exec latent). A regression would break real meter history/actuation. Build-validation is necessary but **not
-  sufficient** — this needs a live round-trip before deploy.
+- **Live GATT-central nodes = `cbed_c6` + `coffice_c6` (c6 fleet) and `hbed_s3` (s3 fleet)** — all run the path
+  (history pulls today, exec latent). A regression would break real meter history/actuation. Build-validation is
+  necessary but **not sufficient** — needs a live round-trip before deploy.
+- **`s3-crawlspace` is NOT in this window — it is BLOCKED** (not enrolled in `node_secrets.enc`, eFuse MAC uncaptured;
+  see `edge/esp32s3-eth/nodes.yaml` TODO + memory `s3-crawlspace-hardware-swap`). Enroll it first (RESUME item #1),
+  then it joins a later window. (Earlier drafts of this doc named it as the s3 target — corrected: the OTA-able s3 is `hbed_s3`.)
+- **Images are branded per node** (ADR-0020 identity gate): each live node needs its OWN `enroll_node → rebuild → OTA`
+  — a `.bin` built for one node is rejected by another's gate. See the §10 runbook.
 - **Deploy path is a dev-signed OTA from 210, NOT a bench flash** (ops correction): c6/s3 are edge nodes; a bench
   build lacks the edge secrets, so its image fails the signed-command/OTA identity gate (`bad-sig`). So dev signs +
   OTAs from 210; ops co-runs the §6 acceptance test on the bus and stands rollback-ready.
@@ -95,10 +100,31 @@ today. A future cleanup could hoist a shared `ha_ble_central` lock, but that's o
 ## 7. Sequencing (agreed dev + ops)
 1. ✅ Hugh decides §4 → **(A) Kconfig**.
 2. dev builds the component + does the c3 wiring (safe, build-validated) and opens it for review.
-3. Window (dev signs+OTAs from 210, ops co-runs on the bus, ~30 min notice): OTA `coffice_c6` first, run the §6
-   acceptance test (a–d incl. the telemetry write-disabled boundary check), confirm green, then `s3-crawlspace`.
-   Deploy gated on green; ops rollback-ready.
+3. Window (dev signs+OTAs from 210, ops co-runs on the bus): per-node `enroll→rebuild→OTA→§6 test`, one at a time,
+   confirm green before the next — `cbed_c6` → `coffice_c6` → `hbed_s3`. Deploy gated on green; ops rollback-ready.
+   (`s3-crawlspace` deferred — blocked on enroll.) See §10 for exact commands.
 4. Fold the same seam pattern into the panel if/when it needs generic GATT exec (today it uses `ha_gatt` history only).
+
+## 10. Live OTA runbook (window) — dev on 210, ops co-runs
+All nodes' broker + `ota_host` = **`192.168.0.210`** (per `nodes.yaml`), so `--serve-ip` and `--broker` are both `.210`.
+Fresh images already built + validated this session: `ha-edge-c6.bin` (branded **cbed_c6**), `ha-edge-s3-eth.bin`
+(branded **hbed_s3**). One node at a time; do NOT proceed to the next until the §6 test is green + node stable.
+
+```
+# 0. ops: confirm on the bus + rollback-ready (watch home/edge/<node>/status + /log).
+# --- cbed_c6 (current c6 image is already branded for it) ---
+python3 tools/edge_ota.py --node cbed_c6 --bin edge/esp32c6/build/ha-edge-c6.bin --serve-ip 192.168.0.210 --broker 192.168.0.210
+#   watch for SUCCESS (new slot + self-test PASS); run §6 (b)(c)(d) via a signed history + gatt command.
+# --- coffice_c6 (re-brand + rebuild first) ---
+python3 tools/enroll_node.py --node-id coffice_c6 --from-manifest --reuse --out edge/esp32c6/main/secrets.h
+( cd edge/esp32c6 && idf.py build )
+python3 tools/edge_ota.py --node coffice_c6 --bin edge/esp32c6/build/ha-edge-c6.bin --serve-ip 192.168.0.210 --broker 192.168.0.210
+# --- hbed_s3 (current s3 image is already branded for it) ---
+python3 tools/edge_ota.py --node hbed_s3 --bin edge/esp32s3-eth/build/ha-edge-s3-eth.bin --serve-ip 192.168.0.210 --broker 192.168.0.210
+```
+`edge_ota.py` serves the bin, sends the signed `{"op":"ota",...}`, and follows status/log to SUCCESS or ROLLBACK.
+Rollback is automatic (brick-safety: a bad image fails `ha_ota_confirm_if_pending` self-test → bootloader reverts).
+**Restore-the-brand note:** after the window, re-enroll c6 secrets.h back to whatever it should persist as (last was `cbed_c6`).
 
 ## 9. Review + logistics (ops, 2026-07-05)
 Ops review of `@7f525f3`: **LGTM, ship it.**
