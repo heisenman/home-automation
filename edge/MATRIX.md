@@ -25,7 +25,7 @@ Which module each **real firmware build** links. Pairs with [MODULES.md](MODULES
 | `switchbot_decode` | shared | shared | shared | shared |
 | `ha_reach` | — | shared | shared | shared |
 | `gatt_history` | shared | shared | fork | shared |
-| `gatt_exec` | fork | fork | fork | — |
+| `gatt_exec` | shared | fork | fork | — |
 | `ha_ota` | shared | shared | shared | shared |
 | `ha_led` | — | — | fork | — |
 | `ha_relay` | shared | shared | shared | — |

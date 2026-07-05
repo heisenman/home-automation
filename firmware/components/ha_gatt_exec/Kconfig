@@ -1,0 +1,13 @@
+menu "ha_gatt_exec"
+
+config HA_GATT_ALLOW_WRITE
+    bool "Allow arbitrary GATT writes (actuation)"
+    default n
+    help
+        Arbitrary GATT characteristic writes are an ACTUATION primitive: a validly-signed command
+        could otherwise drive any BLE device's characteristics. A telemetry-only relay never needs
+        them (sub/read/collect suffice; the CCCD notify-enable in a "sub" step is not arbitrary
+        actuation). Least privilege: leave this OFF (n) so the write path is not even compiled into
+        the image. Set it to y ONLY in a per-actuator firmware build's sdkconfig.defaults.
+
+endmenu

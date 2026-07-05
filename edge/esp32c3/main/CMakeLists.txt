@@ -4,9 +4,8 @@ idf_component_register(
         "ha_config.c"
         "ha_wifi.c"
         "ha_mqtt.c"
-        "gatt_exec.c"
     INCLUDE_DIRS "."
     REQUIRES nvs_flash esp_wifi esp_event esp_netif mqtt bt json
              app_update esp_https_ota esp_http_client mbedtls
-             switchbot_decode ha_ble_scan ha_gatt ha_ota ha_relay ha_sntp
+             switchbot_decode ha_ble_scan ha_gatt ha_gatt_exec ha_ota ha_relay ha_sntp
 )

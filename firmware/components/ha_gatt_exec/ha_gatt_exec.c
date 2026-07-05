@@ -1,12 +1,14 @@
-// Generic GATT step-interpreter — see gatt_exec.h. Connect → discover-all-chars → run server-composed
-// steps → stream replies. Reuses the radio-sharing, blocking-write, and batched-relay patterns proven
-// in gatt_history.c. Single radio: the passive scan is paused for the duration and resumed on exit.
-#include "gatt_exec.h"
-#include "ble_scan.h"
-#include "ha_mqtt.h"
+// Shared generic GATT step-interpreter (ADR-0020) — see ha_gatt_exec.h. Connect → discover-all-chars → run
+// server-composed steps → stream replies. Promoted from edge/esp32c6/main/gatt_exec.c (byte-identical ×3);
+// the only edits vs the edge original are the two platform seams — the reply sink and the diagnostic log are
+// now cfg callbacks (ha_gatt_exec_init) instead of direct ha_mqtt_* calls, and the shared scan is ha_ble_scan
+// (which the edge original already used). Single radio: the passive scan is paused for the duration.
+#include "ha_gatt_exec.h"
+#include "ha_ble_scan.h"        // pause/resume + addr lookup + own_addr_type (shared observer, ADR-0020)
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
@@ -16,19 +18,26 @@
 #include "host/ble_gap.h"
 #include "host/ble_gatt.h"
 #include "cJSON.h"
-#if __has_include("secrets.h")
-#include "secrets.h"
-#endif
 
 // Node-side lockdown (least privilege): arbitrary GATT writes are an ACTUATION primitive — a validly-
 // signed command could otherwise drive any BLE device's characteristics. A telemetry-only relay never
 // needs them (sub/read/collect suffice; the CCCD write in GE_SUB is a fixed notify-enable, not arbitrary
-// actuation). So writes are OFF by default; a per-actuator firmware build sets HA_ALLOW_GATT_WRITE=1.
-#ifndef HA_ALLOW_GATT_WRITE
-#define HA_ALLOW_GATT_WRITE 0
-#endif
+// actuation). So the write path is compiled OUT unless CONFIG_HA_GATT_ALLOW_WRITE=y (Kconfig, default n).
 
-static const char *TAG = "gatt_exec";
+static const char *TAG = "ha_gatt_exec";
+
+// ── Platform seams (ha_gatt_exec_init) ───────────────────────────────────────────
+static ha_gatt_exec_cfg_t s_cfg;
+void ha_gatt_exec_init(const ha_gatt_exec_cfg_t *cfg) { if (cfg) s_cfg = *cfg; }
+
+// Diagnostic log line -> cfg.log (was ha_mqtt_log on the edge). Always mirrored to ESP_LOG.
+static void gexec_log(const char *fmt, ...)
+{
+    char b[200];
+    va_list ap; va_start(ap, fmt); vsnprintf(b, sizeof(b), fmt, ap); va_end(ap);
+    ESP_LOGI(TAG, "%s", b);
+    if (s_cfg.log) s_cfg.log(b, s_cfg.user);
+}
 
 // ── Limits (one central op at a time → static storage is safe) ───────────────────
 #define GE_MAX_STEPS 24
@@ -77,7 +86,7 @@ static struct {
     int batch_count, total_notif, seq;
 } g;
 
-bool gatt_exec_busy(void) { return s_busy; }
+bool ha_gatt_exec_busy(void) { return s_busy; }
 
 // ── helpers ──────────────────────────────────────────────────────────────────────
 static int hex2bin(const char *hex, uint8_t *out, int max) {
@@ -96,7 +105,7 @@ static uint16_t handle_for(const ble_uuid_t *u) {
 }
 
 // ── reply publishing (topic = home/edge/<node>/<reqid>/reply) ────────────────────
-static void reply(const char *payload) { ha_mqtt_publish_reply(g.reqid, payload); }
+static void reply(const char *payload) { if (s_cfg.publish_reply) s_cfg.publish_reply(g.reqid, payload, s_cfg.user); }
 
 static void publish_open(void) {
     char p[768]; int j = 0;
@@ -222,9 +231,9 @@ static void run_step(const ge_step_t *st, int idx) {
     }
     case GE_WRITE:
     case GE_WRITESEQ: {
-#if !HA_ALLOW_GATT_WRITE
+#if !CONFIG_HA_GATT_ALLOW_WRITE
         // Telemetry-only node: refuse actuation writes even when the command is validly signed.
-        step_err("write disabled: telemetry-only node (HA_ALLOW_GATT_WRITE=0)");
+        step_err("write disabled: telemetry-only node (CONFIG_HA_GATT_ALLOW_WRITE=n)");
         break;
 #else
         uint16_t h = handle_for(&st->chr.u);
@@ -340,7 +349,7 @@ static int parse_steps(const char *json) {
     return n;
 }
 
-bool gatt_exec_run(const char *reqid, const char *mac_str, const char *steps_json) {
+bool ha_gatt_exec_run(const char *reqid, const char *mac_str, const char *steps_json) {
     if (s_busy) { ESP_LOGW(TAG, "busy; ignoring gatt exec for %s", mac_str); return false; }
     if (!s_evt) { s_evt = xEventGroupCreate(); s_write_sem = xSemaphoreCreateBinary(); s_batch_mutex = xSemaphoreCreateMutex(); }
 
@@ -349,20 +358,20 @@ bool gatt_exec_run(const char *reqid, const char *mac_str, const char *steps_jso
     snprintf(g.mac_str, sizeof(g.mac_str), "%s", mac_str);
 
     g.n_steps = parse_steps(steps_json);   // 0 = empty list (valid: probe = connect+discover only)
-    if (g.n_steps < 0) { ha_mqtt_log("gatt exec %s: malformed steps", mac_str); return false; }
+    if (g.n_steps < 0) { gexec_log("gatt exec %s: malformed steps", mac_str); return false; }
 
     if (!ha_ble_lookup_addr(mac_str, &g.addr)) {
-        ha_mqtt_log("gatt exec %s: addr not cached by scanner — can't connect", mac_str);
+        gexec_log("gatt exec %s: addr not cached by scanner — can't connect", mac_str);
         return false;
     }
     s_busy = true;
     xEventGroupClearBits(s_evt, 0xFF);
     ha_ble_scan_pause();
 
-    ha_mqtt_log("gatt exec %s: reqid=%s steps=%d connecting", mac_str, g.reqid, g.n_steps);
+    gexec_log("gatt exec %s: reqid=%s steps=%d connecting", mac_str, g.reqid, g.n_steps);
     int rc = ble_gap_connect(ha_ble_own_addr_type(), &g.addr, 10000, NULL, conn_event, NULL);
     if (rc != 0) {
-        ha_mqtt_log("gatt exec %s: ble_gap_connect rc=%d", mac_str, rc);
+        gexec_log("gatt exec %s: ble_gap_connect rc=%d", mac_str, rc);
         ha_ble_scan_resume(); s_busy = false; return false;
     }
     xTaskCreate(exec_task, "gatt_exec", 6144, NULL, 5, NULL);
