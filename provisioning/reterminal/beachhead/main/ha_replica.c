@@ -2,7 +2,9 @@
 #include "ha_replica.h"
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <sys/stat.h>
+#include "esp_vfs_fat.h"     // esp_vfs_fat_info() — FATFS free space (ESP-IDF has no statvfs)
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "freertos/semphr.h"
@@ -245,11 +247,124 @@ static void sync_once(void)
     cJSON_Delete(j);
 }
 
+// ── #7 files lane: warm-standby backup of the dictator instance/ (config+parquet+hot.db) ─────────
+// Contract: docs/design/instance-replica-lane.md. Whole-file-by-sha256: the server manifest lists each
+// artifact's sha256; we keep the last-synced sha in PROVENANCE.json and re-download only when it changes.
+// GATED on is_source_of_record so a demoted standby can't poison the backup. Lower cadence than the rung
+// lane (config/parquet/hot.db move slowly). Reuses http_get / http_get_to_file.
+#define FILES_POLL_EVERY 6                  // run every 6th cycle (~hourly at POLL_MS=10min)
+#define REPLICA_DIR      "replica"
+#define PROV_NAME        "PROVENANCE.json"
+#define SD_FREE_FLOOR_MB 64                 // don't fetch a new artifact below this free-space floor (logged)
+
+// flatten a possibly-slashed artifact name ("2026/07/x.parquet") into one SD filename
+static void flat_name(const char *kind, const char *name, char *out, int cap)
+{
+    int j = snprintf(out, cap, "%s_", kind);
+    for (const char *p = name; *p && j < cap - 1; p++) out[j++] = (*p == '/' || *p == ' ') ? '_' : *p;
+    out[j] = '\0';
+}
+
+static long sd_free_mb(const char *mp)
+{
+    uint64_t total = 0, freeb = 0;
+    if (esp_vfs_fat_info(mp, &total, &freeb) != ESP_OK) return -1;
+    return (long)(freeb >> 20);
+}
+
+static void sync_files_once(void)
+{
+    if (!ha_sdcard_mounted()) return;
+    const char *mp = ha_sdcard_mount_point();
+
+    char url[288];
+    char *man = malloc(8192);
+    if (!man) return;
+    snprintf(url, sizeof url, "%s/api/v1/replica/manifest.json", s_base);
+    int mn = http_get(url, man, 8192);
+    cJSON *j = (mn > 0) ? cJSON_ParseWithLength(man, mn) : NULL;
+    free(man);
+    if (!j) return;                          // route not up yet (dev half) or bad JSON → silent skip
+
+    cJSON *sor = cJSON_GetObjectItem(j, "is_source_of_record");
+    if (!cJSON_IsBool(sor) || !cJSON_IsTrue(sor)) {   // ADR-0018 gate: keep the good copy, don't overwrite
+        ESP_LOGW(TAG, "files lane: server not source-of-record — skipping (backup preserved)");
+        cJSON_Delete(j); return;
+    }
+    cJSON *arts = cJSON_GetObjectItem(j, "artifacts");
+    if (!cJSON_IsArray(arts)) { cJSON_Delete(j); return; }
+    const cJSON *stag = cJSON_GetObjectItem(j, "source_tag");
+    const cJSON *gts  = cJSON_GetObjectItem(j, "generated_ts");
+
+    char dir[160]; snprintf(dir, sizeof dir, "%s/%s", mp, REPLICA_DIR);
+    mkdir(dir, 0777);
+
+    // load (or start) provenance: { source_tag, generated_ts, sha: { "<kind>/<name>": "<sha256>" } }
+    char provpath[224]; snprintf(provpath, sizeof provpath, "%s/%s", dir, PROV_NAME);
+    cJSON *prov = NULL;
+    char *pbuf = malloc(4096);
+    if (pbuf) { int pn = 0; FILE *pf = fopen(provpath, "r");
+        if (pf) { pn = (int)fread(pbuf, 1, 4095, pf); fclose(pf); pbuf[pn > 0 ? pn : 0] = '\0'; }
+        if (pn > 0) prov = cJSON_Parse(pbuf);
+        free(pbuf);
+    }
+    if (!prov) prov = cJSON_CreateObject();
+    cJSON *sha = cJSON_GetObjectItem(prov, "sha");
+    if (!cJSON_IsObject(sha)) { sha = cJSON_AddObjectToObject(prov, "sha"); }
+
+    int fetched = 0, skipped = 0;
+    const cJSON *a;
+    cJSON_ArrayForEach(a, arts) {
+        const cJSON *k = cJSON_GetObjectItem(a, "kind");
+        const cJSON *nm = cJSON_GetObjectItem(a, "name");
+        const cJSON *sh = cJSON_GetObjectItem(a, "sha256");
+        if (!cJSON_IsString(k) || !cJSON_IsString(nm) || !cJSON_IsString(sh)) continue;
+        char key[256]; snprintf(key, sizeof key, "%s/%s", k->valuestring, nm->valuestring);
+        const cJSON *have = cJSON_GetObjectItem(sha, key);
+        if (cJSON_IsString(have) && strcmp(have->valuestring, sh->valuestring) == 0) continue;  // current
+        if (sd_free_mb(mp) >= 0 && sd_free_mb(mp) < SD_FREE_FLOOR_MB) {
+            ESP_LOGW(TAG, "files lane: SD below %d MB free — SKIP %s (not silently dropped)", SD_FREE_FLOOR_MB, key);
+            skipped++; continue;             // no silent truncation — logged; LRU parquet prune = follow-up
+        }
+        char fn[256]; flat_name(k->valuestring, nm->valuestring, fn, sizeof fn);
+        char fpath[420], tmp[440], furl[700];
+        snprintf(fpath, sizeof fpath, "%s/%s", dir, fn);
+        snprintf(tmp,  sizeof tmp,  "%s.tmp", fpath);
+        snprintf(furl, sizeof furl, "%s/api/v1/replica/file?kind=%s&name=%s", s_base, k->valuestring, nm->valuestring);
+        if (http_get_to_file(furl, tmp) && rename(tmp, fpath) == 0) {
+            cJSON_DeleteItemFromObject(sha, key);
+            cJSON_AddStringToObject(sha, key, sh->valuestring);
+            fetched++;
+        } else { remove(tmp); ESP_LOGW(TAG, "files lane: fetch failed %s", key); }
+    }
+
+    // record provenance (what/where/when) so a restore knows the origin — atomic temp+rename
+    if (cJSON_IsString(stag)) { cJSON_DeleteItemFromObject(prov, "source_tag");
+        cJSON_AddStringToObject(prov, "source_tag", stag->valuestring); }
+    if (cJSON_IsString(gts))  { cJSON_DeleteItemFromObject(prov, "generated_ts");
+        cJSON_AddStringToObject(prov, "generated_ts", gts->valuestring); }
+    char *ptxt = cJSON_PrintUnformatted(prov);
+    if (ptxt) {
+        char ptmp[240]; snprintf(ptmp, sizeof ptmp, "%s.tmp", provpath);
+        FILE *pf = fopen(ptmp, "w");
+        if (pf) { fwrite(ptxt, 1, strlen(ptxt), pf); fclose(pf); rename(ptmp, provpath); }
+        cJSON_free(ptxt);
+    }
+    if (fetched || skipped)
+        ESP_LOGI(TAG, "files lane: %d fetched, %d skipped from %s", fetched, skipped,
+                 cJSON_IsString(stag) ? stag->valuestring : "?");
+    cJSON_Delete(prov);
+    cJSON_Delete(j);
+}
+
 static void replica_task(void *pv)
 {
     vTaskDelay(pdMS_TO_TICKS(BOOT_MS));
+    int cycle = 0;
     for (;;) {
-        sync_once();
+        sync_once();                                        // rung ladder (ADR-0022)
+        if (cycle % FILES_POLL_EVERY == 0) sync_files_once();  // #7 instance/ backup lane
+        cycle++;
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
     }
 }
