@@ -21,7 +21,7 @@ from server.comms import events as ev
 from server.control import bootstrap, control_store as store
 from server.control.automation import (
     DEFAULT_SCENE, DeviceState, Override, Policy, Reading, apply_scene, in_window, resolve,
-    schedule_off_now, scene_brightness)
+    schedule_off_now)
 from server.control.secret_store import available_master
 
 log = logging.getLogger("ha.controller")
@@ -72,7 +72,6 @@ class Controller:
         self.readings: dict[str, Reading] = {}  # sensor device_id -> latest control Reading
         self.telemetry: dict[str, dict] = {}    # device_id -> {running, fan, ts} for driverless MQTT devices
         self._night_active = False               # night-mode edge state (dusk->LEDs off, dawn->on)
-        self._last_panel_scene = None            # panel scene-follower edge state (drive backlight on scene change)
         self._lock = threading.Lock()
 
     def _conn(self):
@@ -147,38 +146,10 @@ class Controller:
             for device_id, pol in store.all_policies(conn).items():
                 if not pol.get("enabled", True):
                     continue
-                ctl = self.registry.get(device_id)
-                if ctl is not None and getattr(ctl, "device_type", None) == "panel":
-                    continue                                # panels are scene-followers, not sensor-reconciled
                 self._tick_device(conn, device_id, pol, now, tod, scene, dry_run)
             self._apply_night_mode(conn, tod, dry_run)          # LED night mode (all indicator devices)
-            self._apply_panel_scene(conn, scene, dry_run)       # wall-panel backlight follows the house scene
         finally:
             conn.close()
-
-    def _apply_panel_scene(self, conn, scene, dry_run):
-        """Scene-follower for display actuators (wall panels): on a house-scene change, drive each panel's
-        backlight to that scene's configured brightness (0 = screen off). Edge-triggered on scene change,
-        so a manual brightness set from the PWA is left untouched between scene switches. Panels are not
-        sensor-driven, so they bypass the closed-loop reconcile entirely (this is their whole control rule)."""
-        if scene == self._last_panel_scene:
-            return                                              # no scene edge
-        self._last_panel_scene = scene
-        for device_id, ctl in self.registry.items():
-            if getattr(ctl, "device_type", None) != "panel":
-                continue
-            pol = store.get_policy(conn, device_id) or {}
-            if not pol.get("enabled", True):
-                continue
-            level = scene_brightness(pol, scene)
-            if level is None:                                   # no per-scene opinion -> leave it alone
-                continue
-            if dry_run:
-                continue
-            r = self.issuer.issue(device_id=device_id, trait="setpoint", action="set", args={"value": level})
-            store.append_log(conn, device_id, level > 0, "scene",
-                             f"scene {scene} -> brightness {level}", True, r.status)
-            log.info("panel-scene: %s -> brightness %d (%s) [%s]", device_id, level, scene, r.status)
 
     def _apply_night_mode(self, conn, tod, dry_run):
         """Edge-triggered LED night mode: at dusk (entering the window) set every indicator-capable device's
