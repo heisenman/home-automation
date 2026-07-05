@@ -7,6 +7,30 @@ ADR-0024 (battery standard), and both roadmaps ([e1001-roadmap.md](e1001-roadmap
 Reuse-first: every remaining item cites what already exists. Grounds the "finish the E1001" work; nothing is
 built until an item is picked up + decomposed.
 
+## Execution progress (2026-07-05)
+Executed the procedure in order. **Blockers B1/B2 resolved** (above). **Shipped + live-validated on .71:**
+- **Step 1 — ADR-0024 safety policy** (`0b20c56`): on-battery monitor (warn banner + deep-sleep-at-floor CHARGE ME),
+  boot-gate (hold ePaper dark below cold-start floor), gauge smoothing (median filter). Monitor inert on wall; no
+  heap leak. Warn/CHARGE-ME *visuals* + on-battery decision path pending Hugh's eyes / a battery run.
+- **Step 2 — PCF85063T RTC holdover** (`57a9dbd`): boot read (instant wake-time) + SNTP writes the RTC. Chip healthy,
+  write path fires. Instant-wake read is pre-MQTT → confirm on serial / eyeball.
+- **Step 3 — buzzer** (`2bec635`): MLT-8530 via ledc+rtttl, chime on critical-alert/low-battery, **Buzzer Enable**
+  easy-disable. `rtttl Playing song chime → finished`; **Hugh heard it**.
+
+**Handed off (bench / gated / deploy — not autonomously completable now):**
+- **Step 4 (offsets):** E1001 is e-ink → **no display-load offset** (already 0, correct). Only **USB + charging**
+  offsets remain, and a representative reading needs a **mid-SoC cell + a physical USB unplug** → Hugh bench.
+  The D1001 `battery_characterize.py` drives `cmd/charge`/`cmd/screen` (not the E1001's ESPHome switches), so it needs
+  a port at bench time. **Manual procedure:** discharge to ~mid-SoC; on battery (USB out) read settled `v` from
+  `e1001-bench/battprofile`; plug USB, read `v` → `off_usb_mv = Δ`; toggle `e1001-bench/switch/charge_enable` on,
+  read `v` → `off_charging_mv = Δ`; put both in `battery_profile_v1.json`, bump version, **re-push (no reflash)**.
+- **Step 5:** gauge smoothing done (Step 1); renderer polish (spec-driven metric count, `°` glyph) + production
+  hardening (gate bench affordances, delete the dead `e1001_ui` scaffold, fix the stale header) — do at deploy (the
+  bench affordances are still needed for validation).
+- **Step 6 (deploy):** rename `e1001-bench`→`e1001-<area>` (needs the area) + gated `devices.yaml` SHT40 row +
+  `ha-edge-mapper` restart + enrollment → hand Hugh.
+- **Step 7:** power-budget bench (meter) → then mic. Hugh + hardware.
+
 ## Done / conformant (no work)
 Platform decision (E0), beachhead (E1), spec-driven ePaper renderer + alerts + scene header + SNTP clock (E2),
 deep-sleep + button-wake **mechanism**, **battery profile v1 + ADR-0024 loadable path** (`d910374`), edge presence
