@@ -1,5 +1,16 @@
 # Follow-ups & clarifications for Hugh
 
+## 📌 2026-07-05 — Action item (UNASSIGNED): device admin in the UI
+
+Expose the device **rename + relocate** maintenance ops as a UI "Services"/admin action — change a device's
+**name + location** from the PWA. **Not assigned yet** — where it lands (dev / ops / sw) is TBD (Hugh's call).
+Backend is already API-ready: `server.maintenance.{device_migrate.rename_everywhere, device_relocate.relocate,
+apply_rename_worksheet}` return structured **report dicts** by design; the runbooks note the intended
+`POST /api/v1/admin/devices/{id}:rename|:relocate`. Work = admin-gated endpoints wrapping those cores
+(dry-run → confirm → apply, surface the report) + PWA UI, **keeping the hands-off pipeline guarantees**
+(reconcile-pause / restart-fleet / sweep-until-settled / old-path retained-clear / verify) server-side.
+Board task: `ui-device-admin`.
+
 ## 🟢 2026-07-01 (rev-2) — reTerminal D1001 panel: Phases 1–2 + full PWA parity (A/B/C) LIVE + HW-VERIFIED
 
 **The panel is a working per-room control surface + wall app.** ADR-0019 Phases 1–2 done, plus a full
