@@ -23,6 +23,7 @@ NOT handled (separate concerns / config decisions): the registry reg-key→devic
 from __future__ import annotations
 
 import glob as _glob
+import re
 import shutil
 import sqlite3
 import subprocess
@@ -56,7 +57,10 @@ def apply_sqlite(db_path: str, tables: list[str], old_id: str, new_id: str | Non
                 if retire:
                     conn.execute(f"DELETE FROM {t} WHERE device_id=?", (old_id,))
                 else:
-                    conn.execute(f"UPDATE {t} SET device_id=? WHERE device_id=?", (new_id, old_id))
+                    # OR REPLACE: if the new id already holds a row that would collide on a UNIQUE/PK
+                    # (device_last_seen.device_id, or readings' (device_id,ts,metric)) — e.g. a race-window
+                    # straggler meeting a restarted-ingest row — merge by replacing instead of crashing.
+                    conn.execute(f"UPDATE OR REPLACE {t} SET device_id=? WHERE device_id=?", (new_id, old_id))
             out[t] = n
         if not dry_run:
             conn.commit()
@@ -177,7 +181,8 @@ def peer_hot_migrate(old_id: str, new_id: str | None, *, retire: bool, dry_run: 
     if retire:
         sql = "".join(f"DELETE FROM {t} WHERE device_id='{old_id}';" for t in HOT_TABLES)
     else:
-        sql = "".join(f"UPDATE {t} SET device_id='{new_id}' WHERE device_id='{old_id}';" for t in HOT_TABLES)
+        sql = "".join(f"UPDATE OR REPLACE {t} SET device_id='{new_id}' WHERE device_id='{old_id}';"
+                      for t in HOT_TABLES)
     # count-before (verify), backup, apply, count-after
     remote = (f"cd {remote_repo} && "
               f"BEFORE=$(sqlite3 {remote_db} \"SELECT COUNT(*) FROM readings WHERE device_id='{old_id}';\") && "
@@ -269,12 +274,108 @@ def run_migration(op: str, old_id: str, new_id: str | None = None, *,
     return report
 
 
+# ── identity beyond the data stores: registry device_id + control-plane (unit-tested line editors) ────
+# A device's identity also lives in the registry (its device_id field, or the key in control.yaml), the
+# control.db control-plane (policy/calibration/overlay/etc. key off device_id), and its control_secrets
+# entry. run_migration moves the DATA; rename_everywhere() adds these so a rename is complete.
+CONTROL_TABLES = ["automation_policy", "device_calibration", "control_log",
+                  "device_meta", "override", "cycle_state"]     # control.db tables keyed by device_id
+
+_DEVID_FIELD_RE = re.compile(
+    r'^(?P<pre>\s*device_id:\s*)(?P<q>["\']?)(?P<val>[^"\'#\s]+)(?P=q)(?P<post>\s*(?:#.*)?)$')
+
+
+def _registry_paths() -> list[Path]:
+    inst = REPO_ROOT / "instance"
+    paths = [inst / "devices.yaml", inst / "control.yaml"] + sorted(inst.glob("*-devices.yaml"))
+    return [p for p in paths if p.exists()]
+
+
+def _rename_key_line(body: str, old_id: str, new_id: str) -> str | None:
+    """If `body` is a mapping key line for `old_id` (`  old_id:` — e.g. a control.yaml entry, or a
+    control_secrets entry `old_id: <secret>`), return it rewritten to `new_id`; else None."""
+    m = re.match(rf'^(?P<ind>\s*)(?P<q>["\']?){re.escape(old_id)}(?P=q)(?P<rest>:(?:\s.*)?)$', body)
+    if not m:
+        return None
+    return f"{m.group('ind')}{m.group('q')}{new_id}{m.group('q')}{m.group('rest')}"
+
+
+def apply_registry_id(old_id: str, new_id: str, *, dry_run: bool) -> dict:
+    """Rewrite a device_id in the registries — as a `device_id:` field value (devices.yaml, *-devices.yaml)
+    and as an entry KEY (control.yaml). Quote/indent/comment preserving. Returns {file: lines_changed}."""
+    out: dict[str, int] = {}
+    for p in _registry_paths():
+        lines = p.read_text().splitlines(keepends=True)
+        changed = 0
+        for i, line in enumerate(lines):
+            body = line.rstrip("\n"); nl = line[len(body):]
+            mf = _DEVID_FIELD_RE.match(body)
+            if mf and mf.group("val") == old_id:
+                lines[i] = f"{mf.group('pre')}{mf.group('q')}{new_id}{mf.group('q')}{mf.group('post')}{nl}"
+                changed += 1
+                continue
+            rk = _rename_key_line(body, old_id, new_id)
+            if rk is not None:
+                lines[i] = rk + nl
+                changed += 1
+        if changed:
+            if not dry_run:
+                p.write_text("".join(lines))
+            out[p.name] = changed
+    return out
+
+
+def rename_secret(old_id: str, new_id: str, *, dry_run: bool,
+                  path: str = "instance/control_secrets.yaml") -> bool:
+    """Rename a device's key in control_secrets.yaml (the per-device HMAC secret), value preserved."""
+    p = REPO_ROOT / path
+    if not p.exists():
+        return False
+    lines = p.read_text().splitlines(keepends=True)
+    for i, line in enumerate(lines):
+        body = line.rstrip("\n"); nl = line[len(body):]
+        rk = _rename_key_line(body, old_id, new_id)
+        if rk is not None:
+            lines[i] = rk + nl
+            if not dry_run:
+                p.write_text("".join(lines))
+            return True
+    return False
+
+
+def rename_everywhere(old_id: str, new_id: str, *, control_db: str = "instance/db/control.db",
+                      do_registry: bool = True, do_control: bool = True, do_secret: bool = True,
+                      backup: bool = True, dry_run: bool = False, **kw) -> dict:
+    """Complete device_id rename: the DATA stores + peer (run_migration) PLUS the registry device_id, the
+    control.db control-plane rows, and the control_secrets entry. Returns the run_migration report extended
+    with control_db / registry_id / secret_renamed."""
+    cdb = str(REPO_ROOT / control_db) if not Path(control_db).is_absolute() else control_db
+    if backup and not dry_run:
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        bkdir = REPO_ROOT / "instance" / "db" / "backups"
+        bkdir.mkdir(parents=True, exist_ok=True)
+        for extra in ([cdb] if (do_control and Path(cdb).exists()) else []) + \
+                     ([str(p) for p in _registry_paths()] if do_registry else []) + \
+                     ([str(REPO_ROOT / "instance" / "control_secrets.yaml")]
+                      if (do_secret and (REPO_ROOT / "instance" / "control_secrets.yaml").exists()) else []):
+            shutil.copy2(extra, bkdir / f"{Path(extra).name}.{stamp}.bak")
+    rep = run_migration("rename", old_id, new_id, backup=backup, dry_run=dry_run, **kw)
+    if do_control:
+        rep["control_db"] = (apply_sqlite(cdb, CONTROL_TABLES, old_id, new_id, retire=False, dry_run=dry_run)
+                             if Path(cdb).exists() else {})
+    if do_registry:
+        rep["registry_id"] = apply_registry_id(old_id, new_id, dry_run=dry_run)
+    if do_secret:
+        rep["secret_renamed"] = rename_secret(old_id, new_id, dry_run=dry_run)
+    return rep
+
+
 def _main() -> int:
     import argparse
     import json
     p = argparse.ArgumentParser(description="Rename or retire a device across every store + the peer")
     sub = p.add_subparsers(dest="op", required=True)
-    pr = sub.add_parser("rename", help="rename a device_id everywhere")
+    pr = sub.add_parser("rename", help="rename a device_id everywhere (data + registry + control-plane)")
     pr.add_argument("old_id"); pr.add_argument("new_id")
     pt = sub.add_parser("retire", help="remove a device_id everywhere")
     pt.add_argument("old_id")
@@ -282,10 +383,16 @@ def _main() -> int:
         sp.add_argument("--dry-run", action="store_true")
         sp.add_argument("--no-peer", action="store_true", help="skip the .245 peer step")
         sp.add_argument("--no-mqtt", action="store_true", help="skip retained-topic/alerts cleanup")
+        sp.add_argument("--data-only", action="store_true",
+                        help="rename only the data stores (skip registry/control.db/secret)")
         sp.add_argument("--broker", default="localhost")
     a = p.parse_args()
-    rep = run_migration(a.op, a.old_id, getattr(a, "new_id", None), broker=a.broker,
-                        do_peer=not a.no_peer, do_mqtt=not a.no_mqtt, dry_run=a.dry_run)
+    if a.op == "rename" and not a.data_only:
+        rep = rename_everywhere(a.old_id, a.new_id, broker=a.broker,
+                                do_peer=not a.no_peer, do_mqtt=not a.no_mqtt, dry_run=a.dry_run)
+    else:
+        rep = run_migration(a.op, a.old_id, getattr(a, "new_id", None), broker=a.broker,
+                            do_peer=not a.no_peer, do_mqtt=not a.no_mqtt, dry_run=a.dry_run)
     print(json.dumps(rep, indent=2))
     return 0 if rep.get("clean") else 2
 
