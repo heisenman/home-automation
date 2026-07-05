@@ -345,7 +345,9 @@ static void sync_files_once(bool include_hotdb)
         snprintf(fpath, sizeof fpath, "%s/%s", dir, fn);
         snprintf(tmp,  sizeof tmp,  "%s.tmp", fpath);
         snprintf(furl, sizeof furl, "%s/api/v1/replica/file?kind=%s&name=%s", s_base, k->valuestring, nm->valuestring);
-        if (http_get_to_file(furl, tmp) && rename(tmp, fpath) == 0) {
+        // NB: FatFs f_rename won't overwrite an existing dest (returns FR_EXIST), so drop any prior
+        // copy first — but only AFTER a successful download, so a failed fetch keeps the old file.
+        if (http_get_to_file(furl, tmp) && (remove(fpath), rename(tmp, fpath) == 0)) {
             cJSON_DeleteItemFromObject(sha, key);
             cJSON_AddStringToObject(sha, key, sh->valuestring);
             fetched++;
