@@ -47,6 +47,7 @@
 #include "scene_dim.h"      // device-local scene->backlight policy (roadmap #2 pivot; feedback-cnc-local-settings)
 #include "ha_cmd.h"        // ADR-0010 signed-directive verify (HMAC + freshness + NVS anti-replay), roadmap #4
 #include "ha_gatt.h"       // roadmap #5: shared GATT-central SwitchBot history client (probe + full pull)
+#include "ha_audio.h"      // roadmap #6: shared audible-alert output (ES8311 codec + I2S TX + PA gate)
 #include "ha_replica.h"   // ADR-0022 Phase 1a: rung DB replica to SD
 #include "ha_sdcard.h"    // SD mount + hot-plug watcher (card-detect GPIO45)
 #include "ha_ble_scan.h"
@@ -67,7 +68,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v67-gatt-window"
+#define APP_BUILD_TAG "v68-audio"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -504,6 +505,17 @@ static const char *dispatch_signed_cmd(const cJSON *inner, esp_mqtt_client_handl
         const char *p = cJSON_IsString(prof) ? prof->valuestring : "outdoor";
         int w = cJSON_IsNumber(win) ? (int)win->valuedouble : 1024;
         return ha_gatt_history_pull(mac->valuestring, p, w) ? "gathist:started" : "gathist:busy-or-uncached";
+    } else if (strcmp(op->valuestring, "beep") == 0) {
+        // roadmap #6: audible test tone. {op:beep, freq?:Hz, ms?:dur, amp?:0-100} — omit for a chime.
+        if (!ha_audio_ready()) return "beep:no-audio";
+        const cJSON *f = cJSON_GetObjectItem(inner, "freq");
+        if (cJSON_IsNumber(f)) {
+            const cJSON *ms = cJSON_GetObjectItem(inner, "ms");
+            const cJSON *amp = cJSON_GetObjectItem(inner, "amp");
+            ha_audio_beep((int)f->valuedouble, cJSON_IsNumber(ms) ? (int)ms->valuedouble : 200,
+                          cJSON_IsNumber(amp) ? (int)amp->valuedouble : 70);
+        } else ha_audio_chime();
+        return "beep:ok";
     }
     return "unknown-op";
 }
@@ -1115,6 +1127,32 @@ static void on_time_synced(struct timeval *tv)
 
 // RTC + SNTP wall-clock backbone (ability G). Called from app_main after I2C1 + WiFi are up: seed the
 // system clock from the RTC's holdover immediately (so the clock is right before SNTP returns), then
+// roadmap #6: NS4150B power-amp enable seam — the D1001 wires EN_PA to PCA9535 expander pin 11
+// (BSP_POWER_AMP_EN = 1<<11; docs/hardware/reterminal-d1001.md), driven via the panel's existing expander.
+#define PANEL_PA_EXP_PIN 11
+static void panel_pa_enable(bool on, void *user)
+{
+    (void)user;
+    esp_io_expander_handle_t exp = bsp_io_expander();
+    if (!exp) return;
+    uint32_t mask = 1u << PANEL_PA_EXP_PIN;
+    esp_io_expander_set_dir(exp, mask, IO_EXPANDER_OUTPUT);
+    esp_io_expander_set_level(exp, mask, on ? 1 : 0);
+}
+
+// Bring up audible alerts (ES8311 -> NS4150B -> speaker). Runs after bsp_i2c1() + the io-expander are up.
+static void audio_start(void)
+{
+    esp_err_t e = ha_audio_init(&(ha_audio_cfg_t){
+        .i2c_bus = bsp_i2c1(), .codec_addr = 0x18,
+        .mclk_io = 33, .bclk_io = 32, .ws_io = 31, .dout_io = 30,   // D1001 DAC I2S (docs-first)
+        .sample_rate = 16000, .volume = 75,
+        .pa_enable = panel_pa_enable,
+    });
+    if (e == ESP_OK) ha_audio_chime();   // boot chime = audible proof the path is live
+    else ESP_LOGW(TAG, "audio init failed: %s", esp_err_to_name(e));
+}
+
 // start SNTP against the dictator; on_time_synced writes freshly-synced time back to the RTC.
 static void clock_backbone_start(void)
 {
@@ -1229,6 +1267,7 @@ void app_main(void)
     ha_battery_charge_start();                 // thermal-gated charger + restart watchdog
     ha_power_policy_monitor_start(&s_pp_cfg, &s_pp_io, 5000);   // battery safety monitor: warn @5-10%, hard-off @0%
     clock_backbone_start();                    // roadmap #1 (ability G): RTC holdover + SNTP wall clock
+    audio_start();                             // roadmap #6 (ability): audible alerts + boot chime
     xTaskCreate(presence_task, "presence", 3072, NULL, 3, NULL);   // roadmap #3 (ability A): IMU presence + tap-wake
     xTaskCreate(heartbeat_task, "hb", 4096, NULL, 3, NULL);
     xTaskCreate(button_task, "btn", 3072, NULL, 3, NULL);   // back-button screen toggle

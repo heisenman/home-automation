@@ -66,6 +66,15 @@ def build_inner(argv: list[str]) -> dict:
         if len(argv) >= 3:
             inner["val"] = int(argv[2])
         return inner
+    if op == "beep":                            # roadmap #6: audible test tone (omit args for the chime)
+        inner = {"op": "beep"}
+        if len(argv) >= 2:
+            inner["freq"] = int(argv[1])
+        if len(argv) >= 3:
+            inner["ms"] = int(argv[2])
+        if len(argv) >= 4:
+            inner["amp"] = int(argv[3])
+        return inner
     if op == "gattprobe":                       # roadmap #5 Spike 0: connect+discover a SwitchBot mac
         if len(argv) < 2:
             sys.exit("gattprobe needs a mac (AA:BB:CC:DD:EE:FF)")
@@ -80,7 +89,7 @@ def build_inner(argv: list[str]) -> dict:
         if len(argv) >= 4:
             inner["window"] = int(argv[3])
         return inner
-    sys.exit(f"unknown op '{op}' (ota|fs|gpio|exp|gattprobe|gathist)")
+    sys.exit(f"unknown op '{op}' (ota|fs|gpio|exp|gattprobe|gathist|beep)")
 
 
 def main() -> None:
