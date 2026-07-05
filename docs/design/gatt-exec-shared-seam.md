@@ -57,7 +57,11 @@ Today writes are a **compile-time capability**: a telemetry node's binary litera
   binary and gated by a runtime flag. A telemetry node could actuate if that bool were ever mis-set. **Not recommended.**
 
 Default in all three stays **OFF**, and no node sets it today, so whichever we pick, current behavior is unchanged.
-Recommendation: **(A)**. Decision is Hugh's (it's a security-posture call).
+
+**DECIDED (Hugh, 2026-07-05): option (A) Kconfig** — `CONFIG_HA_GATT_ALLOW_WRITE`, default `n`. The component gates
+the write path with `#if CONFIG_HA_GATT_ALLOW_WRITE`; an actuator build opts in via `CONFIG_HA_GATT_ALLOW_WRITE=y`
+in its `sdkconfig.defaults`. Preserves the compile-time least-privilege boundary (telemetry binaries contain no write
+path) and surfaces the capability in menuconfig.
 
 ## 5. Consumer changes — small and identical per board
 Only `main/ha_mqtt.c` on each of c3/c6/s3-eth (verified: `app_main` does not reference `gatt_exec`). Mirror the
@@ -75,23 +79,38 @@ Only `main/ha_mqtt.c` on each of c3/c6/s3-eth (verified: `app_main` does not ref
 **caller-side in `ha_mqtt.c`**, unchanged — two separate components keep separate `s_busy`, same as the two forks do
 today. A future cleanup could hoist a shared `ha_ble_central` lock, but that's out of scope here.
 
-## 6. Risk + validation — why this is FLASH-GATED
+## 6. Risk + validation — why this is OTA-GATED
 - **c6 (`coffice_c6`) and s3-eth (`s3-crawlspace`) are LIVE** and both run the GATT-central path (history pulls today,
   exec latent). A regression would break real meter history/actuation. Build-validation is necessary but **not
-  sufficient** — this needs a bench flash + a live round-trip before deploy.
+  sufficient** — this needs a live round-trip before deploy.
+- **Deploy path is a dev-signed OTA from 210, NOT a bench flash** (ops correction): c6/s3 are edge nodes; a bench
+  build lacks the edge secrets, so its image fails the signed-command/OTA identity gate (`bad-sig`). So dev signs +
+  OTAs from 210; ops co-runs the §6 acceptance test on the bus and stands rollback-ready.
 - **Acceptance test (per flashed board):** (a) image links `libha_gatt_exec.a`; (b) a signed `{"op":"history",...}`
   command still returns `meta`/`data`/`done` on `.../reply`; (c) a signed `{"op":"gatt","steps":[{"s":"sub"...},{"s":"read"...}]}`
   round-trips `open`/`step`/`notif`/`done`; (d) a `write` step on a telemetry build still returns the
   `write disabled: telemetry-only node` error (capability boundary intact).
 - c3 is **not deployed** → build-validate only (same as the c3 migration in `d46f8f9`).
 
-## 7. Suggested sequencing
-1. Hugh decides §4 (write-gate mechanism).
+## 7. Sequencing (agreed dev + ops)
+1. ✅ Hugh decides §4 → **(A) Kconfig**.
 2. dev builds the component + does the c3 wiring (safe, build-validated) and opens it for review.
-3. In a hardware window (ops + dev): flash c6 first, run the §6 acceptance test; then s3-crawlspace. Deploy gated on green.
+3. Window (dev signs+OTAs from 210, ops co-runs on the bus, ~30 min notice): OTA `coffice_c6` first, run the §6
+   acceptance test (a–d incl. the telemetry write-disabled boundary check), confirm green, then `s3-crawlspace`.
+   Deploy gated on green; ops rollback-ready.
 4. Fold the same seam pattern into the panel if/when it needs generic GATT exec (today it uses `ha_gatt` history only).
 
+## 9. Review + logistics (ops, 2026-07-05)
+Ops review of `@7f525f3`: **LGTM, ship it.**
+- Seam analysis confirmed right (publish_reply + log sinks; `ble_scan` already-shared include-swap correct).
+- **Radio arbitration stays caller-side in `ha_mqtt.c`** — ops explicitly agrees, do NOT hoist a shared `ble_central`
+  lock in this change.
+- Write-gate: ops concurs with **(A) Kconfig `=n`** — the only option keeping the capability boundary COMPILE-TIME.
+- Name: keep `ha_gatt_exec` separate from `ha_gatt` — agreed.
+- Deploy logistics: see §6 correction (dev-OTA-from-210, not bench). ops ready on ~30 min notice once §4 + the
+  c3-review land; no collision with panel work (D1001 = bench, separate).
+
 ## 8. Open questions
-- **§4 write-gate**: (A) Kconfig / (B) build-define / (C) runtime — Hugh's call. dev recommends (A).
+- **§4 write-gate**: ✅ **DECIDED — (A) Kconfig** (Hugh, 2026-07-05).
 - **Flash window**: when can we take a c6 + s3-crawlspace bench/flash slot? (ops to schedule.)
 - **Component name**: `ha_gatt_exec` ok, or prefer folding exec+history under one `ha_gatt` with two headers? dev leans separate.
