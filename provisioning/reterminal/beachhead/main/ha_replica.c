@@ -78,10 +78,16 @@ static bool http_get_to_file(const char *url, const char *path)
             FILE *f = fopen(path, "wb");
             if (f) {
                 static char buf[2048];   // task-private (single sync task) — keeps the stack small
-                int r; size_t total = 0; ok = true;
+                int r; size_t total = 0, since_yield = 0; ok = true;
                 while ((r = esp_http_client_read(cl, buf, sizeof buf)) > 0) {
                     if (fwrite(buf, 1, r, f) != (size_t)r) { ok = false; break; }
-                    total += r;
+                    total += r; since_yield += r;
+                    // Throttle: the SD+HTTP DMA otherwise saturates the PSRAM/AXI bus for the whole
+                    // pull, starving the MIPI-DSI framebuffer fetch (→ underrun/flicker) and stalling
+                    // taskLVGL's synchronous flush memcpy past the WDT window (→ wedge). Yielding a tick
+                    // every ~32 KB gives the display bus breathing room. Cost on a 93 MB pull ≈ +12 s
+                    // (a pull already takes minutes). See docs/design/d1001-display-psram-fix.md Part A.
+                    if (since_yield >= 32 * 1024) { vTaskDelay(pdMS_TO_TICKS(4)); since_yield = 0; }
                 }
                 if (r < 0) ok = false;   // transport error mid-stream
                 fclose(f);

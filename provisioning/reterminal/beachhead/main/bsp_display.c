@@ -198,14 +198,20 @@ static esp_err_t lvgl_init(void)
     lvgl_port_cfg_t pc = ESP_LVGL_PORT_INIT_CONFIG();
     ESP_RETURN_ON_ERROR(lvgl_port_init(&pc), TAG, "lvgl port");
 
+    // Draw buffer lives in INTERNAL SRAM (not PSRAM) and is PARTIAL (1/10 screen). This keeps LVGL's
+    // render off the PSRAM/AXI bus, so the synchronous flush memcpy (esp_lcd_panel_dpi.c CPU-copy path)
+    // reads from fast internal SRAM and only the small dirty-region writeback touches the PSRAM
+    // framebuffer — it can't stall for seconds under a replica pull (the wedge) and it cuts the DSI
+    // scanout contention (the flicker). ~1/10 screen = 800*128*2 = 200 KB internal. LVGL recommends
+    // >=1/10 in PARTIAL mode. See docs/design/d1001-display-psram-fix.md Part B.
     lvgl_port_display_cfg_t disp = {
         .io_handle = s_io, .panel_handle = s_panel,
-        .buffer_size = LCD_H_RES * LCD_V_RES,
+        .buffer_size = LCD_H_RES * (LCD_V_RES / 10),
         .double_buffer = false,
         .hres = LCD_H_RES, .vres = LCD_V_RES, .monochrome = false,
         .color_format = LV_COLOR_FORMAT_RGB565,
         .rotation = { .swap_xy = false, .mirror_x = false, .mirror_y = false },
-        .flags = { .buff_spiram = true, .buff_dma = false, .swap_bytes = false },
+        .flags = { .buff_spiram = false, .buff_dma = false, .swap_bytes = false },
     };
     lvgl_port_display_dsi_cfg_t dpi = { .flags = { .avoid_tearing = false } };
     s_disp = lvgl_port_add_disp_dsi(&disp, &dpi);
