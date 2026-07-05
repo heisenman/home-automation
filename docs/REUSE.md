@@ -14,6 +14,7 @@ The *other reusable surfaces* section is hand-maintained pointers to reuse that 
 | Module | Reuse when | Contract | Header |
 |---|---|---|---|
 | `fs_ops` | you must read or write a device's microSD live, no reflash (e.g. pull a log/CSV off the card) | beachhead cmd/fs | [firmware/components/fs_ops/include/fs_ops.h](../firmware/components/fs_ops/include/fs_ops.h) |
+| `ha_audio` | a board with an ES8311 codec → Class-D amp → speaker needs to emit local alert tones. | ADR-0020 | [firmware/components/ha_audio/include/ha_audio.h](../firmware/components/ha_audio/include/ha_audio.h) |
 | `ha_battery` | reading battery voltage/SoC/charge-state on a panel-class ESP node with no fuel-gauge IC | ADR-0020/0024 | [firmware/components/ha_battery/include/ha_battery.h](../firmware/components/ha_battery/include/ha_battery.h) |
 | `ha_battery_profile` | a device needs its battery curve/offsets/safety-floors as loadable, testable, deployable data (no reflash) | ADR-0024 | [firmware/components/ha_battery_profile/include/ha_battery_profile.h](../firmware/components/ha_battery_profile/include/ha_battery_profile.h) |
 | `ha_ble_scan` | an edge node needs to observe/relay BLE adverts (SwitchBot meters etc.) | ADR-0020 | [firmware/components/ha_ble_scan/include/ha_ble_scan.h](../firmware/components/ha_ble_scan/include/ha_ble_scan.h) |

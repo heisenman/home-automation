@@ -1,5 +1,5 @@
-// BREADCRUMB: firmware/components > ha_audio - shared audible-alert output (ES8311 codec + I2S TX + PA gate).
-// Contract: ADR-0020. Parent: firmware/AGENTS.md. Roadmap #6.
+// BREADCRUMB: firmware/components > ha_audio - shared audible-alert output (ES8311 codec + I2S TX + PA gate). Contract: ADR-0020. Parent: firmware/AGENTS.md.
+// Roadmap #6.
 // REUSE-WHEN: a board with an ES8311 codec → Class-D amp → speaker needs to emit local alert tones.
 //
 #pragma once
