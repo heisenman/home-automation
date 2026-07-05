@@ -22,6 +22,15 @@ instance/control.yaml         | critical | sync
 instance/control_secrets.yaml | critical | sync
 instance/midea-device.env     | critical | sync
 instance/mqtt.env             | optional | local
+# Area taxonomy + device rename/relocate authoring state (ADR-0026) and the house-geometry /
+# location-crosswalk source docs. SYNC 210 -> 245 so a promoted standby renders rooms + resolves
+# device->area identically (mount-210-data / house-geo-backup-sync). optional = these are ingest/
+# render inputs; control + actuation are unaffected if absent on the standby.
+instance/areas.yaml           | optional | sync
+instance/area-migration.yaml  | optional | sync
+instance/device-rename.yaml   | optional | sync
+instance/house-geometry.html  | optional | sync
+instance/location-crosswalk.html | optional | sync
 # R9 (ADR-0017) HTTPS + web-push. SYNC (not local) on purpose: same cert + VAPID key on both boxes means
 # a failover keeps the SAME self-signed cert (the browser's one-time trust survives) AND — decisive — the
 # SAME VAPID key, because a push subscription is bound to the server key; a different key on the promoted
