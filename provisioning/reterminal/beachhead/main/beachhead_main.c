@@ -45,6 +45,7 @@
 #include "ui/ui_scenes.h"   // scene on-change hook (device-side per-scene dimming, roadmap #2 pivot)
 #include "ui/ui_sleep.h"    // Sleep-mode faint screen + centered "Wake" affordance (roadmap #2 pivot)
 #include "scene_dim.h"      // device-local scene->backlight policy (roadmap #2 pivot; feedback-cnc-local-settings)
+#include "ha_cmd.h"        // ADR-0010 signed-directive verify (HMAC + freshness + NVS anti-replay), roadmap #4
 #include "ha_replica.h"   // ADR-0022 Phase 1a: rung DB replica to SD
 #include "ha_sdcard.h"    // SD mount + hot-plug watcher (card-detect GPIO45)
 #include "ha_ble_scan.h"
@@ -65,7 +66,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v63-unlocked"
+#define APP_BUILD_TAG "v64-signed-cmd"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -108,6 +109,7 @@ static const char *TAG = "beachhead";
 #define T_PROF   "d1001-beachhead/profile"         // <- active battery profile (provenance+offsets+lut+source), retained
 #define T_SDIMC  "d1001-beachhead/cmd/scene-brightness" // -> JSON {"Home":N,...} (persist to NVS) | "get" | "default": device-local per-scene backlight (roadmap #2 pivot)
 #define T_SDIM   "d1001-beachhead/scene-brightness" // <- retained {"source","table":{...}}: active per-scene backlight policy
+#define T_CMD    "d1001-beachhead/cmd"              // -> SIGNED {p,s} authority directive (ADR-0010): inner {op:ota|fs|gpio|exp,...}; verified before it acts (roadmap #4)
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
@@ -408,6 +410,63 @@ static void ota_task(void *pv)
     vTaskDelete(NULL);
 }
 
+// Dispatch a VERIFIED signed authority directive (ADR-0010, roadmap #4). The {p,s} envelope has already
+// passed ha_cmd_verify (HMAC + freshness + anti-replay) upstream; here we act on the inner op. Only the
+// high-authority ops the conformance review flagged are exposed on the signed channel — ota (arbitrary
+// flash), fs (SD file ops), gpio, exp (drive P4 GPIO / PCA9535 pins). Device-local benign knobs stay on
+// their raw cmd/* topics. Mirrors the edge node's dispatch_cmd. Returns a short outcome string for the ack.
+static const char *dispatch_signed_cmd(const cJSON *inner, esp_mqtt_client_handle_t client)
+{
+    const cJSON *op = cJSON_GetObjectItem(inner, "op");
+    if (!cJSON_IsString(op)) return "no-op";
+    if (strcmp(op->valuestring, "ota") == 0) {
+        const cJSON *url = cJSON_GetObjectItem(inner, "url");
+        // NOTE (follow-up): "sha256" is accepted in the envelope for forward-compat but not yet verified
+        // against the downloaded image (needs the manual esp_ota chunk-hash path). Signature already gates
+        // WHO may trigger an OTA — the primary hole. Image-hash verify is the next hardening step.
+        if (!cJSON_IsString(url)) return "ota:no-url";
+        char *u = strdup(url->valuestring);
+        if (u) xTaskCreate(ota_task, "ota", 8192, u, 5, NULL);
+        return "ota:started";
+    } else if (strcmp(op->valuestring, "fs") == 0) {
+        char *j = cJSON_PrintUnformatted(inner);   // fs_ops parses cmd/path/…; ignores op/ts/seq
+        if (j) { fs_ops_submit(j); cJSON_free(j); }
+        return "fs:submitted";
+    } else if (strcmp(op->valuestring, "gpio") == 0) {
+        const cJSON *jp = cJSON_GetObjectItem(inner, "pin");
+        const cJSON *jv = cJSON_GetObjectItem(inner, "val");
+        int pin = cJSON_IsNumber(jp) ? (int)jp->valuedouble : -1;
+        int val = cJSON_IsNumber(jv) ? (int)jv->valuedouble : -1;
+        if (pin < 0) return "gpio:no-pin";
+        char out[64];
+        if (val == 0 || val == 1) {
+            gpio_set_direction(pin, GPIO_MODE_OUTPUT); gpio_set_level(pin, val);
+            snprintf(out, sizeof(out), "{\"gpio\":%d,\"set\":%d}", pin, val);
+        } else snprintf(out, sizeof(out), "{\"gpio\":%d,\"level\":%d}", pin, gpio_get_level(pin));
+        if (client) esp_mqtt_client_publish(client, T_PIN, out, 0, 0, 0);
+        return "gpio:ok";
+    } else if (strcmp(op->valuestring, "exp") == 0) {
+        esp_io_expander_handle_t exp = bsp_io_expander();
+        const cJSON *jp = cJSON_GetObjectItem(inner, "pin");
+        const cJSON *jv = cJSON_GetObjectItem(inner, "val");
+        int pin = cJSON_IsNumber(jp) ? (int)jp->valuedouble : -1;
+        int val = cJSON_IsNumber(jv) ? (int)jv->valuedouble : -1;
+        if (!exp || pin < 0 || pin >= 16) return "exp:bad-pin";
+        uint32_t mask = 1u << pin; char out[64];
+        if (val == 0 || val == 1) {
+            esp_io_expander_set_dir(exp, mask, IO_EXPANDER_OUTPUT);
+            esp_io_expander_set_level(exp, mask, val);
+            snprintf(out, sizeof(out), "{\"exp\":%d,\"set\":%d}", pin, val);
+        } else {
+            uint32_t lv = 0; esp_io_expander_get_level(exp, mask, &lv);
+            snprintf(out, sizeof(out), "{\"exp\":%d,\"level\":%d}", pin, (lv & mask) ? 1 : 0);
+        }
+        if (client) esp_mqtt_client_publish(client, T_PIN, out, 0, 0, 0);
+        return "exp:ok";
+    }
+    return "unknown-op";
+}
+
 // --- Battery safety policy (ADR-0024): shutdown / warn / boot-gate. Decisions live in the shared
 // ha_power_policy component; these are the D1001 actuators injected into it. ---
 #define BSP_LED_R  GPIO_NUM_22           // red status LED, active-low (Seeed direct P4 GPIO)
@@ -476,9 +535,26 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
         }
         ESP_LOGW(TAG, "MQTT DATA topic=%.*s payload=%.*s", tl, e->topic, dl, e->data);
         esp_mqtt_client_publish(e->client, T_ACK, e->topic, tl, 0, 0);
-        if (tl == (int)strlen(T_OTA) && strncmp(e->topic, T_OTA, tl) == 0) {
-            char *url = strndup(e->data, dl);
-            if (url) xTaskCreate(ota_task, "ota", 8192, url, 5, NULL);
+        if (tl == (int)strlen(T_CMD) && strncmp(e->topic, T_CMD, tl) == 0) {
+            // Signed authority directive (ADR-0010, roadmap #4): verify {p,s} HMAC + freshness + anti-replay,
+            // then act on the inner op (ota/fs/gpio/exp). The single verified channel for the dangerous surface.
+            cJSON *inner = NULL;
+            ha_cmd_result_t r = ha_cmd_verify(e->data, dl, HA_CMD_SECRET, &inner);
+            char ack[80];
+            if (r == HA_CMD_OK) {
+                const char *outcome = dispatch_signed_cmd(inner, e->client);
+                snprintf(ack, sizeof(ack), "{\"cmd\":\"%s\"}", outcome);
+                cJSON_Delete(inner);
+            } else {
+                ESP_LOGW(TAG, "signed cmd REJECTED: %s", ha_cmd_result_str(r));
+                snprintf(ack, sizeof(ack), "{\"cmd\":\"rejected\",\"why\":\"%s\"}", ha_cmd_result_str(r));
+            }
+            esp_mqtt_client_publish(e->client, T_ACK, ack, 0, 0, 0);
+        } else if (tl == (int)strlen(T_OTA) && strncmp(e->topic, T_OTA, tl) == 0) {
+            // GATED (ADR-0010, roadmap #4): raw unsigned OTA is refused — arbitrary-URL flash was the review's
+            // headline hole. Use the signed channel: T_CMD with inner {"op":"ota","url":...}.
+            ESP_LOGW(TAG, "cmd/ota REFUSED: unsigned (use signed cmd op:ota)");
+            esp_mqtt_client_publish(e->client, T_ACK, "{\"ota\":\"refused\",\"why\":\"unsigned; use signed cmd\"}", 0, 0, 0);
         } else if (tl == (int)strlen(T_PING) && strncmp(e->topic, T_PING, tl) == 0) {
             publish_status();
         } else if (tl == (int)strlen(T_DISPC) && strncmp(e->topic, T_DISPC, tl) == 0) {
@@ -525,32 +601,13 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
                 publish_screen_state();
             }
         } else if (tl == (int)strlen(T_GPIOC) && strncmp(e->topic, T_GPIOC, tl) == 0) {
-            char b[24]; int nb = dl < 23 ? dl : 23; memcpy(b, e->data, nb); b[nb] = 0;
-            int pin = -1, val = -1; sscanf(b, "%d %d", &pin, &val);   // "N" read | "N 0|1" write
-            if (pin >= 0) {
-                char out[64];
-                if (val == 0 || val == 1) {
-                    gpio_set_direction(pin, GPIO_MODE_OUTPUT); gpio_set_level(pin, val);
-                    snprintf(out, sizeof(out), "{\"gpio\":%d,\"set\":%d}", pin, val);
-                } else snprintf(out, sizeof(out), "{\"gpio\":%d,\"level\":%d}", pin, gpio_get_level(pin));
-                esp_mqtt_client_publish(e->client, T_PIN, out, 0, 0, 0);
-            }
+            // GATED (ADR-0010, roadmap #4): driving raw P4 GPIO is authority — signed channel only (T_CMD op:gpio).
+            ESP_LOGW(TAG, "cmd/gpio REFUSED: unsigned (use signed cmd op:gpio)");
+            esp_mqtt_client_publish(e->client, T_ACK, "{\"gpio\":\"refused\",\"why\":\"unsigned; use signed cmd\"}", 0, 0, 0);
         } else if (tl == (int)strlen(T_EXPC) && strncmp(e->topic, T_EXPC, tl) == 0) {
-            esp_io_expander_handle_t exp = bsp_io_expander();
-            char b[24]; int nb = dl < 23 ? dl : 23; memcpy(b, e->data, nb); b[nb] = 0;
-            int pin = -1, val = -1; sscanf(b, "%d %d", &pin, &val);   // "N" read | "N 0|1" write (PCA9535 bit)
-            if (exp && pin >= 0 && pin < 16) {
-                uint32_t mask = 1u << pin; char out[64];
-                if (val == 0 || val == 1) {
-                    esp_io_expander_set_dir(exp, mask, IO_EXPANDER_OUTPUT);
-                    esp_io_expander_set_level(exp, mask, val);
-                    snprintf(out, sizeof(out), "{\"exp\":%d,\"set\":%d}", pin, val);
-                } else {
-                    uint32_t lv = 0; esp_io_expander_get_level(exp, mask, &lv);
-                    snprintf(out, sizeof(out), "{\"exp\":%d,\"level\":%d}", pin, (lv & mask) ? 1 : 0);
-                }
-                esp_mqtt_client_publish(e->client, T_PIN, out, 0, 0, 0);
-            }
+            // GATED (ADR-0010, roadmap #4): driving PCA9535 pins is authority — signed channel only (T_CMD op:exp).
+            ESP_LOGW(TAG, "cmd/exp REFUSED: unsigned (use signed cmd op:exp)");
+            esp_mqtt_client_publish(e->client, T_ACK, "{\"exp\":\"refused\",\"why\":\"unsigned; use signed cmd\"}", 0, 0, 0);
         } else if (tl == (int)strlen(T_CHGC) && strncmp(e->topic, T_CHGC, tl) == 0) {
             char b[24]; int nb = dl < 23 ? dl : 23; memcpy(b, e->data, nb); b[nb] = 0;
             if      (!strncmp(b, "auto", 4)) ha_battery_charge_mode(HA_CHG_AUTO);
@@ -588,8 +645,9 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
             char *j = strndup(e->data, dl);   // JSON table / "get" / "default" — apply task frees it (NVS write off this stack)
             if (j) xTaskCreate(scene_dim_apply_task, "sdimapply", 4096, j, 4, NULL);
         } else if (tl == (int)strlen(T_FSC) && strncmp(e->topic, T_FSC, tl) == 0) {
-            char *j = strndup(e->data, dl);
-            if (j) { fs_ops_submit(j); free(j); }   // SD file op; worker copies + runs off this stack
+            // GATED (ADR-0010, roadmap #4): SD file ops are authority — signed channel only (T_CMD op:fs).
+            ESP_LOGW(TAG, "cmd/fs REFUSED: unsigned (use signed cmd op:fs)");
+            esp_mqtt_client_publish(e->client, T_ACK, "{\"fs\":\"refused\",\"why\":\"unsigned; use signed cmd\"}", 0, 0, 0);
         } else if (tl == (int)strlen(T_DEBUG) && strncmp(e->topic, T_DEBUG, tl) == 0) {
             s_debug = (dl >= 1 && (e->data[0] == '1' || e->data[0] == 'o' || e->data[0] == 'O' ||
                                    e->data[0] == 't' || e->data[0] == 'T'));   // on/1/true
