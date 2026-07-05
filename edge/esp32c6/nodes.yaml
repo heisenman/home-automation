@@ -1,0 +1,33 @@
+# Per-node build/flash manifest for the ESP32-C6 edge fleet (ADR-0020 / ADR-0026).
+#
+# SOURCE OF TRUTH for node identity + board wiring. A firmware image is branded for exactly one
+# node_id (secrets.h) and one gas chip (sensor); this file is what enroll_node/node_bringup and the
+# OTA/flash identity gate check so an image built for one node can never land on another.
+# (Born from the 2026-07-05 incident: a coffice_c6+SGP40 image was OTA'd onto cbed_c6.)
+#
+# node_id -> :
+#   mac       chip eFuse BASE MAC (`esptool.py read_mac`) — the physical-device binding for the flash gate
+#   target    idf target (esp32c6)
+#   sensor    gas chip: sgp30 (eCO2 + TVOC) | sgp40 (VOC index) — compile-time select (HA_GAS_SGP30)
+#   area      room / area id (cross-checks instance/devices.yaml)
+#   broker    MQTT broker URI baked into secrets.h (Wi-Fi segment can't ARP the VIP -> box IP .210)
+#   ota_host  HTTP host the node pins for OTA pulls (must equal serve-ip)
+#
+# Materialize a node's firmware with zero hand-editing:
+#   python3 tools/enroll_node.py --node-id cbed_c6 --from-manifest --reuse --out edge/esp32c6/main/secrets.h
+nodes:
+  cbed_c6:
+    mac: "A0:F2:62:85:B4:14"
+    target: esp32c6
+    sensor: sgp30            # Sensirion SGP30 — eCO2 + TVOC — C bedroom
+    area: c_bed
+    broker: "mqtt://192.168.0.210:1883"
+    ota_host: "192.168.0.210"
+
+  coffice_c6:
+    mac: "58:E6:C5:1A:E6:BC"
+    target: esp32c6
+    sensor: sgp40            # Sensirion SGP40 — VOC index — C office
+    area: c_office
+    broker: "mqtt://192.168.0.210:1883"
+    ota_host: "192.168.0.210"

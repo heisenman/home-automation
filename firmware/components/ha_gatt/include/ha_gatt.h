@@ -1,8 +1,6 @@
-// BREADCRUMB: firmware/components > ha_gatt - shared GATT-central SwitchBot on-device-history client
-// (connect + reverse-engineered handshake/paging + RAW-notification relay). Contract: ADR-0020. Parent:
-// firmware/AGENTS.md. Promoted from edge/esp32c6/main/gatt_history.c (roadmap #5).
-// REUSE-WHEN: any NimBLE-host node (edge c3/c6/s3 native controller, OR the D1001 panel over the
-// esp_hosted HCI) needs to CONNECT to a SwitchBot meter and pull its on-device history log.
+// BREADCRUMB: firmware/components > ha_gatt - shared GATT-central SwitchBot on-device-history client (connect + reverse-engineered handshake/paging + RAW-notification relay). Contract: ADR-0020. Parent: firmware/AGENTS.md.
+// Promoted from edge/esp32c6/main/gatt_history.c (roadmap #5).
+// REUSE-WHEN: any NimBLE-host node (edge c3/c6/s3 native controller, OR the D1001 panel over the esp_hosted HCI) needs to CONNECT to a SwitchBot meter and pull its on-device history log.
 //
 #pragma once
 #include <stdbool.h>

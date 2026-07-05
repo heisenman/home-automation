@@ -1,3 +1,6 @@
+// BREADCRUMB: firmware/components > ha_cmd - shared signed-directive verifier (HMAC-SHA256 {p,s} envelope + freshness window + monotonic (ts,seq) anti-replay persisted in NVS). Contract: ADR-0010. Parent: firmware/AGENTS.md.
+// REUSE-WHEN: any device that ACTS on an authority directive (edge nodes, the D1001 panel) must verify the signed {p,s} envelope before acting, instead of reinventing the scheme.
+//
 // ha_cmd — signed-directive verification (ADR-0010), shared firmware component.
 //
 // Ports the PROVEN edge-node verifier (edge/esp32c6/main/ha_mqtt.c, live in v11-nonce) into a reusable

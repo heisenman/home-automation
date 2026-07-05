@@ -7,6 +7,7 @@
 #include "esp_system.h"
 #include "esp_ota_ops.h"
 #include "esp_https_ota.h"
+#include "esp_app_desc.h"       // esp_app_desc_t — the incoming image's identity (OTA node-id gate)
 #include "esp_http_client.h"
 #include "esp_partition.h"
 #include "mbedtls/sha256.h"
@@ -22,6 +23,9 @@
 // applies on top; this just bounds WHERE images may come from.
 #ifndef HA_OTA_HOST
 #define HA_OTA_HOST "192.168.0.245"
+#endif
+#ifndef HA_NODE_ID
+#define HA_NODE_ID "unknown"       // bench build w/o secrets.h — identity gate below will refuse OTAs
 #endif
 
 static const char *TAG = "ha_ota";
@@ -101,6 +105,21 @@ static void ota_task(void *arg) {
     esp_https_ota_handle_t h = NULL;
     esp_err_t err = esp_https_ota_begin(&cfg, &h);
     if (err != ESP_OK || !h) { ha_mqtt_log("OTA begin failed: %s", esp_err_to_name(err)); goto fail_noh; }
+
+    // Identity gate (ADR-0020): the image's app version is built as "<node_id>@<ver>" (PROJECT_VER via
+    // version.txt). Refuse an image branded for a DIFFERENT node BEFORE writing/booting it, so a
+    // cross-provisioned push (cf. 2026-07-05 cbed_c6<-coffice_c6) can never come up wearing this node's
+    // slot. Runs before download completes — the descriptor is in the header read by esp_https_ota_begin.
+    esp_app_desc_t img_desc;
+    if (esp_https_ota_get_img_desc(h, &img_desc) != ESP_OK) {
+        ha_mqtt_log("OTA REJECTED: no image descriptor"); goto fail;
+    }
+    if (strncmp(img_desc.version, HA_NODE_ID "@", strlen(HA_NODE_ID) + 1) != 0) {
+        ha_mqtt_log("OTA REJECTED: image built for another node (version='%s', this node=%s)",
+                    img_desc.version, HA_NODE_ID);
+        goto fail;
+    }
+    ha_mqtt_log("OTA identity OK: image is for %s (version=%s)", HA_NODE_ID, img_desc.version);
 
     do { err = esp_https_ota_perform(h); } while (err == ESP_ERR_HTTPS_OTA_IN_PROGRESS);
     if (err != ESP_OK || !esp_https_ota_is_complete_data_received(h)) {

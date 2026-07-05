@@ -38,6 +38,9 @@ REPO = Path(__file__).resolve().parents[1]
 VENV_PY = REPO / "venv" / "bin" / "python3"
 DEFAULT_EXPORT = Path.home() / "esp" / "esp-idf" / "export.sh"
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))   # tools/ — for edge_nodes
+import edge_nodes as EN  # noqa: E402
+
 
 def c(s, color):  # tiny ANSI helper (no dependency)
     return f"\033[{color}m{s}\033[0m" if sys.stdout.isatty() else s
@@ -105,6 +108,10 @@ def stage_build(a):
     if not (a.board_dir / "sdkconfig").exists() or a.set_target:
         gate(idf(a.board_dir, "set-target", a.target, export=a.export).returncode == 0,
              "set-target", a.target)
+    # Reconfigure so a freshly-emitted version.txt (PROJECT_VER = "<node>@<fw>") lands in app_desc.version.
+    # IDF only re-reads version.txt at configure time; without this an incremental build ships an UNBRANDED
+    # image, which the node-side OTA identity gate then (correctly) rejects. (ADR-0020)
+    gate(idf(a.board_dir, "reconfigure", export=a.export).returncode == 0, "reconfigure (brand version.txt)")
     gate(idf(a.board_dir, "build", export=a.export).returncode == 0, "idf.py build")
     bins = list((a.board_dir / "build").glob("*.bin"))
     app = next((b for b in bins if b.name not in ("bootloader.bin", "partition-table.bin",
@@ -114,8 +121,26 @@ def stage_build(a):
 
 
 # ── Stage 3: flash ─────────────────────────────────────────────────────────────────────────────────
+def read_chip_mac(port, export):
+    """The chip's eFuse BASE MAC via esptool (the physical-device identity)."""
+    r = run(["bash", "-lc", f". {export} >/dev/null 2>&1 && esptool.py -p {port} read_mac"],
+            capture_output=True, text=True)
+    m = re.search(r"BASE MAC:\s*([0-9A-Fa-f:]{17})", r.stdout or "")
+    return m.group(1).upper() if m else None
+
+
 def stage_flash(a):
     print(c("\n[3/5] FLASH", "1;36"))
+    # Identity gate (ADR-0020): flash only the intended PHYSICAL chip. The manifest binds node_id->MAC;
+    # refuse a look-alike so we can't reflash the wrong device (sibling of the OTA node-id gate).
+    expected = (EN.load().get(a.node_id, {}).get("mac") or a.mac or "").upper()
+    if expected:
+        actual = read_chip_mac(a.port, a.export)
+        gate(actual is not None, "read chip eFuse MAC", a.port)
+        gate(actual == expected, "chip MAC matches target node", f"{actual} == {expected} ({a.node_id})")
+    else:
+        print(c(f"  [WARN] no expected MAC for {a.node_id} (not in manifest, no --mac) — identity gate "
+                f"skipped", "33"))
     gate(idf(a.board_dir, "-p", a.port, "flash", export=a.export).returncode == 0,
          "idf.py flash", a.port)
 
