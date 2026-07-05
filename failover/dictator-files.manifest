@@ -31,6 +31,10 @@ instance/area-migration.yaml  | optional | sync
 instance/device-rename.yaml   | optional | sync
 instance/house-geometry.html  | optional | sync
 instance/location-crosswalk.html | optional | sync
+# ADR-0026 Phase-3 room-graph inputs for /api/v1/rooms (D1001 house-map + PWA). SYNC so a promoted
+# standby serves the same rooms (geometry + per-device placement) — else the panel map degrades on failover.
+instance/house-geometry.json  | optional | sync
+instance/device-placement.yaml | optional | sync
 # R9 (ADR-0017) HTTPS + web-push. SYNC (not local) on purpose: same cert + VAPID key on both boxes means
 # a failover keeps the SAME self-signed cert (the browser's one-time trust survives) AND — decisive — the
 # SAME VAPID key, because a push subscription is bound to the server key; a different key on the promoted
