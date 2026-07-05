@@ -1,7 +1,7 @@
 # NB: once main declares any REQUIRES, it loses the implicit "depends on every
 # component" behaviour — so we must enumerate all of them. `bt` (NimBLE) + esp_hosted
 # are the Spike-0 additions; the rest restore what main saw implicitly before.
-idf_component_register(SRCS "beachhead_main.c" "bsp_display.c" "scene_dim.c" "ui_tiles.c" "ui/ui_format.c" "ui/ui_http.c" "ui/ui_chart.c" "ui/ui_grid.c" "ui/ui_expand.c" "ui/ui_admin.c" "ui/ui_scenes.c" "ui/ui_controls.c" "ui/ui_power.c" "ui/ui_clock.c" "lv_mem_psram.c" "ha_replica.c" "bat_profile.c"
+idf_component_register(SRCS "beachhead_main.c" "bsp_display.c" "scene_dim.c" "ui_tiles.c" "ui/ui_format.c" "ui/ui_http.c" "ui/ui_chart.c" "ui/ui_grid.c" "ui/ui_expand.c" "ui/ui_admin.c" "ui/ui_scenes.c" "ui/ui_sleep.c" "ui/ui_controls.c" "ui/ui_power.c" "ui/ui_clock.c" "lv_mem_psram.c" "ha_replica.c" "bat_profile.c"
                        INCLUDE_DIRS "."
                        REQUIRES nvs_flash esp_wifi esp_event esp_netif esp_timer mqtt
                                 app_update esp_https_ota esp_http_client driver esp_lcd

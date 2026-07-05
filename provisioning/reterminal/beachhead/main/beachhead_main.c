@@ -43,6 +43,7 @@
 #include "fs_ops.h"
 #include "ui_tiles.h"
 #include "ui/ui_scenes.h"   // scene on-change hook (device-side per-scene dimming, roadmap #2 pivot)
+#include "ui/ui_sleep.h"    // Sleep-mode faint screen + centered "Wake" affordance (roadmap #2 pivot)
 #include "scene_dim.h"      // device-local scene->backlight policy (roadmap #2 pivot; feedback-cnc-local-settings)
 #include "ha_replica.h"   // ADR-0022 Phase 1a: rung DB replica to SD
 #include "ha_sdcard.h"    // SD mount + hot-plug watcher (card-detect GPIO45)
@@ -64,7 +65,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v61-scene-dim"
+#define APP_BUILD_TAG "v62-sleep-wake"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -123,6 +124,7 @@ static void publish_screen_state(void);     // retained /state/screen mirror of 
 static void screen_set_level(int n);        // apply a backlight setpoint (0=sleep, N>0=wake+level); shared by cmd/brightness + scene-dim
 static void publish_scene_dim(void);        // retained /scene-brightness status of the active per-scene policy
 static void on_scene_change(const char *scene);   // ui_scenes hook -> device-local scene->backlight (roadmap #2 pivot)
+static void panel_local_wake(void);               // Sleep "Wake" tap -> device-local brighten to Home level
 static char s_profile_source[12] = "default";   // how the active curve was set: "nvs" | "default" | "pushed"
 static volatile bool s_batt_ready = false;       // ha_battery_init done — safe to publish /profile
 static volatile bool s_debug = false;         // <-- diagnostic firehose, default OFF
@@ -295,9 +297,27 @@ static void publish_scene_dim(void)
 static void on_scene_change(const char *scene)
 {
     int pct = scene_dim_lookup(scene);
-    if (pct < 0) { ESP_LOGI(TAG, "scene '%s' not in dim table -> leave brightness", scene); return; }
-    ESP_LOGI(TAG, "scene '%s' -> backlight %d%% (device-local)", scene, pct);
-    screen_set_level(pct);
+    if (pct >= 0) {
+        ESP_LOGI(TAG, "scene '%s' -> backlight %d%% (device-local)", scene, pct);
+        screen_set_level(pct);
+    } else {
+        ESP_LOGI(TAG, "scene '%s' not in dim table -> leave brightness", scene);
+    }
+    // Sleep mode: the faint screen + the on-screen "Wake" affordance. Any other scene clears it.
+    if (strcmp(scene, "Sleep") == 0) ui_sleep_show();
+    else ui_sleep_hide();
+    publish_screen_state();
+}
+
+// Sleep "Wake" tap (device-LOCAL): brighten THIS panel back to the Home level + return to the dashboard.
+// Does NOT change the house scene (admin-gated, and a passer-by should just light the panel, not wake the
+// whole house). The overlay is already hidden by ui_sleep before this runs. House stays in Sleep until an
+// explicit scene change re-fires on_scene_change.
+static void panel_local_wake(void)
+{
+    int home = scene_dim_lookup("Home");
+    ESP_LOGI(TAG, "sleep wake tap -> local backlight %d%% (house scene unchanged)", home >= 0 ? home : 100);
+    screen_set_level(home >= 0 ? home : 100);
     publish_screen_state();
 }
 
@@ -322,9 +342,11 @@ static void display_task(void *pv)
     if (err == ESP_OK) {
         snprintf(m, sizeof(m), "{\"display\":\"online\",\"panel\":\"jd9365\",\"res\":\"800x1280\",\"build\":\"%s\"}", APP_BUILD_TAG);
         ESP_LOGW(TAG, ">>> DISPLAY ONLINE <<<");
-        // Device-local per-scene dimming (roadmap #2 pivot): wire the scene->backlight policy to the
-        // scene-selector's on-change hook BEFORE the tile fetch loop starts, so the panel adopts the
-        // active scene's brightness on the very first /api/v1/house fetch (see on_scene_change).
+        // Device-local per-scene dimming (roadmap #2 pivot): create the Sleep overlay + wire the
+        // scene->backlight policy and the Wake tap BEFORE the tile fetch loop starts, so the panel
+        // adopts the active scene's brightness (and Sleep overlay) on the very first /api/v1/house fetch.
+        ui_sleep_init();
+        ui_sleep_set_on_wake(panel_local_wake);
         ui_scenes_set_on_change(on_scene_change);
         ui_tiles_start(BFF_BASE_URL "/api/v1/sensors");   // server-backed tiles from the BFF
         ha_replica_start(BFF_BASE_URL);                   // ADR-0022 Phase 1a: mirror the rung DB to SD

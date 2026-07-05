@@ -21,8 +21,10 @@ static char s_source[12] = "default";   // "default" | "nvs" | "pushed"
 // The baked-in default policy: lit at Home, dimmed when Away, dark when asleep.
 static void load_default(void)
 {
+    // Sleep is a FAINT level, not 0: the screen stays alive enough to show the on-screen "Wake" button
+    // (ui_sleep). True screen-off is the physical back button. Home/Away are the lit/dimmed daytime levels.
     static const scene_ent_t def[] = {
-        { "Home", 100 }, { "Away", 40 }, { "Sleep", 0 },
+        { "Home", 100 }, { "Away", 40 }, { "Sleep", 5 },
     };
     s_n = sizeof(def) / sizeof(def[0]);
     memcpy(s_tab, def, sizeof(def));
