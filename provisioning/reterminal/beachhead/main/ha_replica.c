@@ -253,6 +253,11 @@ static void sync_once(void)
 // GATED on is_source_of_record so a demoted standby can't poison the backup. Lower cadence than the rung
 // lane (config/parquet/hot.db move slowly). Reuses http_get / http_get_to_file.
 #define FILES_POLL_EVERY 6                  // run every 6th cycle (~hourly at POLL_MS=10min)
+#define HOTDB_EVERY      6                  // hot.db sub-cadence: pull it only every 6th files run (~4x/day).
+                                            // hot.db is 48 MB and its sha changes every cycle, so fetching it
+                                            // hourly is ~1 GB/day of needless traffic for a cold backup whose
+                                            // freshness has low value (the contract wanted "a few times/day").
+                                            // config + parquet still sync every files run (cheap / immutable).
 #define REPLICA_DIR      "replica"
 #define PROV_NAME        "PROVENANCE.json"
 #define SD_FREE_FLOOR_MB 64                 // don't fetch a new artifact below this free-space floor (logged)
@@ -272,7 +277,9 @@ static long sd_free_mb(const char *mp)
     return (long)(freeb >> 20);
 }
 
-static void sync_files_once(void)
+// include_hotdb=false skips the big 48 MB hot.db this run (config+parquet still sync). Scheduled runs pass
+// true only every HOTDB_EVERY-th files cycle; the manual cmd/replica trigger always passes true (full pull).
+static void sync_files_once(bool include_hotdb)
 {
     if (!ha_sdcard_mounted()) return;
     const char *mp = ha_sdcard_mount_point();
@@ -319,6 +326,7 @@ static void sync_files_once(void)
         const cJSON *nm = cJSON_GetObjectItem(a, "name");
         const cJSON *sh = cJSON_GetObjectItem(a, "sha256");
         if (!cJSON_IsString(k) || !cJSON_IsString(nm) || !cJSON_IsString(sh)) continue;
+        if (!include_hotdb && strcmp(k->valuestring, "hotdb") == 0) continue;   // sub-cadence: skip hot.db this run
         char key[256]; snprintf(key, sizeof key, "%s/%s", k->valuestring, nm->valuestring);
         const cJSON *have = cJSON_GetObjectItem(sha, key);
         if (cJSON_IsString(have) && strcmp(have->valuestring, sh->valuestring) == 0) continue;  // current
@@ -362,11 +370,14 @@ static volatile bool s_files_busy;      // best-effort guard so a manual trigger
 static void replica_task(void *pv)
 {
     vTaskDelay(pdMS_TO_TICKS(BOOT_MS));
-    int cycle = 0;
+    int cycle = 0, files_cycle = 0;
     for (;;) {
         sync_once();                                        // rung ladder (ADR-0022)
         if (cycle % FILES_POLL_EVERY == 0 && !s_files_busy) {   // #7 instance/ backup lane
-            s_files_busy = true; sync_files_once(); s_files_busy = false;
+            s_files_busy = true;
+            sync_files_once(files_cycle % HOTDB_EVERY == 0);    // hot.db only every HOTDB_EVERY-th files run
+            files_cycle++;
+            s_files_busy = false;
         }
         cycle++;
         vTaskDelay(pdMS_TO_TICKS(POLL_MS));
@@ -378,7 +389,7 @@ static void replica_task(void *pv)
 // stack (the v11/v17 lesson). Guarded against overlapping the scheduled run.
 static void files_trigger_task(void *pv)
 {
-    if (!s_files_busy) { s_files_busy = true; sync_files_once(); s_files_busy = false; }
+    if (!s_files_busy) { s_files_busy = true; sync_files_once(true); s_files_busy = false; }  // manual = full (incl hot.db)
     else ESP_LOGW(TAG, "files lane: sync already running — trigger ignored");
     vTaskDelete(NULL);
 }
