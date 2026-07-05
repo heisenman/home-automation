@@ -40,6 +40,7 @@
 #include "ha_imu.h"                 // roadmap #3 (ability A): IMU presence + tap-to-wake
 #include "ha_battery_profile_rt.h"   // runtime profile load/save/push — deploy a curve as data (ADR-0024 §5)
 #include "ha_power_policy.h"   // battery safety policy: shutdown/warn/boot-gate (ADR-0024)
+#include "ha_ota.h"            // shared OTA client: host-pin + per-node identity gate + signed-hash (ADR-0020)
 #include "fs_ops.h"
 #include "ui_tiles.h"
 #include "ui/ui_scenes.h"   // scene on-change hook (device-side per-scene dimming, roadmap #2 pivot)
@@ -68,7 +69,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v70-replica-files"
+#define APP_BUILD_TAG "v71-otagate"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -387,52 +388,25 @@ static void display_task(void *pv)
     vTaskDelete(NULL);
 }
 
-static void ota_task(void *pv)
+// ── Shared OTA client (ha_ota, ADR-0020) platform seams ──────────────────────────────────────────
+// The panel used to own a bespoke ota_task; it is replaced by the shared component so the panel links the
+// SAME host-pin + per-node IDENTITY gate + signed-hash + rollback path the edge fleet does (a
+// cross-provisioned image — cf. 2026-07-05 — can no longer boot this panel: ha_ota refuses any image not
+// branded "d1001-beachhead@…", the version stamped by version.txt). The panel-specific concerns fold into
+// these seams; the display-blank-during-flash is bracketed by the caller (below) + on_fail.
+static void ha_ota_log_cb(const char *msg, void *user)   // -> T_OTAST lifecycle topic, JSON-wrapped, always visible
 {
-    char *url = (char *)pv;
-    ESP_LOGW(TAG, "OTA: begin url=%s", url);
-    ota_report("{\"ota\":\"begin\"}");
-    // Blank the panel for the whole download. Flash writes momentarily disable the cache, stalling the
-    // PSRAM-resident MIPI-DSI framebuffer fetch -> the panel STROBES while it's lit (Hugh, 2026-07-01:
-    // the flash is during flash-write, not reboot). sleep() keeps the panel powered (no re-init), just
-    // backlight+display off; wake() restores it if the OTA fails.
-    bsp_display_sleep();
-    esp_http_client_config_t http = { .url = url, .timeout_ms = 30000, .keep_alive_enable = true };
-    esp_https_ota_config_t cfg = { .http_config = &http };
-    esp_https_ota_handle_t h = NULL;
-    esp_err_t err = esp_https_ota_begin(&cfg, &h);
-    if (err != ESP_OK) {
-        ESP_LOGE(TAG, "OTA: begin FAILED: %s", esp_err_to_name(err));
-        char m[96]; snprintf(m, sizeof(m), "{\"ota\":\"begin_failed\",\"err\":\"%s\"}", esp_err_to_name(err));
-        ota_report(m); bsp_display_wake(); free(url); vTaskDelete(NULL); return;
+    char m[224];
+    int n = snprintf(m, sizeof(m), "{\"ota\":\"log\",\"msg\":\"");
+    for (const char *p = msg; *p && n < (int)sizeof(m) - 8; p++) {   // minimal JSON escape
+        if (*p == '"' || *p == '\\') m[n++] = '\\';
+        m[n++] = *p;
     }
-    ota_report("{\"ota\":\"connected\"}");
-    int last = 0;
-    while (1) {
-        err = esp_https_ota_perform(h);
-        if (err != ESP_ERR_HTTPS_OTA_IN_PROGRESS) break;
-        int n = esp_https_ota_get_image_len_read(h);
-        if (n - last >= 131072) {
-            char m[64]; snprintf(m, sizeof(m), "{\"ota\":\"progress\",\"bytes\":%d}", n);
-            ota_report(m); last = n;
-        }
-    }
-    if (err == ESP_OK && esp_https_ota_is_complete_data_received(h) && esp_https_ota_finish(h) == ESP_OK) {
-        ESP_LOGW(TAG, ">>> OTA COMPLETE — rebooting <<<");
-        ota_report("{\"ota\":\"complete\",\"action\":\"rebooting\"}");
-        bsp_display_off();               // dark the panel before reset (no flash/white during reboot)
-        vTaskDelay(pdMS_TO_TICKS(800));
-        esp_restart();
-    } else {
-        ESP_LOGE(TAG, "OTA: FAILED: %s", esp_err_to_name(err));
-        char m[96]; snprintf(m, sizeof(m), "{\"ota\":\"failed\",\"err\":\"%s\"}", esp_err_to_name(err));
-        ota_report(m);
-        esp_https_ota_abort(h);
-        bsp_display_wake();              // restore the panel (no reboot on failure)
-    }
-    free(url);
-    vTaskDelete(NULL);
+    snprintf(m + n, sizeof(m) - n, "\"}");
+    ota_report(m);
 }
+static bool ha_ota_healthy_cb(void *user) { return s_mqtt_up; }      // self-test predicate: broker reachable
+static void ha_ota_fail_cb(void *user) { bsp_display_wake(); }       // any reject/failure: restore the blanked panel
 
 // Dispatch a VERIFIED signed authority directive (ADR-0010, roadmap #4). The {p,s} envelope has already
 // passed ha_cmd_verify (HMAC + freshness + anti-replay) upstream; here we act on the inner op. Only the
@@ -447,12 +421,19 @@ static const char *dispatch_signed_cmd(const cJSON *inner, esp_mqtt_client_handl
     if (!cJSON_IsString(op)) return "no-op";
     if (strcmp(op->valuestring, "ota") == 0) {
         const cJSON *url = cJSON_GetObjectItem(inner, "url");
-        // NOTE (follow-up): "sha256" is accepted in the envelope for forward-compat but not yet verified
-        // against the downloaded image (needs the manual esp_ota chunk-hash path). Signature already gates
-        // WHO may trigger an OTA — the primary hole. Image-hash verify is the next hardening step.
         if (!cJSON_IsString(url)) return "ota:no-url";
-        char *u = strdup(url->valuestring);
-        if (u) xTaskCreate(ota_task, "ota", 8192, u, 5, NULL);
+        // ha_ota enforces the per-node IDENTITY gate (image must be branded "d1001-beachhead@…") on EVERY
+        // pull, so a cross-provisioned image can't come up wearing this panel's slot (ADR-0020). "sha256" is
+        // optional: verified when present, skipped when absent (d1001_cmd.py only sets it if the operator
+        // passes a hash — image-hash-by-default is a d1001_cmd.py follow-up). The signature already gated WHO.
+        const cJSON *sha = cJSON_GetObjectItem(inner, "sha256");
+        // Blank the panel across the flash-write (PSRAM-resident MIPI-DSI framebuffer strobes when the cache
+        // drops during a write — Hugh, 2026-07-01). ha_ota reboots dark on success; on_fail wakes it.
+        bsp_display_sleep();
+        if (!ha_ota_start(url->valuestring, cJSON_IsString(sha) ? sha->valuestring : "")) {
+            bsp_display_wake();
+            return "ota:busy";
+        }
         return "ota:started";
     } else if (strcmp(op->valuestring, "fs") == 0) {
         char *j = cJSON_PrintUnformatted(inner);   // fs_ops parses cmd/path/…; ignores op/ts/seq
@@ -1254,6 +1235,13 @@ void app_main(void)
     }
     scene_dim_init();   // load the device-local per-scene backlight table (NVS override or baked default)
     ha_gatt_init(&(ha_gatt_cfg_t){ .publish = gatt_hist_publish, .log = gatt_log_cb });   // roadmap #5
+    ha_ota_init(&(ha_ota_cfg_t){                 // shared OTA client: identity gate keyed on this node id (ADR-0020)
+        .node_id    = BLE_NODE,                  // "d1001-beachhead" — refuse any image not branded "<node_id>@…"
+        .ota_host   = "",                        // host-pin left OFF (bench serves from .112; prod host varies) — identity is the gate
+        .log        = ha_ota_log_cb,
+        .is_healthy = ha_ota_healthy_cb,
+        .on_fail    = ha_ota_fail_cb,
+    });
 
     s_evt = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_netif_init());
