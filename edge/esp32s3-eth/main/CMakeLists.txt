@@ -8,12 +8,11 @@ idf_component_register(
         "ha_mqtt.c"
         "gatt_history.c"
         "gatt_exec.c"
-        "ha_ota.c"
         "ha_led.c"
         "ha_relay.c"
         "ha_gas.c"
     INCLUDE_DIRS "."
     REQUIRES nvs_flash esp_eth esp_wifi driver esp_driver_rmt esp_event esp_netif mqtt bt json
              app_update esp_https_ota esp_http_client mbedtls
-             switchbot_decode ha_ble_scan ha_reach sgp40 sensirion_gas_index
+             switchbot_decode ha_ble_scan ha_ota ha_reach sgp40 sensirion_gas_index
 )

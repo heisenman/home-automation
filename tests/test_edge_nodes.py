@@ -40,6 +40,16 @@ def test_manifest_loads_and_is_wellformed():
         assert re.fullmatch(r"([0-9A-F]{2}:){5}[0-9A-F]{2}", rec["mac"]), f"{nid}: bad MAC {rec['mac']!r}"
 
 
+def test_all_board_manifests_valid():
+    """Every board's nodes.yaml loads + validates (c6 + s3-eth today)."""
+    boards = [ROOT / "edge/esp32c6/nodes.yaml", ROOT / "edge/esp32s3-eth/nodes.yaml"]
+    for mp in boards:
+        nodes = EN.load(mp)
+        assert nodes, f"{mp} is empty"
+        for nid, rec in nodes.items():
+            assert rec["sensor"] in EN.SENSORS, f"{mp}:{nid} bad sensor"
+
+
 def test_known_nodes_and_their_sensors():
     nodes = EN.load()
     # The two live C6 gas nodes and their chips (SGP30 eCO2+TVOC = bedroom, SGP40 VOC = office).

@@ -26,7 +26,7 @@ Which module each **real firmware build** links. Pairs with [MODULES.md](MODULES
 | `ha_reach` | — | shared | shared | shared |
 | `gatt_history` | fork | — | fork | — |
 | `gatt_exec` | fork | fork | fork | — |
-| `ha_ota` | fork | fork | fork | — |
+| `ha_ota` | fork | shared | shared | — |
 | `ha_led` | — | — | fork | — |
 | `ha_relay` | fork | fork | fork | — |
 | `display` | — | — | — | fork |

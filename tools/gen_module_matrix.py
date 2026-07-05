@@ -54,7 +54,7 @@ MODULES = [
     ("ha_reach", {"sources": [], "component": "ha_reach"}),
     ("gatt_history", {"sources": ["gatt_history.c"], "component": None}),
     ("gatt_exec", {"sources": ["gatt_exec.c"], "component": None}),
-    ("ha_ota", {"sources": ["ha_ota.c"], "component": None}),
+    ("ha_ota", {"sources": ["ha_ota.c"], "component": "ha_ota"}),
     ("ha_led", {"sources": ["ha_led.c"], "component": None}),
     ("ha_relay", {"sources": ["ha_relay.c"], "component": None}),
     ("display", {"sources": ["bsp_display.c", "ui_tiles.c"], "component": None}),

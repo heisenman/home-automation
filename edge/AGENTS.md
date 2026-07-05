@@ -32,9 +32,10 @@ with no hand-editing and the flash/OTA identity gate can refuse an image built f
 from the 2026-07-05 incident: a `coffice_c6`+SGP40 image was OTA'd onto `cbed_c6` (wrong id + wrong sensor).
 
 **The gate (ADR-0020, three layers):** enroll_node also emits `version.txt` = `<node>@<fw>` → IDF bakes it
-into `app_desc.version`. (1) **Node:** `ha_ota.c` reads the *incoming* image's `app_desc` and aborts the OTA
-before boot if its node id ≠ its own. (2) **Push:** `edge_ota.py` refuses to send a `.bin` whose brand ≠ the
-target node. (3) **Cable:** `node_bringup.py` checks the chip's eFuse MAC vs the manifest before flashing.
+into `app_desc.version`. (1) **Node:** the shared `firmware/components/ha_ota` reads the *incoming* image's
+`app_desc` and aborts the OTA before boot if its node id ≠ its own (one copy, linked by c6+s3; c3 fork
+pending). (2) **Push:** `edge_ota.py` refuses to send a `.bin` whose brand ≠ the target node. (3) **Cable:**
+`node_bringup.py` checks the chip's eFuse MAC vs the manifest before flashing.
 ⚠️ IDF reads `version.txt` only at **configure** time — `node_bringup` runs `idf.py reconfigure` so the brand
 lands; a bare incremental `idf.py build` ships an UNBRANDED image that the node gate then (correctly) rejects.
 

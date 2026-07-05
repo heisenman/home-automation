@@ -1,0 +1,18 @@
+# Per-node build/flash manifest for the ESP32-S3-ETH edge fleet (ADR-0020). Same contract as
+# edge/esp32c6/nodes.yaml — binds node_id -> board wiring so an image can't be cross-provisioned.
+# The shared firmware/components/ha_ota gate enforces the node-id brand at OTA time.
+#
+# node_id -> { mac (eFuse, `esptool read_mac`), target, sensor, area, broker, ota_host }
+# Materialize: enroll_node.py --node-id <n> --from-manifest --reuse --out edge/esp32s3-eth/main/secrets.h
+#
+# TODO(dev): s3-crawlspace (live, kitchen SGP40) is NOT yet enrolled in node_secrets.enc as its own node
+# and its eFuse MAC isn't captured (mid hardware-swap, see memory s3-crawlspace-hardware-swap). Enroll it
+# + add its entry here before branding/OTA'ing it, so the identity gate has a real node to key on.
+nodes:
+  hbed_s3:
+    mac: "28:84:85:54:AB:E0"
+    target: esp32s3
+    sensor: sgp40            # Sensirion SGP40 — VOC index — H bedroom
+    area: h_bed
+    broker: "mqtt://192.168.0.210:1883"
+    ota_host: "192.168.0.210"

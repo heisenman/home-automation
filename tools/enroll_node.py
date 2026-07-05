@@ -84,7 +84,9 @@ def main() -> None:
                    help="gas chip -> secrets.h HA_GAS_SGP30 select (else taken from --from-manifest)")
     p.add_argument("--ota-host", help="OTA HTTP host to pin in secrets.h (else from --from-manifest)")
     p.add_argument("--from-manifest", action="store_true",
-                   help="pull mac/sensor/broker/ota_host from edge/esp32c6/nodes.yaml for this node")
+                   help="pull mac/sensor/broker/ota_host from the board's nodes.yaml for this node")
+    p.add_argument("--manifest", type=Path,
+                   help="explicit nodes.yaml (else <board>/nodes.yaml next to --out, else the c6 default)")
     p.add_argument("--show-confirm", action="store_true", help="just print the confirm token and exit")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--stamp", default=None, help="ISO created timestamp (else now)")
@@ -101,7 +103,11 @@ def main() -> None:
     enrolled = a.node_id in lut
 
     # The manifest supplies board wiring (mac/sensor/broker/ota_host) so the emit needs no hand-editing.
-    man = EN.get(a.node_id) if a.from_manifest else {}
+    # Board-aware: use --manifest, else the nodes.yaml next to --out's board, else the c6 default.
+    man = {}
+    if a.from_manifest:
+        man_path = a.manifest or (a.out.parent.parent / "nodes.yaml" if a.out else EN.DEFAULT_MANIFEST)
+        man = EN.get(a.node_id, man_path)
     mac = (a.mac or man.get("mac", "")).upper()
     sensor = a.sensor or man.get("sensor")
     ota_host = a.ota_host or man.get("ota_host")

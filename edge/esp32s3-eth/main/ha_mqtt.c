@@ -16,11 +16,15 @@
 #include <time.h>
 #include "mbedtls/md.h"
 #include "nvs.h"
+#include "ha_ble_scan.h"        // ha_ble_scan_pause/resume — wired into the shared ha_ota radio seam
 #if __has_include("secrets.h")
 #include "secrets.h"
 #endif
 #ifndef HA_CMD_SECRET
 #define HA_CMD_SECRET ""        // empty → all signed commands rejected (must provision a secret)
+#endif
+#ifndef HA_OTA_HOST
+#define HA_OTA_HOST "192.168.0.245"   // pinned image host (default dictator) — wired into ha_ota cfg
 #endif
 #ifndef HA_MQTT_USER
 #define HA_MQTT_USER ""         // empty → anonymous (latent until broker auth cutover)
@@ -245,7 +249,18 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
     }
 }
 
+// ha_ota platform seams: self-test = broker reachable; radio pause/resume = the single-radio BLE
+// scanner; on_fail = magenta LED (the S3-specific hook the shared component keeps out of its core).
+static bool s3_ota_healthy(void *user) { (void)user; return ha_mqtt_is_connected(); }
+static void s3_ota_radio_pause(void *user) { (void)user; ha_ble_scan_pause(); }
+static void s3_ota_radio_resume(void *user) { (void)user; ha_ble_scan_resume(); }
+static void s3_ota_log(const char *msg, void *user) { (void)user; ha_mqtt_log("%s", msg); }
+static void s3_ota_on_fail(void *user) { (void)user; ha_led_set(HA_LED_OTA_FAIL); }
+
 void ha_mqtt_start(const char *broker_uri, const char *node_id) {
+    ha_ota_init(&(ha_ota_cfg_t){ .node_id = node_id, .ota_host = HA_OTA_HOST, .log = s3_ota_log,
+                                 .is_healthy = s3_ota_healthy, .on_fail = s3_ota_on_fail,
+                                 .radio_pause = s3_ota_radio_pause, .radio_resume = s3_ota_radio_resume });
     snprintf(s_node, sizeof(s_node), "%s", node_id);
     snprintf(s_status_topic, sizeof(s_status_topic), "home/edge/%s/status", s_node);
     snprintf(s_cmd_topic, sizeof(s_cmd_topic), "home/edge/%s/cmd", s_node);
