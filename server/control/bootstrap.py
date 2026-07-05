@@ -34,9 +34,15 @@ def parse_env_file(path: Path) -> dict:
     return out
 
 
+def midea_device_id_of(registry: dict) -> str | None:
+    """The device_id of the Midea appliance — resolved from the registry by `device_type: dehumidifier`,
+    NOT hardcoded, so renaming/relocating it in control.yaml flows through with no code change (ADR-0026)."""
+    return next((d for d, c in registry.items() if getattr(c, "device_type", None) == "dehumidifier"), None)
+
+
 def build_issuer(master: str, *, control_registry: Path, node_secrets_lut: Path, control_policy: Path,
                  control_secrets: Path, midea_device_env: Path, broker: str = "localhost",
-                 port: int = 1883, midea_device_id: str = "dehumidifier_office",
+                 port: int = 1883, midea_device_id: str | None = None,
                  levoit_registry: Path | None = None, panel_registry: Path | None = None):
     """Return (issuer, registry, midea_drivers). Secrets = per-NODE cmd_secret (encrypted LUT) +
     per-device secrets (control_secrets.yaml, for local-driver appliances). Transport routes each
@@ -46,7 +52,10 @@ def build_issuer(master: str, *, control_registry: Path, node_secrets_lut: Path,
     secrets = {**secrets_from_lut(registry, lut), **load_secrets(control_secrets)}
     policy_data = yaml.safe_load(control_policy.read_text()) if control_policy.exists() else None
     policy = PolicyStore(policy_data or {"version": 1})
-    midea_drivers = load_drivers_from_env(parse_env_file(midea_device_env), midea_device_id)
+    # the Midea id is config-driven (device_type in control.yaml); caller may still override for tests
+    midea_device_id = midea_device_id or midea_device_id_of(registry)
+    midea_drivers = load_drivers_from_env(parse_env_file(midea_device_env), midea_device_id) \
+        if midea_device_id else {}
     default_tr = MqttTransport(broker=broker, port=port)
     overrides: dict = {}
     if midea_drivers:

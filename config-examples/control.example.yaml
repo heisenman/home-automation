@@ -1,6 +1,12 @@
 # Example actuator control registry. Copy to instance/control.yaml (gitignored) and edit.
 # Actuators are described by TRAITS (ADR-0002), not products. The dictator (PEP) commands them via
 # the owning edge node. Per-device secrets go in instance/control_secrets.yaml.
+#
+# LOCAL-DRIVER appliances (node: server) are resolved by `device_type` so the controller finds them by TYPE,
+# not a hardcoded id — rename/relocate them freely and the wiring follows (ADR-0026):
+#   device_type: dehumidifier   -> Midea LAN driver + default RH policy   (instance/midea-device.env)
+#   device_type: air_purifier   -> Levoit driver + PM2.5 policy           (instance/levoit-devices.yaml)
+#   device_type: panel          -> reTerminal wall-panel scene follower   (instance/panel-devices.yaml)
 version: 1
 devices:
   # a dimmable lamp = switchable + ranged, driven through edge node c6-bench

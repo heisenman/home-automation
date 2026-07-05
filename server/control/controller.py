@@ -38,9 +38,11 @@ DEFAULT_POLICY = {
 }
 
 # first-run defaults for the Levoit purifier (Hugh 2026-06-27: PM2.5 speed-stepping, self-sourced).
+# source_sensor is filled in at seed time with the purifier's OWN device_id (self-sourced), resolved from
+# the registry by device_type — never a hardcoded id (ADR-0026: renames flow through with no code change).
 LEVOIT_POLICY = {
     "enabled": True,
-    "source_sensor": "levoit_office",            # self-sourced air-quality (its own bridged reading)
+    "source_sensor": None,                       # set to the purifier's own device_id at seed time
     "control": {"strategy": "threshold_ranged", "metric": "pm25_ugm3",
                 "bands": [{"max": 12, "level": 1}, {"max": 35, "level": 2},
                           {"max": 55, "level": 3}, {"max": None, "level": 4}]},
@@ -362,9 +364,16 @@ def main():
 
     conn = sqlite3.connect(a.db)
     store.ensure_schema(conn)
-    store.seed_policy(conn, "dehumidifier_office", DEFAULT_POLICY)
-    if "levoit_office" in registry:                  # only seed if the purifier is registered on this box
-        store.seed_policy(conn, "levoit_office", LEVOIT_POLICY)
+    # First-run policy seeds are keyed to the CONFIGURED actuator ids (resolved by device_type in
+    # control.yaml), not hardcoded strings — so a rename/relocate via the maintenance tools flows through
+    # with no code edit, and the controller never re-seeds an old id back into control.db (ADR-0026).
+    midea_id = bootstrap.midea_device_id_of(registry)
+    levoit_id = next((d for d, c in registry.items()
+                      if getattr(c, "device_type", None) == "air_purifier"), None)
+    if midea_id:
+        store.seed_policy(conn, midea_id, DEFAULT_POLICY)
+    if levoit_id:                                    # only seed if the purifier is registered on this box
+        store.seed_policy(conn, levoit_id, {**LEVOIT_POLICY, "source_sensor": levoit_id})
     conn.close()
     ctrl = Controller(issuer, drivers, registry, a.db)
     if a.once:
