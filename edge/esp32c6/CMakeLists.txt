@@ -10,6 +10,8 @@ set(EXTRA_COMPONENT_DIRS
     "${_shared}/ha_ble_scan"
     "${_shared}/ha_gatt"
     "${_shared}/ha_ota"
+    "${_shared}/ha_relay"
+    "${_shared}/ha_sntp"
     "${_shared}/ha_reach"
     "${_shared}/sgp40"
     "${_shared}/sgp30"

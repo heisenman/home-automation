@@ -1,3 +1,5 @@
+// BREADCRUMB: firmware/components > ha_relay - Phase-B relay coverage filter: signed relay_assign, NVS-persisted, epoch-guarded MAC allowlist so a node stops forwarding adverts a closer source already delivers. Contract: ADR-0015. Parent: firmware/AGENTS.md.
+// REUSE-WHEN: an edge node needs the dictator to narrow which endpoints it relays (Tier-2 coverage), rather than relay-all.
 #pragma once
 #include <stdbool.h>
 // ADR-0015 Phase B (Tier 2): the dictator tells this node which meters it's the PREFERRED relay for, so

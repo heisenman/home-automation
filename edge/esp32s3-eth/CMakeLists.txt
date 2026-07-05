@@ -9,6 +9,8 @@ set(EXTRA_COMPONENT_DIRS
     "${_shared}/switchbot_decode"
     "${_shared}/ha_ble_scan"
     "${_shared}/ha_ota"
+    "${_shared}/ha_relay"
+    "${_shared}/ha_sntp"
     "${_shared}/ha_reach"
     "${_shared}/sgp40"
     "${_shared}/sensirion_gas_index")
