@@ -66,6 +66,10 @@ def build_inner(argv: list[str]) -> dict:
         if len(argv) >= 3:
             inner["val"] = int(argv[2])
         return inner
+    if op == "audio":                           # roadmap #6: master enable switch (very easy to disable)
+        if len(argv) < 2 or argv[1] not in ("on", "off"):
+            sys.exit("audio needs on|off  (e.g. d1001_cmd.py audio off)")
+        return {"op": "audio", "on": 1 if argv[1] == "on" else 0}
     if op == "beep":                            # roadmap #6: audible test tone (omit args for the chime)
         inner = {"op": "beep"}
         if len(argv) >= 2:
@@ -89,7 +93,7 @@ def build_inner(argv: list[str]) -> dict:
         if len(argv) >= 4:
             inner["window"] = int(argv[3])
         return inner
-    sys.exit(f"unknown op '{op}' (ota|fs|gpio|exp|gattprobe|gathist|beep)")
+    sys.exit(f"unknown op '{op}' (ota|fs|gpio|exp|gattprobe|gathist|beep|audio)")
 
 
 def main() -> None:

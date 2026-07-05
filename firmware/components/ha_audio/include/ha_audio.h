@@ -43,3 +43,9 @@ void ha_audio_beep(int freq_hz, int ms, int amp_pct);
 
 // Queue a short two-note alert chime (device-local alert sound). Non-blocking.
 void ha_audio_chime(void);
+
+// Master enable gate. When disabled, beep/chime are silent no-ops and the amp is never keyed — the
+// "very easy to disable" kill switch. Default enabled. The CALLER owns persistence (a device-local
+// setting); call this at boot with the persisted choice before any boot chime.
+void ha_audio_set_enabled(bool on);
+bool ha_audio_enabled(void);

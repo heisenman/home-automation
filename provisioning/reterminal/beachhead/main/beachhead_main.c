@@ -68,7 +68,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v68-audio"
+#define APP_BUILD_TAG "v69-audio-toggle"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -439,6 +439,8 @@ static void ota_task(void *pv)
 // high-authority ops the conformance review flagged are exposed on the signed channel — ota (arbitrary
 // flash), fs (SD file ops), gpio, exp (drive P4 GPIO / PCA9535 pins). Device-local benign knobs stay on
 // their raw cmd/* topics. Mirrors the edge node's dispatch_cmd. Returns a short outcome string for the ack.
+static void audio_enabled_store(bool on);   // defined near audio_start(); used by op:audio below
+
 static const char *dispatch_signed_cmd(const cJSON *inner, esp_mqtt_client_handle_t client)
 {
     const cJSON *op = cJSON_GetObjectItem(inner, "op");
@@ -505,9 +507,17 @@ static const char *dispatch_signed_cmd(const cJSON *inner, esp_mqtt_client_handl
         const char *p = cJSON_IsString(prof) ? prof->valuestring : "outdoor";
         int w = cJSON_IsNumber(win) ? (int)win->valuedouble : 1024;
         return ha_gatt_history_pull(mac->valuestring, p, w) ? "gathist:started" : "gathist:busy-or-uncached";
+    } else if (strcmp(op->valuestring, "audio") == 0) {
+        // roadmap #6: the "very easy to disable" master switch. {op:audio, on:0|1} — persisted, device-local.
+        const cJSON *on = cJSON_GetObjectItem(inner, "on");
+        bool en = cJSON_IsBool(on) ? cJSON_IsTrue(on) : (cJSON_IsNumber(on) ? on->valuedouble != 0 : true);
+        ha_audio_set_enabled(en);
+        audio_enabled_store(en);
+        return en ? "audio:on" : "audio:off";
     } else if (strcmp(op->valuestring, "beep") == 0) {
         // roadmap #6: audible test tone. {op:beep, freq?:Hz, ms?:dur, amp?:0-100} — omit for a chime.
         if (!ha_audio_ready()) return "beep:no-audio";
+        if (!ha_audio_enabled()) return "beep:muted";   // observable when the master switch is off
         const cJSON *f = cJSON_GetObjectItem(inner, "freq");
         if (cJSON_IsNumber(f)) {
             const cJSON *ms = cJSON_GetObjectItem(inner, "ms");
@@ -1140,6 +1150,22 @@ static void panel_pa_enable(bool on, void *user)
     esp_io_expander_set_level(exp, mask, on ? 1 : 0);
 }
 
+// Device-local audio-enable flag (NVS): the "very easy to disable" master switch (feedback-audio-easy-disable).
+// Default ON; a signed op:audio persists a change; loaded at boot so a disabled panel stays silent.
+static bool audio_enabled_load(void)
+{
+    nvs_handle_t h; uint8_t v = 1;
+    if (nvs_open("audiocfg", NVS_READONLY, &h) == ESP_OK) { nvs_get_u8(h, "en", &v); nvs_close(h); }
+    return v != 0;
+}
+static void audio_enabled_store(bool on)
+{
+    nvs_handle_t h;
+    if (nvs_open("audiocfg", NVS_READWRITE, &h) == ESP_OK) {
+        nvs_set_u8(h, "en", on ? 1 : 0); nvs_commit(h); nvs_close(h);
+    }
+}
+
 // Bring up audible alerts (ES8311 -> NS4150B -> speaker). Runs after bsp_i2c1() + the io-expander are up.
 static void audio_start(void)
 {
@@ -1149,8 +1175,9 @@ static void audio_start(void)
         .sample_rate = 16000, .volume = 75,
         .pa_enable = panel_pa_enable,
     });
-    if (e == ESP_OK) ha_audio_chime();   // boot chime = audible proof the path is live
-    else ESP_LOGW(TAG, "audio init failed: %s", esp_err_to_name(e));
+    if (e != ESP_OK) { ESP_LOGW(TAG, "audio init failed: %s", esp_err_to_name(e)); return; }
+    ha_audio_set_enabled(audio_enabled_load());   // apply persisted master gate BEFORE any sound
+    ha_audio_chime();                             // boot chime = audible proof (silent if disabled)
 }
 
 // start SNTP against the dictator; on_time_synced writes freshly-synced time back to the RTC.

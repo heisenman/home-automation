@@ -21,6 +21,7 @@ static const char *TAG = "ha_audio";
 typedef struct { int freq; int ms; int amp; } tone_req_t;
 
 static bool                 s_ready;
+static bool                 s_enabled = true;   // master gate ("very easy to disable"); caller persists it
 static ha_audio_cfg_t       s_cfg;
 static i2s_chan_handle_t    s_tx;
 static es8311_handle_t      s_codec;
@@ -86,8 +87,11 @@ static void audio_worker(void *arg) {
     }
 }
 
+void ha_audio_set_enabled(bool on) { s_enabled = on; }
+bool ha_audio_enabled(void) { return s_enabled; }
+
 void ha_audio_beep(int freq_hz, int ms, int amp_pct) {
-    if (!s_ready || !s_q) return;
+    if (!s_ready || !s_q || !s_enabled) return;   // master gate: disabled => silent no-op
     tone_req_t r = { .freq = freq_hz, .ms = ms, .amp = amp_pct };
     xQueueSend(s_q, &r, 0);
 }
