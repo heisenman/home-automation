@@ -63,7 +63,11 @@ def build_inner(argv: list[str]) -> dict:
         if len(argv) >= 3:
             inner["val"] = int(argv[2])
         return inner
-    sys.exit(f"unknown op '{op}' (ota|fs|gpio|exp)")
+    if op == "gattprobe":                       # roadmap #5 Spike 0: connect+discover a SwitchBot mac
+        if len(argv) < 2:
+            sys.exit("gattprobe needs a mac (AA:BB:CC:DD:EE:FF)")
+        return {"op": "gattprobe", "mac": argv[1]}
+    sys.exit(f"unknown op '{op}' (ota|fs|gpio|exp|gattprobe)")
 
 
 def main() -> None:

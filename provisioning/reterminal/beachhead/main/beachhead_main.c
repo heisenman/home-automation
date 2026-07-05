@@ -46,6 +46,7 @@
 #include "ui/ui_sleep.h"    // Sleep-mode faint screen + centered "Wake" affordance (roadmap #2 pivot)
 #include "scene_dim.h"      // device-local scene->backlight policy (roadmap #2 pivot; feedback-cnc-local-settings)
 #include "ha_cmd.h"        // ADR-0010 signed-directive verify (HMAC + freshness + NVS anti-replay), roadmap #4
+#include "gatt_probe.h"    // roadmap #5 Spike 0: GATT-central connect+discover over the C6 HCI
 #include "ha_replica.h"   // ADR-0022 Phase 1a: rung DB replica to SD
 #include "ha_sdcard.h"    // SD mount + hot-plug watcher (card-detect GPIO45)
 #include "ha_ble_scan.h"
@@ -66,7 +67,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v64-signed-cmd"
+#define APP_BUILD_TAG "v65-gatt-probe"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -109,7 +110,8 @@ static const char *TAG = "beachhead";
 #define T_PROF   "d1001-beachhead/profile"         // <- active battery profile (provenance+offsets+lut+source), retained
 #define T_SDIMC  "d1001-beachhead/cmd/scene-brightness" // -> JSON {"Home":N,...} (persist to NVS) | "get" | "default": device-local per-scene backlight (roadmap #2 pivot)
 #define T_SDIM   "d1001-beachhead/scene-brightness" // <- retained {"source","table":{...}}: active per-scene backlight policy
-#define T_CMD    "d1001-beachhead/cmd"              // -> SIGNED {p,s} authority directive (ADR-0010): inner {op:ota|fs|gpio|exp,...}; verified before it acts (roadmap #4)
+#define T_CMD    "d1001-beachhead/cmd"              // -> SIGNED {p,s} authority directive (ADR-0010): inner {op:ota|fs|gpio|exp|gattprobe,...}; verified before it acts (roadmap #4)
+#define T_GATT   "d1001-beachhead/gatt"             // <- GATT-central probe progress/result (roadmap #5 Spike 0)
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
@@ -183,6 +185,12 @@ static void log_drain_task(void *pv)
 static void ota_report(const char *s)   // OTA lifecycle — always visible, independent of debug
 {
     if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_OTAST, s, 0, 1, 0);
+}
+
+// Reporter seam for the GATT-central probe (roadmap #5 Spike 0): each progress line -> d1001-beachhead/gatt.
+static void gatt_probe_report(const char *line)
+{
+    if (s_client && s_mqtt_up) esp_mqtt_client_publish(s_client, T_GATT, line, 0, 0, 0);
 }
 
 static void publish_status(void)
@@ -463,6 +471,11 @@ static const char *dispatch_signed_cmd(const cJSON *inner, esp_mqtt_client_handl
         }
         if (client) esp_mqtt_client_publish(client, T_PIN, out, 0, 0, 0);
         return "exp:ok";
+    } else if (strcmp(op->valuestring, "gattprobe") == 0) {
+        // roadmap #5 Spike 0: GATT-central connect+discover to a SwitchBot mac (progress -> T_GATT).
+        const cJSON *mac = cJSON_GetObjectItem(inner, "mac");
+        if (!cJSON_IsString(mac)) return "gattprobe:no-mac";
+        return gatt_probe_start(mac->valuestring) ? "gattprobe:started" : "gattprobe:busy-or-uncached";
     }
     return "unknown-op";
 }
@@ -1147,6 +1160,7 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_init());
     }
     scene_dim_init();   // load the device-local per-scene backlight table (NVS override or baked default)
+    gatt_probe_set_reporter(gatt_probe_report);   // roadmap #5 Spike 0: GATT-probe progress -> d1001-beachhead/gatt
 
     s_evt = xEventGroupCreate();
     ESP_ERROR_CHECK(esp_netif_init());
