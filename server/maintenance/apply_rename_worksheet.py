@@ -143,16 +143,26 @@ def _systemctl(action: str, *services: str) -> str:
     return "ok" if r.returncode == 0 else f"ERROR: {(r.stderr or r.stdout).strip()[:300]}"
 
 
+def _present_units(services: list[str]) -> list[str]:
+    """Only the units that actually exist on THIS box — the peer (.245) has a different service set, so
+    restarting the dictator's full list there errors on absent units (fixed in code, not by hand)."""
+    return [s for s in services
+            if subprocess.run(["systemctl", "cat", s], capture_output=True, text=True).returncode == 0]
+
+
 def restart_ingest(dry_run: bool) -> str:
     if dry_run:
         return "skipped (dry-run)"
-    err = _systemctl("restart", *INGEST_SERVICES)
+    present = _present_units(INGEST_SERVICES)
+    absent = [s for s in INGEST_SERVICES if s not in present]
+    err = _systemctl("restart", *present) if present else "ok"
     if err != "ok":
         return err
-    bad = [s for s in INGEST_SERVICES
+    bad = [s for s in present
            if subprocess.run(["systemctl", "is-active", s], capture_output=True, text=True).stdout.strip()
            != "active"]
-    return "all active" if not bad else f"NOT active: {bad}"
+    note = f" (skipped absent: {absent})" if absent else ""
+    return ("all active" if not bad else f"NOT active: {bad}") + note
 
 
 def clear_old_retained(plan: list[dict], *, broker: str = "localhost", dry_run: bool) -> list[str]:
