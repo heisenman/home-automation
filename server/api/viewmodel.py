@@ -58,12 +58,19 @@ METRIC_CATALOG: dict[str, dict] = {
 }
 
 
+# Core metrics stay in the 0b map tier (temp/hum are the climate through-line); secondary metrics (CO₂/PM/…)
+# drop first when a room box can't fit everything (docs/design/map-room-fill.md — the dev half, item 3).
+CORE_METRICS = {"temperature_c", "humidity_pct"}
+
+
 def metric_spec(metric: str) -> dict:
-    """Presentation spec for a metric ({key,label,unit,color,precision,graph}). Unknown -> minimal default."""
+    """Presentation spec for a metric ({key,label,unit,color,precision,graph,core}). Unknown -> minimal."""
+    core = metric in CORE_METRICS
     s = METRIC_CATALOG.get(metric)
     if s is None:
-        return {"key": metric, "label": metric, "unit": "", "color": "#94a3b8", "precision": 1, "graph": False}
-    return {"key": metric, **s}
+        return {"key": metric, "label": metric, "unit": "", "color": "#94a3b8", "precision": 1,
+                "graph": False, "core": core}
+    return {"key": metric, "core": core, **s}
 
 
 def ui_metric_catalog() -> list[dict]:
@@ -172,6 +179,7 @@ def build_sensor_list(hot_conn, now: float, meta: dict | None = None,
             e["metrics"]["dewpoint_c"] = dp
         e["name"] = m.get("name") or None           # UI falls back to a prettified device_id
         e["room"] = m.get("room") or e["area"]      # overlay room wins; else the registry area
+        e["climate_role"] = m.get("climate_role")   # primary|secondary|None -> room climate resolver
         e["age_s"] = _age_s(e["ts"], now)
         e["graphs"] = sensor_graphs(e["metrics"])    # shared UI spec: which metrics graph, +unit/color/label
     out.sort(key=lambda e: (e["room"], e["device_id"]))
@@ -225,6 +233,71 @@ def build_actuator_list(hot_conn, control_registry, present_ids, *, meta=None, n
     return out
 
 
+# ── room-fill BFF content (docs/design/map-room-fill.md) — the panel authors fit, the BFF authors content ──
+# Normal ranges: the server is the range authority; the panel just colors an out-of-range value red.
+NORMAL_RANGES: dict[str, tuple[float, float]] = {
+    "temperature_c": (16.0, 27.0),
+    "humidity_pct":  (30.0, 60.0),
+    "co2_ppm":       (0.0, 1000.0),
+    "pm25_ugm3":     (0.0, 35.0),
+    "voc_index":     (0.0, 250.0),
+    "radon_bqm3":    (0.0, 150.0),
+    "aqi":           (0.0, 100.0),
+}
+CLIMATE_STALE_S = 1800          # a configured primary/secondary climate sensor older than this falls through
+CLIMATE_DIVERGE_C = 2.0         # room temperature spread above this -> averaged_divergent (an avg hides a spread)
+CLIMATE_DIVERGE_RH = 10.0       # room humidity spread above this -> averaged_divergent
+
+
+def _out_of_range(metric: str, value) -> bool:
+    r = NORMAL_RANGES.get(metric)
+    return bool(r) and value is not None and (value < r[0] or value > r[1])
+
+
+def out_of_range_map(metrics: dict) -> dict:
+    """Sparse {metric: True} for a device's out-of-range metrics (panel colors these red)."""
+    return {k: True for k, v in (metrics or {}).items() if _out_of_range(k, v)}
+
+
+def _mean(xs: list) -> float | None:
+    xs = [x for x in xs if x is not None]
+    return round(sum(xs) / len(xs), 1) if xs else None
+
+
+def resolve_room_climate(room_sensors: list[dict]) -> dict | None:
+    """Per-room climate summary (docs/design/map-room-fill.md §Climate representative):
+    `{value:{temperature_c,humidity_pct}, confidence, source_device_id}` or None if the room reports no
+    temperature. `confidence`: a configured+fresh `climate_role` primary → `primary`; else its secondary →
+    `secondary`; else the mean of the room's sensors → `averaged`, escalated to `averaged_divergent` when
+    the sensors spread past the threshold (an average hiding a real spread is the thing worth flagging).
+    Pure over sensor dicts (uses `age_s` for staleness, so no clock needed)."""
+    temp_sensors = [s for s in room_sensors if (s.get("metrics") or {}).get("temperature_c") is not None]
+    if not temp_sensors:
+        return None
+
+    def _fresh(s):
+        a = s.get("age_s")
+        return a is None or a <= CLIMATE_STALE_S
+
+    def _val(s):
+        m = s.get("metrics") or {}
+        return {"temperature_c": m.get("temperature_c"), "humidity_pct": m.get("humidity_pct")}
+
+    for role in ("primary", "secondary"):
+        picked = next((s for s in temp_sensors if s.get("climate_role") == role and _fresh(s)), None)
+        if picked:
+            return {"value": _val(picked), "confidence": role, "source_device_id": picked["device_id"]}
+
+    temps = [(s.get("metrics") or {}).get("temperature_c") for s in temp_sensors]
+    hums = [h for s in temp_sensors if (h := (s.get("metrics") or {}).get("humidity_pct")) is not None]
+    spread_t = (max(temps) - min(temps)) if len(temps) > 1 else 0.0
+    spread_h = (max(hums) - min(hums)) if len(hums) > 1 else 0.0
+    divergent = spread_t > CLIMATE_DIVERGE_C or spread_h > CLIMATE_DIVERGE_RH
+    return {"value": {"temperature_c": _mean(temps), "humidity_pct": _mean(hums)},
+            "confidence": "averaged_divergent" if divergent else "averaged",
+            "source_device_id": None}
+
+
 def build_rooms(sensors: list[dict], areas: dict | None = None, geometry: dict | None = None,
                 placement: dict | None = None, controllable_ids: set | None = None) -> dict:
     """The canonical room graph (ADR-0026 Phase 3 UI) — supersedes the bare `/areas` string list.
@@ -250,6 +323,7 @@ def build_rooms(sensors: list[dict], areas: dict | None = None, geometry: dict |
     ctl = controllable_ids or set()
 
     by_room: dict[str, list] = defaultdict(list)
+    climate_inputs: dict[str, list] = defaultdict(list)   # per-room SENSOR dicts, for the climate summary
     unlocated: list[dict] = []
     for s in sensors:
         room_id = s.get("room") or s.get("area") or "unknown"
@@ -261,12 +335,15 @@ def build_rooms(sensors: list[dict], areas: dict | None = None, geometry: dict |
                 "role": "actuator" if s["device_id"] in ctl else "sensor",
                 "name": s.get("name"),
                 "metrics": s.get("metrics", {}),
+                "out_of_range": out_of_range_map(s.get("metrics")),   # sparse {metric: True} -> panel reds
                 "age_s": s.get("age_s"),
                 "placement": placement.get(s["device_id"]) or {"x": None, "y": None, "anchor": "auto"},
             }
 
         if room_id in areas:
             by_room[room_id].append(_dev(room_id))
+            if s["device_id"] not in ctl:                 # climate is a SENSOR reading, not actuator onboard
+                climate_inputs[room_id].append(s)
         else:
             # not a canonical area → NEVER silently drop it; surface it as a red flag the UI must act on
             # (a device that exists but has no valid location). `location_unknown` is the explicit signal.
@@ -277,7 +354,9 @@ def build_rooms(sensors: list[dict], areas: dict | None = None, geometry: dict |
 
     rooms = []
     for order, (aid, meta) in enumerate(areas.items()):
-        devs = by_room.get(aid, [])
+        # stable device-line order so the greedy fit + PWA agree on what drops first: actuators, then
+        # sensors, each by device_id (docs/design/map-room-fill.md — the dev half, item 4).
+        devs = sorted(by_room.get(aid, []), key=lambda d: (d["role"] != "actuator", d["device_id"]))
         rooms.append({
             "id": aid,
             "name": (meta or {}).get("name", aid),
@@ -286,6 +365,7 @@ def build_rooms(sensors: list[dict], areas: dict | None = None, geometry: dict |
             "type": (meta or {}).get("type"),
             "order": order,
             "geometry": geo_rooms.get(aid),                     # null for rooms without a polygon (yet)
+            "climate": resolve_room_climate(climate_inputs.get(aid, [])),   # {value,confidence,source} or null
             "devices": devs,
             # "edge" bucket stays 0 until a node-census source exists (edge nodes aren't in the sensor roster)
             "counts": {"sensors": sum(d["role"] == "sensor" for d in devs),

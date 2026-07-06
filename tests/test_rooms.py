@@ -156,6 +156,67 @@ def test_readingless_actuator_end_to_end_placed_or_flagged():
     assert out["unlocated"][0]["location_unknown"] is True
 
 
+# ── room-fill dev half (docs/design/map-room-fill.md): climate resolver, range flags, ordering ──
+
+def _cs(did, temp=None, hum=None, age=5.0, role=None):
+    """A room-climate sensor input dict (as build_rooms accumulates)."""
+    m = {}
+    if temp is not None:
+        m["temperature_c"] = temp
+    if hum is not None:
+        m["humidity_pct"] = hum
+    return {"device_id": did, "metrics": m, "age_s": age, "climate_role": role}
+
+
+def test_climate_none_when_no_temperature():
+    assert V.resolve_room_climate([]) is None
+    assert V.resolve_room_climate([_cs("d", hum=50)]) is None      # humidity alone isn't a climate read
+
+
+def test_climate_primary_role_wins_over_mean():
+    out = V.resolve_room_climate([_cs("a", 21.0, 45, role="primary"), _cs("b", 25.0, 55)])
+    assert out["confidence"] == "primary" and out["source_device_id"] == "a"
+    assert out["value"] == {"temperature_c": 21.0, "humidity_pct": 45}
+
+
+def test_climate_stale_primary_falls_to_secondary():
+    out = V.resolve_room_climate([_cs("p", 21.0, 45, age=9999, role="primary"),   # stale
+                                  _cs("s", 22.0, 46, role="secondary")])
+    assert out["confidence"] == "secondary" and out["source_device_id"] == "s"
+
+
+def test_climate_averaged_and_divergent():
+    # two close sensors -> averaged (amber)
+    out = V.resolve_room_climate([_cs("a", 21.0, 45), _cs("b", 22.0, 47)])
+    assert out["confidence"] == "averaged" and out["source_device_id"] is None
+    assert out["value"] == {"temperature_c": 21.5, "humidity_pct": 46.0}
+    # a wide temperature spread -> averaged_divergent (red) — an average hiding a real spread
+    div = V.resolve_room_climate([_cs("a", 18.0, 45), _cs("b", 25.0, 46)])
+    assert div["confidence"] == "averaged_divergent"
+
+
+def test_out_of_range_map_flags_only_out_of_range():
+    m = {"temperature_c": 21.0, "humidity_pct": 80.0, "co2_ppm": 1500}   # temp ok; RH + CO2 high
+    oor = V.out_of_range_map(m)
+    assert oor == {"humidity_pct": True, "co2_ppm": True}
+
+
+def test_build_rooms_attaches_climate_and_orders_devices():
+    sensors = [_sensor("meter_kitchen", "kitchen", metrics={"temperature_c": 21.0, "humidity_pct": 44.0}),
+               _sensor("gas_kitchen", "kitchen", dtype="sgp40_gas", metrics={"voc_index": 300})]
+    out = V.build_rooms(sensors, AREAS, controllable_ids={"gas_kitchen"})   # pretend gas is the actuator
+    k = next(r for r in out["rooms"] if r["id"] == "kitchen")
+    # climate resolved from the sensor (gas is an actuator, excluded from climate)
+    assert k["climate"]["confidence"] == "averaged" and k["climate"]["value"]["temperature_c"] == 21.0
+    # actuator ordered before sensor
+    assert [d["role"] for d in k["devices"]] == ["actuator", "sensor"]
+    # out-of-range surfaced on the device (voc_index 300 > 250)
+    gas = next(d for d in k["devices"] if d["device_id"] == "gas_kitchen")
+    assert gas["out_of_range"] == {"voc_index": True}
+    # empty room has no climate
+    assert next(r for r in out["rooms"] if r["id"] == "dining_nook")["climate"] is None
+
+
 if __name__ == "__main__":
     from tests._harness import run_module
     raise SystemExit(run_module(globals()))
