@@ -178,6 +178,53 @@ def build_sensor_list(hot_conn, now: float, meta: dict | None = None,
     return out
 
 
+def build_actuator_list(hot_conn, control_registry, present_ids, *, meta=None, now=None) -> list[dict]:
+    """Sensor-shaped entries for controllable devices (actuators) the authoritative sensor path did NOT
+    already surface — e.g. the Midea dehumidifier, whose self-reported telemetry is non-authoritative
+    (the writer demotes transport='midea-lan'), so it never appears via build_sensor_list and would
+    otherwise vanish from the room graph entirely.
+
+    Area/type come from the CONTROL REGISTRY (control.yaml) — the canonical source — NOT device_last_seen,
+    which a (possibly stale) controller may have stamped 'unknown'. Latest metric values are pulled at
+    EITHER trust level so the tile still shows current RH/target. An actuator whose area isn't a canonical
+    room falls through build_rooms into `unlocated` (the red flag) rather than disappearing. Pairs with
+    build_rooms; `present_ids` is the set of device_ids already emitted by build_sensor_list (skip those)."""
+    meta = meta or {}
+    present = present_ids or set()
+    out = []
+    for did, ctl in (control_registry or {}).items():
+        if did in present:
+            continue
+        m = meta.get(did) or {}
+        if m.get("hidden") or m.get("retired"):            # honour the R8 hide/retire lifecycle
+            continue
+        area = ctl.get("area") if isinstance(ctl, dict) else getattr(ctl, "area", None)
+        dtype = ctl.get("device_type") if isinstance(ctl, dict) else getattr(ctl, "device_type", None)
+        metrics: dict = {}
+        ts = None
+        if hot_conn is not None:
+            for metric, value, rts in hot_conn.execute(
+                    """SELECT r.metric, r.value, r.ts FROM readings r
+                         JOIN (SELECT metric, MAX(ts) AS mts FROM readings
+                                WHERE device_id=? GROUP BY metric) x
+                           ON r.metric=x.metric AND r.ts=x.mts
+                        WHERE r.device_id=?""", (did, did)).fetchall():
+                metrics[metric] = value
+                if rts and (ts is None or rts > ts):
+                    ts = rts
+        dp = dewpoint_c(metrics.get("temperature_c"), metrics.get("humidity_pct"))
+        if dp is not None:
+            metrics["dewpoint_c"] = dp
+        out.append({
+            "device_id": did, "device_type": dtype or "unknown", "area": area or "unknown",
+            "name": m.get("name") or None, "metrics": metrics, "ts": ts, "offsets": {},
+            "room": m.get("room") or area or "unknown",
+            "age_s": _age_s(ts, now) if now is not None else None,
+            "graphs": sensor_graphs(metrics),
+        })
+    return out
+
+
 def build_rooms(sensors: list[dict], areas: dict | None = None, geometry: dict | None = None,
                 placement: dict | None = None, controllable_ids: set | None = None) -> dict:
     """The canonical room graph (ADR-0026 Phase 3 UI) — supersedes the bare `/areas` string list.
@@ -221,7 +268,12 @@ def build_rooms(sensors: list[dict], areas: dict | None = None, geometry: dict |
         if room_id in areas:
             by_room[room_id].append(_dev(room_id))
         else:
-            unlocated.append({**_dev(room_id), "area": room_id})   # not a canonical area → surface it
+            # not a canonical area → NEVER silently drop it; surface it as a red flag the UI must act on
+            # (a device that exists but has no valid location). `location_unknown` is the explicit signal.
+            unlocated.append({**_dev(room_id), "area": room_id, "location_unknown": True,
+                              "reason": ("device has no resolved location"
+                                         if not room_id or room_id == "unknown"
+                                         else f"area '{room_id}' is not a canonical room in areas.yaml")})
 
     rooms = []
     for order, (aid, meta) in enumerate(areas.items()):

@@ -87,6 +87,75 @@ def test_empty_inputs_do_not_error():
     assert out == {"schema_version": 1, "levels": [], "zones": [], "rooms": [], "unlocated": []}
 
 
+# ── build_actuator_list: no controllable device silently disappears (the dehumidifier case) ──
+
+def test_actuator_list_surfaces_readingless_actuator_from_registry():
+    # the Midea dehumidifier: non-authoritative telemetry → absent from build_sensor_list; area lives in
+    # the control registry (control.yaml = living_room), NOT device_last_seen (which the stale controller
+    # stamped 'unknown'). build_actuator_list must still surface it, located, with no readings at all.
+    reg = {"dehumidifier_living_room": {"area": "kitchen", "device_type": "dehumidifier"}}
+    out = V.build_actuator_list(None, reg, present_ids=set(), meta={}, now=1000.0)
+    assert len(out) == 1
+    e = out[0]
+    assert e["device_id"] == "dehumidifier_living_room"
+    assert e["area"] == "kitchen" and e["room"] == "kitchen"   # sourced from the registry
+    assert e["device_type"] == "dehumidifier" and e["metrics"] == {}
+
+
+def test_actuator_list_skips_already_present_devices():
+    reg = {"purifier_h_office": {"area": "h_office", "device_type": "air_purifier"}}
+    out = V.build_actuator_list(None, reg, present_ids={"purifier_h_office"}, meta={})
+    assert out == []                                            # already in the authoritative sensor list
+
+
+def test_actuator_list_pulls_latest_metrics_any_trust_level():
+    import sqlite3
+    c = sqlite3.connect(":memory:")
+    c.execute("CREATE TABLE readings(device_id TEXT, metric TEXT, value REAL, ts TEXT, authoritative INT)")
+    # two non-authoritative self-reports (authoritative=0) — the sensor path would ignore these
+    c.executemany("INSERT INTO readings VALUES(?,?,?,?,0)",
+                  [("dehumidifier_living_room", "humidity_pct", 32.0, "2026-07-06T18:00:00Z"),
+                   ("dehumidifier_living_room", "humidity_pct", 41.0, "2026-07-06T18:05:00Z"),
+                   ("dehumidifier_living_room", "temperature_c", 20.0, "2026-07-06T18:05:00Z")])
+    reg = {"dehumidifier_living_room": {"area": "living_room", "device_type": "dehumidifier"}}
+    out = V.build_actuator_list(c, reg, present_ids=set(), meta={}, now=1000.0)
+    m = out[0]["metrics"]
+    assert m["humidity_pct"] == 41.0                            # latest wins
+    assert m["temperature_c"] == 20.0
+    assert "dewpoint_c" in m                                    # derived from temp+RH
+
+
+def test_actuator_list_honours_hidden_overlay():
+    reg = {"dehumidifier_living_room": {"area": "living_room", "device_type": "dehumidifier"}}
+    out = V.build_actuator_list(None, reg, present_ids=set(),
+                                meta={"dehumidifier_living_room": {"hidden": True}})
+    assert out == []
+
+
+def test_unlocated_carries_red_flag():
+    # a device whose area is not canonical → surfaced in unlocated with the explicit red-flag signal
+    out = V.build_rooms([_sensor("stray", "garage")], AREAS)
+    u = out["unlocated"][0]
+    assert u["location_unknown"] is True and "garage" in u["reason"]
+    # a genuinely location-less device (area 'unknown') gets the no-location reason
+    out2 = V.build_rooms([_sensor("nowhere", "unknown")], AREAS)
+    assert out2["unlocated"][0]["location_unknown"] is True
+    assert "no resolved location" in out2["unlocated"][0]["reason"]
+
+
+def test_readingless_actuator_end_to_end_placed_or_flagged():
+    # located actuator (canonical registry area) lands in its room; unknown-area one → unlocated red flag
+    reg = {"dehumidifier_living_room": {"area": "kitchen", "device_type": "dehumidifier"},
+           "orphan_actuator": {"area": "unknown", "device_type": "dehumidifier"}}
+    acts = V.build_actuator_list(None, reg, present_ids=set(), meta={}, now=1.0)
+    out = V.build_rooms(acts, AREAS, controllable_ids=set(reg))
+    kitchen = next(r for r in out["rooms"] if r["id"] == "kitchen")
+    assert [d["device_id"] for d in kitchen["devices"]] == ["dehumidifier_living_room"]
+    assert kitchen["devices"][0]["role"] == "actuator"
+    assert [u["device_id"] for u in out["unlocated"]] == ["orphan_actuator"]
+    assert out["unlocated"][0]["location_unknown"] is True
+
+
 if __name__ == "__main__":
     from tests._harness import run_module
     raise SystemExit(run_module(globals()))

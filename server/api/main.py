@@ -906,7 +906,7 @@ def rooms_list():
     device-placement.yaml + the live sensor list."""
     import time
 
-    from server.api.viewmodel import build_rooms, build_sensor_list
+    from server.api.viewmodel import build_actuator_list, build_rooms, build_sensor_list
     from server.control import control_store as store
     areas = _load_yaml_section(AREAS_YAML, "areas")
     placement = _load_yaml_section(DEVICE_PLACEMENT, "placements")
@@ -918,16 +918,22 @@ def rooms_list():
             log.warning("could not parse %s", HOUSE_GEOMETRY, exc_info=True)
     hc = _hot_conn() if DB_PATH.exists() else None
     cc = _control_conn()
+    ctl_reg = getattr(app.state, "control_registry", {}) or {}
     try:
         meta = store.all_device_meta(cc) if cc is not None else {}
         calib = store.all_calibration(cc) if cc is not None else {}
         sensors = build_sensor_list(hc, time.time(), meta=meta, calib=calib)
+        # actuators whose only telemetry is non-authoritative (e.g. the Midea dehumidifier) never appear
+        # via the authoritative sensor path — add them from the control registry so no controllable device
+        # silently vanishes; unresolved locations surface in build_rooms `unlocated` (the red flag).
+        present = {s["device_id"] for s in sensors}
+        sensors = sensors + build_actuator_list(hc, ctl_reg, present, meta=meta, now=time.time())
     finally:
         if hc is not None:
             hc.close()
         if cc is not None:
             cc.close()
-    ctl = set(getattr(app.state, "control_registry", {}) or {})
+    ctl = set(ctl_reg)
     return build_rooms(sensors, areas, geometry=geometry, placement=placement, controllable_ids=ctl)
 
 
