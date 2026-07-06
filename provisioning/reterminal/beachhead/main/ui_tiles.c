@@ -151,9 +151,13 @@ static void render(cJSON *sensors, cJSON *devices, cJSON *catalog, const char *r
 }
 
 // Fetch + render one cycle for the CURRENT nav state (house map, or a room's filtered grid).
-static void do_render_cycle(void)
+// `nav` = this cycle was triggered by a nav change (entry/back), not the periodic timer. The devices
+// screen is management data that changes rarely, so it renders only on `nav` and stays static otherwise —
+// no 10s full-table teardown, no flicker. The map/room views still refresh live sensor values each tick.
+static void do_render_cycle(bool nav)
 {
     if (s_devview) {
+      if (nav) {                                         // render only on entry — static after, no flicker
         // ── devices-management screen: editable Device/Location/Status table ──
         int lm = 0, lmeta = 0;
         char *bm = ui_http_get(s_map_url, &lm);          // /api/v1/rooms (device list + room options)
@@ -176,6 +180,7 @@ static void do_render_cycle(void)
         if (rmeta) cJSON_Delete(rmeta);
         if (bm) heap_caps_free(bm);
         if (bmeta) heap_caps_free(bmeta);
+      }
     } else if (s_room[0]) {
         // ── room-zoom: the device grid filtered to the selected room ──
         int l1 = 0, l2 = 0;
@@ -269,10 +274,11 @@ static void ui_task(void *pv)
 {
     TickType_t last = xTaskGetTickCount() - pdMS_TO_TICKS(REFRESH_MS);   // render on first pass
     for (;;) {
-        if (s_nav_dirty || (xTaskGetTickCount() - last) >= pdMS_TO_TICKS(REFRESH_MS)) {
+        bool nav = s_nav_dirty;
+        if (nav || (xTaskGetTickCount() - last) >= pdMS_TO_TICKS(REFRESH_MS)) {
             s_nav_dirty = false;
             last = xTaskGetTickCount();
-            do_render_cycle();
+            do_render_cycle(nav);
         }
         vTaskDelay(pdMS_TO_TICKS(150));   // poll for nav changes (tap/back) for a snappy response
     }
