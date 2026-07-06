@@ -1143,7 +1143,10 @@ def rung_since(res: str = Query(..., description="rung name: 1min|1hour|1day|1we
 # leak onto the panel's (physically-accessible) SD. control_secrets.yaml / node_secrets.enc / *.env / the
 # master pass are deliberately EXCLUDED: a restore that needs credentials pulls them from the controlled box,
 # not the panel. (Security decision — revisit only if encrypted-secret replication is explicitly wanted.)
-REPLICA_CONFIG_ALLOW = ("control.yaml", "control_policy.yaml", "areas.yaml", "devices.yaml")
+REPLICA_CONFIG_ALLOW = ("control.yaml", "control_policy.yaml", "areas.yaml", "devices.yaml",
+                        # ADR-0026 room-graph render sources for the D1001 house-map / PWA (house-geo-backup-sync).
+                        # Inert house geometry (room polygons + per-device coords), no secrets → safe on the panel SD.
+                        "house-geometry.json", "device-placement.yaml")
 # Cap the manifest to the newest N parquet day-files: the panel's manifest buffer is 8 KB (ha_replica.c), and
 # day-files accumulate 1/day. Newest = most valuable; older are omitted from the backup set (logged, not silent).
 REPLICA_PARQUET_MAX = int(os.environ.get("HA_REPLICA_PARQUET_MAX", "30"))
