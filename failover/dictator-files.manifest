@@ -35,6 +35,13 @@ instance/location-crosswalk.html | optional | sync
 # standby serves the same rooms (geometry + per-device placement) — else the panel map degrades on failover.
 instance/house-geometry.json  | optional | sync
 instance/device-placement.yaml | optional | sync
+# Device registries — raw device identity -> canonical device_id/area, read by the ingest mappers
+# (edge_mapper, tasmota_bridge, levoit_bridge) + device_registry. SYNC so a promoted standby OR A NEW
+# SERVER maps readings identically (added when airgap_router_pm S31 was inducted, 2026-07-06). optional =
+# ingest degrades to unmapped readings if absent; control/actuation are unaffected (control.yaml owns those).
+instance/devices.yaml         | optional | sync
+instance/tasmota-devices.yaml | optional | sync
+instance/levoit-devices.yaml  | optional | sync
 # R9 (ADR-0017) HTTPS + web-push. SYNC (not local) on purpose: same cert + VAPID key on both boxes means
 # a failover keeps the SAME self-signed cert (the browser's one-time trust survives) AND — decisive — the
 # SAME VAPID key, because a push subscription is bound to the server key; a different key on the promoted
