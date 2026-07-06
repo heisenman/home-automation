@@ -96,6 +96,20 @@ def test_published_state_carries_timestamp():
         assert st["meta"]["authoritative"] is False          # ...flagged non-authoritative
 
 
+def test_published_state_carries_area():
+    """Regression: the writer reads area from the PAYLOAD (writer.py: payload.get('area','unknown')),
+    not the topic — so a missing area field stamps device_last_seen.area='unknown' and the device drops
+    off the map. The self-report payload must include the registry area."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make(tmp, STATUS_ON)
+        ctrl.mqtt = _FakeMqtt()
+        ctrl.inject_reading("meter_pro_living_room", 50.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        topic, st = next((t, p) for t, p in ctrl.mqtt.published if t.endswith("/state"))
+        assert st.get("area") == "living_room", f"state missing area: {st}"
+        assert topic == "home/living_room/dehumidifier_office/state"   # topic + payload agree
+
+
 def test_fallback_source_used_when_primary_stale():
     with tempfile.TemporaryDirectory() as tmp:
         ctrl, iss, db = _make(tmp, STATUS_ON)                  # device ON

@@ -274,6 +274,7 @@ class Controller:
         # fresh ts every self-report collides on ts="" and INSERT OR IGNORE freezes onboard RH forever.
         ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
         payload = {"schema": 1, "device_id": device_id, "device_type": "dehumidifier", "ts": ts,
+                   "area": area,                          # writer reads area from the PAYLOAD, not the topic
                    "transport": "midea-lan", "running": st.get("running"),
                    "target_pct": st.get("target"), "metrics": metrics,
                    "meta": {"authoritative": False}}
