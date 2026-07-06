@@ -79,6 +79,9 @@ static int do_action(const struct admin_req *rq)
         static char resp[640];
         snprintf(url, sizeof(url), "%s/control/%s/policy", ui_http_base(), rq->id);
         return ui_http_send_json(HTTP_METHOD_PUT, url, rq->arg, s_admin_tok, resp, sizeof(resp));
+    } else if (rq->kind == 4) {                            // device relocate (POST, arg = JSON body)
+        snprintf(url, sizeof(url), "%s/api/v1/devices/%s/relocate", ui_http_base(), rq->id);
+        return ui_http_send_json(HTTP_METHOD_POST, url, rq->arg, s_admin_tok, NULL, 0);
     }
     return -1;
 }
@@ -95,7 +98,8 @@ static void admin_worker(void *pv)
             s_jwt_valid = false;
             if (ensure_admin()) code = do_action(&rq);
         }
-        const char *ok = rq.kind == 1 ? "scene set" : rq.kind == 2 ? "override applied" : "automation saved";
+        const char *ok = rq.kind == 1 ? "scene set" : rq.kind == 2 ? "override applied"
+                       : rq.kind == 3 ? "automation saved" : "device moved";
         if (code == 200) ui_toast(ok);
         else if (code >= 400) ui_toast("rejected by server");
         else ui_toast("request failed");
@@ -119,6 +123,13 @@ void ui_admin_set_override(const char *id, const char *body)
 void ui_admin_set_policy(const char *id, const char *body)
 {
     struct admin_req rq = { .kind = 3 };
+    snprintf(rq.id, sizeof(rq.id), "%s", id);
+    snprintf(rq.arg, sizeof(rq.arg), "%s", body);
+    if (s_admin_q) xQueueSend(s_admin_q, &rq, 0);
+}
+void ui_admin_set_relocate(const char *id, const char *body)
+{
+    struct admin_req rq = { .kind = 4 };
     snprintf(rq.id, sizeof(rq.id), "%s", id);
     snprintf(rq.arg, sizeof(rq.arg), "%s", body);
     if (s_admin_q) xQueueSend(s_admin_q, &rq, 0);

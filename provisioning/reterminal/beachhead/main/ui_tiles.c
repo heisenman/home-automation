@@ -24,6 +24,7 @@
 #include "ui/ui_grid.h"     // sensor tile grid + card registry + live-state patching (ADR-0020)
 #include "ui/ui_map.h"      // house map: /api/v1/rooms -> spatial room chips (panel-ui-spatial-nav)
 #include "ui/ui_admin.h"    // admin session + top-bar toast/gear + idle auto-lock (ADR-0020)
+#include "ui/ui_devices.h"  // devices-management screen: list -> reassign room (canonical relocate)
 #include "ui/ui_scenes.h"   // top-bar row + whole-house scene selector (ADR-0020)
 #include "ui/ui_controls.h" // actuator cards + command overlay (ADR-0020)
 #include "ui/ui_power.h"    // top-bar power-off button + confirm (ADR-0020)
@@ -38,11 +39,14 @@ static char s_house_url[256]; // /api/v1/house
 static char s_map_url[256];   // /api/v1/rooms (house map — the landing view)
 static lv_obj_t *s_header, *s_grid;
 static lv_obj_t *s_map;       // house-map container (absolute-positioned room chips)
-static lv_obj_t *s_back;      // "< Rooms" back button (shown only in the room-zoom view)
+static lv_obj_t *s_devices;   // devices-management screen container (list -> reassign room)
+static lv_obj_t *s_back;      // "< Rooms" back button (shown only in the room-zoom / devices view)
+static lv_obj_t *s_devbtn;    // "Devices" entry button in the title row (shown only on the house map)
 static lv_obj_t *s_batt_lbl;  // battery indicator in the top bar
 
 static char s_room[28];            // selected room slug for room-zoom; "" = house map (landing)
 static char s_room_name[28];       // its display name (for the title label)
+static volatile bool s_devview;    // devices-management screen active (overrides map/room)
 static volatile bool s_nav_dirty;  // set on a nav change -> ui_task re-renders promptly (no 10s wait)
 
 // House-map room tap -> enter that room's zoom view (the device grid filtered to this room).
@@ -58,13 +62,35 @@ static void on_room_tap(const char *area_id, const char *name)
     ESP_LOGI(TAG, "nav -> room %s", s_room);
 }
 
-// Back button in the room-zoom view -> return to the house map.
+// Back button (room-zoom OR devices view) -> return to the house map.
 static void on_back_clicked(lv_event_t *e)
 {
     (void)e;
     s_room[0] = 0;
+    s_devview = false;
     ui_expand_clear();           // leaving the room -> destroy its inline charts (not persisted)
     s_nav_dirty = true;
+}
+
+// "Devices" button on the house map -> open the devices-management screen.
+static void on_devices_clicked(lv_event_t *e)
+{
+    (void)e;
+    s_devview = true;
+    s_nav_dirty = true;
+}
+
+// A room was picked in the devices screen -> fire the canonical relocate (restamp: correction phase)
+// through the admin worker (HTTP off the click stack; auto-JWT + 401 retry). The worker toasts the result.
+static void on_relocate(const char *device_id, const char *new_area, const char *new_area_name)
+{
+    if (!device_id || !new_area) return;
+    char body[160];
+    snprintf(body, sizeof body, "{\"new_area\":\"%s\",\"mode\":\"restamp\",\"dry_run\":false}", new_area);
+    ui_admin_set_relocate(device_id, body);
+    char t[96];
+    snprintf(t, sizeof t, "moving to %s...", new_area_name ? new_area_name : new_area);
+    ui_toast(t);
 }
 
 static bool s_started;
@@ -107,7 +133,24 @@ static void render(cJSON *sensors, cJSON *devices, cJSON *catalog, const char *r
 // Fetch + render one cycle for the CURRENT nav state (house map, or a room's filtered grid).
 static void do_render_cycle(void)
 {
-    if (s_room[0]) {
+    if (s_devview) {
+        // ── devices-management screen: list every device -> reassign its room ──
+        int lm = 0;
+        char *bm = ui_http_get(s_map_url, &lm);      // reuse /api/v1/rooms (rooms[].devices[] grouped)
+        cJSON *rm = (bm && lm > 0) ? cJSON_Parse(bm) : NULL;
+        if (lvgl_port_lock(0)) {
+            ui_devices_render(rm, s_devices, on_relocate);
+            lv_obj_clear_flag(s_devices, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(s_back, LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(s_header, "Devices");
+            lvgl_port_unlock();
+        }
+        if (rm) cJSON_Delete(rm);
+        if (bm) heap_caps_free(bm);
+    } else if (s_room[0]) {
         // ── room-zoom: the device grid filtered to the selected room ──
         int l1 = 0, l2 = 0;
         char *b1 = ui_http_get(s_url, &l1);         // sensors
@@ -120,6 +163,8 @@ static void do_render_cycle(void)
         if (lvgl_port_lock(0)) {
             lv_obj_clear_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_devices, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(s_back, LV_OBJ_FLAG_HIDDEN);   // back button beside the title
             lvgl_port_unlock();
         }
@@ -141,7 +186,9 @@ static void do_render_cycle(void)
                 ui_map_render(rm, s_map, on_room_tap);
                 lv_obj_clear_flag(s_map, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_devices, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_back, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_clear_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);   // Devices entry only on the map
                 lv_label_set_text(s_header, "House");
                 lvgl_port_unlock();
             }
@@ -164,6 +211,8 @@ static void do_render_cycle(void)
                 if (lvgl_port_lock(0)) {
                     lv_obj_clear_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
                     lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
+                    lv_obj_add_flag(s_devices, LV_OBJ_FLAG_HIDDEN);
+                    lv_obj_add_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);   // no rooms data -> no devices screen
                     lv_obj_add_flag(s_back, LV_OBJ_FLAG_HIDDEN);
                     lvgl_port_unlock();
                 }
@@ -329,6 +378,25 @@ void ui_tiles_start(const char *sensors_url)
     lv_label_set_text(s_header, "House");
     lv_obj_set_style_text_font(s_header, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_header, lv_color_hex(0xffffff), 0);
+    lv_obj_set_flex_grow(s_header, 1);      // push the Devices button to the right edge of the title row
+
+    // "Devices" entry -> the devices-management screen. Shown only on the house map (hidden in
+    // room-zoom / devices views, where the back button takes the title-row slot instead).
+    s_devbtn = lv_obj_create(title_row);
+    lv_obj_set_size(s_devbtn, 156, 46);
+    lv_obj_set_style_bg_color(s_devbtn, lv_color_hex(0x16204a), 0);
+    lv_obj_set_style_border_color(s_devbtn, lv_color_hex(0x2f7e7a), 0);
+    lv_obj_set_style_border_width(s_devbtn, 2, 0);
+    lv_obj_set_style_radius(s_devbtn, 10, 0);
+    lv_obj_set_style_pad_all(s_devbtn, 0, 0);
+    lv_obj_clear_flag(s_devbtn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_devbtn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_devbtn, on_devices_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *dblbl = lv_label_create(s_devbtn);
+    lv_label_set_text(dblbl, LV_SYMBOL_LIST "  Devices");
+    lv_obj_set_style_text_font(dblbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(dblbl, lv_color_hex(0xffffff), 0);
+    lv_obj_center(dblbl);
 
     // The screen itself scrolls vertically: [header] -> [tile grid] -> [expansion stack].
     lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_AUTO);
@@ -358,6 +426,20 @@ void ui_tiles_start(const char *sensors_url)
     lv_obj_set_layout(s_map, LV_LAYOUT_NONE);
     lv_obj_clear_flag(s_map, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
+
+    // Devices-management screen: a scrollable vertical list (device rows grouped by room). Fills the
+    // leftover height like the map (only one of the two is ever visible); its own content scrolls.
+    s_devices = lv_obj_create(scr);
+    lv_obj_set_width(s_devices, lv_pct(100));
+    lv_obj_set_height(s_devices, 0);
+    lv_obj_set_flex_grow(s_devices, 1);
+    lv_obj_set_style_bg_opa(s_devices, 0, 0);
+    lv_obj_set_style_border_width(s_devices, 0, 0);
+    lv_obj_set_style_pad_all(s_devices, 0, 0);
+    lv_obj_set_style_pad_row(s_devices, 6, 0);
+    lv_obj_set_flex_flow(s_devices, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scroll_dir(s_devices, LV_DIR_VER);
+    lv_obj_add_flag(s_devices, LV_OBJ_FLAG_HIDDEN);
 
     ui_expand_init(scr);      // inline expansion stack below the grid (ui/ui_expand)
     ui_controls_init();       // actuator command overlay + worker (ui/ui_controls)
