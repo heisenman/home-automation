@@ -7,7 +7,7 @@ relocate rewrites the file non-atomically) and throttling stat() on a hot path.
 """
 import logging
 
-from server.ingest.registry_reload import RegistryReloader
+from server.util.registry_reload import RegistryReloader
 
 # The torn-read test deliberately triggers a load failure; the reloader logs it via log.exception.
 # Silence that expected traceback so the suite output stays clean (behaviour is asserted, not the log).

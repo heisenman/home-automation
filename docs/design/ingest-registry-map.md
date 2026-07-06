@@ -57,7 +57,7 @@ the bridge stamps**. So relocating a device by editing `devices.yaml` had no eff
 bridge kept its stale cache, the next reading re-stamped the old area, and the UI reverted within one
 scan cycle. Devices only "stuck" if their bridge happened to be restarted.
 
-## The fix — live registry reload (`server/ingest/registry_reload.py`)
+## The fix — live registry reload (`server/util/registry_reload.py`)
 
 `RegistryReloader(path, loader)` watches the registry file's **mtime** and reloads via the bridge's own
 `load_registry` when it changes; `.current()` on the hot path returns the freshest registry. So a
@@ -77,6 +77,26 @@ Each bridge is wired the same, backward-compatibly:
 - `attach_reloader(reloader)` swaps in `reloader.current` for the live path (called in `main()`).
 - `self._registry` is a **property** → `self._registry_get()`. Derived caches follow it:
   `LevoitBridge._by_devid` is now a property recomputed from `_registry`.
+
+### control.yaml is a SECOND reloaded registry (the 6th + 7th area-stampers)
+
+`devices.yaml` isn't the only cached registry. **Actuator** areas live in `instance/control.yaml`, which
+is cached by two more long-running services — so an *actuator* relocate popped back even after the 5
+ingest bridges were fixed:
+
+- **6th — `ha-controller`** (`server/control/controller.py`): the Midea dehumidifier is a controller-side
+  local driver; `_publish_state` stamps `area` from `self.registry` (loaded from control.yaml at
+  startup). `attach_registry_reloader(RegistryReloader(control.yaml, load_control_registry))` +
+  `_refresh_registry()` at the top of each `tick()` swaps `self.registry` live. Only the area/indicator
+  path reloads; the issuer/drivers/transports keep their mount-time state (adding a device still needs a
+  restart, but a relocate flows through).
+- **7th — `ha-api`/`ha-api-tls`** (`server/api/main.py`): `app.state.control_registry` feeds the READ
+  side (`build_actuator_list` → `/rooms`, `build_display` → `/displays`). `_control_registry()` consults
+  an `app.state.control_registry_reloader` so a relocate shows up without an ha-api restart.
+
+The shared `RegistryReloader` now lives at `server/util/registry_reload.py` (used by ingest, control, and
+api). Structural follow-up under review: `docs/design/actuator-telemetry-contract.md` proposes stamping
+actuator `area` in ONE place so Midea (controller) and Levoit (bridge) can't drift again.
 
 Tests: `tests/test_registry_reload.py` (reload-on-change, throttle, torn-read recovery, missing-file);
 existing `tests/test_edge_mapper_dedup.py` proves the dict constructor still works.

@@ -36,7 +36,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))  # repo root (run as a script)
 from server.util.mqtt_creds import apply_credentials  # noqa: E402
-from server.ingest.registry_reload import RegistryReloader  # noqa: E402
+from server.util.registry_reload import RegistryReloader  # noqa: E402
 from server.mesh.assign import Assigner  # noqa: E402
 from server.mesh import store as mesh_store  # noqa: E402
 from server.mesh.topology import SERVER  # noqa: E402

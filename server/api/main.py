@@ -292,6 +292,13 @@ def _mount_control(app: FastAPI) -> None:
         app.include_router(make_registry_router(api_authz, DEVICES_REGISTRY, CONTROL_REGISTRY,
                                                  NODE_SECRETS_LUT, master))  # add-device: sensor / actuator / node-enroll
         app.state.control_registry = registry      # device_id -> DeviceCtl (traits for manual-control UI)
+        # live-reload control.yaml so an actuator RELOCATE (area edit) is reflected in /rooms + /displays
+        # without an ha-api restart (the read-side sibling of the controller + ingest reloads). Only the
+        # display registry is refreshed; the command-plane routers keep their mount-time registry (a new
+        # device still needs a restart to be commandable).
+        from server.control.registry import load_control_registry
+        from server.util.registry_reload import RegistryReloader
+        app.state.control_registry_reloader = RegistryReloader(CONTROL_REGISTRY, load_control_registry)
         missing = check_secrets_present(registry, issuer.secrets)
         log.info("control plane MOUNTED — %d device(s), %d controllable; broker %s:%s%s",
                  len(registry), len(issuer.secrets), broker, port,
@@ -897,6 +904,16 @@ def _load_yaml_section(path: Path, section: str) -> dict:
         return {}
 
 
+def _control_registry():
+    """The current control registry (device_id -> DeviceCtl), live-reloaded from control.yaml so an
+    actuator relocate (area edit) shows up in /rooms + /displays without an ha-api restart. Falls back to
+    the mount-time snapshot (or None if the control plane isn't mounted, e.g. a warm standby)."""
+    r = getattr(app.state, "control_registry_reloader", None)
+    if r is not None:
+        app.state.control_registry = r.current()      # refresh the snapshot other readers may use
+    return getattr(app.state, "control_registry", None)
+
+
 @app.get("/api/v1/rooms", include_in_schema=True)
 def rooms_list():
     """Canonical room graph (ADR-0026 Phase 3 UI) — the house→room→device nav source for the D1001 panel
@@ -918,7 +935,7 @@ def rooms_list():
             log.warning("could not parse %s", HOUSE_GEOMETRY, exc_info=True)
     hc = _hot_conn() if DB_PATH.exists() else None
     cc = _control_conn()
-    ctl_reg = getattr(app.state, "control_registry", {}) or {}
+    ctl_reg = _control_registry() or {}
     try:
         meta = store.all_device_meta(cc) if cc is not None else {}
         calib = store.all_calibration(cc) if cc is not None else {}
@@ -948,7 +965,7 @@ def _build_current_alerts(now: float) -> list[dict]:
         sensors = build_sensor_list(hc, now, meta=meta) if hc is not None else []
         displays = []
         if cc is not None:
-            reg = getattr(app.state, "control_registry", None)
+            reg = _control_registry()
             displays = [vm for did in sorted(store.all_policies(cc))
                         if (vm := build_display(cc, hc, did, now, registry=reg, meta=meta)) is not None]
         return build_alerts(sensors, displays, now)
@@ -1041,7 +1058,7 @@ def display_list():
     if cc is None:
         return {"devices": []}
     hc = _hot_conn() if DB_PATH.exists() else None
-    reg = getattr(app.state, "control_registry", None)
+    reg = _control_registry()
     dm = store.all_device_meta(cc)
     now = time.time()
     try:
@@ -1067,7 +1084,7 @@ def display_viewmodel(device_id: str):
     if cc is None:
         raise HTTPException(status_code=503, detail="control state not available")
     hc = _hot_conn() if DB_PATH.exists() else None
-    reg = getattr(app.state, "control_registry", None)
+    reg = _control_registry()
     try:
         from server.control import control_store as store
         vm = build_display(cc, hc, device_id, time.time(), registry=reg, meta=store.all_device_meta(cc))

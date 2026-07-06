@@ -31,7 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root (run as a script)
 from server.util.mqtt_creds import apply_credentials  # noqa: E402
-from server.ingest.registry_reload import RegistryReloader  # noqa: E402
+from server.util.registry_reload import RegistryReloader  # noqa: E402
 
 import paho.mqtt.client as mqtt
 import yaml

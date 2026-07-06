@@ -31,7 +31,7 @@ sys.path.insert(0, str(_REPO / "tools"))
 import switchbot_history as sbh   # noqa: E402
 
 from server.ingest.edge_mapper import load_registry, _utc_now  # noqa: E402
-from server.ingest.registry_reload import RegistryReloader  # noqa: E402
+from server.util.registry_reload import RegistryReloader  # noqa: E402
 from server.util.mqtt_creds import apply_credentials  # noqa: E402
 try:
     from server.mesh import store as mesh_store  # noqa: E402

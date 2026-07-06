@@ -110,6 +110,36 @@ def test_published_state_carries_area():
         assert topic == "home/living_room/dehumidifier_office/state"   # topic + payload agree
 
 
+class _CtlAt:
+    def __init__(self, area):
+        self.area = area
+
+
+class _FakeReloader:
+    """Stands in for RegistryReloader — .current() returns whatever the (simulated) control.yaml now holds."""
+    def __init__(self, registry):
+        self._registry = registry
+
+    def current(self):
+        return self._registry
+
+
+def test_actuator_relocate_reloads_area_without_restart():
+    """controller-area-reload: relocating an actuator edits its area in control.yaml. tick() must pick up
+    the new area live (via the attached reloader) so the self-report stamps the NEW area — no restart, no
+    pop-back. The controller is the 6th area-stamper, sibling of the ingest bridges' devices.yaml reload."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make(tmp, STATUS_ON)
+        ctrl.mqtt = _FakeMqtt()
+        ctrl.inject_reading("meter_pro_living_room", 50.0, ts=NOW - 30)
+        # simulate a relocate: control.yaml now says h_office for this actuator
+        ctrl.attach_registry_reloader(_FakeReloader({"dehumidifier_office": _CtlAt("h_office")}))
+        ctrl.tick(now=NOW)
+        topic, st = next((t, p) for t, p in ctrl.mqtt.published if t.endswith("/state"))
+        assert st.get("area") == "h_office", f"reloaded area not applied: {st}"
+        assert topic == "home/h_office/dehumidifier_office/state"
+
+
 def test_fallback_source_used_when_primary_stale():
     with tempfile.TemporaryDirectory() as tmp:
         ctrl, iss, db = _make(tmp, STATUS_ON)                  # device ON

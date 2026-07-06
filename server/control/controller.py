@@ -19,6 +19,8 @@ from pathlib import Path
 
 from server.comms import events as ev
 from server.control import bootstrap, control_store as store
+from server.control.registry import load_control_registry
+from server.util.registry_reload import RegistryReloader
 from server.control.automation import (
     DEFAULT_SCENE, DeviceState, Override, Policy, Reading, apply_scene, in_window, resolve,
     schedule_off_now)
@@ -67,6 +69,7 @@ class Controller:
         self.issuer = issuer
         self.drivers = drivers                 # device_id -> MideaDriver
         self.registry = registry               # device_id -> DeviceCtl
+        self._registry_reloader = None         # optional live control.yaml reload (attach_registry_reloader)
         self.db = db
         self.mqtt = mqtt_client
         self.readings: dict[str, Reading] = {}  # sensor device_id -> latest control Reading
@@ -136,7 +139,21 @@ class Controller:
         return None, None, False
 
     # ── tick ────────────────────────────────────────────────────────────────────
+    def attach_registry_reloader(self, reloader):
+        """Watch control.yaml for changes so an actuator RELOCATE (its area edited in control.yaml) takes
+        effect on live control without a restart — the controller is the 6th area-stamper (its self-report
+        _publish_state stamps area from self.registry), the sibling of the ingest bridges' devices.yaml
+        reload. Only self.registry (area + the indicator loop) is swapped; the issuer/drivers/transports
+        are unchanged, so a relocate flows through but adding/removing a device still needs a restart."""
+        self._registry_reloader = reloader
+        return self
+
+    def _refresh_registry(self):
+        if self._registry_reloader is not None:
+            self.registry = self._registry_reloader.current()
+
     def tick(self, now: float | None = None, dry_run: bool = False):
+        self._refresh_registry()               # pick up a live control.yaml edit (actuator relocate)
         now = now if now is not None else time.time()
         lt = time.localtime(now)
         tod = lt.tm_hour * 60 + lt.tm_min
@@ -348,6 +365,10 @@ def main():
         store.seed_policy(conn, levoit_id, {**LEVOIT_POLICY, "source_sensor": levoit_id})
     conn.close()
     ctrl = Controller(issuer, drivers, registry, a.db)
+    # live-reload control.yaml so an actuator relocate (area edit) takes effect without a controller
+    # restart — the control-plane sibling of the ingest bridges' devices.yaml reload.
+    ctrl.attach_registry_reloader(RegistryReloader(Path("instance/control.yaml"),
+                                                   load_control_registry, logger=log))
     if a.once:
         import paho.mqtt.client as mqtt
         from server.util.mqtt_creds import apply_credentials
