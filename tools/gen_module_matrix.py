@@ -48,7 +48,7 @@ MODULES = [
     ("ha_wifi", {"sources": ["ha_wifi.c"], "component": None}),
     ("ha_eth", {"sources": ["ha_eth.c"], "component": None}),
     ("ha_sntp", {"sources": ["ha_sntp.c"], "component": "ha_sntp"}),
-    ("ha_mqtt", {"sources": ["ha_mqtt.c"], "component": None}),
+    ("ha_mqtt", {"sources": ["ha_mqtt.c"], "component": "ha_mqtt"}),
     ("ble_scan", {"sources": ["ble_scan.c"], "component": "ha_ble_scan"}),
     ("switchbot_decode", {"sources": ["switchbot_decode.c"], "component": "switchbot_decode"}),
     ("ha_reach", {"sources": [], "component": "ha_reach"}),

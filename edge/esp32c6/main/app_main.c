@@ -29,6 +29,22 @@
 #define HA_NODE_ID    "c6-bench"
 #define HA_NTP_SERVER "pool.ntp.org"
 #endif
+// ha_mqtt seam: secrets.h provides these in production; fall back for a bench build. HA_FW_VERSION is board-set.
+#ifndef HA_CMD_SECRET
+#define HA_CMD_SECRET ""
+#endif
+#ifndef HA_OTA_HOST
+#define HA_OTA_HOST "192.168.0.245"
+#endif
+#ifndef HA_MQTT_USER
+#define HA_MQTT_USER ""
+#endif
+#ifndef HA_MQTT_PASS
+#define HA_MQTT_PASS ""
+#endif
+#ifndef HA_FW_VERSION
+#define HA_FW_VERSION "v16-ledoff"
+#endif
 
 static const char *TAG = "ha_edge";
 
@@ -79,6 +95,9 @@ void app_main(void) {
     ha_sntp_start_periodic(30 * 60 * 1000);   // re-sync every 30 min (the C6 RTC drifts fast)
 
     ha_relay_init();                // load the persisted Phase-B coverage allowlist (default: relay-all)
+    ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = HA_CMD_SECRET, .ota_host = HA_OTA_HOST,
+        .mqtt_user = HA_MQTT_USER, .mqtt_pass = HA_MQTT_PASS, .fw_version = HA_FW_VERSION,
+        .enable_reach = true });
     ha_mqtt_start(cfg.broker_uri, cfg.node_id);
     ha_ble_scan_cfg_t scan_cfg = {
         .controller_init = NULL,          // native controller (nimble_port_init brings it up)

@@ -36,8 +36,30 @@
 #define HA_NODE_ID    "c6-bench"
 #define HA_NTP_SERVER "pool.ntp.org"
 #endif
+// ha_mqtt seam: secrets.h provides these in production; fall back for a bench build. HA_FW_VERSION is board-set.
+#ifndef HA_CMD_SECRET
+#define HA_CMD_SECRET ""
+#endif
+#ifndef HA_OTA_HOST
+#define HA_OTA_HOST "192.168.0.245"
+#endif
+#ifndef HA_MQTT_USER
+#define HA_MQTT_USER ""
+#endif
+#ifndef HA_MQTT_PASS
+#define HA_MQTT_PASS ""
+#endif
+#ifndef HA_FW_VERSION
+#define HA_FW_VERSION "v19-hbed"
+#endif
 
 static const char *TAG = "ha_edge";
+
+// Operability-LED status hooks (S3-only): the shared ha_mqtt calls these on connect/disconnect and on an
+// OTA failure. Other boards pass NULL. Keeps the LED policy — an S3-specific peripheral — out of ha_mqtt.
+static void s3_led_ok(void *u)        { (void)u; ha_led_set(HA_LED_OK); }          // relaying normally → LED off
+static void s3_led_mqtt_down(void *u) { (void)u; ha_led_set(HA_LED_MQTT_DOWN); }   // broker unreachable
+static void s3_led_ota_fail(void *u)  { (void)u; ha_led_set(HA_LED_OTA_FAIL); }
 
 // Interrupt-driven transport switch: a reboot cleanly re-picks Ethernet-vs-Wi-Fi. The eth driver is
 // left running even when no cable is present, so its CONNECTED interrupt can tell us one was plugged in.
@@ -76,6 +98,13 @@ void app_main(void) {
     ha_config_t cfg;
     ha_config_load(&cfg, &(ha_config_t){ .wifi_ssid = HA_WIFI_SSID, .wifi_psk = HA_WIFI_PSK,
         .broker_uri = HA_BROKER_URI, .node_id = HA_NODE_ID, .ntp_server = HA_NTP_SERVER });
+
+    // Install the ha_mqtt seam early — ha_mqtt_has_cmd_secret() is checked below (LED FATAL if un-enrolled),
+    // before ha_mqtt_start. LED hooks are S3-specific; reach is wired on this node.
+    ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = HA_CMD_SECRET, .ota_host = HA_OTA_HOST,
+        .mqtt_user = HA_MQTT_USER, .mqtt_pass = HA_MQTT_PASS, .fw_version = HA_FW_VERSION,
+        .enable_reach = true, .on_connected = s3_led_ok, .on_disconnected = s3_led_mqtt_down,
+        .ota_on_fail = s3_led_ota_fail });
 
     // Shared network init — exactly once; both transports attach to this stack + event loop.
     ESP_ERROR_CHECK(esp_netif_init());

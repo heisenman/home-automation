@@ -20,7 +20,7 @@ Which module each **real firmware build** links. Pairs with [MODULES.md](MODULES
 | `ha_wifi` | fork | fork | fork | — |
 | `ha_eth` | — | — | fork | — |
 | `ha_sntp` | shared | shared | shared | — |
-| `ha_mqtt` | fork | fork | fork | — |
+| `ha_mqtt` | shared | shared | shared | — |
 | `ble_scan` | shared | shared | shared | shared |
 | `switchbot_decode` | shared | shared | shared | shared |
 | `ha_reach` | — | shared | shared | shared |
