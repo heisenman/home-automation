@@ -217,6 +217,37 @@ def test_build_rooms_attaches_climate_and_orders_devices():
     assert next(r for r in out["rooms"] if r["id"] == "dining_nook")["climate"] is None
 
 
+def test_actuator_map_state_status_is_family_agnostic_detail():
+    # dehumidifier -> target RH %
+    dehum = {"running": True, "actuator": {"target_pct": 45.0}, "traits": {}}
+    assert V.actuator_map_state(dehum) == {"running": True, "status": "45%"}
+    # purifier, 2-speed ranged -> named level verbatim (40->Low / 80->High)
+    purifier2 = {"running": True, "actuator": {"fan_speed": 80.0},
+                 "traits": {"ranged": {"min": 40, "max": 80, "step": 40}}}
+    assert V.actuator_map_state(purifier2) == {"running": True, "status": "High"}
+    # purifier, 4-speed ranged -> numeric level gets a "Fan N" prefix (not a bare "1")
+    purifier4 = {"running": True, "actuator": {"fan_speed": 1.0},
+                 "traits": {"ranged": {"min": 1, "max": 4, "step": 1}}}
+    assert V.actuator_map_state(purifier4) == {"running": True, "status": "Fan 1"}
+    # plug/switch with no target/level -> "on" running, "" idle
+    assert V.actuator_map_state({"running": True, "actuator": {}, "traits": {}})["status"] == "on"
+    assert V.actuator_map_state({"running": False, "actuator": {}, "traits": {}})["status"] == ""
+    # status is verbatim; running coerced to bool
+    assert V.actuator_map_state({"running": None, "actuator": {}})["running"] is False
+
+
+def test_build_rooms_passes_actuator_state_through():
+    # the rooms_list handler attaches state {running,status} on actuators; build_rooms carries it verbatim
+    a = _sensor("purifier_h_office", "h_office", dtype="air_purifier", metrics={"fan_on": 1})
+    a["state"] = {"running": True, "status": "ok"}
+    s = _sensor("meter_kitchen", "kitchen")               # a sensor gets no state
+    out = V.build_rooms([a, s], AREAS, controllable_ids={"purifier_h_office"})
+    ho = next(r for r in out["rooms"] if r["id"] == "h_office")
+    assert ho["devices"][0]["state"] == {"running": True, "status": "ok"}
+    kit = next(r for r in out["rooms"] if r["id"] == "kitchen")
+    assert kit["devices"][0]["state"] is None
+
+
 if __name__ == "__main__":
     from tests._harness import run_module
     raise SystemExit(run_module(globals()))

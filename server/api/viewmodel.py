@@ -298,6 +298,31 @@ def resolve_room_climate(room_sensors: list[dict]) -> dict | None:
             "source_device_id": None}
 
 
+def actuator_map_state(display_vm: dict) -> dict:
+    """`{running, status}` for an actuator on the spatial house map (docs/design/map-room-fill.md Arc 2),
+    derived from a `build_display` view-model — so the map, room-zoom, and PWA agree (control registry is the
+    source). `status` is a short, family-agnostic ACTION detail the panel renders verbatim (it does NOT
+    re-derive per family): dehumidifier → target RH (e.g. "45%"); purifier → fan level (e.g. "Low"/"High",
+    from the ranged trait labels); plug/switch → "on" when running else "". Not its onboard reading — the
+    room climate line already covers ambient."""
+    act = display_vm.get("actuator") or {}
+    traits = display_vm.get("traits") or {}
+    running = bool(display_vm.get("running"))
+    if act.get("target_pct") is not None:
+        status = f"{round(act['target_pct'])}%"
+    elif act.get("fan_speed") is not None:
+        speed = round(act["fan_speed"])
+        rcfg = traits.get("ranged")
+        label = next((o["label"] for o in _ranged_options(rcfg) if o["value"] == speed), None) if rcfg else None
+        # named levels (Low/Med/High for 2-3 speeds) read verbatim; numeric levels get a "Fan N" prefix
+        status = label if (label and not label.isdigit()) else f"Fan {speed}"
+    elif running:
+        status = "on"
+    else:
+        status = ""
+    return {"running": running, "status": status}
+
+
 def build_rooms(sensors: list[dict], areas: dict | None = None, geometry: dict | None = None,
                 placement: dict | None = None, controllable_ids: set | None = None) -> dict:
     """The canonical room graph (ADR-0026 Phase 3 UI) — supersedes the bare `/areas` string list.
@@ -336,6 +361,7 @@ def build_rooms(sensors: list[dict], areas: dict | None = None, geometry: dict |
                 "name": s.get("name"),
                 "metrics": s.get("metrics", {}),
                 "out_of_range": out_of_range_map(s.get("metrics")),   # sparse {metric: True} -> panel reds
+                "state": s.get("state"),                              # actuators: {running, status}; else null
                 "age_s": s.get("age_s"),
                 "placement": placement.get(s["device_id"]) or {"x": None, "y": None, "anchor": "auto"},
             }

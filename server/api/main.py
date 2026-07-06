@@ -923,7 +923,8 @@ def rooms_list():
     device-placement.yaml + the live sensor list."""
     import time
 
-    from server.api.viewmodel import build_actuator_list, build_rooms, build_sensor_list
+    from server.api.viewmodel import (actuator_map_state, build_actuator_list, build_display, build_rooms,
+                                       build_sensor_list)
     from server.control import control_store as store
     areas = _load_yaml_section(AREAS_YAML, "areas")
     placement = _load_yaml_section(DEVICE_PLACEMENT, "placements")
@@ -945,6 +946,14 @@ def rooms_list():
         # silently vanishes; unresolved locations surface in build_rooms `unlocated` (the red flag).
         present = {s["device_id"] for s in sensors}
         sensors = sensors + build_actuator_list(hc, ctl_reg, present, meta=meta, now=time.time())
+        # actuator state {running, status} for the spatial map (map arc 2 / D1001 v91) — sourced from
+        # build_display so the map, room-zoom, and PWA agree; status = short family-agnostic action detail.
+        now = time.time()
+        for e in sensors:
+            if e["device_id"] in ctl_reg and cc is not None:
+                vm = build_display(cc, hc, e["device_id"], now, registry=ctl_reg, meta=meta)
+                if vm is not None:
+                    e["state"] = actuator_map_state(vm)
     finally:
         if hc is not None:
             hc.close()
