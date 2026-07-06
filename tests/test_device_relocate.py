@@ -49,6 +49,20 @@ def test_apply_sqlite_device_override(tmp_path):
     assert sum(again.values()) == 0                             # idempotent
 
 
+def test_forward_only_leaves_readings_history(tmp_path):
+    # forward-only move = restrict the update to device_last_seen; readings history stays under the old room.
+    hot = _hot(tmp_path,
+               [("t1", "host_210", "h_office"), ("t2", "host_210", "h_office"), ("t3", "other", "c_bed")],
+               [("host_210", "h_office"), ("other", "c_bed")])
+    out = R.apply_sqlite_area(hot, device_id="host_210", new_area="mech_closet", dry_run=False,
+                              tables=["device_last_seen"])
+    assert out == {"device_last_seen": 1}                                # pointer moved, readings untouched
+    # verify scoped to what a forward-only move rewrote = clean; the full-table check still sees stale readings
+    assert R.count_stale_area(hot, device_id="host_210", new_area="mech_closet",
+                              tables=["device_last_seen"]) == 0
+    assert R.count_stale_area(hot, device_id="host_210", new_area="mech_closet") == 2   # 2 readings still old
+
+
 def test_apply_sqlite_dry_run_writes_nothing(tmp_path):
     hot = _hot(tmp_path, [("t1", "a", "office")], [("a", "office")])
     out = R.apply_sqlite_area(hot, old_area="office", new_area="h_office", dry_run=True)

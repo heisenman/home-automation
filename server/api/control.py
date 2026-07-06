@@ -327,6 +327,32 @@ def handle_device_calibration(conn, device_id: str, body: dict[str, Any]) -> tup
     return 200, {"status": "ok", "device_id": device_id, "calibration": store.all_calibration(conn).get(device_id, {})}
 
 
+def handle_device_relocate(device_id: str, body: dict[str, Any]) -> tuple[int, dict]:
+    """Canonically relocate a device to ``new_area`` (the UI-driven replacement for the CLI crosswalk).
+    Body: ``{new_area, mode, dry_run?}``. ``mode`` is REQUIRED and explicit because the two are not
+    interchangeable: ``restamp`` = history-safe — rewrites ``readings.area`` (+ parquet + .245 peer) so the
+    past follows the device (for a device mislabeled from the start); ``forward`` = forward-only — leaves
+    ``readings`` history under the old room, only the registry + current-location pointer move (a genuine
+    physical move). Wraps ``device_relocate.relocate`` (which backs up hot.db + registry first). Admin-gated;
+    runs the real mutation, so the route offloads it to a threadpool."""
+    from server.maintenance import device_relocate as R
+    b = body or {}
+    new_area = b.get("new_area")
+    mode = b.get("mode")
+    dry_run = b.get("dry_run", False)
+    if not isinstance(new_area, str) or not new_area.strip():
+        return 400, {"status": "bad-request", "reason": "new_area must be a non-empty string"}
+    if mode not in ("restamp", "forward"):
+        return 400, {"status": "bad-request", "reason": "mode must be 'restamp' or 'forward'"}
+    if not isinstance(dry_run, bool):
+        return 400, {"status": "bad-request", "reason": "dry_run must be a boolean"}
+    report = R.relocate("device", device_id, new_area.strip(),
+                        restamp_history=(mode == "restamp"), dry_run=dry_run)
+    ok = bool(report.get("clean"))
+    return (200 if ok else 500), {"status": "ok" if ok else "verify-failed",
+                                  "device_id": device_id, "report": report}
+
+
 def make_device_meta_router(api_authz, control_db):
     """Admin-gated device overlay editor (prefix /api/v1/devices). Works for any device (sensors too)."""
     import sqlite3
@@ -351,6 +377,18 @@ def make_device_meta_router(api_authz, control_db):
             code, payload = handle_device_meta(c, device_id, body)
         finally:
             c.close()
+        return JSONResponse(status_code=code, content=payload)
+
+    @router.post("/{device_id}/relocate", dependencies=[Depends(require_admin)])
+    async def post_relocate(device_id: str, body: dict = Body(...)):
+        from starlette.concurrency import run_in_threadpool
+        try:
+            code, payload = await run_in_threadpool(handle_device_relocate, device_id, body)
+        except Exception as e:   # mutation may be partial — a per-op backup was written before any write
+            return JSONResponse(status_code=500, content={
+                "status": "error", "device_id": device_id, "reason": str(e),
+                "note": "hot.db + registry were backed up to instance/db/backups/ before mutating; "
+                        "see docs/runbook-dataset-restore.md"})
         return JSONResponse(status_code=code, content=payload)
 
     @router.put("/{device_id}/calibration", dependencies=[Depends(require_admin)])

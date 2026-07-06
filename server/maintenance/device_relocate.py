@@ -64,18 +64,20 @@ def registry_paths() -> list[Path]:
 
 # ── sqlite store (pure; unit-tested) ─────────────────────────────────────────────────────────────────
 def apply_sqlite_area(db_path: str, *, old_area: str | None = None, device_id: str | None = None,
-                      new_area: str, dry_run: bool) -> dict:
+                      new_area: str, dry_run: bool, tables: list[str] | None = None) -> dict:
     """Set ``area=new_area`` across the area-bearing tables, selecting rows either by ``old_area`` (an area
     move) or by ``device_id`` (a per-device override) — exactly one selector. Skips tables lacking the needed
     column. Idempotent: rows already at ``new_area`` are excluded, so a re-run affects 0. Returns
-    ``{table: rows_affected}``."""
+    ``{table: rows_affected}``. ``tables`` restricts which area-bearing tables are touched — default is all
+    (``AREA_TABLES``, i.e. a history-restamp); pass ``["device_last_seen"]`` for a forward-only move that
+    leaves ``readings`` history stamped with the old room."""
     if (old_area is None) == (device_id is None):
         raise ValueError("pass exactly one of old_area / device_id")
     out: dict[str, int] = {}
     conn = sqlite3.connect(db_path, timeout=30)
     try:
         have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        for t in AREA_TABLES:
+        for t in (tables or AREA_TABLES):
             if t not in have:
                 continue
             cols = [r[1] for r in conn.execute(f"PRAGMA table_info({t})")]
@@ -99,14 +101,16 @@ def apply_sqlite_area(db_path: str, *, old_area: str | None = None, device_id: s
 
 
 def count_stale_area(db_path: str, *, old_area: str | None = None, device_id: str | None = None,
-                     new_area: str | None = None) -> int:
+                     new_area: str | None = None, tables: list[str] | None = None) -> int:
     """Verification: rows that still carry the OLD location. For an area move that's ``area=old_area``; for an
-    override it's ``device_id=dev AND area!=new_area``. Want 0 after a run."""
+    override it's ``device_id=dev AND area!=new_area``. Want 0 after a run. ``tables`` restricts the check to
+    the tables the move actually rewrote — a forward-only move deliberately leaves ``readings`` stale, so it
+    verifies only ``device_last_seen``."""
     total = 0
     conn = sqlite3.connect(db_path, timeout=30)
     try:
         have = {r[0] for r in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-        for t in AREA_TABLES:
+        for t in (tables or AREA_TABLES):
             if t not in have:
                 continue
             cols = [r[1] for r in conn.execute(f"PRAGMA table_info({t})")]
@@ -310,9 +314,15 @@ def relocate(kind: str, key: str, new_area: str, *,
              parquet_glob: str = "instance/db/parquet/year=*/month=*/*.parquet",
              broker: str = "localhost", broker_port: int = 1883,
              do_peer: bool = True, do_mqtt: bool = True, do_registry: bool = True,
-             backup: bool = True, dry_run: bool = False) -> dict:
+             backup: bool = True, dry_run: bool = False, restamp_history: bool = True) -> dict:
     """Relocate an ``area`` (``kind='area'``, ``key``=old area) or a single ``device`` (``kind='device'``,
-    ``key``=device_id) to ``new_area`` across all stores + registry + peer. Returns a report dict."""
+    ``key``=device_id) to ``new_area`` across all stores + registry + peer. Returns a report dict.
+
+    ``restamp_history`` selects the semantics: ``True`` (default) = **history-safe restamp** — rewrite the
+    old room's stamp on every ``readings`` row + parquet + the .245 peer, so the past follows the device
+    (correct only when the device was mislabeled from the start). ``False`` = **forward-only** — update just
+    the registry (so *future* readings stamp the new room) + the ``device_last_seen`` pointer, leaving
+    ``readings`` history under the old room (the right default for a genuine physical move)."""
     if kind not in ("area", "device"):
         raise ValueError(f"kind must be 'area' or 'device', got {kind!r}")
     old_area = key if kind == "area" else None
@@ -321,7 +331,9 @@ def relocate(kind: str, key: str, new_area: str, *,
     if not Path(parquet_glob).is_absolute():
         parquet_glob = str(REPO_ROOT / parquet_glob)
 
-    report: dict = {"kind": kind, "key": key, "new_area": new_area, "dry_run": dry_run, "backups": []}
+    tables = AREA_TABLES if restamp_history else ["device_last_seen"]   # forward-only leaves readings history
+    report: dict = {"kind": kind, "key": key, "new_area": new_area, "dry_run": dry_run,
+                    "mode": "restamp" if restamp_history else "forward", "backups": []}
 
     # affected devices + their old area(s) — read BEFORE mutating, for the retained-topic clear
     if kind == "area":
@@ -345,13 +357,16 @@ def relocate(kind: str, key: str, new_area: str, *,
                 report["backups"].append(str(dst))
 
     sel = {"old_area": old_area} if kind == "area" else {"device_id": device_id}
-    report["hot"] = apply_sqlite_area(hot_db, **sel, new_area=new_area, dry_run=dry_run)
-    try:
-        report["parquet"] = apply_parquet_area(parquet_glob, **sel, new_area=new_area, dry_run=dry_run)
-        if report["parquet"]:
-            report["parquet_manifest"] = rebuild_parquet_manifest(dry_run)
-    except ImportError:
-        report["parquet"] = {"skipped": "pyarrow unavailable"}
+    report["hot"] = apply_sqlite_area(hot_db, **sel, new_area=new_area, dry_run=dry_run, tables=tables)
+    if restamp_history:
+        try:
+            report["parquet"] = apply_parquet_area(parquet_glob, **sel, new_area=new_area, dry_run=dry_run)
+            if report["parquet"]:
+                report["parquet_manifest"] = rebuild_parquet_manifest(dry_run)
+        except ImportError:
+            report["parquet"] = {"skipped": "pyarrow unavailable"}
+    else:
+        report["parquet"] = {"skipped": "forward-only (readings history retained)"}
 
     if do_registry:
         report["registry"] = {p.name: relocate_registry_file(p, **sel, new_area=new_area, dry_run=dry_run)
@@ -361,10 +376,12 @@ def relocate(kind: str, key: str, new_area: str, *,
         topics = [f"home/{a}/{d}/state" for d, a in affected if a]
         report["retained_cleared"] = clear_retained(broker, broker_port, topics, dry_run=dry_run)
 
-    if do_peer:
+    if do_peer and restamp_history:
         report["peer"] = peer_hot_relocate(**sel, new_area=new_area, dry_run=dry_run)
+    elif do_peer:
+        report["peer"] = {"skipped": "forward-only (peer readings history retained; re-seeded by sync-standby)"}
 
-    report["verify_stale_local"] = count_stale_area(hot_db, **sel, new_area=new_area)
+    report["verify_stale_local"] = count_stale_area(hot_db, **sel, new_area=new_area, tables=tables)
     report["clean"] = (dry_run or report["verify_stale_local"] == 0)
     return report
 
@@ -394,6 +411,8 @@ def _main() -> int:
     pa.add_argument("old_area"); pa.add_argument("new_area")
     pd = sub.add_parser("device", help="move one DEVICE_ID to NEW_AREA (override)")
     pd.add_argument("device_id"); pd.add_argument("new_area")
+    pd.add_argument("--forward-only", action="store_true",
+                    help="forward-only: leave readings history under the old room (default = history-safe restamp)")
     pc_ = sub.add_parser("crosswalk", help="apply a whole ADR-0026 crosswalk file")
     pc_.add_argument("path", nargs="?", default="instance/area-migration.yaml")
     for sp in (pa, pd, pc_):
@@ -408,6 +427,8 @@ def _main() -> int:
     if a.cmd == "crosswalk":
         rep = apply_crosswalk(a.path, **kw)
     else:
+        if a.cmd == "device":
+            kw["restamp_history"] = not a.forward_only
         rep = relocate(a.cmd, getattr(a, "old_area", None) or a.device_id, a.new_area, **kw)
     print(json.dumps(rep, indent=2))
     return 0 if rep.get("clean") else 2
