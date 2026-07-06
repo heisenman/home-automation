@@ -25,6 +25,8 @@ static const char *TAG = "ui.map";
 #define C_NORMAL      0x8fb4ff   // sensor / count text
 #define C_AMBER       0xf59e0b   // averaged climate (no primary configured)
 #define C_RED         0xef4444   // averaged + divergent, or out-of-range
+#define C_ACTIVE      0x4ade80   // actuator running (green)
+#define C_IDLE        0x64748b   // actuator idle (dim slate)
 #define ML_MAX        14         // max content lines below the room name
 #define ML_LEN        56
 
@@ -117,6 +119,25 @@ static bool dev_alert(cJSON *dev)
     return cJSON_IsObject(o) && o->child != NULL;
 }
 
+static bool dev_is_actuator(cJSON *dev)
+{
+    cJSON *r = cJSON_GetObjectItem(dev, "role");
+    return cJSON_IsString(r) && strcmp(r->valuestring, "actuator") == 0;
+}
+
+// Row color for a device: out-of-range red wins; else an actuator shows running(green)/idle(dim)
+// from its server state; sensors are normal. Inert until the BFF ships dev.state (-> normal).
+static uint32_t dev_color(cJSON *dev)
+{
+    if (dev_alert(dev)) return C_RED;
+    if (dev_is_actuator(dev)) {
+        cJSON *st = cJSON_GetObjectItem(dev, "state");
+        if (cJSON_IsObject(st))
+            return cJSON_IsTrue(cJSON_GetObjectItem(st, "running")) ? C_ACTIVE : C_IDLE;
+    }
+    return C_NORMAL;
+}
+
 // One device's glance line: short name + its metrics in catalog (priority) order. core_only drops
 // the secondary metrics (the 0a->0b degrade, driven by the server metric_spec.core flag). Always
 // emits at least the name (honors "all devices").
@@ -129,6 +150,20 @@ static void dev_line(cJSON *dev, bool core_only, char *out, size_t n)
     char folded[24];
     ascii_fold(nm, folded, sizeof folded);
     if (strlen(folded) > 11) folded[11] = 0;          // keep the line compact
+
+    // Actuator: show ACTION (running glyph + server status string), not its onboard reading — the
+    // room's climate line already covers ambient. Defensive: no dev.state yet -> fall through to
+    // metrics (no regression until the BFF ships it).
+    cJSON *st = cJSON_GetObjectItem(dev, "state");
+    if (dev_is_actuator(dev) && cJSON_IsObject(st)) {
+        bool running = cJSON_IsTrue(cJSON_GetObjectItem(st, "running"));
+        cJSON *stat = cJSON_GetObjectItem(st, "status");
+        char sf[24]; ascii_fold(cJSON_IsString(stat) ? stat->valuestring : "", sf, sizeof sf);
+        snprintf(out, n, "%s %s%s%s", running ? LV_SYMBOL_PLAY : LV_SYMBOL_PAUSE,
+                 folded, sf[0] ? " " : "", sf);
+        return;
+    }
+
     int off = snprintf(out, n, "%s", folded);
     cJSON *m = cJSON_GetObjectItem(dev, "metrics");
     if (!cJSON_IsObject(m)) return;
@@ -266,7 +301,7 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
         cJSON_ArrayForEach(d, devs) {
             if (k >= ML_MAX) { over = true; break; }
             dev_line(d, mode == 1, lines[k], ML_LEN);
-            lcol[k] = dev_alert(d) ? C_RED : C_NORMAL;   // any metric out of normal range -> red row
+            lcol[k] = dev_color(d);                    // red(alert) > green(running) > dim(idle) > normal
             int lw; h += text_wh(lines[k], 0, &lw);    // natural (unwrapped) size
             if (lw > usable_w) over = true;
             if (lw > maxw) maxw = lw;
