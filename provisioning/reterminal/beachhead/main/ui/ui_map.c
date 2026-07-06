@@ -17,7 +17,8 @@ static const char *TAG = "ui.map";
 #define MAX_RING_PTS  20      // points per ring incl. the closing repeat
 #define LBL_W         128
 #define LBL_H         46
-#define STRIP_H       72
+#define COL_W         150     // right-side column for monolithic rooms (attic/crawlspace); frees the
+                              // full screen height for the (tall, narrow) floor plan to expand into
 #define PAD           14
 #define WALL_COL      0x7fa9d9
 #define ACT_WALL_COL  0xd9a85c
@@ -99,8 +100,9 @@ static void room_glance(cJSON *devs, char *out, size_t n)
         cJSON *t = cJSON_GetObjectItem(m, "temperature_c");
         cJSON *h = cJSON_GetObjectItem(m, "humidity_pct");
         if (cJSON_IsNumber(t)) {
-            if (cJSON_IsNumber(h)) snprintf(out, n, "%.1f  %.0f%%", t->valuedouble, h->valuedouble);
-            else                   snprintf(out, n, "%.1f", t->valuedouble);
+            double tf = disp_val("C", t->valuedouble);   // panel-local Fahrenheit (data stays SI)
+            if (cJSON_IsNumber(h)) snprintf(out, n, "%.0f  %.0f%%", tf, h->valuedouble);
+            else                   snprintf(out, n, "%.0f", tf);
             return;
         }
     }
@@ -201,10 +203,10 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
     int pw = lv_obj_get_width(parent), ph = lv_obj_get_height(parent);
     if (pw <= 0) pw = 780;
     if (ph <= 0) ph = 1040;
-    int map_h = ph - STRIP_H;
+    int mapw = pw - COL_W;                       // floor plan = left area; right column = monolithic rooms
     s_mnx = mnx; s_mny = mny;
-    double sx = have_space ? (double)(pw - 2 * PAD) / (mxx - mnx) : 1;
-    double sy = have_space ? (double)(map_h - 2 * PAD) / (mxy - mny) : 1;
+    double sx = have_space ? (double)(mapw - 2 * PAD) / (mxx - mnx) : 1;
+    double sy = have_space ? (double)(ph - 2 * PAD) / (mxy - mny) : 1;   // full screen height now
     s_scale = sx < sy ? sx : sy;                 // uniform, preserve aspect
 
     // pass 1: walls (so labels draw on top)
@@ -225,8 +227,8 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
         }
     }
 
-    // pass 2: labels (placed rooms at centroids; monolithic/geometry-less-with-devices -> strip)
-    int strip_x = PAD;
+    // pass 2: labels (placed rooms at centroids; monolithic/geometry-less-with-devices -> right column)
+    int col_y = PAD + LBL_H / 2;
     cJSON_ArrayForEach(r, rooms) {
         if (s_nreg >= MAX_ROOMS) break;
         cJSON *geo = cJSON_GetObjectItem(r, "geometry");
@@ -249,15 +251,15 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
         if (have_space && room_label(geo, &lx, &ly)) {
             int x = scr_x(lx), y = scr_y(ly);
             if (x < PAD + LBL_W / 2) x = PAD + LBL_W / 2;
-            if (x > pw - PAD - LBL_W / 2) x = pw - PAD - LBL_W / 2;
+            if (x > mapw - PAD - LBL_W / 2) x = mapw - PAD - LBL_W / 2;
             if (y < PAD + LBL_H / 2) y = PAD + LBL_H / 2;
-            if (y > map_h - PAD - LBL_H / 2) y = map_h - PAD - LBL_H / 2;
+            if (y > ph - PAD - LBL_H / 2) y = ph - PAD - LBL_H / 2;
             make_label(parent, r, idx, x, y, act, false);
             s_nreg++;
         } else if (ns + na > 0) {
-            if (strip_x + LBL_W > pw - PAD) continue;
-            make_label(parent, r, idx, strip_x + LBL_W / 2, map_h + STRIP_H / 2, act, true);
-            strip_x += LBL_W + 10;
+            if (col_y + LBL_H / 2 > ph - PAD) continue;    // right column full
+            make_label(parent, r, idx, pw - COL_W / 2, col_y, act, true);
+            col_y += LBL_H + 12;
             s_nreg++;
         }
     }
