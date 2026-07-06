@@ -22,6 +22,11 @@ static const char *TAG = "ui.map";
 #define PAD           14
 #define WALL_COL      0x7fa9d9
 #define ACT_WALL_COL  0xd9a85c
+#define C_NORMAL      0x8fb4ff   // sensor / count text
+#define C_AMBER       0xf59e0b   // averaged climate (no primary configured)
+#define C_RED         0xef4444   // averaged + divergent, or out-of-range
+#define ML_MAX        14         // max content lines below the room name
+#define ML_LEN        56
 
 static struct { char id[28]; char name[28]; } s_reg[MAX_ROOMS];
 static int s_nreg;
@@ -90,22 +95,87 @@ static void room_bounds(cJSON *geo, double *mnx, double *mny, double *mxx, doubl
     }
 }
 
-static void room_glance(cJSON *devs, char *out, size_t n)
+// --- adaptive room-fill helpers (docs/design/map-room-fill.md) -------------
+// Render the richest tier that fits the room's box: 0a (every device, all metrics) -> 0b (every
+// device, core metrics) -> 1 (climate glance + counts) -> 2 (counts). Fit is measured with
+// lv_text_get_size against the room's on-screen bbox; the font stays fixed (legibility at distance).
+
+// wrapped px size of `s` at `max_w` (LVGL font metrics). Returns height; *w gets the used width.
+static int text_wh(const char *s, int max_w, int *w)
 {
-    out[0] = 0;
-    cJSON *d;
+    lv_point_t sz;
+    lv_text_get_size(&sz, s, &lv_font_montserrat_14, 0, 1,
+                     max_w > 0 ? max_w : LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    if (w) *w = sz.x;
+    return sz.y;
+}
+
+// v1 core set (until the BFF tags core-vs-secondary): temp/humidity are the through-line kept in 0b.
+static bool is_core_metric(const char *key)
+{
+    return strcmp(key, "temperature_c") == 0 || strcmp(key, "humidity_pct") == 0;
+}
+
+// One device's glance line: short name + its metrics in catalog (priority) order. core_only drops
+// the secondary metrics (the 0a->0b degrade). Always emits at least the name (honors "all devices").
+static void dev_line(cJSON *dev, bool core_only, char *out, size_t n)
+{
+    const cJSON *jn = cJSON_GetObjectItem(dev, "name");
+    const cJSON *jt = cJSON_GetObjectItem(dev, "device_type");
+    const char *nm = cJSON_IsString(jn) ? jn->valuestring
+                     : (cJSON_IsString(jt) ? jt->valuestring : "?");
+    char folded[24];
+    ascii_fold(nm, folded, sizeof folded);
+    if (strlen(folded) > 11) folded[11] = 0;          // keep the line compact
+    int off = snprintf(out, n, "%s", folded);
+    cJSON *m = cJSON_GetObjectItem(dev, "metrics");
+    if (!cJSON_IsObject(m)) return;
+    int cnt;
+    const struct mfmt *cat = ui_format_catalog(&cnt);
+    for (int i = 0; i < cnt && off < (int)n - 1; i++) {
+        if (core_only && !is_core_metric(cat[i].key)) continue;
+        bool present;
+        double v = metric_of(m, cat[i].key, &present);
+        if (!present) continue;
+        double dv = disp_val(cat[i].unit, v);          // panel-local Fahrenheit; data stays SI
+        const char *u = disp_unit(cat[i].unit);
+        off += snprintf(out + off, n - off, " %.*f%s", cat[i].prec, dv, u ? u : "");
+    }
+}
+
+// Tier-1 climate glance. Prefers the BFF-authored room.climate (value + confidence); falls back to
+// the first sensor's temp/hum until the BFF ships it. *color set per confidence (amber=averaged,
+// red=averaged+divergent). Returns false if no temperature is available anywhere in the room.
+static bool climate_line(cJSON *room, char *out, size_t n, uint32_t *color)
+{
+    *color = C_NORMAL;
+    cJSON *cl = cJSON_GetObjectItem(room, "climate");
+    if (cJSON_IsObject(cl)) {
+        cJSON *conf = cJSON_GetObjectItem(cl, "confidence");
+        const char *cs = cJSON_IsString(conf) ? conf->valuestring : "";
+        if (strcmp(cs, "averaged") == 0) *color = C_AMBER;
+        else if (strcmp(cs, "averaged_divergent") == 0) *color = C_RED;
+        cJSON *val = cJSON_GetObjectItem(cl, "value");
+        if (cJSON_IsObject(val)) {
+            bool ht, hh;
+            double t = metric_of(val, "temperature_c", &ht);
+            double h = metric_of(val, "humidity_pct", &hh);
+            char pfx = (*color == C_RED) ? '!' : ' ';   // divergent gets a glyph, not just a tint
+            if (ht && hh) { snprintf(out, n, "%c%.0f %.0f%%", pfx, disp_val("C", t), h); return true; }
+            if (ht)       { snprintf(out, n, "%c%.0f", pfx, disp_val("C", t)); return true; }
+        }
+    }
+    cJSON *devs = cJSON_GetObjectItem(room, "devices"), *d;
     cJSON_ArrayForEach(d, devs) {
         cJSON *m = cJSON_GetObjectItem(d, "metrics");
         if (!cJSON_IsObject(m)) continue;
-        cJSON *t = cJSON_GetObjectItem(m, "temperature_c");
-        cJSON *h = cJSON_GetObjectItem(m, "humidity_pct");
-        if (cJSON_IsNumber(t)) {
-            double tf = disp_val("C", t->valuedouble);   // panel-local Fahrenheit (data stays SI)
-            if (cJSON_IsNumber(h)) snprintf(out, n, "%.0f  %.0f%%", tf, h->valuedouble);
-            else                   snprintf(out, n, "%.0f", tf);
-            return;
-        }
+        bool ht, hh;
+        double t = metric_of(m, "temperature_c", &ht);
+        double h = metric_of(m, "humidity_pct", &hh);
+        if (ht && hh) { snprintf(out, n, "%.0f %.0f%%", disp_val("C", t), h); return true; }
+        if (ht)       { snprintf(out, n, "%.0f", disp_val("C", t)); return true; }
     }
+    return false;
 }
 
 // --- draw one polygon ring as a closed wall outline ------------------------
@@ -152,7 +222,7 @@ static void room_screen_bbox(cJSON *geo, int *bw, int *bh)
     else { *bw = LBL_W; *bh = LBL_H; }
 }
 
-// --- room label (name + glance/count), sized to fit `bw`x`bh` (the room). clickable = tap target ---
+// --- room label: adaptive tier fill, sized to fit `bw`x`bh` (the room). clickable = tap target ---
 static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int cy, bool act, bool strip,
                        int bw, int bh)
 {
@@ -166,17 +236,71 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
         ns = cJSON_IsNumber(s) ? s->valueint : 0;
         na = cJSON_IsNumber(a) ? a->valueint : 0;
     }
-    char glance[32]; room_glance(cJSON_GetObjectItem(room, "devices"), glance, sizeof glance);
+    cJSON *devs = cJSON_GetObjectItem(room, "devices");
+    int ndev = cJSON_IsArray(devs) ? cJSON_GetArraySize(devs) : 0;
     char folded[40]; ascii_fold(name, folded, sizeof folded);
 
-    // fit the label inside the room's box (leave a small inset); clamp to sane bounds.
-    int w = bw - 8, h = bh - 8;
-    if (w < 52) w = 52;
-    if (w > 150) w = 150;
-    int hmax = strip ? 58 : 74;
+    // Usable interior (px). The old 150x74 clamp is gone — the box grows to the chosen tier's
+    // content, bounded only by the room's on-screen bbox. Floor the width so a sliver room still
+    // gets a legible count.
+    const int inset = 6;
+    int usable_w = bw - inset; if (usable_w < 50) usable_w = 50;
+    int usable_h = bh - inset; if (usable_h < 20) usable_h = 20;
+    int name_w = 0, name_h = text_wh(folded, usable_w, &name_w);
+    int budget = usable_h - name_h;                    // px left for content lines below the name
+
+    // Pick the richest tier that fits `budget`. lines[]/lcol[] hold the content lines under the name.
+    char lines[ML_MAX][ML_LEN];
+    uint32_t lcol[ML_MAX];
+    int nl = 0, tier = -1;                              // 0a=0 0b=1 climate=2 counts=3
+
+    // Tier 0a / 0b — one line per device (all-or-nothing on the device LIST; metrics may degrade).
+    for (int mode = 0; mode <= 1 && ndev > 0 && tier < 0; mode++) {   // 0=full(0a) 1=core(0b)
+        int h = 0, k = 0;
+        cJSON *d;
+        cJSON_ArrayForEach(d, devs) {
+            if (k >= ML_MAX) { k = 0; break; }         // too many devices to line up -> fall through
+            dev_line(d, mode == 1, lines[k], ML_LEN);
+            lcol[k] = C_NORMAL;
+            h += text_wh(lines[k], usable_w, NULL);
+            k++;
+        }
+        if (k == ndev && k > 0 && h <= budget) { nl = k; tier = mode; }
+    }
+    // Tier 1 — climate glance + counts.
+    if (tier < 0) {
+        int h = 0, k = 0;
+        char cl[ML_LEN]; uint32_t cc;
+        if (climate_line(room, cl, sizeof cl, &cc)) {
+            snprintf(lines[k], ML_LEN, "%s", cl); lcol[k] = cc;
+            h += text_wh(lines[k], usable_w, NULL); k++;
+        }
+        if (ns + na > 0) {
+            if (na) snprintf(lines[k], ML_LEN, "%ds %da", ns, na);
+            else    snprintf(lines[k], ML_LEN, "%ds", ns);
+            lcol[k] = act ? ACT_WALL_COL : C_NORMAL;
+            h += text_wh(lines[k], usable_w, NULL); k++;
+        }
+        if (k > 0 && h <= budget) { nl = k; tier = 2; }
+    }
+    // Tier 2 — counts floor (render even if it slightly overflows a tiny room; icon+badge is future).
+    if (tier < 0 && ns + na > 0) {
+        if (na) snprintf(lines[0], ML_LEN, "%ds %da", ns, na);
+        else    snprintf(lines[0], ML_LEN, "%ds", ns);
+        lcol[0] = act ? ACT_WALL_COL : C_NORMAL;
+        nl = 1; tier = 3;
+    }
+
+    // Box sized to the actual content (name + chosen lines), bounded by the room bbox.
+    int content_w = name_w, content_h = name_h;
+    for (int i = 0; i < nl; i++) {
+        int lw; content_h += text_wh(lines[i], usable_w, &lw);
+        if (lw > content_w) content_w = lw;
+    }
+    int w = content_w + 2 * inset; if (w > bw && bw > 50) w = bw; if (w < 50) w = 50;
+    int h = content_h + 2 * inset;
+    if (tier != 3 && h > bh && bh > 0) h = bh;         // only the counts floor may overflow
     if (h < 22) h = 22;
-    if (h > hmax) h = hmax;
-    bool show_2nd = h >= 46;                 // room enough for a wrapped name AND a second line
 
     lv_obj_t *box = lv_obj_create(parent);
     lv_obj_set_size(box, w, h);
@@ -202,13 +326,12 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
     lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(t, lv_pct(100));
 
-    if (show_2nd) {
+    for (int i = 0; i < nl; i++) {
         lv_obj_t *sub = lv_label_create(box);
-        if (glance[0]) lv_label_set_text(sub, glance);
-        else if (na)   lv_label_set_text_fmt(sub, "%ds %da", ns, na);
-        else           lv_label_set_text_fmt(sub, "%d sen", ns);
+        lv_label_set_text(sub, lines[i]);
         lv_obj_set_style_text_font(sub, &lv_font_montserrat_14, 0);
-        lv_obj_set_style_text_color(sub, lv_color_hex(act ? ACT_WALL_COL : 0x8fb4ff), 0);
+        lv_obj_set_style_text_color(sub, lv_color_hex(lcol[i]), 0);
+        lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
     }
 }
 
