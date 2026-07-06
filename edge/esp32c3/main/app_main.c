@@ -14,6 +14,19 @@
 #include "ha_relay.h"
 #include "ble_scan.h"
 
+// ha_config secrets seam (ADR-0020): the shared ha_config component stays secrets-free; app_main reads the
+// board-local secrets.h and passes the compile-time defaults in (NVS then overlays them in production).
+#if __has_include("secrets.h")
+#include "secrets.h"
+#else
+#warning "secrets.h not found — copy secrets.example.h to secrets.h and fill it in (or provision NVS)."
+#define HA_WIFI_SSID  ""
+#define HA_WIFI_PSK   ""
+#define HA_BROKER_URI "mqtt://192.168.0.245:1883"
+#define HA_NODE_ID    "c6-bench"
+#define HA_NTP_SERVER "pool.ntp.org"
+#endif
+
 static const char *TAG = "ha_edge";
 
 // Edge publish sink for the shared ha_ble_scan observer (ADR-0020): Phase-B relay gate,
@@ -33,7 +46,8 @@ void app_main(void) {
     }
 
     ha_config_t cfg;
-    ha_config_load(&cfg);
+    ha_config_load(&cfg, &(ha_config_t){ .wifi_ssid = HA_WIFI_SSID, .wifi_psk = HA_WIFI_PSK,
+        .broker_uri = HA_BROKER_URI, .node_id = HA_NODE_ID, .ntp_server = HA_NTP_SERVER });
 
     if (ha_wifi_connect(cfg.wifi_ssid, cfg.wifi_psk, 30000) != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi connect failed — restarting in 10s");

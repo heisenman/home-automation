@@ -44,7 +44,7 @@ BUILDS = [
 # matches an entry in REQUIRES and takes precedence (shared beats fork).
 MODULES = [
     ("app_main", {"sources": ["app_main.c", "beachhead_main.c"], "component": None}),
-    ("ha_config", {"sources": ["ha_config.c"], "component": None}),
+    ("ha_config", {"sources": ["ha_config.c"], "component": "ha_config"}),
     ("ha_wifi", {"sources": ["ha_wifi.c"], "component": None}),
     ("ha_eth", {"sources": ["ha_eth.c"], "component": None}),
     ("ha_sntp", {"sources": ["ha_sntp.c"], "component": "ha_sntp"}),

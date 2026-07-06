@@ -1,18 +1,12 @@
+// Node config loader (ADR-0020) — see ha_config.h. Promoted from edge/esp32c6/main/ha_config.c; the only
+// change vs the fork is the secrets seam: compile-time defaults arrive as a parameter (app_main reads the
+// board-local secrets.h and passes them), so this shared component never includes secrets. NVS overlay +
+// provisioning precedence are unchanged.
 #include "ha_config.h"
 #include <string.h>
+#include <stdio.h>
 #include "nvs.h"
 #include "esp_log.h"
-
-#if __has_include("secrets.h")
-#include "secrets.h"
-#else
-#warning "secrets.h not found — copy secrets.example.h to secrets.h and fill it in (or provision NVS)."
-#define HA_WIFI_SSID  ""
-#define HA_WIFI_PSK   ""
-#define HA_BROKER_URI "mqtt://192.168.0.245:1883"
-#define HA_NODE_ID    "c6-bench"
-#define HA_NTP_SERVER "pool.ntp.org"
-#endif
 
 static const char *TAG = "ha_config";
 
@@ -24,13 +18,9 @@ static void nvs_overlay(nvs_handle_t h, const char *key, char *dst, size_t dst_s
     }
 }
 
-void ha_config_load(ha_config_t *cfg) {
-    // 1) compile-time defaults
-    snprintf(cfg->wifi_ssid, sizeof(cfg->wifi_ssid), "%s", HA_WIFI_SSID);
-    snprintf(cfg->wifi_psk, sizeof(cfg->wifi_psk), "%s", HA_WIFI_PSK);
-    snprintf(cfg->broker_uri, sizeof(cfg->broker_uri), "%s", HA_BROKER_URI);
-    snprintf(cfg->node_id, sizeof(cfg->node_id), "%s", HA_NODE_ID);
-    snprintf(cfg->ntp_server, sizeof(cfg->ntp_server), "%s", HA_NTP_SERVER);
+void ha_config_load(ha_config_t *cfg, const ha_config_t *defaults) {
+    // 1) compile-time defaults (board's secrets.h, passed by app_main)
+    *cfg = *defaults;
 
     // 2) NVS overlay (production provisioning) — best-effort
     nvs_handle_t h;

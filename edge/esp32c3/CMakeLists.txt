@@ -7,6 +7,7 @@ cmake_minimum_required(VERSION 3.16)
 set(_shared "${CMAKE_CURRENT_LIST_DIR}/../../firmware/components")
 set(EXTRA_COMPONENT_DIRS
     "${_shared}/switchbot_decode"
+    "${_shared}/ha_config"
     "${_shared}/ha_ble_scan"
     "${_shared}/ha_gatt"
     "${_shared}/ha_gatt_exec"

@@ -16,7 +16,7 @@ Which module each **real firmware build** links. Pairs with [MODULES.md](MODULES
 | Module | esp32c3 | esp32c6 | esp32s3-eth | d1001-panel |
 |--------|:-----:|:-----:|:-----:|:-----:|
 | `app_main` | fork | fork | fork | fork |
-| `ha_config` | fork | fork | fork | — |
+| `ha_config` | shared | shared | shared | — |
 | `ha_wifi` | fork | fork | fork | — |
 | `ha_eth` | — | — | fork | — |
 | `ha_sntp` | shared | shared | shared | — |
