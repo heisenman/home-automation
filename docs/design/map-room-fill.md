@@ -149,3 +149,57 @@ Add per-actuator **live state** to `build_rooms` devices[] (role == "actuator"):
 - Running actuator → green row with the play glyph + its target/level; idle → dim with the pause glyph.
 - An out-of-range actuator is red (alert beats running/idle).
 - No `state` yet → actuator shows its metric as before (no regression).
+
+---
+
+# Arc 3 — spatial room-zoom + PWA placement editor (design note)
+
+**Status:** dev plan approved by Hugh 2026-07-06 (hybrid "C", panel read-only). Not yet built.
+
+## Goal
+Extend the spatial metaphor all the way down: house map → **spatial room-zoom** → device detail. Tapping a
+room zooms into *that room's polygon* filling the screen, with its devices drawn at their in-room positions;
+tapping a device opens the **existing** inline expand + 72h chart + controls. Read-only on the panel.
+
+## Decision (hybrid C, panel read-only)
+- **Spatial room render** for the glance (devices placed on the room diagram), **reusing** the room-fill row
+  treatment (tier text, out-of-range red, actuator glyphs) as the per-device callout.
+- **Device detail on tap** reuses the already-built `ui_expand` / `ui_chart` / `ui_controls` — no new detail UI.
+- **Placement editing lives in the PWA, not the panel.** The panel is a thin read-only renderer; the browser
+  hosts the drag-to-place editor so low-power hardware carries no editing burden (Hugh, 2026-07-06). Hugh
+  assigns every placement himself in the web app — fully self-service.
+
+## Placement schema — already exists, LOCKED (`instance/device-placement.yaml`)
+`device_id: { x, y, anchor }` — **x,y normalized to the room bounding box, 0..1** (x 0=west→1=east, y
+0=north→1=south; room-relative so it survives geometry re-scaling; `null` = not captured). `anchor` n/s/e/w/auto
+leans the label off the walls. **Opt-in:** a null-placement device renders in the room's **fallback list**, not
+on the diagram. All placements are currently null (nothing captured yet). `build_rooms` already emits
+`placement` per device — the read path is done.
+
+> **Supersedes** the file's own "CAPTURE: walk the house … tap each device's spot on the room-zoom view" note:
+> capture is now the **PWA drag-to-place editor** (self-service), and the panel is **read-only**.
+
+## The three halves
+1. **BFF — placement write-endpoint (dev).** `PUT /api/v1/devices/{id}/placement {x,y,anchor}` → writes
+   `device-placement.yaml` (canonical on the dictator), reload-aware so the panel picks it up live. Mirrors the
+   relocate/meta endpoints. Validate x,y ∈ [0,1] (or null) and anchor ∈ {n,s,e,w,auto}.
+2. **PWA — drag-to-place editor (dev/browser).** Render each room's diagram, drag device markers to normalized
+   x/y, save via the endpoint. The "big app" — lives off the Pi. This is where Hugh captures all placements.
+3. **Panel — spatial room-zoom render (ops).** On entering a room *with geometry*, draw that single room's
+   polygon zoomed to fill the screen (reuse the map's scale machinery, scoped to one room's bbox); place each
+   device with non-null x/y at `bbox + (x,y)·bbox_size`, drawn as the room-fill callout with `anchor` lean;
+   null-placement devices go to a fallback strip; tap → existing detail. Rooms without geometry keep the
+   current tile-grid room-zoom as the fallback. Read-only.
+
+## Sequencing
+- **Dev:** placement endpoint → PWA editor (unblocks self-service capture).
+- **Ops (parallel):** build the panel spatial render, smoke-tested against one throwaway seeded placement so
+  the renderer is proven before it meets real data.
+- **Hugh:** capture placements in the PWA; the panel fills in live (reload-aware).
+- The current tile-grid room-zoom remains the fallback throughout, so nothing breaks while placements are empty.
+
+## Verification (arc 3)
+- Room with geometry + ≥1 placed device → zoomed room polygon, device at its normalized spot, tap → detail.
+- Null-placement device → appears in the fallback strip, never on the diagram.
+- Room without geometry → falls back to the tile grid (no regression).
+- A new placement saved in the PWA appears on the panel within a reload cycle (no reflash).
