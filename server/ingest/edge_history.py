@@ -31,6 +31,7 @@ sys.path.insert(0, str(_REPO / "tools"))
 import switchbot_history as sbh   # noqa: E402
 
 from server.ingest.edge_mapper import load_registry, _utc_now  # noqa: E402
+from server.ingest.registry_reload import RegistryReloader  # noqa: E402
 from server.util.mqtt_creds import apply_credentials  # noqa: E402
 try:
     from server.mesh import store as mesh_store  # noqa: E402
@@ -58,9 +59,19 @@ class _Session:
 
 class HistoryIngest:
     def __init__(self, registry, db: Path):
-        self._registry = registry
+        self._registry_get = lambda: registry     # swapped for a live source by attach_reloader()
         self._db = db
         self._sessions: dict[str, _Session] = {}   # key: "node/mac"
+
+    def attach_reloader(self, reloader) -> "HistoryIngest":
+        """Swap the static registry for a live mtime-reloading source so a device relocate
+        (devices.yaml edit) takes effect without a restart (relocate-ingest-reload)."""
+        self._registry_get = reloader.current
+        return self
+
+    @property
+    def _registry(self) -> dict:
+        return self._registry_get()
 
     def on_connect(self, client, userdata, flags, rc, properties=None):
         if rc == 0:
@@ -177,6 +188,7 @@ def main() -> None:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     apply_credentials(client)
     ing = HistoryIngest(registry, a.db)
+    ing.attach_reloader(RegistryReloader(a.registry, load_registry, logger=log))
     client.on_connect = ing.on_connect
     client.on_message = ing.on_message
     attempt = 0

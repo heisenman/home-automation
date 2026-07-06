@@ -43,6 +43,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import paho.mqtt.client as mqtt                       # noqa: E402
 from server.util.mqtt_creds import apply_credentials  # noqa: E402
+from server.ingest.registry_reload import RegistryReloader  # noqa: E402
 
 try:
     import yaml
@@ -111,14 +112,27 @@ def load_registry(path: Path) -> dict[str, dict]:
 
 class LevoitBridge:
     def __init__(self, registry: dict[str, dict], client: mqtt.Client, heartbeat_s: float = 300.0):
-        self._registry = registry                      # esphome name -> identity
-        self._by_devid = {r["device_id"]: r for r in registry.values()}   # device_id -> identity
+        self._registry_get = lambda: registry          # swapped for a live source by attach_reloader()
         self._mqtt = client
         self._heartbeat_s = heartbeat_s
         self._state: dict[str, dict[str, float]] = {}   # device_id -> {metric: value} (accumulated)
         self._online: dict[str, bool] = {}
         self._unknown: set[str] = set()
         self._lock = threading.Lock()
+
+    def attach_reloader(self, reloader) -> "LevoitBridge":
+        """Swap the static registry for a live mtime-reloading source so a device relocate
+        (levoit-devices.yaml edit) takes effect without a restart (relocate-ingest-reload)."""
+        self._registry_get = reloader.current
+        return self
+
+    @property
+    def _registry(self) -> dict:                        # esphome name -> identity
+        return self._registry_get()
+
+    @property
+    def _by_devid(self) -> dict:                         # device_id -> identity (derived; follows reload)
+        return {r["device_id"]: r for r in self._registry.values()}
 
     def on_connect(self, client, userdata, flags, rc, properties=None):
         if rc != 0:
@@ -221,6 +235,7 @@ def main() -> None:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     apply_credentials(client)
     bridge = LevoitBridge(registry, client, heartbeat_s=args.heartbeat_s)
+    bridge.attach_reloader(RegistryReloader(args.registry, load_registry, logger=log))
     client.on_connect = bridge.on_connect
     client.on_message = bridge.on_message
     client.connect(args.broker, args.broker_port, keepalive=60)

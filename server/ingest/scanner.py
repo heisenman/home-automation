@@ -31,6 +31,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root (run as a script)
 from server.util.mqtt_creds import apply_credentials  # noqa: E402
+from server.ingest.registry_reload import RegistryReloader  # noqa: E402
 
 import paho.mqtt.client as mqtt
 import yaml
@@ -161,7 +162,7 @@ class _DeviceState:
 
 class Scanner:
     def __init__(self, registry: dict, mqtt_client: mqtt.Client, relay_dedup: bool = False):
-        self._registry = registry
+        self._registry_get = lambda: registry     # swapped for a live source by attach_reloader()
         self._mqtt = mqtt_client
         self._state: dict[str, _DeviceState] = {}
         self._raw_last_ts: dict[str, float] = {}
@@ -169,6 +170,16 @@ class Scanner:
         # ADR-0015 Phase A: when on, the local radio's readings are emitted as edge advs (node "local")
         # so they pass the mapper's single dedup gate instead of being published direct. Default OFF.
         self._relay_dedup = relay_dedup
+
+    def attach_reloader(self, reloader) -> "Scanner":
+        """Swap the static registry for a live mtime-reloading source so a device relocate
+        (devices.yaml edit) takes effect without a restart (relocate-ingest-reload)."""
+        self._registry_get = reloader.current
+        return self
+
+    @property
+    def _registry(self) -> dict:
+        return self._registry_get()
 
     def _device_state(self, mac: str) -> _DeviceState:
         if mac not in self._state:
@@ -406,6 +417,7 @@ def main() -> None:
     _mqtt_connect_with_retry(client)
 
     scanner = Scanner(registry, client, relay_dedup=args.relay_dedup)
+    scanner.attach_reloader(RegistryReloader(args.registry, load_registry, logger=log))
     asyncio.run(scanner.run())
 
     client.loop_stop()

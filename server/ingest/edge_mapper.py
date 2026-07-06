@@ -36,6 +36,7 @@ from pathlib import Path
 REPO_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO_ROOT))  # repo root (run as a script)
 from server.util.mqtt_creds import apply_credentials  # noqa: E402
+from server.ingest.registry_reload import RegistryReloader  # noqa: E402
 from server.mesh.assign import Assigner  # noqa: E402
 from server.mesh import store as mesh_store  # noqa: E402
 from server.mesh.topology import SERVER  # noqa: E402
@@ -75,7 +76,7 @@ def _utc_now() -> str:
 
 class EdgeMapper:
     def __init__(self, registry: dict[str, dict], client: mqtt.Client, relay_dedup: bool = False):
-        self._registry = registry
+        self._registry_get = lambda: registry     # swapped for a live source by attach_reloader()
         self._mqtt = client
         self._unknown_seen: set[str] = set()
         # ADR-0015 Phase A: when on, republish a meter only from its single preferred source (drops the
@@ -98,6 +99,16 @@ class EdgeMapper:
             except Exception as exc:                                 # never let it break mapping
                 log.warning("mesh_links persistence disabled (%s): %s", MESH_DB_REL, exc)
                 self._mesh = None
+
+    def attach_reloader(self, reloader) -> "EdgeMapper":
+        """Swap the static registry for a live mtime-reloading source so a device relocate
+        (devices.yaml edit) takes effect without a restart (relocate-ingest-reload)."""
+        self._registry_get = reloader.current
+        return self
+
+    @property
+    def _registry(self) -> dict:
+        return self._registry_get()
 
     def _record_reach(self, device_id: str, node: str, rssi) -> None:
         """Best-effort upsert of a node→endpoint ble-adv sighting (throttled per edge)."""
@@ -236,6 +247,7 @@ def main() -> None:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     apply_credentials(client)
     mapper = EdgeMapper(registry, client, relay_dedup=args.relay_dedup)
+    mapper.attach_reloader(RegistryReloader(args.registry, load_registry, logger=log))
     client.on_connect = mapper.on_connect
     client.on_message = mapper.on_message
 
