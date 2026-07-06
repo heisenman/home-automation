@@ -330,6 +330,19 @@ def build_controls(traits_cfg: dict | None) -> list[dict]:
     return controls
 
 
+def _device_area(hot_conn, device_id: str) -> str | None:
+    """The device's current area from device_last_seen — the room fallback when there's no meta overlay.
+    Mirrors build_sensor_list's `meta.room or area` so a controllable device lands in a room the same way
+    a sensor does (else it renders room=None and gets filtered out of every room-zoom view)."""
+    if hot_conn is None:
+        return None
+    try:
+        r = hot_conn.execute("SELECT area FROM device_last_seen WHERE device_id=?", (device_id,)).fetchone()
+        return r[0] if r and r[0] else None
+    except Exception:
+        return None
+
+
 def build_display(control_conn, hot_conn, device_id: str, now: float, registry=None,
                   meta: dict | None = None) -> dict | None:
     """Compose the display view-model for one controllable device. None if it has no control policy.
@@ -410,7 +423,7 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         "schema": 1,
         "device_id": device_id,
         "name": dm.get("name") or None,
-        "room": dm.get("room") or None,
+        "room": dm.get("room") or _device_area(hot_conn, device_id),   # overlay wins; else the device's area
         "running": running,
         "control": {
             "enabled": bool(policy.get("enabled", True)),
