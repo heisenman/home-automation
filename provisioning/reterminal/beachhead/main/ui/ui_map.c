@@ -23,7 +23,7 @@ static const char *TAG = "ui.map";
 #define WALL_COL      0x7fa9d9
 #define ACT_WALL_COL  0xd9a85c
 
-static struct { char id[28]; } s_reg[MAX_ROOMS];
+static struct { char id[28]; char name[28]; } s_reg[MAX_ROOMS];
 static int s_nreg;
 static lv_point_precise_t s_ring[MAX_RINGS][MAX_RING_PTS];   // point pool (lv_line keeps the pointer)
 static int s_nring;
@@ -40,7 +40,7 @@ static void room_clicked_cb(lv_event_t *e)
     int idx = (int)(intptr_t)lv_event_get_user_data(e);
     if (idx < 0 || idx >= s_nreg || !s_cb) return;
     ESP_LOGI(TAG, "tap -> room %s", s_reg[idx].id);
-    s_cb(s_reg[idx].id);
+    s_cb(s_reg[idx].id, s_reg[idx].name);
 }
 
 // --- geometry helpers ------------------------------------------------------
@@ -243,9 +243,12 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
         bool act = na > 0;
 
         const cJSON *ji = cJSON_GetObjectItem(r, "id");
+        const cJSON *jn = cJSON_GetObjectItem(r, "name");
         int idx = s_nreg;
         strncpy(s_reg[idx].id, cJSON_IsString(ji) ? ji->valuestring : "?", sizeof s_reg[idx].id - 1);
         s_reg[idx].id[sizeof s_reg[idx].id - 1] = 0;
+        strncpy(s_reg[idx].name, cJSON_IsString(jn) ? jn->valuestring : s_reg[idx].id, sizeof s_reg[idx].name - 1);
+        s_reg[idx].name[sizeof s_reg[idx].name - 1] = 0;
 
         double lx, ly;
         if (have_space && room_label(geo, &lx, &ly)) {

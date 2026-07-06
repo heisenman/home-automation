@@ -38,18 +38,47 @@ static char s_house_url[256]; // /api/v1/house
 static char s_map_url[256];   // /api/v1/rooms (house map — the landing view)
 static lv_obj_t *s_header, *s_grid;
 static lv_obj_t *s_map;       // house-map container (absolute-positioned room chips)
+static lv_obj_t *s_back;      // "< Rooms" back button (shown only in the room-zoom view)
 static lv_obj_t *s_batt_lbl;  // battery indicator in the top bar
 
-// House-map room tap -> open the room-zoom view. Increment 2 (room zoom) not built yet; log for now.
-static void on_room_tap(const char *area_id)
+static char s_room[28];            // selected room slug for room-zoom; "" = house map (landing)
+static char s_room_name[28];       // its display name (for the title label)
+static volatile bool s_nav_dirty;  // set on a nav change -> ui_task re-renders promptly (no 10s wait)
+
+// House-map room tap -> enter that room's zoom view (the device grid filtered to this room).
+static void on_room_tap(const char *area_id, const char *name)
 {
-    ESP_LOGI(TAG, "room tap: %s (room-zoom = next increment)", area_id ? area_id : "?");
+    if (!area_id) return;
+    strncpy(s_room, area_id, sizeof s_room - 1);
+    s_room[sizeof s_room - 1] = 0;
+    strncpy(s_room_name, (name && name[0]) ? name : area_id, sizeof s_room_name - 1);
+    s_room_name[sizeof s_room_name - 1] = 0;
+    s_nav_dirty = true;
+    ESP_LOGI(TAG, "nav -> room %s", s_room);
+}
+
+// Back button in the room-zoom view -> return to the house map.
+static void on_back_clicked(lv_event_t *e)
+{
+    (void)e;
+    s_room[0] = 0;
+    s_nav_dirty = true;
 }
 
 static bool s_started;
 static QueueHandle_t s_state_q;    // MQTT state payloads (char*) -> state_task (LVGL off the mqtt stack)
 
-static void render(cJSON *sensors, cJSON *devices, cJSON *catalog)
+// True if a sensor/display entry belongs to `filter` (a room slug); filter NULL/"" matches all.
+static bool room_match(cJSON *e, const char *filter)
+{
+    if (!filter || !filter[0]) return true;
+    cJSON *jr = cJSON_GetObjectItem(e, "room");
+    return cJSON_IsString(jr) && strcmp(jr->valuestring, filter) == 0;
+}
+
+// Render the sensor/actuator grid. `room_filter` NULL/"" = whole house (offline fallback); else only
+// that room's devices (room-zoom). `title` names the view in the header (room name / "House").
+static void render(cJSON *sensors, cJSON *devices, cJSON *catalog, const char *room_filter, const char *title)
 {
     if (!lvgl_port_lock(0)) return;
     ui_format_load_catalog(catalog);  // refresh the shared metric spec before rebuilding cards
@@ -58,17 +87,48 @@ static void render(cJSON *sensors, cJSON *devices, cJSON *catalog)
     lv_obj_clean(s_grid);             // wipe both actuator + sensor card widgets from the shared grid
     int ns = 0, na = 0;
     cJSON *e;
-    if (devices) cJSON_ArrayForEach(e, devices) { ui_controls_add_card(e, s_grid); na++; }   // actuators first (top)
-    if (sensors) cJSON_ArrayForEach(e, sensors) { ui_grid_add_card(e, s_grid); ns++; }
-    lv_label_set_text_fmt(s_header, "Home  -  %d devices  %d sensors", na, ns);
+    if (devices) {
+        cJSON_ArrayForEach(e, devices) {
+            if (room_match(e, room_filter)) { ui_controls_add_card(e, s_grid); na++; }   // actuators first
+        }
+    }
+    if (sensors) {
+        cJSON_ArrayForEach(e, sensors) {
+            if (room_match(e, room_filter)) { ui_grid_add_card(e, s_grid); ns++; }
+        }
+    }
+    lv_label_set_text_fmt(s_header, "%s  -  %d dev  %d sen", title ? title : "House", na, ns);
     lvgl_port_unlock();
-    ESP_LOGI(TAG, "rendered %d actuators + %d sensors", na, ns);
+    ESP_LOGI(TAG, "rendered %d actuators + %d sensors (room=%s)", na, ns, room_filter ? room_filter : "all");
 }
 
-static void ui_task(void *pv)
+// Fetch + render one cycle for the CURRENT nav state (house map, or a room's filtered grid).
+static void do_render_cycle(void)
 {
-    for (;;) {
-        // ── primary landing: the house map (GET /api/v1/rooms) ──
+    if (s_room[0]) {
+        // ── room-zoom: the device grid filtered to the selected room ──
+        int l1 = 0, l2 = 0;
+        char *b1 = ui_http_get(s_url, &l1);         // sensors
+        char *b2 = ui_http_get(s_disp_url, &l2);    // controllable devices
+        cJSON *r1 = (b1 && l1 > 0) ? cJSON_Parse(b1) : NULL;
+        cJSON *r2 = (b2 && l2 > 0) ? cJSON_Parse(b2) : NULL;
+        cJSON *sensors = r1 ? cJSON_GetObjectItem(r1, "sensors") : NULL;
+        cJSON *devices = r2 ? cJSON_GetObjectItem(r2, "devices") : NULL;
+        cJSON *catalog = r1 ? cJSON_GetObjectItem(r1, "metrics") : NULL;
+        if (lvgl_port_lock(0)) {
+            lv_obj_clear_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(s_back, LV_OBJ_FLAG_HIDDEN);   // back button beside the title
+            lvgl_port_unlock();
+        }
+        render(cJSON_IsArray(sensors) ? sensors : NULL, cJSON_IsArray(devices) ? devices : NULL,
+               catalog, s_room, s_room_name);
+        if (r1) cJSON_Delete(r1);
+        if (r2) cJSON_Delete(r2);
+        if (b1) heap_caps_free(b1);
+        if (b2) heap_caps_free(b2);
+    } else {
+        // ── house map (landing) ──
         int lm = 0;
         char *bm = ui_http_get(s_map_url, &lm);
         cJSON *rm = (bm && lm > 0) ? cJSON_Parse(bm) : NULL;
@@ -79,7 +139,8 @@ static void ui_task(void *pv)
                 ui_map_render(rm, s_map, on_room_tap);
                 lv_obj_clear_flag(s_map, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
-                lv_label_set_text(s_header, "Home");
+                lv_obj_add_flag(s_back, LV_OBJ_FLAG_HIDDEN);
+                lv_label_set_text(s_header, "House");
                 lvgl_port_unlock();
             }
             mapped = true;
@@ -87,11 +148,11 @@ static void ui_task(void *pv)
         if (rm) cJSON_Delete(rm);
         if (bm) heap_caps_free(bm);
 
-        // ── fallback: the flat sensor grid (endpoint absent / offline) ──
         if (!mapped) {
+            // fallback: the flat whole-house grid (rooms endpoint absent / offline)
             int l1 = 0, l2 = 0;
-            char *b1 = ui_http_get(s_url, &l1);         // sensors
-            char *b2 = ui_http_get(s_disp_url, &l2);    // controllable devices
+            char *b1 = ui_http_get(s_url, &l1);
+            char *b2 = ui_http_get(s_disp_url, &l2);
             cJSON *r1 = (b1 && l1 > 0) ? cJSON_Parse(b1) : NULL;
             cJSON *r2 = (b2 && l2 > 0) ? cJSON_Parse(b2) : NULL;
             cJSON *sensors = r1 ? cJSON_GetObjectItem(r1, "sensors") : NULL;
@@ -101,28 +162,42 @@ static void ui_task(void *pv)
                 if (lvgl_port_lock(0)) {
                     lv_obj_clear_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
                     lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
+                    lv_obj_add_flag(s_back, LV_OBJ_FLAG_HIDDEN);
                     lvgl_port_unlock();
                 }
-                render(cJSON_IsArray(sensors) ? sensors : NULL, cJSON_IsArray(devices) ? devices : NULL, catalog);
+                render(cJSON_IsArray(sensors) ? sensors : NULL, cJSON_IsArray(devices) ? devices : NULL,
+                       catalog, NULL, "House");
             } else {
                 ESP_LOGW(TAG, "fetch/parse failed");
-                if (lvgl_port_lock(0)) { lv_label_set_text(s_header, "Home  -  (offline)"); lvgl_port_unlock(); }
+                if (lvgl_port_lock(0)) { lv_label_set_text(s_header, "House  -  (offline)"); lvgl_port_unlock(); }
             }
             if (r1) cJSON_Delete(r1);
             if (r2) cJSON_Delete(r2);
             if (b1) heap_caps_free(b1);
             if (b2) heap_caps_free(b2);
         }
+    }
 
-        // ── whole-house scene state (top bar) — always ──
-        int l3 = 0;
-        char *b3 = ui_http_get(s_house_url, &l3);
-        cJSON *r3 = (b3 && l3 > 0) ? cJSON_Parse(b3) : NULL;
-        if (cJSON_IsObject(r3)) ui_scenes_render(r3);
-        ui_admin_check_idle();       // drop the admin session after inactivity
-        if (r3) cJSON_Delete(r3);
-        if (b3) heap_caps_free(b3);
-        vTaskDelay(pdMS_TO_TICKS(REFRESH_MS));
+    // ── whole-house scene state (top bar) — always ──
+    int l3 = 0;
+    char *b3 = ui_http_get(s_house_url, &l3);
+    cJSON *r3 = (b3 && l3 > 0) ? cJSON_Parse(b3) : NULL;
+    if (cJSON_IsObject(r3)) ui_scenes_render(r3);
+    ui_admin_check_idle();       // drop the admin session after inactivity
+    if (r3) cJSON_Delete(r3);
+    if (b3) heap_caps_free(b3);
+}
+
+static void ui_task(void *pv)
+{
+    TickType_t last = xTaskGetTickCount() - pdMS_TO_TICKS(REFRESH_MS);   // render on first pass
+    for (;;) {
+        if (s_nav_dirty || (xTaskGetTickCount() - last) >= pdMS_TO_TICKS(REFRESH_MS)) {
+            s_nav_dirty = false;
+            last = xTaskGetTickCount();
+            do_render_cycle();
+        }
+        vTaskDelay(pdMS_TO_TICKS(150));   // poll for nav changes (tap/back) for a snappy response
     }
 }
 
@@ -217,11 +292,41 @@ void ui_tiles_start(const char *sensors_url)
     ui_clock_init(topbar);                    // wall clock (ui/ui_clock; roadmap #1, ability G)
     ui_power_init(topbar);                    // trailing red power-off button + confirm (ui/ui_power)
 
-    s_header = lv_label_create(scr);
-    lv_label_set_text(s_header, "Home  -  loading...");
+    // Title row: [ < back ]  [ title ].  The back button sits NEXT TO the view title (House / room
+    // name) — deliberately NOT in the top-bar scene selector, so it never reads as a scene control.
+    lv_obj_t *title_row = lv_obj_create(scr);
+    lv_obj_set_width(title_row, lv_pct(100));
+    lv_obj_set_height(title_row, LV_SIZE_CONTENT);
+    lv_obj_set_style_bg_opa(title_row, 0, 0);
+    lv_obj_set_style_border_width(title_row, 0, 0);
+    lv_obj_set_style_pad_all(title_row, 0, 0);
+    lv_obj_set_style_pad_bottom(title_row, 6, 0);
+    lv_obj_set_style_pad_column(title_row, 12, 0);
+    lv_obj_set_flex_flow(title_row, LV_FLEX_FLOW_ROW);
+    lv_obj_set_flex_align(title_row, LV_FLEX_ALIGN_START, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(title_row, LV_OBJ_FLAG_SCROLLABLE);
+
+    s_back = lv_obj_create(title_row);
+    lv_obj_set_size(s_back, 128, 46);
+    lv_obj_set_style_bg_color(s_back, lv_color_hex(0x16204a), 0);
+    lv_obj_set_style_border_color(s_back, lv_color_hex(0x2f7e7a), 0);
+    lv_obj_set_style_border_width(s_back, 2, 0);
+    lv_obj_set_style_radius(s_back, 10, 0);
+    lv_obj_set_style_pad_all(s_back, 0, 0);
+    lv_obj_clear_flag(s_back, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_back, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_back, on_back_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *bklbl = lv_label_create(s_back);
+    lv_label_set_text(bklbl, LV_SYMBOL_LEFT "  House");
+    lv_obj_set_style_text_font(bklbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(bklbl, lv_color_hex(0xffffff), 0);
+    lv_obj_center(bklbl);
+    lv_obj_add_flag(s_back, LV_OBJ_FLAG_HIDDEN);   // shown only in a room
+
+    s_header = lv_label_create(title_row);
+    lv_label_set_text(s_header, "House");
     lv_obj_set_style_text_font(s_header, &lv_font_montserrat_28, 0);
     lv_obj_set_style_text_color(s_header, lv_color_hex(0xffffff), 0);
-    lv_obj_set_style_pad_bottom(s_header, 6, 0);
 
     // The screen itself scrolls vertically: [header] -> [tile grid] -> [expansion stack].
     lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_AUTO);

@@ -13,9 +13,9 @@
 #include "lvgl.h"
 #include "cJSON.h"
 
-// Tap callback: the tapped room's canonical area id (stable pointer only valid during the call —
-// copy if retained). Used by the orchestrator to open the room-zoom view.
-typedef void (*ui_map_room_cb)(const char *area_id);
+// Tap callback: the tapped room's canonical area id + display name (stable pointers only valid during
+// the call — copy if retained). Used by the orchestrator to open the room-zoom view + title it.
+typedef void (*ui_map_room_cb)(const char *area_id, const char *name);
 
 // Build/refresh the house map into `parent` from a parsed /api/v1/rooms response (`root` = the whole
 // object with .rooms[]). Clears `parent` first. Must be called under the LVGL lock. `cb` may be NULL.
