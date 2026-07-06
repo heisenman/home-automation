@@ -134,3 +134,35 @@ the house + sensor-category views land — per Hugh.
 authored through the ops sshfs mount (`~/mnt/ha210/instance`), mirrored 210→245 by `sync-standby.sh`
 (add manifest rows via `house-geo-backup-sync`), and part of the edge-SD replica lane. The public repo carries
 **only** this doc's schema + contracts — never the real geometry, room list, or coordinates.
+
+## Devices-management screen (panel) — PLAN (Hugh 2026-07-06; decompose-before-dev, not built)
+**Why:** from the floor plan you can't see/verify a device's assignment (e.g. "is my office Meter Pro
+actually on h_office?") or fix it without a laptop. Want a panel screen listing every device, its current
+room, with rename + reassign in place. Sibling of the PWA board item `ui-device-admin`.
+
+**Reuse (backend already exists — no/low server work for the quick path):**
+- **List:** `GET /api/v1/sensors` + `/api/v1/displays` — each entry has `device_id, device_type, area, room, name`.
+- **Rename + reassign (display overlay, LIVE, admin-gated):** `PUT /api/v1/devices/{id}/meta {name, room}` — the R8
+  device-meta API that already backs the PWA `DeviceMetaModal`. `room` is the OVERLAY the viewmodel resolves
+  as `room = overlay OR registry area`, so setting it to a canonical slug re-homes the device on the house map
+  + everywhere immediately. The panel already holds an auto-minted admin JWT (`ui_admin`), so it can PUT.
+- **Room picker options:** the canonical areas from `GET /api/v1/rooms` (id + name).
+
+**The one design decision (for Hugh) — overlay vs canonical relocate:**
+- **(A) Display overlay** [`PUT …/meta {room}`] — LIVE now, reversible, display-only. Fixes "show it in the
+  right room" instantly. Does NOT move the registry `area` or migrate history. RECOMMENDED for the panel's
+  quick fix.
+- **(B) Canonical relocate** — moves the registry `area` + history-safe parquet/rung migration
+  (`server/maintenance/device_relocate.py`). No live HTTP endpoint yet → needs a new admin route
+  `POST /api/v1/devices/{id}/relocate {new_area}` (dev/server). Heavier; the "proper" move. Follow-up.
+- Rec: ship (A) on the panel now (mirrors the PWA); add (B) as a shared endpoint later (benefits panel + PWA).
+
+**Panel UI shape:** a third top-level view beside House(map)/room-zoom — a scrollable device list, each row:
+`name (device_id) · type · [current room ⚠ if overlay≠area] · [Reassign ▾ canonical-area picker] · [Rename]`.
+Reached from a top-bar/House entry (nav TBD). Admin-gated (auto-JWT present). New module `main/ui/ui_devices.c`.
+Rename = friendly-name overlay (`meta.name`); full `device_id` rename stays the batch tool (not in scope).
+
+**Note on the specific gripe:** the office Meter Pro not showing on h_office is exactly this — likely its
+registry `area`/overlay points elsewhere (the Meter-Pro MACs were once crossed, corrected 2026-06-22). This
+screen is the tool to inspect + fix it; don't hand-edit — do it through the screen once built (or the PWA meta
+modal today).
