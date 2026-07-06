@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v37 S31 energy (power_w/kWh today) + VOC gas in graphs + value row";
+const BUILD = "v38 house map (SVG floor plan) — /api/v1/rooms, tap a room to filter sensors";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -728,16 +728,18 @@ function ExpandedSensor({ s, range, isAdmin, onEdit, onClose }) {
     </div>`;
 }
 
-function Sensors({ sensors, isAdmin, onEdit, onChange }) {
+function Sensors({ sensors, isAdmin, onEdit, onChange, roomFilter, onClearRoom }) {
   const [expanded, setExpanded] = useState(new Set());        // device_ids currently expanded
   const [range, setRange] = useState(() => computeRange(24, { start: "", end: "" }));
   const [managed, setManaged] = useState(null);               // null=not loaded; {hidden:[], retired:[]}
   if (sensors == null) return null;
   if (sensors.length === 0) return html`<p class="note">No sensor readings yet.</p>`;
+  // room-zoom: when a room is picked on the house map, show only that room's sensors
+  const all = roomFilter ? sensors.filter((s) => s.room === roomFilter.id) : sensors;
   const open = (id) => setExpanded((p) => new Set(p).add(id));
   const close = (id) => setExpanded((p) => { const n = new Set(p); n.delete(id); return n; });
-  const mins = sensors.filter((s) => !expanded.has(s.device_id));
-  const exps = sensors.filter((s) => expanded.has(s.device_id));
+  const mins = all.filter((s) => !expanded.has(s.device_id));
+  const exps = all.filter((s) => expanded.has(s.device_id));
 
   const loadManaged = async () => {
     try {
@@ -762,7 +764,11 @@ function Sensors({ sensors, isAdmin, onEdit, onChange }) {
 
   return html`
     <div class="sensors-wrap">
-      <h2 class="section">Sensors</h2>
+      <h2 class="section">
+        ${roomFilter ? html`${roomFilter.name} <button class="btn sm ghost" style="margin-left:8px"
+          onClick=${onClearRoom}>← All rooms</button>` : "Sensors"}
+      </h2>
+      ${roomFilter && all.length === 0 && html`<p class="note">No sensors in this room.</p>`}
       <div class="sensor-grid">
         ${mins.map((s) => html`<${SensorChip} key=${s.device_id} s=${s} onOpen=${() => open(s.device_id)} />`)}
       </div>
@@ -1201,9 +1207,76 @@ function NotifyToggle() {
 }
 
 // ── app shell ────────────────────────────────────────────────────────────────
+// House map — the /api/v1/rooms room graph as an SVG floor plan (parity with the D1001 panel).
+// Rooms with a polygon draw as walls + a live glance; monolithic rooms (attic/crawlspace) as chips.
+// Clicking a room selects it (filters the Sensors list below). PWA renders real SVG, so this is cheap.
+function HouseMap({ data, selected, onSelect }) {
+  const unit = useTemp();
+  if (!data || !Array.isArray(data.rooms) || data.rooms.length === 0) return null;
+  const rooms = data.rooms;
+
+  let mnx = 1e9, mny = 1e9, mxx = -1e9, mxy = -1e9;
+  const grow = (x, y) => { mnx = Math.min(mnx, x); mny = Math.min(mny, y); mxx = Math.max(mxx, x); mxy = Math.max(mxy, y); };
+  const scan = (ring) => ring.forEach(([x, y]) => grow(x, y));
+  for (const r of rooms) {
+    const g = r.geometry; if (!g) continue;
+    if (g.poly) scan(g.poly);
+    if (g.polys) g.polys.forEach(scan);
+    if (g.label) grow(g.label[0], g.label[1]);
+  }
+  if (!(mxx > mnx && mxy > mny)) return null;
+  const W = mxx - mnx, H = mxy - mny;
+
+  const glance = (devs) => {
+    for (const d of devs || []) {
+      const m = d.metrics || {};
+      if (typeof m.temperature_c === "number") {
+        const t = convT(m.temperature_c, unit).toFixed(0);
+        const h = typeof m.humidity_pct === "number" ? ` · ${m.humidity_pct.toFixed(0)}%` : "";
+        return `${t}°${h}`;
+      }
+    }
+    return "";
+  };
+  const hasPoly = (r) => r.geometry && (r.geometry.poly || r.geometry.polys);
+  const placed = rooms.filter(hasPoly);
+  const mono = rooms.filter((r) => !hasPoly(r) && (r.counts.sensors + r.counts.actuators) > 0);
+
+  return html`
+    <div class="housemap-wrap">
+      <h2 class="section">House</h2>
+      <svg class="housemap" viewBox="${mnx} ${mny} ${W} ${H}" preserveAspectRatio="xMidYMid meet"
+           style="width:100%;max-height:74vh;display:block">
+        ${placed.map((r) => {
+          const g = r.geometry, act = r.counts.actuators > 0, sel = selected === r.id;
+          const rings = g.polys || [g.poly];
+          const [lx, ly] = g.label || [(mnx + mxx) / 2, (mny + mxy) / 2];
+          const gl = glance(r.devices);
+          const fill = sel ? (act ? "rgba(180,130,60,0.34)" : "rgba(47,126,122,0.30)")
+                           : (act ? "rgba(180,130,60,0.14)" : "rgba(47,126,122,0.12)");
+          const stroke = act ? "#b4823c" : "#2f7e7a";
+          return html`<g class="room" style="cursor:pointer" onClick=${() => onSelect(r.id, r.name)}>
+            ${rings.map((ring) => html`<polygon points=${ring.map((p) => p.join(",")).join(" ")}
+              fill=${fill} stroke=${stroke} stroke-width=${sel ? 6 : 4} stroke-linejoin="round" />`)}
+            <text x=${lx} y=${ly - 2} text-anchor="middle" font-size="26" font-weight="600"
+              fill="currentColor">${r.name}</text>
+            ${gl && html`<text x=${lx} y=${ly + 24} text-anchor="middle" font-size="22"
+              fill=${act ? "#b4823c" : "#3d6e93"}>${gl}</text>`}
+          </g>`;
+        })}
+      </svg>
+      ${mono.length > 0 && html`<div class="mono-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+        ${mono.map((r) => html`<button class=${"btn sm" + (selected === r.id ? "" : " ghost")}
+          onClick=${() => onSelect(r.id, r.name)}>${r.name}${glance(r.devices) ? ` · ${glance(r.devices)}` : ""}</button>`)}
+      </div>`}
+    </div>`;
+}
+
 function App() {
   const [devices, setDevices] = useState(null);
   const [sensors, setSensors] = useState(null);
+  const [rooms, setRooms] = useState(null);         // /api/v1/rooms graph (house map)
+  const [selRoom, setSelRoom] = useState(null);     // {id,name} filtering the Sensors list, or null
   const [alerts, setAlerts] = useState([]);
   const [weather, setWeather] = useState(null);
   const [status, setStatus] = useState("init");      // init | live | down
@@ -1231,6 +1304,8 @@ function App() {
       setSensors(sens.sensors || []);
       setAlerts(alr.alerts || []);
       setStatus("live");
+      // house map is additive — fetch out-of-band so an older server (no /api/v1/rooms) can't break the dashboard
+      getJSON("/api/v1/rooms").then(setRooms).catch(() => setRooms(null));
     } catch {
       setStatus("down");
     }
@@ -1265,13 +1340,17 @@ function App() {
 
       <${AlertsBanner} alerts=${alerts} />
 
+      <${HouseMap} data=${rooms} selected=${selRoom && selRoom.id}
+        onSelect=${(id, name) => setSelRoom((p) => (p && p.id === id ? null : { id, name }))} />
+
       ${devices == null && html`<div class="empty">Loading…</div>`}
       ${devices && devices.length > 0 && html`<h2 class="section">Automations</h2>`}
       ${devices && devices.map((vm) => html`
         <${DeviceCard} key=${vm.device_id} vm=${vm} sensors=${sensors} isAdmin=${isAdmin}
           onChange=${refresh} onNeedAdmin=${() => setShowAdmin(true)} onEdit=${onEdit} />`)}
 
-      <${Sensors} sensors=${sensors} isAdmin=${isAdmin} onEdit=${onEdit} onChange=${refresh} />
+      <${Sensors} sensors=${sensors} isAdmin=${isAdmin} onEdit=${onEdit} onChange=${refresh}
+        roomFilter=${selRoom} onClearRoom=${() => setSelRoom(null)} />
       <${GraphBuilder} sensors=${sensors} weather=${weather} />
 
       ${status === "down" && html`<p class="note">⚠ Can't reach the server — showing last known state.</p>`}
