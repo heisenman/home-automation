@@ -1,0 +1,21 @@
+# config-examples/device-placement.example.yaml — GENERIC EXAMPLE / template (ADR-0026 Phase 3, panel UI redesign).
+#
+# Committable SHAPE only, a fictional house. The REAL placement lives at instance/device-placement.yaml
+# (gitignored, canonical on .210, authored through the ops sshfs mount) and is NEVER committed.
+# Copy this to instance/device-placement.yaml and fill in your own devices. device_ids here match
+# config-examples/devices.example.yaml; rooms match config-examples/house-geometry.example.json.
+#
+# SCHEMA  device_id: { x, y, anchor }
+#   x, y   : position NORMALIZED to the device's room bounding box, 0..1  (x: 0=west edge, 1=east; y: 0=north, 1=south).
+#            Normalized-to-room (not house) so it survives room re-scaling. null = not yet captured.
+#   anchor : label lean, one of n|s|e|w|auto (default auto) — keeps the callout off the walls.
+# Placement is OPT-IN: a device with null x/y renders in the room's fallback list, not on the geometric view.
+# Rooms/polygons live in house-geometry.json; join key = the device's area (see devices.yaml).
+# CAPTURE: walk the house and tap each device's spot on the room-zoom view (like the area capture).
+
+placements:
+  meter_pro_living_room:  { x: 0.72,  y: 0.35,  anchor: n    }   # living_room · captured
+  meter_pro_suite_a_bed:  { x: 0.20,  y: 0.80,  anchor: s    }   # suite_a_bed · captured
+  gas_kitchen:            { x: 0.50,  y: 0.15,  anchor: s    }   # kitchen · captured
+  meter_suite_b_bed:      { x: null,  y: null,  anchor: auto }   # suite_b_bed · not yet captured -> fallback list
+  meter_attic:            { x: null,  y: null,  anchor: auto }   # attic (monolithic) · not yet captured

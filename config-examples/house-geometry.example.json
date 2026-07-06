@@ -1,0 +1,20 @@
+{
+  "_provenance": "GENERIC EXAMPLE — a fictional house, committable shape only (ADR-0026 Phase 3, panel-ui-spatial-nav.md). The REAL floor plan lives at instance/house-geometry.json (gitignored, canonical on 210) and is NEVER committed (privacy: a to-scale plan reveals the actual home). Copy this to instance/house-geometry.json and replace with your own room polygons. Room ids here match config-examples/areas.example.yaml so the two render together.",
+  "_schema": "space{units,width,height,px_per_ft,north}; outer_wall=[[x,y],...] closed loop; rooms{<id>:{name,level,zone,type,poly:[[x,y],...],label:[x,y]}}. Coordinates are SVG-viewBox units (origin top-left, y grows south). label = where the room name is drawn. poly need not tessellate perfectly; it's the clickable/render outline.",
+  "schema_version": 1,
+  "space": { "units": "svg_px", "width": 600, "height": 800, "px_per_ft": 20, "north": "up" },
+  "outer_wall": [[40, 40], [560, 40], [560, 760], [40, 760]],
+  "rooms": {
+    "kitchen":        { "name": "Kitchen",     "level": "main_floor", "zone": "common",      "type": "kitchen",      "poly": [[40, 40], [300, 40], [300, 240], [40, 240]],   "label": [170, 140] },
+    "living_room":    { "name": "Living Room", "level": "main_floor", "zone": "common",      "type": "living",       "poly": [[300, 40], [560, 40], [560, 300], [300, 300]], "label": [430, 170] },
+    "hall":           { "name": "Hall",        "level": "main_floor", "zone": "circulation", "type": "circulation",  "poly": [[40, 240], [300, 240], [300, 320], [40, 320]], "label": [170, 280] },
+    "suite_a_office": { "name": "Office A",    "level": "main_floor", "zone": "suite_a",     "type": "office",       "poly": [[40, 320], [220, 320], [220, 540], [40, 540]], "label": [130, 430] },
+    "suite_a_bed":    { "name": "Bedroom A",   "level": "main_floor", "zone": "suite_a",     "type": "bedroom",      "poly": [[220, 320], [400, 320], [400, 540], [220, 540]], "label": [310, 430] },
+    "suite_a_bath":   { "name": "Bath A",      "level": "main_floor", "zone": "suite_a",     "type": "bathroom",     "poly": [[400, 320], [560, 320], [560, 440], [400, 440]], "label": [480, 380] },
+    "suite_b_bed":    { "name": "Bedroom B",   "level": "main_floor", "zone": "suite_b",     "type": "bedroom",      "poly": [[40, 540], [300, 540], [300, 760], [40, 760]], "label": [170, 650] },
+    "mech_closet":    { "name": "Mechanical",  "level": "main_floor", "zone": "utility",     "type": "mechanical",   "poly": [[300, 540], [400, 540], [400, 640], [300, 640]], "label": [350, 590] },
+    "porch":          { "name": "Porch",       "level": "main_floor", "zone": "exterior",    "type": "porch",        "poly": [[400, 540], [560, 540], [560, 760], [400, 760]], "label": [480, 650] },
+    "attic":          { "name": "Attic",       "level": "attic",      "zone": "none",        "type": "monolithic",   "poly": [[40, 40], [560, 40], [560, 760], [40, 760]],   "label": [300, 400] },
+    "crawlspace":     { "name": "Crawlspace",  "level": "crawlspace", "zone": "none",        "type": "monolithic",   "poly": [[40, 40], [560, 40], [560, 760], [40, 760]],   "label": [300, 400] }
+  }
+}
