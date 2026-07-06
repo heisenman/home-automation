@@ -229,9 +229,10 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
     cJSON_ArrayForEach(r, rooms) room_bounds(cJSON_GetObjectItem(r, "geometry"), &mnx, &mny, &mxx, &mxy);
     bool have_space = (mxx > mnx && mxy > mny);
 
+    lv_obj_update_layout(parent);              // resolve flex_grow height before measuring
     int pw = lv_obj_get_width(parent), ph = lv_obj_get_height(parent);
     if (pw <= 0) pw = 780;
-    if (ph <= 0) ph = 1040;
+    if (ph <= 0) ph = 1140;
     int mapw = pw - COL_W;                       // floor plan = left area; right column = monolithic rooms
     s_mnx = mnx; s_mny = mny;
     double sx = have_space ? (double)(mapw - 2 * PAD) / (mxx - mnx) : 1;

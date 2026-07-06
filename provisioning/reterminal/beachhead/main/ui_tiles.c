@@ -345,11 +345,13 @@ void ui_tiles_start(const char *sensors_url)
     lv_obj_set_flex_flow(s_grid, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_clear_flag(s_grid, LV_OBJ_FLAG_SCROLLABLE);   // the screen scrolls, not the grid
 
-    // House-map container: fixed-height, absolute-positioned room chips (ui/ui_map). Shown as the
-    // landing view once the first /api/v1/rooms lands; the grid above is the offline fallback.
+    // House-map container: fills all remaining height below the title (flex_grow) so the floor plan
+    // scales to the bottom of the screen (the scr has a 10px inset = ~10px off the edge). Absolute-
+    // positioned room labels + wall lines (ui/ui_map). Landing view once the first /api/v1/rooms lands.
     s_map = lv_obj_create(scr);
     lv_obj_set_width(s_map, lv_pct(100));
-    lv_obj_set_height(s_map, 1040);
+    lv_obj_set_height(s_map, 0);
+    lv_obj_set_flex_grow(s_map, 1);            // take all leftover vertical space
     lv_obj_set_style_bg_opa(s_map, 0, 0);
     lv_obj_set_style_border_width(s_map, 0, 0);
     lv_obj_set_style_pad_all(s_map, 0, 0);
