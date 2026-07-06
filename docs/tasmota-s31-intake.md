@@ -64,8 +64,9 @@ Do NOT set WiFi over serial — the console drops when Tasmota restarts to apply
 
 ## 5. Final topic + module (dev, over MQTT — reliable)
 The device is now on the broker, so configure it over MQTT (NOT `/cm` — HTTP API is disabled by default; NOT
-serial — flaky). Find its default topic (`mosquitto_sub -h localhost -t 'tele/+/LWT' -v` shows the new
-`tasmota_XXXXXX`), then:
+serial — flaky). The default topic is always **`tasmota_<last-3-MAC-bytes-hex>`** (e.g. flash MAC `…41:2e:38`
+→ `tasmota_412E38`), so you can go straight to renaming — or `mosquitto_sub -h localhost -t 'tele/+/LWT' -v`
+lists any new `tasmota_XXXXXX`. Then:
 ```
 mosquitto_pub -h localhost -t 'cmnd/tasmota_XXXXXX/Backlog' -m 'Module 41; Topic <final_topic>; FullTopic %prefix%/%topic%/; TelePeriod 30'
 ```
@@ -85,9 +86,11 @@ Expect `ENERGY` with `Power`/`Voltage`/`Current`. `tele/<final_topic>/LWT = Onli
   `home/<area>/<device_id>/state` with canonical `power_w/voltage_v/current_a/...`. The registry rides the
   failover-sync manifest (`instance/tasmota-devices.yaml` is `optional|sync`), so standbys + new servers mirror it.
 - **Spare (deliberately NOT logged):** flash + get it on the network under `s31_spareN`, but do **NOT** add a
-  registry entry. The bridge logs one `telemetry from UNKNOWN Tasmota topic 's31_spareN'` warning and drops it —
-  the device sits on the bus, powered/metering, ready to deploy later by adding a registry row + repointing its
-  Topic. This is the intended state for staged spares.
+  live registry entry. The bridge logs one `telemetry from UNKNOWN Tasmota topic 's31_spareN'` warning and drops
+  it — the device sits on the bus, powered, ready to deploy later. **Record it in a commented `# STAGED SPARES`
+  block in `tasmota-devices.yaml`** (topic + physical MAC) so it's discoverable; activating it later is just
+  uncomment the block + set `area` + `sudo systemctl restart ha-tasmota-bridge`. Find a live spare on the bus
+  with `mosquitto_sub -t 'tele/s31_spareN/STATE'` (its payload carries the current IP/RSSI).
 
 ## 8. Energy calibration (optional, per deployment)
 With a known resistive load ON, over MQTT: `cmnd/<topic>/PowerSet <watts>`, `VoltageSet <mV>`, `CurrentSet <mA>`.
