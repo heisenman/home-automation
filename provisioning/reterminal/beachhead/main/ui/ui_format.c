@@ -10,8 +10,8 @@
 // an older server that doesn't emit the catalog) until ui_format_load_catalog() replaces it.
 #define MAX_CAT 32
 static struct mfmt s_cat[MAX_CAT] = {
-    {"temperature_c", "Temp", "C", 1},
-    {"humidity_pct",  "Hum",  "%", 0},
+    {"temperature_c", "Temp", "C", 1, true},
+    {"humidity_pct",  "Hum",  "%", 0, true},
 };
 static int s_ncat = 2;   // fallback entry count until the server catalog arrives
 
@@ -50,6 +50,7 @@ void ui_format_load_catalog(cJSON *metrics)
         ascii_fold(cJSON_IsString(l) ? l->valuestring : k->valuestring, f->label, sizeof(f->label));
         ascii_fold(cJSON_IsString(u) ? u->valuestring : "", f->unit, sizeof(f->unit));
         f->prec = cJSON_IsNumber(pr) ? (int)pr->valuedouble : 0;
+        f->core = cJSON_IsTrue(cJSON_GetObjectItem(m, "core"));
     }
     if (n > 0) s_ncat = n;
 }

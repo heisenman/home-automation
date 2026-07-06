@@ -110,14 +110,16 @@ static int text_wh(const char *s, int max_w, int *w)
     return sz.y;
 }
 
-// v1 core set (until the BFF tags core-vs-secondary): temp/humidity are the through-line kept in 0b.
-static bool is_core_metric(const char *key)
+// Any metric on this device out of its normal range (server out_of_range map, sparse {metric:True}).
+static bool dev_alert(cJSON *dev)
 {
-    return strcmp(key, "temperature_c") == 0 || strcmp(key, "humidity_pct") == 0;
+    cJSON *o = cJSON_GetObjectItem(dev, "out_of_range");
+    return cJSON_IsObject(o) && o->child != NULL;
 }
 
 // One device's glance line: short name + its metrics in catalog (priority) order. core_only drops
-// the secondary metrics (the 0a->0b degrade). Always emits at least the name (honors "all devices").
+// the secondary metrics (the 0a->0b degrade, driven by the server metric_spec.core flag). Always
+// emits at least the name (honors "all devices").
 static void dev_line(cJSON *dev, bool core_only, char *out, size_t n)
 {
     const cJSON *jn = cJSON_GetObjectItem(dev, "name");
@@ -133,7 +135,7 @@ static void dev_line(cJSON *dev, bool core_only, char *out, size_t n)
     int cnt;
     const struct mfmt *cat = ui_format_catalog(&cnt);
     for (int i = 0; i < cnt && off < (int)n - 1; i++) {
-        if (core_only && !is_core_metric(cat[i].key)) continue;
+        if (core_only && !cat[i].core) continue;
         bool present;
         double v = metric_of(m, cat[i].key, &present);
         if (!present) continue;
@@ -264,7 +266,7 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
         cJSON_ArrayForEach(d, devs) {
             if (k >= ML_MAX) { over = true; break; }
             dev_line(d, mode == 1, lines[k], ML_LEN);
-            lcol[k] = C_NORMAL;
+            lcol[k] = dev_alert(d) ? C_RED : C_NORMAL;   // any metric out of normal range -> red row
             int lw; h += text_wh(lines[k], 0, &lw);    // natural (unwrapped) size
             if (lw > usable_w) over = true;
             if (lw > maxw) maxw = lw;

@@ -11,8 +11,9 @@
 #include <string.h>
 #include "cJSON.h"
 
-// One metric's presentation spec (label/unit/precision), copied from the server catalog.
-struct mfmt { char key[24], label[20], unit[12]; int prec; };
+// One metric's presentation spec (label/unit/precision/core), copied from the server catalog.
+// `core` (server metric_spec.core) = kept in the map's 0b tier when secondary metrics are dropped.
+struct mfmt { char key[24], label[20], unit[12]; int prec; bool core; };
 
 // Server-authored graph spec for a metric (from /api/v1/sensors `graphs`, ADR-0019 shared UI spec).
 // Shared type: the grid card registry and the expand panels both carry an array of these.
