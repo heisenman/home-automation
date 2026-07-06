@@ -44,6 +44,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 import paho.mqtt.client as mqtt                       # noqa: E402
 from server.util.mqtt_creds import apply_credentials  # noqa: E402
 from server.util.registry_reload import RegistryReloader  # noqa: E402
+from server.control import actuator_state              # noqa: E402  (ADR-0027 shared stamp)
+from server.control.registry import load_control_registry  # noqa: E402
 
 try:
     import yaml
@@ -118,6 +120,8 @@ class LevoitBridge:
         self._state: dict[str, dict[str, float]] = {}   # device_id -> {metric: value} (accumulated)
         self._online: dict[str, bool] = {}
         self._unknown: set[str] = set()
+        self._area_warned: set[str] = set()             # ADR-0027: warn once per device on area drift/fallback
+        self._control_get = lambda: {}                  # control.yaml registry (device_id -> DeviceCtl)
         self._lock = threading.Lock()
 
     def attach_reloader(self, reloader) -> "LevoitBridge":
@@ -125,6 +129,29 @@ class LevoitBridge:
         (levoit-devices.yaml edit) takes effect without a restart (relocate-ingest-reload)."""
         self._registry_get = reloader.current
         return self
+
+    def attach_control_reloader(self, reloader) -> "LevoitBridge":
+        """ADR-0027: source actuator `area` from control.yaml (the single source), reload-aware, instead of
+        levoit-devices.yaml. Keeps the name->device_id map here; area comes from the control registry."""
+        self._control_get = reloader.current
+        return self
+
+    def _resolve_area(self, device_id: str, levoit_area: str | None) -> str:
+        """Single-source area (ADR-0027): control.yaml wins; levoit-devices.yaml area is the deprecated
+        fallback only when the device isn't declared as a control actuator. Warn once per device on drift."""
+        creg = self._control_get() or {}
+        if device_id in creg:
+            area = actuator_state.resolve_area(creg, device_id)
+            if levoit_area and levoit_area != area and device_id not in self._area_warned:
+                self._area_warned.add(device_id)
+                log.warning("levoit-devices.yaml area %r for %s disagrees with control.yaml %r — using "
+                            "control.yaml (ADR-0027 single-source)", levoit_area, device_id, area)
+            return area
+        if device_id not in self._area_warned:
+            self._area_warned.add(device_id)
+            log.warning("area for %s from deprecated levoit-devices.yaml (not declared in control.yaml) — "
+                        "ADR-0027 fallback", device_id)
+        return levoit_area or "unknown"
 
     @property
     def _registry(self) -> dict:                        # esphome name -> identity
@@ -178,17 +205,12 @@ class LevoitBridge:
         self._emit(reg, device_id, snapshot)            # immediate emit on a real change (low latency)
 
     def _emit(self, reg: dict, device_id: str, metrics: dict[str, float]):
-        out_topic = f"home/{reg['area']}/{device_id}/state"
-        out = {
-            "schema": MESSAGE_SCHEMA,
-            "device_id": device_id,
-            "device_type": reg["device_type"],
-            "area": reg["area"],
-            "ts": _utc_now(),
-            "transport": "wifi-mqtt",
-            "metrics": dict(metrics),                   # full current snapshot (deduped on change)
-            "meta": {"esphome": True, "online": self._online.get(device_id, True)},
-        }
+        # ADR-0027: single shared stamp; area from control.yaml (reload-aware), not levoit-devices.yaml.
+        area = self._resolve_area(device_id, reg.get("area"))
+        out_topic, out = actuator_state.actuator_state(
+            device_id=device_id, device_type=reg["device_type"], area=area,
+            metrics=dict(metrics), transport="wifi-mqtt",
+            meta={"esphome": True, "online": self._online.get(device_id, True)})
         self._mqtt.publish(out_topic, json.dumps(out), qos=1, retain=True)
         log.debug("emit %s %s", out_topic, metrics)
 
@@ -236,6 +258,9 @@ def main() -> None:
     apply_credentials(client)
     bridge = LevoitBridge(registry, client, heartbeat_s=args.heartbeat_s)
     bridge.attach_reloader(RegistryReloader(args.registry, load_registry, logger=log))
+    # ADR-0027: area comes from control.yaml (single source), reload-aware, not levoit-devices.yaml.
+    control_registry = args.registry.parent / "control.yaml"
+    bridge.attach_control_reloader(RegistryReloader(control_registry, load_control_registry, logger=log))
     client.on_connect = bridge.on_connect
     client.on_message = bridge.on_message
     client.connect(args.broker, args.broker_port, keepalive=60)

@@ -18,7 +18,7 @@ import time
 from pathlib import Path
 
 from server.comms import events as ev
-from server.control import bootstrap, control_store as store
+from server.control import actuator_state, bootstrap, control_store as store
 from server.control.registry import load_control_registry
 from server.util.registry_reload import RegistryReloader
 from server.control.automation import (
@@ -276,8 +276,6 @@ class Controller:
     def _publish_state(self, device_id, st):
         if self.mqtt is None:
             return
-        ctl = self.registry.get(device_id)
-        area = getattr(ctl, "area", "unknown")
         metrics = {}
         if "humidity" in st:
             metrics["humidity_pct"] = st["humidity"]           # ONBOARD = non-authoritative
@@ -287,16 +285,17 @@ class Controller:
             metrics["target_humidity_pct"] = st["target"]      # device setpoint (telemetry, for the UI)
         if "fan" in st:
             metrics["fan_speed"] = st["fan"]                   # current fan level
-        # stamp the publish time: the writer keys readings on (device_id, ts, metric), so without a
-        # fresh ts every self-report collides on ts="" and INSERT OR IGNORE freezes onboard RH forever.
-        ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
-        payload = {"schema": 1, "device_id": device_id, "device_type": "dehumidifier", "ts": ts,
-                   "area": area,                          # writer reads area from the PAYLOAD, not the topic
-                   "transport": "midea-lan", "running": st.get("running"),
-                   "target_pct": st.get("target"), "metrics": metrics,
-                   "meta": {"authoritative": False}}
+        # ADR-0027: single shared stamp. area from the reload-aware control registry (self.registry, kept
+        # fresh by _refresh_registry each tick); the helper stamps a fresh ts per call (the writer keys on
+        # (device_id, ts, metric), so a stale ts would collide and freeze onboard RH). writer reads area
+        # from the PAYLOAD, not the topic — the helper puts it in both.
+        topic, payload = actuator_state.actuator_state(
+            device_id=device_id, device_type="dehumidifier",
+            area=actuator_state.resolve_area(self.registry, device_id),
+            metrics=metrics, transport="midea-lan", meta={"authoritative": False},
+            extra={"running": st.get("running"), "target_pct": st.get("target")})
         try:
-            self.mqtt.publish(f"home/{area}/{device_id}/state", json.dumps(payload), qos=0)
+            self.mqtt.publish(topic, json.dumps(payload), qos=0)
         except Exception:
             pass
 
