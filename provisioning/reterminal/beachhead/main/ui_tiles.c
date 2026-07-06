@@ -22,6 +22,7 @@
 #include "ui/ui_expand.h"   // inline expansion stack container (ADR-0020)
 #include "ui/ui_chart.h"    // 72h chart fetch worker (ADR-0020)
 #include "ui/ui_grid.h"     // sensor tile grid + card registry + live-state patching (ADR-0020)
+#include "ui/ui_map.h"      // house map: /api/v1/rooms -> spatial room chips (panel-ui-spatial-nav)
 #include "ui/ui_admin.h"    // admin session + top-bar toast/gear + idle auto-lock (ADR-0020)
 #include "ui/ui_scenes.h"   // top-bar row + whole-house scene selector (ADR-0020)
 #include "ui/ui_controls.h" // actuator cards + command overlay (ADR-0020)
@@ -34,8 +35,16 @@ static const char *TAG = "ui";
 static char s_url[192];       // /api/v1/sensors
 static char s_disp_url[192];  // /api/v1/displays (controllable devices)
 static char s_house_url[256]; // /api/v1/house
+static char s_map_url[256];   // /api/v1/rooms (house map — the landing view)
 static lv_obj_t *s_header, *s_grid;
+static lv_obj_t *s_map;       // house-map container (absolute-positioned room chips)
 static lv_obj_t *s_batt_lbl;  // battery indicator in the top bar
+
+// House-map room tap -> open the room-zoom view. Increment 2 (room zoom) not built yet; log for now.
+static void on_room_tap(const char *area_id)
+{
+    ESP_LOGI(TAG, "room tap: %s (room-zoom = next increment)", area_id ? area_id : "?");
+}
 
 static bool s_started;
 static QueueHandle_t s_state_q;    // MQTT state payloads (char*) -> state_task (LVGL off the mqtt stack)
@@ -59,29 +68,59 @@ static void render(cJSON *sensors, cJSON *devices, cJSON *catalog)
 static void ui_task(void *pv)
 {
     for (;;) {
-        int l1 = 0, l2 = 0, l3 = 0;
-        char *b1 = ui_http_get(s_url, &l1);         // sensors
-        char *b2 = ui_http_get(s_disp_url, &l2);    // controllable devices
-        char *b3 = ui_http_get(s_house_url, &l3);   // whole-house scene state
-        cJSON *r1 = (b1 && l1 > 0) ? cJSON_Parse(b1) : NULL;
-        cJSON *r2 = (b2 && l2 > 0) ? cJSON_Parse(b2) : NULL;
-        cJSON *r3 = (b3 && l3 > 0) ? cJSON_Parse(b3) : NULL;
-        cJSON *sensors = r1 ? cJSON_GetObjectItem(r1, "sensors") : NULL;
-        cJSON *devices = r2 ? cJSON_GetObjectItem(r2, "devices") : NULL;
-        cJSON *catalog = r1 ? cJSON_GetObjectItem(r1, "metrics") : NULL;   // shared UI metric spec
-        if (cJSON_IsArray(sensors) || cJSON_IsArray(devices)) {
-            render(cJSON_IsArray(sensors) ? sensors : NULL, cJSON_IsArray(devices) ? devices : NULL, catalog);
-        } else {
-            ESP_LOGW(TAG, "fetch/parse failed");
-            if (lvgl_port_lock(0)) { lv_label_set_text(s_header, "Home  -  (offline)"); lvgl_port_unlock(); }
+        // ── primary landing: the house map (GET /api/v1/rooms) ──
+        int lm = 0;
+        char *bm = ui_http_get(s_map_url, &lm);
+        cJSON *rm = (bm && lm > 0) ? cJSON_Parse(bm) : NULL;
+        cJSON *rooms = rm ? cJSON_GetObjectItem(rm, "rooms") : NULL;
+        bool mapped = false;
+        if (cJSON_IsArray(rooms) && cJSON_GetArraySize(rooms) > 0) {
+            if (lvgl_port_lock(0)) {
+                ui_map_render(rm, s_map, on_room_tap);
+                lv_obj_clear_flag(s_map, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
+                lv_label_set_text(s_header, "Home");
+                lvgl_port_unlock();
+            }
+            mapped = true;
         }
+        if (rm) cJSON_Delete(rm);
+        if (bm) heap_caps_free(bm);
+
+        // ── fallback: the flat sensor grid (endpoint absent / offline) ──
+        if (!mapped) {
+            int l1 = 0, l2 = 0;
+            char *b1 = ui_http_get(s_url, &l1);         // sensors
+            char *b2 = ui_http_get(s_disp_url, &l2);    // controllable devices
+            cJSON *r1 = (b1 && l1 > 0) ? cJSON_Parse(b1) : NULL;
+            cJSON *r2 = (b2 && l2 > 0) ? cJSON_Parse(b2) : NULL;
+            cJSON *sensors = r1 ? cJSON_GetObjectItem(r1, "sensors") : NULL;
+            cJSON *devices = r2 ? cJSON_GetObjectItem(r2, "devices") : NULL;
+            cJSON *catalog = r1 ? cJSON_GetObjectItem(r1, "metrics") : NULL;
+            if (cJSON_IsArray(sensors) || cJSON_IsArray(devices)) {
+                if (lvgl_port_lock(0)) {
+                    lv_obj_clear_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
+                    lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
+                    lvgl_port_unlock();
+                }
+                render(cJSON_IsArray(sensors) ? sensors : NULL, cJSON_IsArray(devices) ? devices : NULL, catalog);
+            } else {
+                ESP_LOGW(TAG, "fetch/parse failed");
+                if (lvgl_port_lock(0)) { lv_label_set_text(s_header, "Home  -  (offline)"); lvgl_port_unlock(); }
+            }
+            if (r1) cJSON_Delete(r1);
+            if (r2) cJSON_Delete(r2);
+            if (b1) heap_caps_free(b1);
+            if (b2) heap_caps_free(b2);
+        }
+
+        // ── whole-house scene state (top bar) — always ──
+        int l3 = 0;
+        char *b3 = ui_http_get(s_house_url, &l3);
+        cJSON *r3 = (b3 && l3 > 0) ? cJSON_Parse(b3) : NULL;
         if (cJSON_IsObject(r3)) ui_scenes_render(r3);
         ui_admin_check_idle();       // drop the admin session after inactivity
-        if (r1) cJSON_Delete(r1);
-        if (r2) cJSON_Delete(r2);
         if (r3) cJSON_Delete(r3);
-        if (b1) heap_caps_free(b1);
-        if (b2) heap_caps_free(b2);
         if (b3) heap_caps_free(b3);
         vTaskDelay(pdMS_TO_TICKS(REFRESH_MS));
     }
@@ -151,6 +190,7 @@ void ui_tiles_start(const char *sensors_url)
     if (b) *b = 0;
     ui_http_init(base);                                        // hand the base to the transport module
     snprintf(s_house_url, sizeof(s_house_url), "%s/api/v1/house", base);
+    snprintf(s_map_url, sizeof(s_map_url), "%s/api/v1/rooms", base);
     s_started = true;
 
     if (!lvgl_port_lock(0)) { ESP_LOGE(TAG, "lvgl lock failed"); return; }
@@ -197,6 +237,18 @@ void ui_tiles_start(const char *sensors_url)
     lv_obj_set_style_pad_column(s_grid, 10, 0);
     lv_obj_set_flex_flow(s_grid, LV_FLEX_FLOW_ROW_WRAP);
     lv_obj_clear_flag(s_grid, LV_OBJ_FLAG_SCROLLABLE);   // the screen scrolls, not the grid
+
+    // House-map container: fixed-height, absolute-positioned room chips (ui/ui_map). Shown as the
+    // landing view once the first /api/v1/rooms lands; the grid above is the offline fallback.
+    s_map = lv_obj_create(scr);
+    lv_obj_set_width(s_map, lv_pct(100));
+    lv_obj_set_height(s_map, 1040);
+    lv_obj_set_style_bg_opa(s_map, 0, 0);
+    lv_obj_set_style_border_width(s_map, 0, 0);
+    lv_obj_set_style_pad_all(s_map, 0, 0);
+    lv_obj_set_layout(s_map, LV_LAYOUT_NONE);
+    lv_obj_clear_flag(s_map, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
 
     ui_expand_init(scr);      // inline expansion stack below the grid (ui/ui_expand)
     ui_controls_init();       // actuator command overlay + worker (ui/ui_controls)
