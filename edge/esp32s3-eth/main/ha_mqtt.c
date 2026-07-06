@@ -1,6 +1,6 @@
 #include "ha_mqtt.h"
 #include "ha_sntp.h"
-#include "gatt_history.h"
+#include "ha_gatt.h"            // shared GATT-central history client (ADR-0020) — was fork gatt_history.c
 #include "ha_gatt_exec.h"       // shared generic GATT step-interpreter (ADR-0020) — was fork gatt_exec.c
 #include "ha_ota.h"
 #include "ha_led.h"
@@ -111,7 +111,7 @@ static void dispatch_cmd(const cJSON *cmd) {
         const char *profile = cJSON_IsString(prof) ? prof->valuestring : "outdoor";
         ESP_LOGI(TAG, "cmd: history pull mac=%s profile=%s", mac->valuestring, profile);
         if (ha_gatt_exec_busy()) ESP_LOGW(TAG, "central busy; dropping history pull");
-        else gatt_history_pull(mac->valuestring, profile);
+        else ha_gatt_history_pull(mac->valuestring, profile, 0);   // 0 = full range (edge backfill; native radio)
     } else if (cJSON_IsString(op) && strcmp(op->valuestring, "gatt") == 0 && cJSON_IsString(mac)) {
         // Generic GATT forwarder: {"op":"gatt","reqid":"..","mac":"..","steps":[...]}
         const cJSON *reqid = cJSON_GetObjectItem(cmd, "reqid");
@@ -120,7 +120,7 @@ static void dispatch_cmd(const cJSON *cmd) {
         char *steps_json = cJSON_PrintUnformatted(steps);   // re-serialise just the steps array
         const char *rid = cJSON_IsString(reqid) ? reqid->valuestring : "0";
         ESP_LOGI(TAG, "cmd: gatt exec mac=%s reqid=%s", mac->valuestring, rid);
-        if (gatt_history_busy() || ha_gatt_exec_busy()) ESP_LOGW(TAG, "central busy; dropping gatt exec");
+        if (ha_gatt_busy() || ha_gatt_exec_busy()) ESP_LOGW(TAG, "central busy; dropping gatt exec");
         else if (steps_json) ha_gatt_exec_run(rid, mac->valuestring, steps_json);
         if (steps_json) cJSON_free(steps_json);
     } else if (cJSON_IsString(op) && strcmp(op->valuestring, "ota") == 0) {
@@ -256,10 +256,13 @@ static void s3_ota_radio_pause(void *user) { (void)user; ha_ble_scan_pause(); }
 static void s3_ota_radio_resume(void *user) { (void)user; ha_ble_scan_resume(); }
 static void s3_ota_log(const char *msg, void *user) { (void)user; ha_mqtt_log("%s", msg); }
 static void s3_ota_on_fail(void *user) { (void)user; ha_led_set(HA_LED_OTA_FAIL); }
+// ha_gatt (history) seam: relay -> home/edge/<node>/<macflat>/history; log reuses s3_ota_log.
+static void edge_gatt_publish(const char *mac, const char *json, void *user) { (void)user; ha_mqtt_publish_history(mac, json); }
 // ha_gatt_exec seams: reply -> home/edge/<node>/<reqid>/reply; log reuses s3_ota_log (-> ha_mqtt_log).
 static void edge_exec_reply(const char *reqid, const char *json, void *user) { (void)user; ha_mqtt_publish_reply(reqid, json); }
 
 void ha_mqtt_start(const char *broker_uri, const char *node_id) {
+    ha_gatt_init(&(ha_gatt_cfg_t){ .publish = edge_gatt_publish, .log = s3_ota_log });
     ha_gatt_exec_init(&(ha_gatt_exec_cfg_t){ .publish_reply = edge_exec_reply, .log = s3_ota_log });
     ha_ota_init(&(ha_ota_cfg_t){ .node_id = node_id, .ota_host = HA_OTA_HOST, .log = s3_ota_log,
                                  .is_healthy = s3_ota_healthy, .on_fail = s3_ota_on_fail,
