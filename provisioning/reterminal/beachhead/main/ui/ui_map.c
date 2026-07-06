@@ -1,25 +1,38 @@
-// House map (see ui_map.h). Renders /api/v1/rooms as room chips positioned at their real geometry
-// centroids, scaled from house-space to the screen. Existing lv_obj/label infra only — no lv_canvas.
+// House map (see ui_map.h). Renders /api/v1/rooms as the actual floor plan: each room's polygon
+// drawn as vector wall outlines (lv_line — no framebuffer, so the PSRAM draw budget is untouched),
+// with a compact live-reading label inside. House-space coords are scaled to the screen. Monolithic
+// rooms (attic/crawlspace — no polygon) render as chips in a bottom strip.
 #include "ui/ui_map.h"
 #include "ui/ui_format.h"   // ascii_fold (font is ASCII-only; drop non-ASCII glyphs)
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
-#include <math.h>
 #include "lvgl.h"
 #include "esp_log.h"
 
 static const char *TAG = "ui.map";
 
-#define MAX_ROOMS   32
-#define CHIP_W      150
-#define CHIP_H      66
-#define STRIP_H     72     // bottom strip for monolithic (geometry-less) rooms
-#define PAD         14
+#define MAX_ROOMS     32
+#define MAX_RINGS     48      // a composite room (e.g. an L-shaped hall) contributes several rings
+#define MAX_RING_PTS  20      // points per ring incl. the closing repeat
+#define LBL_W         128
+#define LBL_H         46
+#define STRIP_H       72
+#define PAD           14
+#define WALL_COL      0x7fa9d9
+#define ACT_WALL_COL  0xd9a85c
 
 static struct { char id[28]; } s_reg[MAX_ROOMS];
 static int s_nreg;
+static lv_point_precise_t s_ring[MAX_RINGS][MAX_RING_PTS];   // point pool (lv_line keeps the pointer)
+static int s_nring;
 static ui_map_room_cb s_cb;
+
+// scale state (house-space -> screen), set per render
+static double s_mnx, s_mny, s_scale;
+
+static int scr_x(double hx) { return (int)(PAD + (hx - s_mnx) * s_scale); }
+static int scr_y(double hy) { return (int)(PAD + (hy - s_mny) * s_scale); }
 
 static void room_clicked_cb(lv_event_t *e)
 {
@@ -30,7 +43,6 @@ static void room_clicked_cb(lv_event_t *e)
 }
 
 // --- geometry helpers ------------------------------------------------------
-// A room's label centroid (house-space). Returns false if it has no polygon geometry (monolithic).
 static bool room_label(cJSON *geo, double *lx, double *ly)
 {
     if (!cJSON_IsObject(geo)) return false;
@@ -43,8 +55,6 @@ static bool room_label(cJSON *geo, double *lx, double *ly)
     return false;
 }
 
-// Grow the house-space bounding box by every coordinate we can find (labels + polygons), so we can
-// scale to the screen without depending on the endpoint carrying the top-level space dims.
 static void scan_pts(cJSON *arr, double *mnx, double *mny, double *mxx, double *mxy)
 {
     cJSON *pt;
@@ -79,7 +89,6 @@ static void room_bounds(cJSON *geo, double *mnx, double *mny, double *mxx, doubl
     }
 }
 
-// The room's headline reading for the glance chip, ASCII-only (font drops °). "" if none.
 static void room_glance(cJSON *devs, char *out, size_t n)
 {
     out[0] = 0;
@@ -97,8 +106,37 @@ static void room_glance(cJSON *devs, char *out, size_t n)
     }
 }
 
-// --- one chip --------------------------------------------------------------
-static void make_chip(lv_obj_t *parent, cJSON *room, int reg_idx, int x, int y, bool actuator_room)
+// --- draw one polygon ring as a closed wall outline ------------------------
+static void draw_ring(cJSON *ring, lv_obj_t *parent, uint32_t col)
+{
+    if (!cJSON_IsArray(ring) || s_nring >= MAX_RINGS) return;
+    int np = cJSON_GetArraySize(ring);
+    if (np < 2 || np > MAX_RING_PTS - 1) return;
+    lv_point_precise_t *pts = s_ring[s_nring];
+    int i = 0;
+    cJSON *pt;
+    cJSON_ArrayForEach(pt, ring) {
+        if (!cJSON_IsArray(pt) || cJSON_GetArraySize(pt) != 2) continue;
+        pts[i].x = scr_x(cJSON_GetArrayItem(pt, 0)->valuedouble);
+        pts[i].y = scr_y(cJSON_GetArrayItem(pt, 1)->valuedouble);
+        i++;
+    }
+    if (i < 2) return;
+    pts[i] = pts[0];            // close the loop
+    i++;
+
+    lv_obj_t *line = lv_line_create(parent);
+    lv_obj_set_pos(line, 0, 0);
+    lv_line_set_points(line, pts, i);
+    lv_obj_set_style_line_color(line, lv_color_hex(col), 0);
+    lv_obj_set_style_line_width(line, 3, 0);
+    lv_obj_set_style_line_rounded(line, true, 0);
+    lv_obj_clear_flag(line, LV_OBJ_FLAG_CLICKABLE);   // taps go to the room label, not the wall
+    s_nring++;
+}
+
+// --- compact room label (name + glance/count), clickable = the tap target --
+static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int cy, bool act, bool strip)
 {
     const cJSON *jn = cJSON_GetObjectItem(room, "name");
     const cJSON *ji = cJSON_GetObjectItem(room, "id");
@@ -113,31 +151,34 @@ static void make_chip(lv_obj_t *parent, cJSON *room, int reg_idx, int x, int y, 
     char glance[32]; room_glance(cJSON_GetObjectItem(room, "devices"), glance, sizeof glance);
     char folded[40]; ascii_fold(name, folded, sizeof folded);
 
-    lv_obj_t *chip = lv_obj_create(parent);
-    lv_obj_set_size(chip, CHIP_W, CHIP_H);
-    lv_obj_set_pos(chip, x, y);
-    lv_obj_set_style_bg_color(chip, lv_color_hex(actuator_room ? 0x2a2411 : 0x16204a), 0);
-    lv_obj_set_style_border_color(chip, lv_color_hex(actuator_room ? 0xb4823c : 0x2f7e7a), 0);
-    lv_obj_set_style_border_width(chip, 2, 0);
-    lv_obj_set_style_radius(chip, 10, 0);
-    lv_obj_set_style_pad_all(chip, 6, 0);
-    lv_obj_set_flex_flow(chip, LV_FLEX_FLOW_COLUMN);
-    lv_obj_clear_flag(chip, LV_OBJ_FLAG_SCROLLABLE);
-    lv_obj_add_flag(chip, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(chip, room_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)reg_idx);
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_set_size(box, LBL_W, LBL_H);
+    int x = cx - LBL_W / 2, y = cy - LBL_H / 2;
+    lv_obj_set_pos(box, x, y);
+    lv_obj_set_style_bg_color(box, lv_color_hex(0x0b1021), 0);
+    lv_obj_set_style_bg_opa(box, strip ? LV_OPA_COVER : 190, 0);   // semi-transparent so walls read through
+    lv_obj_set_style_border_width(box, strip ? 2 : 0, 0);
+    lv_obj_set_style_border_color(box, lv_color_hex(act ? ACT_WALL_COL : WALL_COL), 0);
+    lv_obj_set_style_radius(box, 6, 0);
+    lv_obj_set_style_pad_all(box, 4, 0);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(box, room_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)reg_idx);
 
-    lv_obj_t *t = lv_label_create(chip);
+    lv_obj_t *t = lv_label_create(box);
     lv_label_set_text(t, folded);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(t, lv_color_hex(0xffffff), 0);
     lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
     lv_obj_set_width(t, lv_pct(100));
 
-    lv_obj_t *sub = lv_label_create(chip);
+    lv_obj_t *sub = lv_label_create(box);
     if (glance[0]) lv_label_set_text(sub, glance);
-    else if (na)   lv_label_set_text_fmt(sub, "%ds  %da", ns, na);
+    else if (na)   lv_label_set_text_fmt(sub, "%ds %da", ns, na);
     else           lv_label_set_text_fmt(sub, "%d sen", ns);
-    lv_obj_set_style_text_color(sub, lv_color_hex(actuator_room ? 0xd9a85c : 0x8fb4ff), 0);
+    lv_obj_set_style_text_font(sub, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(sub, lv_color_hex(act ? ACT_WALL_COL : 0x8fb4ff), 0);
 }
 
 // --- render ----------------------------------------------------------------
@@ -145,13 +186,13 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
 {
     s_cb = cb;
     s_nreg = 0;
+    s_nring = 0;
     lv_obj_clean(parent);
-    lv_obj_set_layout(parent, LV_LAYOUT_NONE);   // absolute positioning of chips
+    lv_obj_set_layout(parent, LV_LAYOUT_NONE);
 
     cJSON *rooms = cJSON_GetObjectItem(root, "rooms");
     if (!cJSON_IsArray(rooms)) { ESP_LOGW(TAG, "no rooms[]"); return; }
 
-    // pass 1: house-space bounds over every placed room
     double mnx = 1e9, mny = 1e9, mxx = -1e9, mxy = -1e9;
     cJSON *r;
     cJSON_ArrayForEach(r, rooms) room_bounds(cJSON_GetObjectItem(r, "geometry"), &mnx, &mny, &mxx, &mxy);
@@ -160,12 +201,31 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
     int pw = lv_obj_get_width(parent), ph = lv_obj_get_height(parent);
     if (pw <= 0) pw = 780;
     if (ph <= 0) ph = 1040;
-    int map_h = ph - STRIP_H;                    // reserve the bottom strip for monolithic rooms
-    double sx = have_space ? (pw - CHIP_W - 2 * PAD) / (mxx - mnx) : 1;
-    double sy = have_space ? (map_h - CHIP_H - 2 * PAD) / (mxy - mny) : 1;
-    double s = sx < sy ? sx : sy;                // uniform scale, preserve aspect
+    int map_h = ph - STRIP_H;
+    s_mnx = mnx; s_mny = mny;
+    double sx = have_space ? (double)(pw - 2 * PAD) / (mxx - mnx) : 1;
+    double sy = have_space ? (double)(map_h - 2 * PAD) / (mxy - mny) : 1;
+    s_scale = sx < sy ? sx : sy;                 // uniform, preserve aspect
 
-    // pass 2: place chips
+    // pass 1: walls (so labels draw on top)
+    if (have_space) {
+        cJSON_ArrayForEach(r, rooms) {
+            cJSON *geo = cJSON_GetObjectItem(r, "geometry");
+            if (!cJSON_IsObject(geo)) continue;
+            cJSON *counts = cJSON_GetObjectItem(r, "counts");
+            cJSON *ca = cJSON_IsObject(counts) ? cJSON_GetObjectItem(counts, "actuators") : NULL;
+            uint32_t col = (cJSON_IsNumber(ca) && ca->valueint > 0) ? ACT_WALL_COL : WALL_COL;
+            cJSON *poly = cJSON_GetObjectItem(geo, "poly");
+            if (cJSON_IsArray(poly)) draw_ring(poly, parent, col);
+            cJSON *polys = cJSON_GetObjectItem(geo, "polys");
+            if (cJSON_IsArray(polys)) {
+                cJSON *ring;
+                cJSON_ArrayForEach(ring, polys) draw_ring(ring, parent, col);
+            }
+        }
+    }
+
+    // pass 2: labels (placed rooms at centroids; monolithic/geometry-less-with-devices -> strip)
     int strip_x = PAD;
     cJSON_ArrayForEach(r, rooms) {
         if (s_nreg >= MAX_ROOMS) break;
@@ -178,7 +238,6 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
             ns = cJSON_IsNumber(cs) ? cs->valueint : 0;
             na = cJSON_IsNumber(cna) ? cna->valueint : 0;
         }
-        int nd = ns + na;
         bool act = na > 0;
 
         const cJSON *ji = cJSON_GetObjectItem(r, "id");
@@ -188,21 +247,19 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
 
         double lx, ly;
         if (have_space && room_label(geo, &lx, &ly)) {
-            int x = (int)(PAD + (lx - mnx) * s) - CHIP_W / 2;
-            int y = (int)(PAD + (ly - mny) * s) - CHIP_H / 2;
-            if (x < PAD) x = PAD;
-            if (x > pw - CHIP_W - PAD) x = pw - CHIP_W - PAD;
-            if (y < PAD) y = PAD;
-            if (y > map_h - CHIP_H - PAD) y = map_h - CHIP_H - PAD;
-            make_chip(parent, r, idx, x, y, act);
+            int x = scr_x(lx), y = scr_y(ly);
+            if (x < PAD + LBL_W / 2) x = PAD + LBL_W / 2;
+            if (x > pw - PAD - LBL_W / 2) x = pw - PAD - LBL_W / 2;
+            if (y < PAD + LBL_H / 2) y = PAD + LBL_H / 2;
+            if (y > map_h - PAD - LBL_H / 2) y = map_h - PAD - LBL_H / 2;
+            make_label(parent, r, idx, x, y, act, false);
             s_nreg++;
-        } else if (nd > 0) {
-            // monolithic / geometry-less room WITH devices -> bottom strip (skip empty ones)
-            if (strip_x + CHIP_W > pw - PAD) continue;
-            make_chip(parent, r, idx, strip_x, map_h + (STRIP_H - CHIP_H) / 2, act);
-            strip_x += CHIP_W + 10;
+        } else if (ns + na > 0) {
+            if (strip_x + LBL_W > pw - PAD) continue;
+            make_label(parent, r, idx, strip_x + LBL_W / 2, map_h + STRIP_H / 2, act, true);
+            strip_x += LBL_W + 10;
             s_nreg++;
         }
     }
-    ESP_LOGI(TAG, "rendered %d room chips (space=%d)", s_nreg, have_space);
+    ESP_LOGI(TAG, "rendered floor plan: %d rooms, %d wall rings (space=%d)", s_nreg, s_nring, have_space);
 }
