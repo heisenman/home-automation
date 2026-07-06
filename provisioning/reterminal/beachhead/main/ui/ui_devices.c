@@ -368,10 +368,31 @@ void ui_devices_render(cJSON *rooms_doc, cJSON *meta_doc, lv_obj_t *parent, ui_d
                 memset(r, 0, sizeof *r);
                 snprintf(r->id, sizeof r->id, "%s", did);
                 snprintf(r->name, sizeof r->name, "%s", cJSON_IsString(nm) && nm->valuestring[0] ? nm->valuestring : did);
-                snprintf(r->room_name, sizeof r->room_name, "%s", cJSON_IsString(rm) ? rm->valuestring : "—");
-                if (cJSON_IsString(rm)) snprintf(r->room_id, sizeof r->room_id, "%s", rm->valuestring);
+                if (cJSON_IsString(rm)) { snprintf(r->room_name, sizeof r->room_name, "%s", rm->valuestring);
+                                          snprintf(r->room_id, sizeof r->room_id, "%s", rm->valuestring); }
+                // else: leave room empty -> flagged "Unknown" below
                 r->status = st;
             }
+        }
+    }
+
+    // pass 2.5: devices the back-end couldn't place (null / unknown / non-canonical area) — surface them
+    // FLAGGED so they can be assigned a location from here. Programmatic: driven by rooms.unlocated[], not
+    // any device list. (build_rooms puts every non-canonical-area device here; this is the UI half of it.)
+    cJSON *unloc = rooms_doc ? cJSON_GetObjectItem(rooms_doc, "unlocated") : NULL;
+    if (cJSON_IsArray(unloc)) {
+        cJSON *u;
+        cJSON_ArrayForEach(u, unloc) {
+            if (s_ndev >= MAX_DEV) break;
+            cJSON *did = cJSON_GetObjectItem(u, "device_id");
+            if (!cJSON_IsString(did) || find_dev(did->valuestring) >= 0) continue;
+            cJSON *dnm = cJSON_GetObjectItem(u, "name");
+            struct devrow *r = &s_dev[s_ndev++];
+            memset(r, 0, sizeof *r);
+            snprintf(r->id, sizeof r->id, "%s", did->valuestring);
+            snprintf(r->name, sizeof r->name, "%s", cJSON_IsString(dnm) ? dnm->valuestring : did->valuestring);
+            r->room_id[0] = 0; r->room_name[0] = 0;      // no canonical room -> "Unknown", tap to assign
+            r->status = UI_DEV_ACTIVE;
         }
     }
 
@@ -386,7 +407,9 @@ void ui_devices_render(cJSON *rooms_doc, cJSON *meta_doc, lv_obj_t *parent, ui_d
         struct devrow *r = &s_dev[i];
         lv_obj_t *row = make_row(parent);
         r->name_btn = cell_btn(row, 3, r->name, 0xffffff, name_cb, i, &r->name_lbl);
-        r->loc_btn  = cell_btn(row, 3, r->room_name[0]?r->room_name:"—", 0xcbd5e1, loc_cb, i, &r->loc_lbl);
+        bool located = r->room_name[0] != 0;             // amber "Unknown" flags a device needing a location
+        r->loc_btn  = cell_btn(row, 3, located ? r->room_name : "Unknown",
+                               located ? 0xcbd5e1 : C_STAGE, loc_cb, i, &r->loc_lbl);
         r->stat_btn = cell_btn(row, 2, status_text(r->status), status_color(r->status), stat_cb, i, &r->stat_lbl);
         lv_obj_t *cf = lv_button_create(row);
         lv_obj_set_size(cf, 64, 44);
