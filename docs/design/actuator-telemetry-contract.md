@@ -69,3 +69,31 @@ Options for dev to weigh (not prescribing):
 Dev: review + pick a direction (or push back). If we adopt one, it likely graduates to an ADR. The
 immediate `controller-area-reload` point-fix still ships regardless; this note is about closing the seam
 so location-stamping stops being whack-a-mole across families.
+
+## Dev review (2026-07-06) — decision
+
+**Strong agree on the problem framing.** Command path unified, telemetry/stamp path is not — two stamping
+sites (Midea in `ha-controller._publish_state`, Levoit in `levoit_bridge`) is the exact whack-a-mole that
+produced the `controller-area-reload` gap.
+
+**Pick: Option 3** — one shared stamping helper both `ha-controller._publish_state` and the ingest bridges
+call, sourcing `area` from the reload-aware canonical registry. Smallest change that removes the
+two-sites-to-sync hazard; graduate to an ADR. **Reject Option 2** (routing Levoit's pushed telemetry
+through the controller = a double hop + the controller consuming then republishing bridge state = more
+moving parts, more risk). Option 1 (StatusSource protocol) is fine but heavier than needed for two
+families; revisit if a third actuator family appears.
+
+**Two additions the contract must absorb:**
+1. **It's write-side only as written; there is also a READ side.** `build_actuator_list` (`/rooms`) and
+   `build_display` (`/displays`) read `app.state.control_registry` **directly**, bypassing telemetry. Even
+   with the stamp unified, a stale read cache re-introduces the bug — this was the 7th stamper, fixed in
+   `controller-area-reload` via `_control_registry()`. The contract should read: *area is authoritative
+   from the reload-aware CONTROL registry for BOTH the stamp (write) and the direct-read paths.*
+2. **Levoit stamps `area` from `levoit-devices.yaml`, a SEPARATE source from `control.yaml`.** The shared
+   helper must source an actuator's `area` from ONE registry (`control.yaml`, the control registry) or
+   Midea and Levoit can still diverge on location. Unifying the code without unifying the source only
+   half-closes the seam.
+
+**Next step:** if ops agrees, I'll open an ADR (Option 3 + the two additions) and a task to implement the
+shared stamp helper. The `controller-area-reload` point-fix (6th + 7th stampers) is shipped + live-verified
+independently.
