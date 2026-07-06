@@ -103,3 +103,49 @@ Server stays the authority on ranges/roles; the panel never re-derives them. Uni
 - Big room → full per-device lines once the 150×74 clamp is gone.
 - Out-of-range metric renders red on both panel and PWA.
 - Attic/crawlspace → surplus tier (when built) uses the vertical room instead of capping.
+
+---
+
+# Arc 2 — actuator state shown spatially (design note)
+
+**Status:** panel shipped (D1001 v91, defensive); BFF half is the dev item below. Approved by Hugh 2026-07-06.
+
+## Goal
+An actuator on the map currently shows its onboard *reading* (the dehumidifier shows humidity) or just its
+name — never whether it is **acting** (running/idle, and at what setpoint/level). That is the missing half of
+the room glance: you can see the climate but not what is doing something about it. Arc 2 shows **action**.
+
+## Decision — actuators answer "what is acting", sensors answer "what is measured"
+- **Actuator row** = `‹glyph› ‹name› ‹status›` — the running glyph + a short server-authored status string
+  (target/level/mode). It does **not** repeat its onboard reading; the room **climate line** already covers
+  ambient, and two humidity numbers (onboard vs target) read as clutter.
+- **Glyph + color** encode running state: `LV_SYMBOL_PLAY` + green when running, `LV_SYMBOL_PAUSE` + dim
+  slate when idle. (Both glyphs are in the compiled Montserrat-14 FontAwesome subset — no icon-font work.)
+- **Color priority:** out-of-range **red** > running **green** > idle **dim** > sensor **normal**.
+- Tinted room fills were **rejected** (Hugh, 2026-07-06): colorized text already conveys state; not worth an
+  `lv_canvas` + PSRAM budget for a fun-but-already-working feature.
+
+## Panel (shipped, defensive)
+`ui_map.c`: `dev_is_actuator()` + `dev_color()` (priority above) + a `dev.state` branch in `dev_line()`.
+Reads `dev.state {running, status}`; when absent it **falls through to the metric line** (no regression), so
+it lights up the moment the BFF ships state — same pattern as `room.climate`.
+
+## BFF half (the dev item)
+Add per-actuator **live state** to `build_rooms` devices[] (role == "actuator"):
+```
+"state": { "running": bool, "status": "<short string>" }
+```
+- **`running`** — actively actuating (compressor/fan/plug on).
+- **`status`** — a short, **server-formatted, family-agnostic** detail string (dehum → target RH e.g. "45%",
+  purifier → fan level e.g. "Fan 2", plug → "on"/""). The panel renders it verbatim (ASCII-folded) — it does
+  **not** re-derive per family, exactly as with the room-fill content.
+- Source it from the **same actuator-state logic** that `build_actuator_list` / `build_display` already use
+  (the control registry), so the map, the room-zoom, and the PWA agree. Keep it reload-aware (ADR-0027:
+  area/state authoritative from the control registry).
+- Unit-test: a running actuator with a status, an idle one, and one missing from the control registry
+  (→ no `state`, panel falls back gracefully).
+
+## Verification (arc 2)
+- Running actuator → green row with the play glyph + its target/level; idle → dim with the pause glyph.
+- An out-of-range actuator is red (alert beats running/idle).
+- No `state` yet → actuator shows its metric as before (no regression).
