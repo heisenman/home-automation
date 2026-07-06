@@ -249,54 +249,58 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
     int name_w = 0, name_h = text_wh(folded, usable_w, &name_w);
     int budget = usable_h - name_h;                    // px left for content lines below the name
 
-    // Pick the richest tier that fits `budget`. lines[]/lcol[] hold the content lines under the name.
+    // Pick the richest tier that fits — WIDTH and height. Content rows are single-line: a row wider
+    // than the room degrades the WHOLE tier (a narrow room drops to the nameless climate line, which
+    // fits) rather than clipping mid-value. lines[]/lcol[] hold the content lines under the name.
     char lines[ML_MAX][ML_LEN];
     uint32_t lcol[ML_MAX];
-    int nl = 0, tier = -1;                              // 0a=0 0b=1 climate=2 counts=3
+    int nl = 0, tier = -1, content_w = name_w;         // 0a=0 0b=1 climate=2 counts=3
 
     // Tier 0a / 0b — one line per device (all-or-nothing on the device LIST; metrics may degrade).
     for (int mode = 0; mode <= 1 && ndev > 0 && tier < 0; mode++) {   // 0=full(0a) 1=core(0b)
-        int h = 0, k = 0;
+        int h = 0, maxw = 0, k = 0;
+        bool over = false;
         cJSON *d;
         cJSON_ArrayForEach(d, devs) {
-            if (k >= ML_MAX) { k = 0; break; }         // too many devices to line up -> fall through
+            if (k >= ML_MAX) { over = true; break; }
             dev_line(d, mode == 1, lines[k], ML_LEN);
             lcol[k] = C_NORMAL;
-            h += text_wh(lines[k], usable_w, NULL);
+            int lw; h += text_wh(lines[k], 0, &lw);    // natural (unwrapped) size
+            if (lw > usable_w) over = true;
+            if (lw > maxw) maxw = lw;
             k++;
         }
-        if (k == ndev && k > 0 && h <= budget) { nl = k; tier = mode; }
+        if (k == ndev && k > 0 && !over && h <= budget) { nl = k; tier = mode; if (maxw > content_w) content_w = maxw; }
     }
     // Tier 1 — climate glance + counts.
     if (tier < 0) {
-        int h = 0, k = 0;
+        int h = 0, maxw = 0, k = 0;
+        bool over = false;
         char cl[ML_LEN]; uint32_t cc;
         if (climate_line(room, cl, sizeof cl, &cc)) {
             snprintf(lines[k], ML_LEN, "%s", cl); lcol[k] = cc;
-            h += text_wh(lines[k], usable_w, NULL); k++;
+            int lw; h += text_wh(lines[k], 0, &lw); if (lw > usable_w) over = true; if (lw > maxw) maxw = lw; k++;
         }
         if (ns + na > 0) {
             if (na) snprintf(lines[k], ML_LEN, "%ds %da", ns, na);
             else    snprintf(lines[k], ML_LEN, "%ds", ns);
             lcol[k] = act ? ACT_WALL_COL : C_NORMAL;
-            h += text_wh(lines[k], usable_w, NULL); k++;
+            int lw; h += text_wh(lines[k], 0, &lw); if (lw > usable_w) over = true; if (lw > maxw) maxw = lw; k++;
         }
-        if (k > 0 && h <= budget) { nl = k; tier = 2; }
+        if (k > 0 && !over && h <= budget) { nl = k; tier = 2; if (maxw > content_w) content_w = maxw; }
     }
-    // Tier 2 — counts floor (render even if it slightly overflows a tiny room; icon+badge is future).
+    // Tier 2 — counts floor (always render; may overflow a sliver room. icon+badge is future).
     if (tier < 0 && ns + na > 0) {
         if (na) snprintf(lines[0], ML_LEN, "%ds %da", ns, na);
         else    snprintf(lines[0], ML_LEN, "%ds", ns);
         lcol[0] = act ? ACT_WALL_COL : C_NORMAL;
+        int lw; text_wh(lines[0], 0, &lw); if (lw > content_w) content_w = lw;
         nl = 1; tier = 3;
     }
 
-    // Box sized to the actual content (name + chosen lines), bounded by the room bbox.
-    int content_w = name_w, content_h = name_h;
-    for (int i = 0; i < nl; i++) {
-        int lw; content_h += text_wh(lines[i], usable_w, &lw);
-        if (lw > content_w) content_w = lw;
-    }
+    // Box sized to the chosen single-line content (bounded by the room bbox).
+    int content_h = name_h;
+    for (int i = 0; i < nl; i++) content_h += text_wh(lines[i], 0, NULL);
     int w = content_w + 2 * inset; if (w > bw && bw > 50) w = bw; if (w < 50) w = 50;
     int h = content_h + 2 * inset;
     if (tier != 3 && h > bh && bh > 0) h = bh;         // only the counts floor may overflow
