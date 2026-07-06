@@ -31,3 +31,4 @@ void ui_admin_set_scene(const char *scene);              // POST /control/house/
 void ui_admin_set_override(const char *id, const char *body);  // POST /control/<id>/override
 void ui_admin_set_policy(const char *id, const char *body);    // PUT  /control/<id>/policy
 void ui_admin_set_relocate(const char *device_id, const char *body);  // POST /api/v1/devices/<id>/relocate
+void ui_admin_set_meta(const char *device_id, const char *body);      // PUT  /api/v1/devices/<id>/meta {name,hidden,retired}

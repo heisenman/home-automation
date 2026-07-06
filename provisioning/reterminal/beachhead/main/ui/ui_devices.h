@@ -1,20 +1,25 @@
-// Devices-management screen (ADR-0026 location / panel-ui-spatial-nav) — the coarse, canonical step
-// of the location model: list every device under its CURRENT room, tap one to reassign its room.
+// Devices-management screen (ADR-0026 location / panel-ui-spatial-nav) — an editable table of every
+// device: columns Device (name), Location (room), Status (Active/Hidden/Retired). Each cell edits into a
+// STAGED change (highlighted); a per-row confirm (checkmark) commits it — so a stray tap never mutates.
 //
-// Coarse only (room), by design: the fine "exact spot within the room" (x,y) is web-only — the
-// constrained panel does the cheap, canonical room assignment; the PWA does the rich geometry. Reads
-// the same /api/v1/rooms document the house-map uses (rooms[].devices[] already grouped) and, on a
-// pick, calls back with the chosen area — the orchestrator fires POST /devices/{id}/relocate through
-// the admin worker (HTTP off the click stack). Rebuilt from scratch each render, like ui_map.
+// Sources: /api/v1/rooms (the located device list + room options) merged with /api/v1/devices/meta (the
+// name/hidden/retired overlay, so Status is accurate and hidden/retired devices still appear to be
+// reactivated). On commit the orchestrator turns the staged fields into the right writes: Location -> the
+// canonical relocate (POST /relocate); Name + Status -> the display overlay (PUT /meta). Rebuilt each render
+// (a no-op while an editor modal is open). Fonts compiled: montserrat 14/20/28 only.
 #pragma once
 #include "lvgl.h"
 #include "cJSON.h"
 
-// Pick callback: the user chose `new_area` (canonical id + display name) for `device_id`. Pointers are
-// only valid during the call — copy if retained. The orchestrator turns this into the relocate request.
-typedef void (*ui_devices_relocate_cb)(const char *device_id, const char *new_area, const char *new_area_name);
+// Status values (map to the meta overlay): Active = shown; Hidden = dropped from views; Retired = decommissioned.
+enum { UI_DEV_ACTIVE = 0, UI_DEV_HIDDEN = 1, UI_DEV_RETIRED = 2 };
 
-// Build/refresh the devices list into `parent` from a parsed /api/v1/rooms response (`root` = the whole
-// object with .rooms[]). Clears `parent` first. Must be called under the LVGL lock. `cb` may be NULL.
-// A no-op while the room-picker modal is open (so a background refresh can't yank it out from under a tap).
-void ui_devices_render(cJSON *root, lv_obj_t *parent, ui_devices_relocate_cb cb);
+// Commit callback: the user confirmed a row. Any field not staged is passed "empty": `new_room`/`new_name`
+// are NULL when not changed; `new_status` is -1 when not changed. Pointers valid only during the call.
+typedef void (*ui_devices_commit_cb)(const char *device_id,
+                                     const char *new_room, const char *new_room_name,
+                                     const char *new_name, int new_status);
+
+// Build/refresh the table into `parent` from parsed /api/v1/rooms (`rooms_doc`, .rooms[]) + /api/v1/devices/meta
+// (`meta_doc`, .meta{}). Clears `parent` first. Must be called under the LVGL lock. `cb` may be NULL.
+void ui_devices_render(cJSON *rooms_doc, cJSON *meta_doc, lv_obj_t *parent, ui_devices_commit_cb cb);

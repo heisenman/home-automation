@@ -80,17 +80,37 @@ static void on_devices_clicked(lv_event_t *e)
     s_nav_dirty = true;
 }
 
-// A room was picked in the devices screen -> fire the canonical relocate (restamp: correction phase)
-// through the admin worker (HTTP off the click stack; auto-JWT + 401 retry). The worker toasts the result.
-static void on_relocate(const char *device_id, const char *new_area, const char *new_area_name)
+// A devices-screen row was confirmed -> turn the staged fields into the right writes, through the admin
+// worker (HTTP off the click stack; auto-JWT + 401 retry). Location = canonical relocate (restamp:
+// correction phase); Name + Status = the display overlay (one PUT /meta). Unstaged fields arrive empty.
+static void on_devices_commit(const char *device_id, const char *new_room, const char *new_room_name,
+                              const char *new_name, int new_status)
 {
-    if (!device_id || !new_area) return;
-    char body[160];
-    snprintf(body, sizeof body, "{\"new_area\":\"%s\",\"mode\":\"restamp\",\"dry_run\":false}", new_area);
-    ui_admin_set_relocate(device_id, body);
-    char t[96];
-    snprintf(t, sizeof t, "moving to %s...", new_area_name ? new_area_name : new_area);
-    ui_toast(t);
+    if (!device_id) return;
+    if (new_room && new_room[0]) {
+        char body[160];
+        snprintf(body, sizeof body, "{\"new_area\":\"%s\",\"mode\":\"restamp\",\"dry_run\":false}", new_room);
+        ui_admin_set_relocate(device_id, body);
+    }
+    if ((new_name && new_name[0]) || new_status >= 0) {
+        char body[240];
+        int n = snprintf(body, sizeof body, "{");
+        bool first = true;
+        if (new_name && new_name[0]) {
+            n += snprintf(body + n, sizeof body - n, "\"name\":\"%s\"", new_name);
+            first = false;
+        }
+        if (new_status >= 0) {                                  // Active=neither, Hidden=hidden, Retired=retired
+            n += snprintf(body + n, sizeof body - n, "%s\"hidden\":%s,\"retired\":%s",
+                          first ? "" : ",",
+                          new_status == UI_DEV_HIDDEN ? "true" : "false",
+                          new_status == UI_DEV_RETIRED ? "true" : "false");
+        }
+        snprintf(body + n, sizeof body - n, "}");
+        ui_admin_set_meta(device_id, body);
+    }
+    ui_toast("saving...");
+    (void)new_room_name;
 }
 
 static bool s_started;
@@ -134,12 +154,16 @@ static void render(cJSON *sensors, cJSON *devices, cJSON *catalog, const char *r
 static void do_render_cycle(void)
 {
     if (s_devview) {
-        // ── devices-management screen: list every device -> reassign its room ──
-        int lm = 0;
-        char *bm = ui_http_get(s_map_url, &lm);      // reuse /api/v1/rooms (rooms[].devices[] grouped)
+        // ── devices-management screen: editable Device/Location/Status table ──
+        int lm = 0, lmeta = 0;
+        char *bm = ui_http_get(s_map_url, &lm);          // /api/v1/rooms (device list + room options)
+        char meta_url[192];
+        snprintf(meta_url, sizeof meta_url, "%s/api/v1/devices/meta", ui_http_base());
+        char *bmeta = ui_http_get(meta_url, &lmeta);     // /api/v1/devices/meta (name/hidden/retired overlay)
         cJSON *rm = (bm && lm > 0) ? cJSON_Parse(bm) : NULL;
+        cJSON *rmeta = (bmeta && lmeta > 0) ? cJSON_Parse(bmeta) : NULL;
         if (lvgl_port_lock(0)) {
-            ui_devices_render(rm, s_devices, on_relocate);
+            ui_devices_render(rm, rmeta, s_devices, on_devices_commit);
             lv_obj_clear_flag(s_devices, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
@@ -149,7 +173,9 @@ static void do_render_cycle(void)
             lvgl_port_unlock();
         }
         if (rm) cJSON_Delete(rm);
+        if (rmeta) cJSON_Delete(rmeta);
         if (bm) heap_caps_free(bm);
+        if (bmeta) heap_caps_free(bmeta);
     } else if (s_room[0]) {
         // ── room-zoom: the device grid filtered to the selected room ──
         int l1 = 0, l2 = 0;
