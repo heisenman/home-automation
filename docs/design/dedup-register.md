@@ -28,6 +28,28 @@ callbacks), consumed by every board. `ha_gatt`, `ha_cmd`, `ha_ota` are done; thi
 
 **P1 alone removes ~950 lines of identical triplicated source** and closes the highest-drift-risk copies.
 
+## STATUS — 2026-07-06: edge-core dedup COMPLETE (all cleanly-shareable modules shared)
+Every module whose drift was *cosmetic* (byte-identical or board-hook-only) is now a shared component in
+`firmware/components/`; the forks are deleted and all 3 edge builds + the panel are build-validated:
+
+| Module | Result |
+|--------|--------|
+| `gatt_exec` → `ha_gatt_exec` | **shared ×3** (cfg seam reply/log; Kconfig write-gate). DEPLOYED (cbed/coffice OTA, hbed_s3 bench). |
+| `gatt_history` → `ha_gatt` | **shared** c3/c6/s3/panel |
+| `ha_relay`, `ha_sntp` | **shared ×3** (plain promote, 0-drift) |
+| `ha_ota` | **shared** c3/c6/s3/panel |
+| `ha_config` | **shared ×3** (secrets seam: app_main passes compile-time defaults; component secrets-free) |
+| `ha_mqtt` → `ha_mqtt` | **shared ×3** (biggest: ~700 lines removed; `ha_mqtt_init` seam = per-node secrets + LED hooks + reach flag; gatt/ota/exec seams internal) |
+
+**Kept forked — genuine board/platform glue (drift encodes real differences, NOT triplication):**
+- `ha_gas` (c6/s3): compile-time **per-node sensor select** (SGP30 vs SGP40 via `secrets.h`), board I2C pins,
+  per-sensor metrics (eCO₂/TVOC vs VOC-index), per-node reg-key. Sharing cleanly would need linking both
+  drivers (runtime select, abandoning the elegant per-node compile-time select) or a thin shell + still-forked
+  sensor read — worse than a clean fork. **Verdict: node-glue, leave forked** (P3 drift-analysis conclusion).
+- `ha_wifi` (c3/c6 identical, s3 diverged): s3 adds a down-watchdog (reboot-on-outage) + reconnect-forever +
+  LED hooks — real robustness divergence. **Platform, leave forked** (or a future `ha_net` seam if desired).
+- `ha_eth` (s3 W5500), `ha_led` (s3 WS2812), `app_main` (board bring-up glue, P4): board-specific by nature.
+
 ## Registration gaps (doc ↔ reality drift)
 - `edge/MODULES.md` labels `gatt_exec`, `ha_relay`, `ha_sntp` as **shared**, but they are still **fork** in
   `edge/MATRIX.md` (the generated truth). Fix as each is promoted — MODULES.md was aspirational.
