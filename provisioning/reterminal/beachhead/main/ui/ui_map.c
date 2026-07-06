@@ -137,8 +137,24 @@ static void draw_ring(cJSON *ring, lv_obj_t *parent, uint32_t col)
     s_nring++;
 }
 
-// --- compact room label (name + glance/count), clickable = the tap target --
-static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int cy, bool act, bool strip)
+// The room's on-screen bbox (px), so the label can be sized to fit the room, not overflow neighbours.
+static void room_screen_bbox(cJSON *geo, int *bw, int *bh)
+{
+    double mnx = 1e9, mny = 1e9, mxx = -1e9, mxy = -1e9;
+    cJSON *poly = cJSON_GetObjectItem(geo, "poly");
+    if (cJSON_IsArray(poly)) scan_pts(poly, &mnx, &mny, &mxx, &mxy);
+    cJSON *polys = cJSON_GetObjectItem(geo, "polys");
+    if (cJSON_IsArray(polys)) {
+        cJSON *ring;
+        cJSON_ArrayForEach(ring, polys) if (cJSON_IsArray(ring)) scan_pts(ring, &mnx, &mny, &mxx, &mxy);
+    }
+    if (mxx > mnx) { *bw = scr_x(mxx) - scr_x(mnx); *bh = scr_y(mxy) - scr_y(mny); }
+    else { *bw = LBL_W; *bh = LBL_H; }
+}
+
+// --- room label (name + glance/count), sized to fit `bw`x`bh` (the room). clickable = tap target ---
+static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int cy, bool act, bool strip,
+                       int bw, int bh)
 {
     const cJSON *jn = cJSON_GetObjectItem(room, "name");
     const cJSON *ji = cJSON_GetObjectItem(room, "id");
@@ -153,17 +169,27 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
     char glance[32]; room_glance(cJSON_GetObjectItem(room, "devices"), glance, sizeof glance);
     char folded[40]; ascii_fold(name, folded, sizeof folded);
 
+    // fit the label inside the room's box (leave a small inset); clamp to sane bounds.
+    int w = bw - 8, h = bh - 8;
+    if (w < 52) w = 52;
+    if (w > 150) w = 150;
+    int hmax = strip ? 58 : 74;
+    if (h < 22) h = 22;
+    if (h > hmax) h = hmax;
+    bool show_2nd = h >= 46;                 // room enough for a wrapped name AND a second line
+
     lv_obj_t *box = lv_obj_create(parent);
-    lv_obj_set_size(box, LBL_W, LBL_H);
-    int x = cx - LBL_W / 2, y = cy - LBL_H / 2;
-    lv_obj_set_pos(box, x, y);
+    lv_obj_set_size(box, w, h);
+    lv_obj_set_pos(box, cx - w / 2, cy - h / 2);
     lv_obj_set_style_bg_color(box, lv_color_hex(0x0b1021), 0);
     lv_obj_set_style_bg_opa(box, strip ? LV_OPA_COVER : 190, 0);   // semi-transparent so walls read through
     lv_obj_set_style_border_width(box, strip ? 2 : 0, 0);
     lv_obj_set_style_border_color(box, lv_color_hex(act ? ACT_WALL_COL : WALL_COL), 0);
     lv_obj_set_style_radius(box, 6, 0);
-    lv_obj_set_style_pad_all(box, 4, 0);
+    lv_obj_set_style_pad_all(box, 3, 0);
+    lv_obj_set_style_pad_row(box, 1, 0);
     lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(box, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
     lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);
     lv_obj_add_event_cb(box, room_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)reg_idx);
@@ -172,15 +198,18 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
     lv_label_set_text(t, folded);
     lv_obj_set_style_text_font(t, &lv_font_montserrat_14, 0);
     lv_obj_set_style_text_color(t, lv_color_hex(0xffffff), 0);
-    lv_label_set_long_mode(t, LV_LABEL_LONG_DOT);
+    lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);          // multi-line names (e.g. "Dining Nook")
+    lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(t, lv_pct(100));
 
-    lv_obj_t *sub = lv_label_create(box);
-    if (glance[0]) lv_label_set_text(sub, glance);
-    else if (na)   lv_label_set_text_fmt(sub, "%ds %da", ns, na);
-    else           lv_label_set_text_fmt(sub, "%d sen", ns);
-    lv_obj_set_style_text_font(sub, &lv_font_montserrat_14, 0);
-    lv_obj_set_style_text_color(sub, lv_color_hex(act ? ACT_WALL_COL : 0x8fb4ff), 0);
+    if (show_2nd) {
+        lv_obj_t *sub = lv_label_create(box);
+        if (glance[0]) lv_label_set_text(sub, glance);
+        else if (na)   lv_label_set_text_fmt(sub, "%ds %da", ns, na);
+        else           lv_label_set_text_fmt(sub, "%d sen", ns);
+        lv_obj_set_style_text_font(sub, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_color(sub, lv_color_hex(act ? ACT_WALL_COL : 0x8fb4ff), 0);
+    }
 }
 
 // --- render ----------------------------------------------------------------
@@ -228,7 +257,7 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
     }
 
     // pass 2: labels (placed rooms at centroids; monolithic/geometry-less-with-devices -> right column)
-    int col_y = PAD + LBL_H / 2;
+    int col_y = PAD + 30;
     cJSON_ArrayForEach(r, rooms) {
         if (s_nreg >= MAX_ROOMS) break;
         cJSON *geo = cJSON_GetObjectItem(r, "geometry");
@@ -253,16 +282,18 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
         double lx, ly;
         if (have_space && room_label(geo, &lx, &ly)) {
             int x = scr_x(lx), y = scr_y(ly);
-            if (x < PAD + LBL_W / 2) x = PAD + LBL_W / 2;
-            if (x > mapw - PAD - LBL_W / 2) x = mapw - PAD - LBL_W / 2;
-            if (y < PAD + LBL_H / 2) y = PAD + LBL_H / 2;
-            if (y > ph - PAD - LBL_H / 2) y = ph - PAD - LBL_H / 2;
-            make_label(parent, r, idx, x, y, act, false);
+            int bw = LBL_W, bh = LBL_H;
+            room_screen_bbox(geo, &bw, &bh);
+            if (x < PAD + 26) x = PAD + 26;
+            if (x > mapw - PAD - 26) x = mapw - PAD - 26;
+            if (y < PAD + 14) y = PAD + 14;
+            if (y > ph - PAD - 14) y = ph - PAD - 14;
+            make_label(parent, r, idx, x, y, act, false, bw, bh);
             s_nreg++;
         } else if (ns + na > 0) {
-            if (col_y + LBL_H / 2 > ph - PAD) continue;    // right column full
-            make_label(parent, r, idx, pw - COL_W / 2, col_y, act, true);
-            col_y += LBL_H + 12;
+            if (col_y + 30 > ph - PAD) continue;    // right column full
+            make_label(parent, r, idx, pw - COL_W / 2, col_y, act, true, COL_W - 12, 58);
+            col_y += 58 + 12;
             s_nreg++;
         }
     }

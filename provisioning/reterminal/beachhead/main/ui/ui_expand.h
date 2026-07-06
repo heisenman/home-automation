@@ -52,3 +52,7 @@ void ui_expand_init(lv_obj_t *parent);
 // Open (or toggle-close) an inline expansion panel for the seeded device + enqueue its 72h
 // fetch. Runs in the LVGL/click ctx (card tap).
 void expand_open(const struct expand_seed *seed);
+
+// Close every open expansion (nav change: leaving a room / back to the house map) so inline charts
+// don't accumulate. The graph builder is the home for persistent viz. Caller holds the LVGL lock.
+void ui_expand_clear(void);

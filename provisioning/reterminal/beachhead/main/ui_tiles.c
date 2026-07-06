@@ -53,6 +53,7 @@ static void on_room_tap(const char *area_id, const char *name)
     s_room[sizeof s_room - 1] = 0;
     strncpy(s_room_name, (name && name[0]) ? name : area_id, sizeof s_room_name - 1);
     s_room_name[sizeof s_room_name - 1] = 0;
+    ui_expand_clear();           // nav change -> drop any inline charts (LVGL lock held in this cb)
     s_nav_dirty = true;
     ESP_LOGI(TAG, "nav -> room %s", s_room);
 }
@@ -62,6 +63,7 @@ static void on_back_clicked(lv_event_t *e)
 {
     (void)e;
     s_room[0] = 0;
+    ui_expand_clear();           // leaving the room -> destroy its inline charts (not persisted)
     s_nav_dirty = true;
 }
 

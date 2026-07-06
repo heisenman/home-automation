@@ -46,6 +46,13 @@ static void expand_close_cb(lv_event_t *e)
     if (slot >= 0 && slot < MAX_EXPAND) expand_free(slot);
 }
 
+// Close EVERY open expansion — called on a nav change (leaving a room / house map) so inline charts
+// don't pile up below the map. Persistent visualization belongs in the graph builder. LVGL lock held.
+void ui_expand_clear(void)
+{
+    for (int i = 0; i < MAX_EXPAND; i++) expand_free(i);
+}
+
 // Build the expansion panel for the seeded device and enqueue its 72h chart fetch. Runs in the
 // LVGL/click context (object creation is fine here; the HTTP fetch is deferred to a worker).
 void expand_open(const struct expand_seed *seed)
