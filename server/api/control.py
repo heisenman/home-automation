@@ -353,7 +353,28 @@ def handle_device_relocate(device_id: str, body: dict[str, Any]) -> tuple[int, d
                                   "device_id": device_id, "report": report}
 
 
-def make_device_meta_router(api_authz, control_db):
+def handle_device_placement(device_id: str, body: dict[str, Any], placement_path) -> tuple[int, dict]:
+    """Upsert a device's in-room placement for the spatial room-zoom (map arc 3). Body ``{x, y, anchor?}``:
+    ``x,y`` normalized to the room bbox, a number in [0,1] or ``null`` (not captured); ``anchor`` one of
+    n|s|e|w|auto (default auto). Writes ``device-placement.yaml`` (canonical on the dictator); the read path
+    re-reads it each ``/rooms`` request so the panel picks it up live. Admin-gated; mirrors relocate/meta."""
+    from server.maintenance.device_placement import write_placement
+    b = body or {}
+    x, y, anchor = b.get("x"), b.get("y"), b.get("anchor", "auto")
+
+    def _coord_ok(v):
+        return v is None or (isinstance(v, (int, float)) and not isinstance(v, bool) and 0.0 <= v <= 1.0)
+
+    if not _coord_ok(x) or not _coord_ok(y):
+        return 400, {"status": "bad-request", "reason": "x and y must be null or a number in [0,1]"}
+    if anchor not in ("n", "s", "e", "w", "auto"):
+        return 400, {"status": "bad-request", "reason": "anchor must be one of n,s,e,w,auto"}
+    action = write_placement(placement_path, device_id, x, y, anchor)
+    return 200, {"status": "ok", "device_id": device_id, "action": action,
+                 "placement": {"x": x, "y": y, "anchor": anchor}}
+
+
+def make_device_meta_router(api_authz, control_db, placement_path=None):
     """Admin-gated device overlay editor (prefix /api/v1/devices). Works for any device (sensors too)."""
     import sqlite3
 
@@ -389,6 +410,14 @@ def make_device_meta_router(api_authz, control_db):
                 "status": "error", "device_id": device_id, "reason": str(e),
                 "note": "hot.db + registry were backed up to instance/db/backups/ before mutating; "
                         "see docs/runbook-dataset-restore.md"})
+        return JSONResponse(status_code=code, content=payload)
+
+    @router.put("/{device_id}/placement", dependencies=[Depends(require_admin)])
+    async def put_placement(device_id: str, body: dict = Body(...)):
+        if placement_path is None:
+            return JSONResponse(status_code=503, content={"status": "unavailable",
+                                                          "reason": "placement file not configured"})
+        code, payload = handle_device_placement(device_id, body, placement_path)
         return JSONResponse(status_code=code, content=payload)
 
     @router.put("/{device_id}/calibration", dependencies=[Depends(require_admin)])
