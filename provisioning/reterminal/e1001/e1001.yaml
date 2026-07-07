@@ -629,6 +629,7 @@ font:
   - file: "fonts/DejaVuSans-Bold.ttf"
     id: font_val
     size: 40
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~°"
   - file: "fonts/DejaVuSans.ttf"
     id: font_label
     size: 20
@@ -1088,7 +1089,7 @@ button:
                       std::string unit;                                  // ASCII-strip for the mono font: "°C"->"C"
                       for (const char *p = u; *p; p++) if ((unsigned char) *p < 0x80) unit += *p;
                       float v = m[key].as<float>();
-                      if (unit == "C") { v = v * 9.0f / 5.0f + 32.0f; unit = "F"; }   // C -> F
+                      if (unit == "C") { v = v * 9.0f / 5.0f + 32.0f; unit = "\xC2\xB0" "F"; }   // C -> °F (font_val has °)
                       char fmt[8], val[16];
                       snprintf(fmt, sizeof(fmt), "%%.%df", prec);
                       snprintf(val, sizeof(val), fmt, v);
