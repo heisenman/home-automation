@@ -160,9 +160,11 @@ static uint32_t dev_color(cJSON *dev)
 static void dev_line(cJSON *dev, bool core_only, char *out, size_t n)
 {
     const cJSON *jn = cJSON_GetObjectItem(dev, "name");
-    const cJSON *jt = cJSON_GetObjectItem(dev, "device_type");
+    const cJSON *jid = cJSON_GetObjectItem(dev, "device_id");
+    // fall back to device_id (matches the PWA), NOT device_type — an unnamed device's device_type is
+    // "unknown", which read as a bogus label (e.g. host_210 showing "unknown").
     const char *nm = cJSON_IsString(jn) ? jn->valuestring
-                     : (cJSON_IsString(jt) ? jt->valuestring : "?");
+                     : (cJSON_IsString(jid) ? jid->valuestring : "?");
     char folded[24];
     ascii_fold(nm, folded, sizeof folded);
     if (strlen(folded) > 11) folded[11] = 0;          // keep the line compact
