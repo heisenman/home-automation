@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v38 house map (SVG floor plan) — /api/v1/rooms, tap a room to filter sensors";
+const BUILD = "v39 room placement editor — tap a room, drag devices to their spots (admin)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -1206,6 +1206,100 @@ function NotifyToggle() {
       onClick=${onClick} title=${title}>${label}</button>`;
 }
 
+// Room placement editor (map arc 3) — drag each device to its spot within the selected room. Position
+// is NORMALIZED to the room bounding box (0..1, x west→east, y north→south) so it survives geometry
+// re-scaling and is reusable at any zoom (room-zoom AND, if desired, the house map). Saves to
+// PUT /api/v1/devices/{id}/placement (admin-gated). The D1001 panel renders these read-only.
+const clamp01 = (v) => Math.max(0, Math.min(1, v));
+const round2 = (v) => Math.round(v * 100) / 100;
+
+function RoomPlacementEditor({ room, isAdmin, onNeedAdmin, onSaved }) {
+  const svgRef = useRef(null);
+  const [pos, setPos] = useState({});      // device_id -> {x,y} normalized (authoritative during a drag)
+  const [drag, setDrag] = useState(null);  // device_id being dragged
+  const [busy, setBusy] = useState("");
+  const [err, setErr] = useState("");
+
+  // seed local positions from the server placements whenever the selected room changes
+  useEffect(() => {
+    const p = {};
+    for (const d of room.devices || []) {
+      const pl = d.placement || {};
+      if (typeof pl.x === "number" && typeof pl.y === "number") p[d.device_id] = { x: pl.x, y: pl.y };
+    }
+    setPos(p);
+  }, [room.id]);
+
+  const g = room.geometry;
+  if (!g || !(g.poly || g.polys)) return null;             // only rooms with a polygon
+  let mnx = 1e9, mny = 1e9, mxx = -1e9, mxy = -1e9;
+  const grow = (x, y) => { mnx = Math.min(mnx, x); mny = Math.min(mny, y); mxx = Math.max(mxx, x); mxy = Math.max(mxy, y); };
+  const rings = g.polys || [g.poly];
+  rings.forEach((r) => r.forEach(([x, y]) => grow(x, y)));
+  const W = mxx - mnx, H = mxy - mny;
+  const R = Math.max(W, H) * 0.018, FS = Math.max(W, H) * 0.028;
+
+  const toNorm = (e) => {
+    const svg = svgRef.current, m = svg && svg.getScreenCTM();
+    if (!m) return null;
+    const pt = svg.createSVGPoint(); pt.x = e.clientX; pt.y = e.clientY;
+    const p = pt.matrixTransform(m.inverse());
+    return { x: clamp01((p.x - mnx) / W), y: clamp01((p.y - mny) / H) };
+  };
+  const save = async (id, body) => {
+    if (!isAdmin) { onNeedAdmin(); return; }
+    setBusy(id); setErr("");
+    try { await adminSend("PUT", `/api/v1/devices/${id}/placement`, body); onSaved && onSaved(); }
+    catch (e) { setErr(`Couldn't save ${id}: ${e.message || e}`); }
+    setBusy("");
+  };
+  const onMove = (e) => { if (!drag) return; const n = toNorm(e); if (n) setPos((s) => ({ ...s, [drag]: n })); };
+  const onUp = () => { if (!drag) return; const id = drag; setDrag(null); const n = pos[id]; if (n) save(id, { x: round2(n.x), y: round2(n.y), anchor: "auto" }); };
+  const startDrag = (id) => (e) => {
+    if (!isAdmin) { onNeedAdmin(); return; }
+    e.preventDefault();
+    if (svgRef.current && svgRef.current.setPointerCapture) svgRef.current.setPointerCapture(e.pointerId);
+    setDrag(id);
+  };
+  const placeAt = (id, x, y) => { setPos((s) => ({ ...s, [id]: { x, y } })); save(id, { x, y, anchor: "auto" }); };
+  const clear = (id) => { setPos((s) => { const c = { ...s }; delete c[id]; return c; }); save(id, { x: null, y: null, anchor: "auto" }); };
+
+  const devs = room.devices || [];
+  const unplaced = devs.filter((d) => !pos[d.device_id]);
+  const placedDevs = devs.filter((d) => pos[d.device_id]);
+
+  return html`<div class="placement-editor">
+    <h2 class="section">Placement — ${room.name}
+      ${!isAdmin && html`<button class="btn sm" onClick=${onNeedAdmin}>🔒 unlock to edit</button>`}</h2>
+    <p class="note">Drag a device to its spot in the room; positions save automatically. The wall panel
+      shows these read-only. Positions are relative to the room, so they hold if the room is rescaled.</p>
+    ${err && html`<p class="err sm">⚠ ${err}</p>`}
+    <svg ref=${svgRef} viewBox="${mnx} ${mny} ${W} ${H}" preserveAspectRatio="xMidYMid meet"
+         style="width:100%;max-height:62vh;display:block;touch-action:none;background:rgba(20,28,48,0.5);border-radius:8px"
+         onPointerMove=${onMove} onPointerUp=${onUp} onPointerCancel=${onUp}>
+      ${rings.map((ring) => html`<polygon points=${ring.map((p) => p.join(",")).join(" ")}
+        fill="rgba(47,126,122,0.12)" stroke="#2f7e7a" stroke-width=4 stroke-linejoin="round" />`)}
+      ${placedDevs.map((d) => {
+        const p = pos[d.device_id], cx = mnx + p.x * W, cy = mny + p.y * H, on = drag === d.device_id;
+        return html`<g style="cursor:grab" onPointerDown=${startDrag(d.device_id)}>
+          <circle cx=${cx} cy=${cy} r=${R} fill=${on ? "#b4823c" : "#3d6e93"} stroke="#fff" stroke-width=2 />
+          <text x=${cx} y=${cy - R - 4} text-anchor="middle" font-size=${FS} fill="currentColor">${d.name || d.device_id}</text>
+        </g>`;
+      })}
+    </svg>
+    ${unplaced.length > 0 && html`<div class="tray" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:8px">
+      <span class="note">Unplaced — tap to drop at center, then drag:</span>
+      ${unplaced.map((d) => html`<button class="btn sm ghost" disabled=${busy === d.device_id}
+        onClick=${() => (isAdmin ? placeAt(d.device_id, 0.5, 0.5) : onNeedAdmin())}>${d.name || d.device_id}</button>`)}
+    </div>`}
+    ${placedDevs.length > 0 && html`<div class="tray" style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;margin-top:6px">
+      <span class="note">Placed:</span>
+      ${placedDevs.map((d) => html`<button class="btn sm ghost" title="remove placement"
+        onClick=${() => clear(d.device_id)}>${d.name || d.device_id} ✕</button>`)}
+    </div>`}
+  </div>`;
+}
+
 // ── app shell ────────────────────────────────────────────────────────────────
 // House map — the /api/v1/rooms room graph as an SVG floor plan (parity with the D1001 panel).
 // Rooms with a polygon draw as walls + a live glance; monolithic rooms (attic/crawlspace) as chips.
@@ -1342,6 +1436,12 @@ function App() {
 
       <${HouseMap} data=${rooms} selected=${selRoom && selRoom.id}
         onSelect=${(id, name) => setSelRoom((p) => (p && p.id === id ? null : { id, name }))} />
+
+      ${selRoom && rooms && (() => {
+        const rm = (rooms.rooms || []).find((r) => r.id === selRoom.id);
+        return rm ? html`<${RoomPlacementEditor} room=${rm} isAdmin=${isAdmin}
+          onNeedAdmin=${() => setShowAdmin(true)} onSaved=${refresh} />` : null;
+      })()}
 
       ${devices == null && html`<div class="empty">Loading…</div>`}
       ${devices && devices.length > 0 && html`<h2 class="section">Automations</h2>`}
