@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v39 room placement editor — tap a room, drag devices to their spots (admin)";
+const BUILD = "v40 house map — devices at their placed spots with curated readings (temp/hum + gas index, no raw)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -1321,17 +1321,45 @@ function HouseMap({ data, selected, onSelect }) {
   if (!(mxx > mnx && mxy > mny)) return null;
   const W = mxx - mnx, H = mxy - mny;
 
-  const glance = (devs) => {
-    for (const d of devs || []) {
-      const m = d.metrics || {};
-      if (typeof m.temperature_c === "number") {
-        const t = convT(m.temperature_c, unit).toFixed(0);
-        const h = typeof m.humidity_pct === "number" ? ` · ${m.humidity_pct.toFixed(0)}%` : "";
-        return `${t}°${h}`;
-      }
-    }
-    return "";
+  // One device's curated glance = the FIRST TWO non-raw readings (GRAPHABLE order leads with
+  // temp+hum), or an actuator's run state. Mirrors the D1001 panel's map (dev_compact): index data,
+  // never raw (voc_raw etc.). temp respects the °F/°C pref; humidity shown as a bare "%".
+  const fmtG = (g, v) => {
+    if (isTempMetric(g.key)) return `${Math.round(convT(v, unit))}°`;
+    if (g.key === "humidity_pct") return `${Math.round(v)}%`;
+    const u = g.unit && g.unit[0] === "%" ? "%" : g.unit;
+    return `${Math.round(v)}${u || ""}`;
   };
+  const devGlance = (d) => {
+    if (d.role === "actuator" && d.state)
+      return `${d.state.running ? "▶" : "⏸"} ${d.state.status || (d.state.running ? "on" : "idle")}`;
+    const m = d.metrics || {}, parts = [];
+    for (const g of GRAPHABLE) {
+      if (g.key.endsWith("_raw")) continue;                 // index metrics only — never raw
+      const v = m[g.key];
+      if (typeof v !== "number") continue;
+      parts.push(fmtG(g, v));
+      if (parts.length >= 2) break;
+    }
+    return parts.join(" · ");
+  };
+  const devColor = (d, act) => {
+    if (d.out_of_range && Object.keys(d.out_of_range).length) return "#ef4444";   // out of range
+    if (d.role === "actuator" && d.state) return d.state.running ? "#22c55e" : "#94a3b8";
+    return act ? "#b4823c" : "#3d6e93";
+  };
+  const roomGlance = (devs) => { for (const d of devs || []) { const g = devGlance(d); if (g) return g; } return ""; };
+  const hasPlace = (d) => d.placement && typeof d.placement.x === "number" && typeof d.placement.y === "number";
+  // Placements are normalized to the POLYGON bbox (matching RoomPlacementEditor's toNorm) — not the
+  // label-inclusive bbox — so a device lands exactly where it was dropped in the editor.
+  const polyBox = (g) => {
+    let x0 = 1e9, y0 = 1e9, x1 = -1e9, y1 = -1e9;
+    (g.polys || [g.poly]).forEach((r) => r.forEach(([x, y]) => {
+      x0 = Math.min(x0, x); y0 = Math.min(y0, y); x1 = Math.max(x1, x); y1 = Math.max(y1, y);
+    }));
+    return { x0, y0, W: x1 - x0, H: y1 - y0 };
+  };
+
   const hasPoly = (r) => r.geometry && (r.geometry.poly || r.geometry.polys);
   const placed = rooms.filter(hasPoly);
   const mono = rooms.filter((r) => !hasPoly(r) && (r.counts.sensors + r.counts.actuators) > 0);
@@ -1345,23 +1373,34 @@ function HouseMap({ data, selected, onSelect }) {
           const g = r.geometry, act = r.counts.actuators > 0, sel = selected === r.id;
           const rings = g.polys || [g.poly];
           const [lx, ly] = g.label || [(mnx + mxx) / 2, (mny + mxy) / 2];
-          const gl = glance(r.devices);
+          const box = polyBox(g);
+          const devs = r.devices || [];
+          const placedDevs = devs.filter(hasPlace);
+          const unplaced = devs.filter((d) => !hasPlace(d));
           const fill = sel ? (act ? "rgba(180,130,60,0.34)" : "rgba(47,126,122,0.30)")
                            : (act ? "rgba(180,130,60,0.14)" : "rgba(47,126,122,0.12)");
           const stroke = act ? "#b4823c" : "#2f7e7a";
+          const unplacedGl = unplaced.map(devGlance).filter(Boolean).join("   ");
           return html`<g class="room" style="cursor:pointer" onClick=${() => onSelect(r.id, r.name)}>
             ${rings.map((ring) => html`<polygon points=${ring.map((p) => p.join(",")).join(" ")}
               fill=${fill} stroke=${stroke} stroke-width=${sel ? 6 : 4} stroke-linejoin="round" />`)}
             <text x=${lx} y=${ly - 2} text-anchor="middle" font-size="26" font-weight="600"
               fill="currentColor">${r.name}</text>
-            ${gl && html`<text x=${lx} y=${ly + 24} text-anchor="middle" font-size="22"
-              fill=${act ? "#b4823c" : "#3d6e93"}>${gl}</text>`}
+            ${placedDevs.map((d) => {
+              const t = devGlance(d); if (!t) return null;
+              const cx = box.x0 + d.placement.x * box.W, cy = box.y0 + d.placement.y * box.H;
+              return html`<text x=${cx} y=${cy} text-anchor="middle" dominant-baseline="middle"
+                font-size="19" font-weight="600" fill=${devColor(d, act)} style="pointer-events:none"
+                paint-order="stroke" stroke="rgba(9,12,22,0.72)" stroke-width="3.5">${t}</text>`;
+            })}
+            ${unplacedGl && html`<text x=${lx} y=${ly + 22} text-anchor="middle" font-size="19"
+              fill=${act ? "#b4823c" : "#3d6e93"} style="pointer-events:none">${unplacedGl}</text>`}
           </g>`;
         })}
       </svg>
       ${mono.length > 0 && html`<div class="mono-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
         ${mono.map((r) => html`<button class=${"btn sm" + (selected === r.id ? "" : " ghost")}
-          onClick=${() => onSelect(r.id, r.name)}>${r.name}${glance(r.devices) ? ` · ${glance(r.devices)}` : ""}</button>`)}
+          onClick=${() => onSelect(r.id, r.name)}>${r.name}${roomGlance(r.devices) ? ` · ${roomGlance(r.devices)}` : ""}</button>`)}
       </div>`}
     </div>`;
 }
