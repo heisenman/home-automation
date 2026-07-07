@@ -219,7 +219,11 @@ static void handle(const char *json)
 {
     cJSON *cmd = cJSON_Parse(json);
     if (!cmd) { ESP_LOGW(TAG, "bad json"); return; }
-    const cJSON *jop = cJSON_GetObjectItem(cmd, "op");
+    // The file-op is 'cmd' (ls/stat/read/write/rm/mkdir/df). It must NOT be 'op' because on the signed
+    // channel (T_CMD) 'op' is the lane selector ("fs") — reading it here saw "fs" -> "unknown op"
+    // (d1001-fs-opkey-drift). Fall back to 'op' only for a legacy sender that put the file-op there.
+    const cJSON *jop = cJSON_GetObjectItem(cmd, "cmd");
+    if (!cJSON_IsString(jop)) jop = cJSON_GetObjectItem(cmd, "op");
     const cJSON *jpath = cJSON_GetObjectItem(cmd, "path");
     const char *op = cJSON_IsString(jop) ? jop->valuestring : "";
     const char *path = cJSON_IsString(jpath) ? jpath->valuestring : NULL;
