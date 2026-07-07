@@ -155,6 +155,69 @@ static uint32_t dev_color(cJSON *dev)
     return C_NORMAL;
 }
 
+// Compact marker: the primary reading only (no name), for the house view when full chips would
+// crowd a room. Actuator -> run glyph; sensor -> its first catalog metric at prec 0 (e.g. "71F",
+// "44%"); nothing numeric -> a short name stem. Position (placement) disambiguates which is which.
+static void dev_compact(cJSON *dev, char *out, size_t n)
+{
+    cJSON *st = cJSON_GetObjectItem(dev, "state");
+    if (dev_is_actuator(dev) && cJSON_IsObject(st)) {
+        snprintf(out, n, "%s", cJSON_IsTrue(cJSON_GetObjectItem(st, "running"))
+                 ? LV_SYMBOL_PLAY : LV_SYMBOL_PAUSE);
+        return;
+    }
+    cJSON *m = cJSON_GetObjectItem(dev, "metrics");
+    if (cJSON_IsObject(m)) {
+        int cnt;
+        const struct mfmt *cat = ui_format_catalog(&cnt);
+        for (int i = 0; i < cnt; i++) {
+            bool present;
+            double v = metric_of(m, cat[i].key, &present);
+            if (!present) continue;
+            const char *u = disp_unit(cat[i].unit);
+            snprintf(out, n, "%.0f%s", disp_val(cat[i].unit, v), u ? u : "");
+            return;
+        }
+    }
+    const cJSON *jn = cJSON_GetObjectItem(dev, "name");
+    const cJSON *jid = cJSON_GetObjectItem(dev, "device_id");
+    const char *nm = cJSON_IsString(jn) ? jn->valuestring
+                     : (cJSON_IsString(jid) ? jid->valuestring : "?");
+    char f[16]; ascii_fold(nm, f, sizeof f); if (strlen(f) > 8) f[8] = 0;
+    snprintf(out, n, "%s", f);
+}
+
+// A house-view chip: `text` colored by state, clickable -> zooms the room (reg_idx), positioned at
+// (cx,cy) but CLAMPED so its whole box stays inside the room's px bbox [x0,y0]-[x1,y1]. The clamp is
+// what keeps a chip (or the room name) from spilling past the walls into a neighbor.
+static void house_chip(lv_obj_t *parent, const char *text, uint32_t col, bool is_name,
+                       int cx, int cy, int reg_idx, int x0, int y0, int x1, int y1)
+{
+    int w, h = text_wh(text, 0, &w);
+    int bw = w + 10, bh = h + 6;
+    int px = cx - bw / 2, py = cy - bh / 2;
+    if (x1 > x0) { if (px + bw > x1) px = x1 - bw; if (px < x0) px = x0; }
+    if (y1 > y0) { if (py + bh > y1) py = y1 - bh; if (py < y0) py = y0; }
+
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_set_size(box, bw, bh);
+    lv_obj_set_pos(box, px, py);
+    lv_obj_set_style_bg_color(box, lv_color_hex(0x0b1021), 0);
+    lv_obj_set_style_bg_opa(box, is_name ? 150 : 200, 0);
+    lv_obj_set_style_border_width(box, 0, 0);
+    lv_obj_set_style_radius(box, 5, 0);
+    lv_obj_set_style_pad_all(box, 2, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(box, room_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)reg_idx);
+
+    lv_obj_t *t = lv_label_create(box);
+    lv_label_set_text(t, text);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(t, lv_color_hex(col), 0);
+    lv_obj_center(t);
+}
+
 // One device's glance line: short name + its metrics in catalog (priority) order. core_only drops
 // the secondary metrics (the 0a->0b degrade, driven by the server metric_spec.core flag). Always
 // emits at least the name (honors "all devices").
@@ -288,7 +351,7 @@ static void room_screen_bbox(cJSON *geo, int *bw, int *bh)
 
 // --- room label: adaptive tier fill, sized to fit `bw`x`bh` (the room). clickable = tap target ---
 static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int cy, bool act, bool strip,
-                       int bw, int bh)
+                       int bw, int bh, int cbx0, int cby0, int cbx1, int cby1)
 {
     const cJSON *jn = cJSON_GetObjectItem(room, "name");
     const cJSON *ji = cJSON_GetObjectItem(room, "id");
@@ -393,9 +456,16 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
     if (tier != 3 && h > bh && bh > 0) h = bh;         // only the counts floor may overflow
     if (h < 22) h = 22;
 
+    // Position centered on the label anchor, then CLAMP the whole box inside the room px bbox so it
+    // can't spill past the walls (the height/width overrun: a box sized to bh centered on an anchor
+    // near a short room's edge overflowed into the neighbor). cbx1<=cbx0 -> no clamp.
+    int px = cx - w / 2, py = cy - h / 2;
+    if (cbx1 > cbx0) { if (px + w > cbx1) px = cbx1 - w; if (px < cbx0) px = cbx0; }
+    if (cby1 > cby0) { if (py + h > cby1) py = cby1 - h; if (py < cby0) py = cby0; }
+
     lv_obj_t *box = lv_obj_create(parent);
     lv_obj_set_size(box, w, h);
-    lv_obj_set_pos(box, cx - w / 2, cy - h / 2);
+    lv_obj_set_pos(box, px, py);
     lv_obj_set_style_bg_color(box, lv_color_hex(0x0b1021), 0);
     lv_obj_set_style_bg_opa(box, strip ? LV_OPA_COVER : 190, 0);   // semi-transparent so walls read through
     lv_obj_set_style_border_width(box, strip ? 2 : 0, 0);
@@ -424,6 +494,96 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
         lv_obj_set_style_text_color(sub, lv_color_hex(lcol[i]), 0);
         lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
     }
+}
+
+// --- house-view spatial fill (placed devices at their normalized spot) -------
+// Render a geometried room's devices at their PWA-editor placements instead of one stacked centroid
+// box. Adaptive: try full readings (name + metrics); if any would overflow the room bbox or overlap
+// a sibling, the WHOLE room degrades to compact markers (primary value only). Room name = a small
+// quiet chip at the label anchor. Unplaced devices stack compactly under the name. Everything is
+// clamped to the room's px bbox so nothing crosses a wall. Returns false (-> caller uses make_label)
+// when the room has no placed device or no usable geometry.
+static bool house_room_spatial(lv_obj_t *parent, cJSON *room, cJSON *geo, int reg_idx,
+                               const char *name, int mapw, int ph)
+{
+    cJSON *devs = cJSON_GetObjectItem(room, "devices");
+    if (!cJSON_IsArray(devs)) return false;
+    const cJSON *ji = cJSON_GetObjectItem(room, "id");
+    const char *rid = cJSON_IsString(ji) ? ji->valuestring : "";
+
+    double mnx = 1e9, mny = 1e9, mxx = -1e9, mxy = -1e9;
+    room_bounds(geo, &mnx, &mny, &mxx, &mxy);
+    if (!(mxx > mnx && mxy > mny)) return false;
+
+    // Room px bbox, clamped to the floor-plan area (chips/name clamp against this).
+    int x0 = scr_x(mnx), y0 = scr_y(mny), x1 = scr_x(mxx), y1 = scr_y(mxy);
+    if (x0 < PAD) x0 = PAD;
+    if (x1 > mapw - PAD) x1 = mapw - PAD;
+    if (y0 < PAD) y0 = PAD;
+    if (y1 > ph - PAD) y1 = ph - PAD;
+
+    // Gather placed chips (full-reading geometry) for the fit test.
+    struct { int cx, cy, w, h; cJSON *dev; } ch[MAX_DEVS];
+    int nc = 0;
+    cJSON *d;
+    cJSON_ArrayForEach(d, devs) {
+        if (nc >= MAX_DEVS) break;
+        cJSON *pl = cJSON_GetObjectItem(d, "placement");
+        cJSON *jx = pl ? cJSON_GetObjectItem(pl, "x") : NULL;
+        cJSON *jy = pl ? cJSON_GetObjectItem(pl, "y") : NULL;
+        if (!(cJSON_IsNumber(jx) && cJSON_IsNumber(jy))) continue;   // unplaced -> handled below
+        double hx = mnx + jx->valuedouble * (mxx - mnx);
+        double hy = mny + jy->valuedouble * (mxy - mny);
+        char line[ML_LEN]; dev_line(d, false, rid, line, sizeof line);
+        int w, h = text_wh(line, 0, &w);
+        ch[nc].cx = scr_x(hx); ch[nc].cy = scr_y(hy); ch[nc].w = w + 10; ch[nc].h = h + 6; ch[nc].dev = d;
+        nc++;
+    }
+    if (nc == 0) return false;                                       // nothing placed -> centroid box
+
+    // Decide full vs compact for the whole room: full only if every chip fits the bbox and no two
+    // overlap. (Chip boxes measured at their natural on-screen centers, before the per-chip clamp.)
+    bool full = true;
+    for (int i = 0; i < nc && full; i++) {
+        int ax0 = ch[i].cx - ch[i].w / 2, ax1 = ax0 + ch[i].w;
+        int ay0 = ch[i].cy - ch[i].h / 2, ay1 = ay0 + ch[i].h;
+        if (ax0 < x0 || ax1 > x1 || ay0 < y0 || ay1 > y1) full = false;
+        for (int j = 0; j < i && full; j++) {
+            int bx0 = ch[j].cx - ch[j].w / 2, bx1 = bx0 + ch[j].w;
+            int by0 = ch[j].cy - ch[j].h / 2, by1 = by0 + ch[j].h;
+            if (ax0 < bx1 && bx0 < ax1 && ay0 < by1 && by0 < ay1) full = false;   // overlap
+        }
+    }
+
+    // Room name — small chip at the label anchor (fallback: bbox top-center), clamped, clickable.
+    double lx, ly; int nx, ny;
+    if (room_label(geo, &lx, &ly)) { nx = scr_x(lx); ny = scr_y(ly); }
+    else { nx = (x0 + x1) / 2; ny = y0 + 12; }
+    char folded[40]; ascii_fold(name, folded, sizeof folded);
+    house_chip(parent, folded, 0xcfe0ff, true, nx, ny, reg_idx, x0, y0, x1, y1);
+
+    // Placed devices at their spots.
+    for (int i = 0; i < nc; i++) {
+        char txt[ML_LEN];
+        if (full) dev_line(ch[i].dev, false, rid, txt, sizeof txt);
+        else      dev_compact(ch[i].dev, txt, sizeof txt);
+        house_chip(parent, txt, dev_color(ch[i].dev), false, ch[i].cx, ch[i].cy, reg_idx, x0, y0, x1, y1);
+    }
+
+    // Unplaced devices (this room has geometry + some placed): compact stack under the name.
+    int uy = ny + 18;
+    cJSON_ArrayForEach(d, devs) {
+        cJSON *pl = cJSON_GetObjectItem(d, "placement");
+        cJSON *jx = pl ? cJSON_GetObjectItem(pl, "x") : NULL;
+        cJSON *jy = pl ? cJSON_GetObjectItem(pl, "y") : NULL;
+        if (cJSON_IsNumber(jx) && cJSON_IsNumber(jy)) continue;      // already placed
+        char txt[ML_LEN]; dev_compact(d, txt, sizeof txt);
+        house_chip(parent, txt, dev_color(d), false, nx, uy, reg_idx, x0, y0, x1, y1);
+        uy += 18;
+    }
+
+    ESP_LOGI(TAG, "spatial %s: %d placed (%s)", rid, nc, full ? "full" : "compact");
+    return true;
 }
 
 // --- render ----------------------------------------------------------------
@@ -496,19 +656,35 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
         s_reg[idx].name[sizeof s_reg[idx].name - 1] = 0;
 
         double lx, ly;
+        const cJSON *rname = jn;
         if (have_space && room_label(geo, &lx, &ly)) {
-            int x = scr_x(lx), y = scr_y(ly);
-            int bw = LBL_W, bh = LBL_H;
-            room_screen_bbox(geo, &bw, &bh);
-            if (x < PAD + 26) x = PAD + 26;
-            if (x > mapw - PAD - 26) x = mapw - PAD - 26;
-            if (y < PAD + 14) y = PAD + 14;
-            if (y > ph - PAD - 14) y = ph - PAD - 14;
-            make_label(parent, r, idx, x, y, act, false, bw, bh);
+            // Prefer spatial placement (PWA-editor spots). Falls back to the centroid tier box for a
+            // room with no placed device (house_room_spatial returns false).
+            const char *nm = cJSON_IsString(rname) ? rname->valuestring : s_reg[idx].id;
+            if (!house_room_spatial(parent, r, geo, idx, nm, mapw, ph)) {
+                int x = scr_x(lx), y = scr_y(ly);
+                int bw = LBL_W, bh = LBL_H;
+                room_screen_bbox(geo, &bw, &bh);
+                // room px bbox -> clamp rect (keeps the box inside the walls; fixes the overrun)
+                double rmnx = 1e9, rmny = 1e9, rmxx = -1e9, rmxy = -1e9;
+                room_bounds(geo, &rmnx, &rmny, &rmxx, &rmxy);
+                int cbx0 = scr_x(rmnx), cby0 = scr_y(rmny), cbx1 = scr_x(rmxx), cby1 = scr_y(rmxy);
+                if (cbx0 < PAD) cbx0 = PAD;
+                if (cbx1 > mapw - PAD) cbx1 = mapw - PAD;
+                if (cby0 < PAD) cby0 = PAD;
+                if (cby1 > ph - PAD) cby1 = ph - PAD;
+                if (x < PAD + 26) x = PAD + 26;
+                if (x > mapw - PAD - 26) x = mapw - PAD - 26;
+                if (y < PAD + 14) y = PAD + 14;
+                if (y > ph - PAD - 14) y = ph - PAD - 14;
+                make_label(parent, r, idx, x, y, act, false, bw, bh, cbx0, cby0, cbx1, cby1);
+            }
             s_nreg++;
         } else if (ns + na > 0) {
             if (col_y + 30 > ph - PAD) continue;    // right column full
-            make_label(parent, r, idx, pw - COL_W / 2, col_y, act, true, COL_W - 12, 58);
+            int cbx0 = pw - COL_W, cby0 = col_y - 29, cbx1 = pw - 6, cby1 = col_y + 29;
+            make_label(parent, r, idx, pw - COL_W / 2, col_y, act, true, COL_W - 12, 58,
+                       cbx0, cby0, cbx1, cby1);
             col_y += 58 + 12;
             s_nreg++;
         }
