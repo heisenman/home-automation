@@ -1,3 +1,5 @@
+# BREADCRUMB: server > weather - weather lane (forecast/observation ingest). Contract: 0008. Parent: server/AGENTS.md.
+# REUSE-WHEN: you need weather data — use the weather lane
 """
 Internet weather lane — standalone, modular.
 

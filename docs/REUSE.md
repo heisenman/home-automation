@@ -54,4 +54,24 @@ something cross-cutting a future agent would otherwise rebuild.
 - **Panel/edge tooling** → `tools/` (edge_ota/sign, node_bringup, enroll_node, the `agents/coord.py` board);
   battery profiling: `tools/e1001_*.py`, `tools/d1001_*.py`.
 
-*(Pass 3, dev: server packages get their own generated table here, sourced from [server/AGENTS.md](../server/AGENTS.md).)*
+### Server packages (`server/`)
+
+Generated from each package's `__init__.py` breadcrumb (ADR-0025 Pass-3), the same pattern as the firmware
+table above. Add a package → add its `# BREADCRUMB: server > … / # REUSE-WHEN: …` header (or `tools/gen_reuse.py
+--check` fails). Overview: [server/AGENTS.md](../server/AGENTS.md).
+
+<!-- GENERATED:reuse-server (tools/gen_reuse.py --write) — do not edit by hand -->
+| Module | Reuse when | Contract | Header |
+|---|---|---|---|
+| `api` | you need to expose or render device/room/control data to a client — author it once in the BFF view-model, never a panel-specific endpoint | 0013 | [server/api/__init__.py](../server/api/__init__.py) |
+| `cluster` | you're doing heartbeat, VIP/dictator sensing, or failover coordination on the server side | 0016,0018 | [server/cluster/__init__.py](../server/cluster/__init__.py) |
+| `comms` | you're emitting an event or need a transport-agnostic resource — use the comms layer, not raw MQTT | 0012 | [server/comms/__init__.py](../server/comms/__init__.py) |
+| `control` | you're actuating a device or resolving a control policy/scene — go through the trait loop + signed issuer | 0002,0011,0014 | [server/control/__init__.py](../server/control/__init__.py) |
+| `ingest` | you're turning device telemetry into canonical readings or adding a device family — reuse a bridge + the registry reloader | 0001,0023 | [server/ingest/__init__.py](../server/ingest/__init__.py) |
+| `maintenance` | you're renaming/relocating/retiring a device — reuse device_migrate/relocate/placement, never hand-edit a registry | 0016,0022,0026,0027 | [server/maintenance/__init__.py](../server/maintenance/__init__.py) |
+| `mesh` | you're assigning edge-relay coverage or reading mesh topology / reach census | 0015,0023 | [server/mesh/__init__.py](../server/mesh/__init__.py) |
+| `notify` | you're raising a user-facing alert — go through the alert engine, don't invent a notify path | - | [server/notify/__init__.py](../server/notify/__init__.py) |
+| `storage` | you're reading/writing device readings — go through the two-tier writer, don't touch the DBs directly | 0004,0006,0009 | [server/storage/__init__.py](../server/storage/__init__.py) |
+| `util` | you need a cross-cutting helper (mqtt creds, registry reload) — reuse before reimplementing | - | [server/util/__init__.py](../server/util/__init__.py) |
+| `weather` | you need weather data — use the weather lane | 0008 | [server/weather/__init__.py](../server/weather/__init__.py) |
+<!-- /GENERATED:reuse-server -->

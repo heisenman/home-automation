@@ -1,3 +1,5 @@
+# BREADCRUMB: server > control - actuator control loop, override/policy/scenes, trait-based signed command issuance. Contract: 0002,0011,0014. Parent: server/AGENTS.md.
+# REUSE-WHEN: you're actuating a device or resolving a control policy/scene — go through the trait loop + signed issuer
 """Command-and-control plane (Phase 5/6).
 
 The dictator's control side: a small trait vocabulary (ADR-0002), a versioned/validated policy

@@ -89,6 +89,18 @@ def test_reuse_md_generated_and_fresh():
     assert R.render(existing, rows) == existing, "docs/REUSE.md is stale — run tools/gen_reuse.py --write"
 
 
+def test_reuse_md_server_table_generated_and_fresh():
+    """(b) Pass-3: every server package HAS a parseable breadcrumb (else it's invisible to the catalog),
+    and REUSE.md's generated server table matches — no drift. Driven off gen_reuse.scan_server."""
+    srows, missing = R.scan_server()
+    assert not missing, (
+        f"server package(s) with no parseable breadcrumb — invisible to REUSE.md: {missing}. "
+        "Add the '# BREADCRUMB: server > … / # REUSE-WHEN: …' header to the package __init__.py.")
+    existing = R.REUSE.read_text()
+    assert R.render_server(existing, srows) == existing, (
+        "docs/REUSE.md server table is stale — run tools/gen_reuse.py --write")
+
+
 def test_reuse_md_links_resolve():
     """The capability catalog can't point at missing files: every relative link in REUSE.md resolves."""
     reuse = ROOT / "docs" / "REUSE.md"

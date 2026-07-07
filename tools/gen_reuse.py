@@ -26,10 +26,13 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPONENTS = ROOT / "firmware" / "components"
+SERVER = ROOT / "server"                       # ADR-0025 Pass-3: server packages get a generated table too
 REUSE = ROOT / "docs" / "REUSE.md"
 
 GEN_BEGIN = "<!-- GENERATED:reuse (tools/gen_reuse.py --write) — do not edit by hand -->"
 GEN_END = "<!-- /GENERATED:reuse -->"
+GEN_BEGIN_SRV = "<!-- GENERATED:reuse-server (tools/gen_reuse.py --write) — do not edit by hand -->"
+GEN_END_SRV = "<!-- /GENERATED:reuse-server -->"
 
 # Third-party components vendored in-tree — upstream code, not our reusable modules, so exempt from the
 # breadcrumb requirement. They are listed as "vendored" in the hand-written prose of REUSE.md.
@@ -37,6 +40,9 @@ VENDORED = {"sensirion_gas_index", "sgp30", "sgp40", "sqlite3"}
 
 BREADCRUMB_RE = re.compile(
     r"BREADCRUMB:\s*firmware/components\s*>\s*(?P<mod>\S+)\s*-\s*(?P<purpose>.*?)\.\s*"
+    r"Contract:\s*(?P<contract>.*?)\.\s*Parent:")
+SERVER_BREADCRUMB_RE = re.compile(   # same shape, declared in each server package's __init__.py
+    r"BREADCRUMB:\s*server\s*>\s*(?P<mod>\S+)\s*-\s*(?P<purpose>.*?)\.\s*"
     r"Contract:\s*(?P<contract>.*?)\.\s*Parent:")
 REUSEWHEN_RE = re.compile(r"REUSE-WHEN:\s*(?P<when>.+)")  # .+ stops at newline (no MULTILINE needed)
 
@@ -67,6 +73,23 @@ def scan():
     return rows, missing
 
 
+def scan_server():
+    """Return (rows, missing) for server packages, parsed from each package's __init__.py breadcrumb.
+    Mirrors scan() — a package with no breadcrumb is invisible to the catalog and flagged."""
+    rows, missing = [], []
+    for pkg in sorted(p for p in SERVER.iterdir() if p.is_dir() and (p / "__init__.py").exists()):
+        init = pkg / "__init__.py"
+        txt = init.read_text()
+        bc = SERVER_BREADCRUMB_RE.search(txt)
+        rw = REUSEWHEN_RE.search(txt)
+        if not bc or not rw:
+            missing.append(pkg.name)
+            continue
+        rows.append((bc.group("mod"), rw.group("when").strip(),
+                     bc.group("contract").strip(), str(init.relative_to(ROOT))))
+    return rows, missing
+
+
 def table(rows) -> str:
     out = ["| Module | Reuse when | Contract | Header |", "|---|---|---|---|"]
     for mod, when, contract, path in rows:
@@ -74,31 +97,46 @@ def table(rows) -> str:
     return "\n".join(out)
 
 
-def render(existing: str, rows) -> str:
-    block = f"{GEN_BEGIN}\n{table(rows)}\n{GEN_END}"
-    if GEN_BEGIN in existing and GEN_END in existing:
-        return re.sub(re.escape(GEN_BEGIN) + r".*?" + re.escape(GEN_END), block, existing, flags=re.S)
+def _render_region(existing: str, begin: str, end: str, rows) -> str:
+    block = f"{begin}\n{table(rows)}\n{end}"
+    if begin in existing and end in existing:
+        return re.sub(re.escape(begin) + r".*?" + re.escape(end), block, existing, flags=re.S)
     return existing.rstrip() + "\n\n" + block + "\n"
+
+
+def render(existing: str, rows) -> str:
+    return _render_region(existing, GEN_BEGIN, GEN_END, rows)
+
+
+def render_server(existing: str, rows) -> str:
+    return _render_region(existing, GEN_BEGIN_SRV, GEN_END_SRV, rows)
+
+
+def _rendered(existing: str, rows, srows) -> str:
+    return render_server(render(existing, rows), srows)
 
 
 def main():
     args = set(sys.argv[1:])
     rows, missing = scan()
-    if missing:
-        print(f"# WARNING: {len(missing)} component(s) with no parseable breadcrumb: {', '.join(missing)}",
+    srows, smissing = scan_server()
+    allmissing = [f"fw:{m}" for m in missing] + [f"server:{m}" for m in smissing]
+    if allmissing:
+        print(f"# WARNING: {len(allmissing)} module(s) with no parseable breadcrumb: {', '.join(allmissing)}",
               file=sys.stderr)
     if "--check" in args:
-        stale = REUSE.exists() and render(REUSE.read_text(), rows) != REUSE.read_text()
-        if missing or stale:
+        cur = REUSE.read_text() if REUSE.exists() else ""
+        stale = _rendered(cur, rows, srows) != cur
+        if allmissing or stale:
             print("REUSE.md drift or missing breadcrumb — run tools/gen_reuse.py --write", file=sys.stderr)
             sys.exit(1)
         print("REUSE.md up to date")
         return
     if "--write" in args:
-        REUSE.write_text(render(REUSE.read_text(), rows))
-        print(f"wrote {len(rows)} module rows -> {REUSE.relative_to(ROOT)}")
+        REUSE.write_text(_rendered(REUSE.read_text(), rows, srows))
+        print(f"wrote {len(rows)} firmware + {len(srows)} server rows -> {REUSE.relative_to(ROOT)}")
         return
-    print(table(rows))
+    print(table(rows) + "\n\n" + table(srows))
 
 
 if __name__ == "__main__":

@@ -1,3 +1,5 @@
+# BREADCRUMB: server > mesh - mesh topology + edge-relay coverage assignment + reach census. Contract: 0015,0023. Parent: server/AGENTS.md.
+# REUSE-WHEN: you're assigning edge-relay coverage or reading mesh topology / reach census
 """Mesh topology + path-aware backfill routing.
 
 The forwarding fabric is NOT a star — it can be a multi-hop chain:

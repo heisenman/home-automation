@@ -1,3 +1,5 @@
+# BREADCRUMB: server > comms - event + resource/transport abstraction over MQTT. Contract: 0012. Parent: server/AGENTS.md.
+# REUSE-WHEN: you're emitting an event or need a transport-agnostic resource — use the comms layer, not raw MQTT
 """Communication-event layer (ADR-0012).
 
 A normalized, transport-agnostic vocabulary for connection/health events emitted by every transport
