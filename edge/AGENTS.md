@@ -4,6 +4,8 @@ BLE/relay firmware for the edge nodes. Reference builds: `esp32c6/` (WiFi C6), `
 S3-POE), `esp32c3/` (WiFi C3 fork). Build/flash + the module map + the hard-won gotchas: **read
 [FIRMWARE-GUIDE.md](FIRMWARE-GUIDE.md) first.**
 
+*↑ The by-location node for `edge/` in the [root AGENTS.md](../AGENTS.md) tree (ADR-0021/0025); the by-capability index is [`docs/REUSE.md`](../docs/REUSE.md). Link up, don't duplicate.*
+
 ## The contract (ADR-0001)
 
 Nodes are **dumb relays.** A node scans BLE, publishes raw decoded readings keyed by MAC to

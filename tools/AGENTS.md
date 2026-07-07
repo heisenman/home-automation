@@ -2,6 +2,8 @@
 
 Scripts the operator/agent runs against the fleet. Python + a few shell. Not services (those are `../systemd/`).
 
+*↑ The by-location node for `tools/` in the [root AGENTS.md](../AGENTS.md) tree (ADR-0021/0025); the by-capability index is [`docs/REUSE.md`](../docs/REUSE.md). Link up, don't duplicate.*
+
 ## The task board (start every task here)
 
 `agents/coord.py` — two-Claude coordination over an MQTT task ledger (`ha/agents/#` on VIP `.200`).

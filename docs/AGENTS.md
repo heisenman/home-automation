@@ -3,6 +3,8 @@
 Where the "why" and the "how" live. Root orientation is [../AGENTS.md](../AGENTS.md); this explains how the
 docs here are organized.
 
+*↑ The by-location node for `docs/` in the [root AGENTS.md](../AGENTS.md) tree (ADR-0021/0025); the by-capability index is [`docs/REUSE.md`](REUSE.md). Link up, don't duplicate.*
+
 ## Structure
 
 | Path | What it is | When to touch |

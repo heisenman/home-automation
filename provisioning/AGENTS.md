@@ -2,6 +2,8 @@
 
 How to stand up each box/device from scratch. Reproducible, gated where it touches live/critical hardware.
 
+*↑ The by-location node for `provisioning/` in the [root AGENTS.md](../AGENTS.md) tree (ADR-0021/0025); the by-capability index is [`docs/REUSE.md`](../docs/REUSE.md). Link up, don't duplicate.*
+
 ## Map
 
 | Path | What |

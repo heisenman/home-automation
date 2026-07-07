@@ -3,6 +3,8 @@
 Keeps a warm standby able to seize the dictator role. VIP `.200`; primary `.210`, standby `.245`.
 Concepts + operations: [README.md](README.md), [failover-runbook.md](failover-runbook.md).
 
+*↑ The by-location node for `failover/` in the [root AGENTS.md](../AGENTS.md) tree (ADR-0021/0025); the by-capability index is [`docs/REUSE.md`](../docs/REUSE.md). Link up, don't duplicate.*
+
 ## Pieces
 
 | File | Role | ADR |

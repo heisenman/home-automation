@@ -2,6 +2,8 @@
 
 Python test suites for the dictator stack. Run before proposing server changes.
 
+*↑ The by-location node for `tests/` in the [root AGENTS.md](../AGENTS.md) tree (ADR-0021/0025); the by-capability index is [`docs/REUSE.md`](../docs/REUSE.md). Link up, don't duplicate.*
+
 ```sh
 python3 tests/run_all.py          # full suite (use the server venv)
 ```
