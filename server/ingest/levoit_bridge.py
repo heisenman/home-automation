@@ -106,7 +106,9 @@ def load_registry(path: Path) -> dict[str, dict]:
         cfg = cfg or {}
         out[str(name)] = {
             "device_id": cfg.get("device_id", str(name).replace("-", "_")),
-            "area": cfg.get("area", "unknown"),
+            "area": cfg.get("area"),                    # ADR-0027: area is authoritative from control.yaml;
+                                                        # this field is deprecated (None post-cutover) and
+                                                        # only a fallback for a device not in control.yaml.
             "device_type": cfg.get("device_type", "air_purifier"),
         }
     return out

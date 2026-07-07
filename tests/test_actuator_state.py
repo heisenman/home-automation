@@ -56,6 +56,28 @@ def test_levoit_single_source_area_from_control_yaml():
     assert b._resolve_area("ghost", None) == "unknown"
 
 
+def test_area_drift_guard(tmp_path=None):
+    ctl = {"purifier_h_office": {"area": "living_room"}}
+    # side registry still carrying a DISAGREEING area -> flagged (a re-introduced drift)
+    assert A.area_drift(ctl, {"levoit-office": {"device_id": "purifier_h_office", "area": "office"}}) == \
+        [("purifier_h_office", "office", "living_room")]
+    # agreeing area -> no drift
+    assert A.area_drift(ctl, {"levoit-office": {"device_id": "purifier_h_office", "area": "living_room"}}) == []
+    # post-cutover: no area field at all -> no drift (the healthy state ADR-0027 step 4 leaves)
+    assert A.area_drift(ctl, {"levoit-office": {"device_id": "purifier_h_office"}}) == []
+    # device not declared in control.yaml -> not drift (deprecated fallback path, not a disagreement)
+    assert A.area_drift(ctl, {"x": {"device_id": "ghost", "area": "attic"}}) == []
+
+
+def test_levoit_absent_area_resolves_control_without_drift_warning():
+    from server.ingest.levoit_bridge import LevoitBridge
+    b = LevoitBridge({}, object())
+    b._control_get = lambda: {"purifier_h_office": {"area": "living_room"}}
+    # post-cutover the levoit area is None -> control.yaml wins, and NO drift warning fires
+    assert b._resolve_area("purifier_h_office", None) == "living_room"
+    assert "purifier_h_office" not in b._area_warned
+
+
 if __name__ == "__main__":
     from tests._harness import run_module
     raise SystemExit(run_module(globals()))

@@ -35,6 +35,24 @@ def resolve_area(control_registry, device_id: str, *, fallback: str | None = Non
     return area or fallback or "unknown"
 
 
+def area_drift(control_registry, side_registry) -> list[tuple[str, str, str]]:
+    """ADR-0027 single-source drift guard. Returns `[(device_id, side_area, control_area), …]` for every
+    device in a side registry (a `*-devices.yaml` map — values carrying `device_id` + optional `area`)
+    whose `area` DISAGREES with the control registry. Empty = no drift (the healthy post-cutover state,
+    where side registries carry no `area` at all). A side entry with no `area`, or a device absent from
+    `control.yaml`, never drifts. Run it against the live registries to catch a re-introduced area."""
+    out: list[tuple[str, str, str]] = []
+    for entry in (side_registry or {}).values():
+        did = (entry or {}).get("device_id")
+        side_area = (entry or {}).get("area")
+        if not did or side_area is None:
+            continue
+        ctl_area = resolve_area(control_registry, did)
+        if ctl_area != "unknown" and side_area != ctl_area:
+            out.append((did, side_area, ctl_area))
+    return out
+
+
 def actuator_state(*, device_id: str, device_type: str, area: str, metrics: dict, transport: str,
                    ts: str | None = None, meta: dict | None = None, extra: dict | None = None):
     """Build the canonical actuator `(topic, payload)`. The common envelope
