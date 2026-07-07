@@ -155,9 +155,22 @@ static uint32_t dev_color(cJSON *dev)
     return C_NORMAL;
 }
 
-// Compact marker: the primary reading only (no name), for the house view when full chips would
-// crowd a room. Actuator -> run glyph; sensor -> its first catalog metric at prec 0 (e.g. "71F",
-// "44%"); nothing numeric -> a short name stem. Position (placement) disambiguates which is which.
+// Raw sensor outputs (e.g. voc_raw) are noisy and unbounded — never surfaced on the map. Only the
+// interpreted INDEX metrics (voc_index, eco2, tvoc, aqi, ...) and the climate readings are shown.
+// Keyed off the "_raw" suffix so new raw metrics are excluded without a code change (Hugh 2026-07-07).
+static bool is_raw_key(const char *k)
+{
+    size_t n = strlen(k);
+    return n >= 4 && strcmp(k + n - 4, "_raw") == 0;
+}
+
+// Terse unit for the map glance: humidity's "%RH" collapses to "%" (the "nnF mm%" pair stays ~7 chars).
+static const char *map_unit(const char *u) { return (u && u[0] == '%') ? "%" : u; }
+
+// Compact marker (no device name), for the house view when full chips would crowd a room. Actuator
+// -> run glyph. Sensor -> its FIRST TWO non-raw readings at prec 0 (catalog order leads with temp +
+// humidity -> "72F 44%"; an sgp30 -> "1143ppm 269ppb"; an sgp40 -> "115"). Nothing numeric -> a short
+// name stem. Placement disambiguates which marker is which; the full reading is one tap away.
 static void dev_compact(cJSON *dev, char *out, size_t n)
 {
     cJSON *st = cJSON_GetObjectItem(dev, "state");
@@ -170,14 +183,18 @@ static void dev_compact(cJSON *dev, char *out, size_t n)
     if (cJSON_IsObject(m)) {
         int cnt;
         const struct mfmt *cat = ui_format_catalog(&cnt);
-        for (int i = 0; i < cnt; i++) {
+        int off = 0, shown = 0; out[0] = 0;
+        for (int i = 0; i < cnt && off < (int)n - 1; i++) {
+            if (is_raw_key(cat[i].key)) continue;
             bool present;
             double v = metric_of(m, cat[i].key, &present);
             if (!present) continue;
-            const char *u = disp_unit(cat[i].unit);
-            snprintf(out, n, "%.0f%s", disp_val(cat[i].unit, v), u ? u : "");
-            return;
+            const char *u = map_unit(disp_unit(cat[i].unit));
+            off += snprintf(out + off, n - off, "%s%.0f%s", off ? " " : "",
+                            disp_val(cat[i].unit, v), u ? u : "");
+            if (++shown >= 2) break;                    // first two readings — the glance pair
         }
+        if (shown > 0) return;
     }
     const cJSON *jn = cJSON_GetObjectItem(dev, "name");
     const cJSON *jid = cJSON_GetObjectItem(dev, "device_id");
@@ -261,11 +278,12 @@ static void dev_line(cJSON *dev, bool core_only, const char *room_id, char *out,
     const struct mfmt *cat = ui_format_catalog(&cnt);
     for (int i = 0; i < cnt && off < (int)n - 1; i++) {
         if (core_only && !cat[i].core) continue;
+        if (is_raw_key(cat[i].key)) continue;          // index metrics only — never raw
         bool present;
         double v = metric_of(m, cat[i].key, &present);
         if (!present) continue;
         double dv = disp_val(cat[i].unit, v);          // panel-local Fahrenheit; data stays SI
-        const char *u = disp_unit(cat[i].unit);
+        const char *u = map_unit(disp_unit(cat[i].unit));
         off += snprintf(out + off, n - off, " %.*f%s", cat[i].prec, dv, u ? u : "");
     }
 }

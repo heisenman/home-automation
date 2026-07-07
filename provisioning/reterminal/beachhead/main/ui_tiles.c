@@ -37,6 +37,9 @@ static char s_url[192];       // /api/v1/sensors
 static char s_disp_url[192];  // /api/v1/displays (controllable devices)
 static char s_house_url[256]; // /api/v1/house
 static char s_map_url[256];   // /api/v1/rooms (house map — the landing view)
+static bool s_catalog_primed;  // /api/v1/rooms carries no metric catalog, so the landing map would
+                               // render with the temp/hum fallback (gas/index metrics missing). Prime
+                               // the shared catalog once from /api/v1/sensors before the first render.
 static lv_obj_t *s_header, *s_grid;
 static lv_obj_t *s_map;       // house-map container (absolute-positioned room chips)
 static lv_obj_t *s_devices;   // devices-management screen container (list -> reassign room)
@@ -168,6 +171,24 @@ static void render(cJSON *sensors, cJSON *devices, cJSON *catalog, const char *r
 // no 10s full-table teardown, no flicker. The map/room views still refresh live sensor values each tick.
 static void do_render_cycle(bool nav)
 {
+    // Prime the shared metric catalog once (the map's /api/v1/rooms doesn't carry it, so without this
+    // the landing view renders gas/index metrics as bare device names on the temp/hum fallback).
+    if (!s_catalog_primed) {
+        int lc = 0;
+        char *bc = ui_http_get(s_url, &lc);          // /api/v1/sensors carries the `metrics` catalog
+        if (bc && lc > 0) {
+            cJSON *rc = cJSON_Parse(bc);
+            cJSON *cat = rc ? cJSON_GetObjectItem(rc, "metrics") : NULL;
+            if (cJSON_IsArray(cat) && cJSON_GetArraySize(cat) > 0 && lvgl_port_lock(0)) {
+                ui_format_load_catalog(cat);
+                lvgl_port_unlock();
+                s_catalog_primed = true;
+            }
+            if (rc) cJSON_Delete(rc);
+        }
+        if (bc) heap_caps_free(bc);
+    }
+
     if (s_devview) {
       if (nav) {                                         // render only on entry — static after, no flicker
         // ── devices-management screen: editable Device/Location/Status table ──
