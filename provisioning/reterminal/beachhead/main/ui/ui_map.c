@@ -118,15 +118,16 @@ static void room_bounds(cJSON *geo, double *mnx, double *mny, double *mxx, doubl
 // device, core metrics) -> 1 (climate glance + counts) -> 2 (counts). Fit is measured with
 // lv_text_get_size against the room's on-screen bbox; the font stays fixed (legibility at distance).
 
-// wrapped px size of `s` at `max_w` (LVGL font metrics). Returns height; *w gets the used width.
-static int text_wh(const char *s, int max_w, int *w)
+// wrapped px size of `s` at `max_w` in `font`. Returns height; *w gets the used width.
+static int text_wh_f(const char *s, int max_w, const lv_font_t *font, int *w)
 {
     lv_point_t sz;
-    lv_text_get_size(&sz, s, &lv_font_montserrat_14, 0, 1,
-                     max_w > 0 ? max_w : LV_COORD_MAX, LV_TEXT_FLAG_NONE);
+    lv_text_get_size(&sz, s, font, 0, 1, max_w > 0 ? max_w : LV_COORD_MAX, LV_TEXT_FLAG_NONE);
     if (w) *w = sz.x;
     return sz.y;
 }
+// default 14pt measure (tier selection floors on the smallest font so a tier that fits at 14 always fits).
+static int text_wh(const char *s, int max_w, int *w) { return text_wh_f(s, max_w, &lv_font_montserrat_14, w); }
 
 // Any metric on this device out of its normal range (server out_of_range map, sparse {metric:True}).
 static bool dev_alert(cJSON *dev)
@@ -157,17 +158,25 @@ static uint32_t dev_color(cJSON *dev)
 // One device's glance line: short name + its metrics in catalog (priority) order. core_only drops
 // the secondary metrics (the 0a->0b degrade, driven by the server metric_spec.core flag). Always
 // emits at least the name (honors "all devices").
-static void dev_line(cJSON *dev, bool core_only, char *out, size_t n)
+static void dev_line(cJSON *dev, bool core_only, const char *room_id, char *out, size_t n)
 {
     const cJSON *jn = cJSON_GetObjectItem(dev, "name");
     const cJSON *jid = cJSON_GetObjectItem(dev, "device_id");
     // fall back to device_id (matches the PWA), NOT device_type — an unnamed device's device_type is
     // "unknown", which read as a bogus label (e.g. host_210 showing "unknown").
+    bool from_id = !cJSON_IsString(jn);
     const char *nm = cJSON_IsString(jn) ? jn->valuestring
                      : (cJSON_IsString(jid) ? jid->valuestring : "?");
     char folded[24];
     ascii_fold(nm, folded, sizeof folded);
-    if (strlen(folded) > 11) folded[11] = 0;          // keep the line compact
+    // when the label is the device_id, strip a redundant trailing "_<room_id>" so two devices in the
+    // same room disambiguate on their distinctive stem (meter_living_room -> "meter", meter_pro -> "meter_pro").
+    if (from_id && room_id && room_id[0]) {
+        size_t fl = strlen(folded), rl = strlen(room_id);
+        if (fl > rl + 1 && folded[fl - rl - 1] == '_' && strcmp(folded + fl - rl, room_id) == 0)
+            folded[fl - rl - 1] = 0;
+    }
+    if (strlen(folded) > 13) folded[13] = 0;          // keep the line compact (distinctive stem shows)
 
     // Actuator: show ACTION (running glyph + server status string), not its onboard reading — the
     // room's climate line already covers ambient. Defensive: no dev.state yet -> fall through to
@@ -284,6 +293,7 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
     const cJSON *jn = cJSON_GetObjectItem(room, "name");
     const cJSON *ji = cJSON_GetObjectItem(room, "id");
     const char *name = cJSON_IsString(jn) ? jn->valuestring : (cJSON_IsString(ji) ? ji->valuestring : "?");
+    const char *rid = cJSON_IsString(ji) ? ji->valuestring : "";
     cJSON *counts = cJSON_GetObjectItem(room, "counts");
     int ns = 0, na = 0;
     if (cJSON_IsObject(counts)) {
@@ -318,7 +328,7 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
         cJSON *d;
         cJSON_ArrayForEach(d, devs) {
             if (k >= ML_MAX) { over = true; break; }
-            dev_line(d, mode == 1, lines[k], ML_LEN);
+            dev_line(d, mode == 1, rid, lines[k], ML_LEN);
             lcol[k] = dev_color(d);                    // red(alert) > green(running) > dim(idle) > normal
             int lw; h += text_wh(lines[k], 0, &lw);    // natural (unwrapped) size
             if (lw > usable_w) over = true;
@@ -344,19 +354,41 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
         }
         if (k > 0 && !over && h <= budget) { nl = k; tier = 2; if (maxw > content_w) content_w = maxw; }
     }
-    // Tier 2 — counts floor (always render; may overflow a sliver room. icon+badge is future).
+    // Tier 2 — counts floor. If even the counts won't fit a sliver room, drop to a bare count BADGE
+    // (total device count) so it never overflows the polygon.
     if (tier < 0 && ns + na > 0) {
         if (na) snprintf(lines[0], ML_LEN, "%ds %da", ns, na);
         else    snprintf(lines[0], ML_LEN, "%ds", ns);
+        int lw; text_wh(lines[0], 0, &lw);
+        if (lw > usable_w) snprintf(lines[0], ML_LEN, "%d", ns + na);   // sliver room -> count badge
         lcol[0] = act ? ACT_WALL_COL : C_NORMAL;
-        int lw; text_wh(lines[0], 0, &lw); if (lw > content_w) content_w = lw;
+        text_wh(lines[0], 0, &lw); if (lw > content_w) content_w = lw;
         nl = 1; tier = 3;
     }
 
-    // Box sized to the chosen single-line content (bounded by the room bbox).
-    int content_h = name_h;
-    for (int i = 0; i < nl; i++) content_h += text_wh(lines[i], 0, NULL);
-    int w = content_w + 2 * inset; if (w > bw && bw > 50) w = bw; if (w < 50) w = 50;
+    // Surplus tier: when content is much smaller than the room, upsize the font (28/20) to fill the
+    // space and read at a distance (attic/crawlspace + other big, sparse rooms). Tier selection floored
+    // on 14pt so the tier already fits; only grow if the bigger font STILL fits width and height. Never
+    // upsize the sliver-room counts floor (tier 3).
+    const lv_font_t *font = &lv_font_montserrat_14;
+    if (tier != 3) {
+        const lv_font_t *cand[2] = { &lv_font_montserrat_28, &lv_font_montserrat_20 };
+        for (int ci = 0; ci < 2; ci++) {
+            int th, tw; bool fits = true;
+            th = text_wh_f(folded, usable_w, cand[ci], &tw);
+            if (tw > usable_w) fits = false;
+            for (int i = 0; i < nl && fits; i++) {
+                int lw; th += text_wh_f(lines[i], 0, cand[ci], &lw);
+                if (lw > usable_w) fits = false;
+            }
+            if (fits && th <= usable_h) { font = cand[ci]; break; }
+        }
+    }
+
+    // Box sized to the chosen content at the chosen font (bounded by the room bbox).
+    int content_w2, content_h = text_wh_f(folded, usable_w, font, &content_w2);
+    for (int i = 0; i < nl; i++) { int lw; content_h += text_wh_f(lines[i], 0, font, &lw); if (lw > content_w2) content_w2 = lw; }
+    int w = content_w2 + 2 * inset; if (w > bw && bw > 50) w = bw; if (w < 50) w = 50;
     int h = content_h + 2 * inset;
     if (tier != 3 && h > bh && bh > 0) h = bh;         // only the counts floor may overflow
     if (h < 22) h = 22;
@@ -379,7 +411,7 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
 
     lv_obj_t *t = lv_label_create(box);
     lv_label_set_text(t, folded);
-    lv_obj_set_style_text_font(t, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_font(t, font, 0);
     lv_obj_set_style_text_color(t, lv_color_hex(0xffffff), 0);
     lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);          // multi-line names (e.g. "Dining Nook")
     lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
@@ -388,7 +420,7 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
     for (int i = 0; i < nl; i++) {
         lv_obj_t *sub = lv_label_create(box);
         lv_label_set_text(sub, lines[i]);
-        lv_obj_set_style_text_font(sub, &lv_font_montserrat_14, 0);
+        lv_obj_set_style_text_font(sub, font, 0);
         lv_obj_set_style_text_color(sub, lv_color_hex(lcol[i]), 0);
         lv_obj_set_style_text_align(sub, LV_TEXT_ALIGN_CENTER, 0);
     }
@@ -487,7 +519,7 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
 // --- spatial room-zoom (arc 3) ---------------------------------------------
 // One device callout: its room-fill line (name + metrics or actuator action), colored by state,
 // clickable. Registered in s_dreg so the tap survives the cJSON free. `cx,cy` = center (px).
-static void device_chip(lv_obj_t *parent, cJSON *dev, int cx, int cy)
+static void device_chip(lv_obj_t *parent, cJSON *dev, const char *room_id, int cx, int cy)
 {
     if (s_ndreg >= MAX_DEVS) return;
     const cJSON *jid = cJSON_GetObjectItem(dev, "device_id");
@@ -499,7 +531,7 @@ static void device_chip(lv_obj_t *parent, cJSON *dev, int cx, int cy)
     s_dreg[idx].name[sizeof s_dreg[idx].name - 1] = 0;
 
     char line[ML_LEN];
-    dev_line(dev, false, line, sizeof line);
+    dev_line(dev, false, room_id, line, sizeof line);
     uint32_t col = dev_color(dev);
     int w, hh = text_wh(line, 0, &w);
 
@@ -581,11 +613,11 @@ bool ui_map_render_room(cJSON *root, const char *room_id, lv_obj_t *parent, ui_m
         if (cJSON_IsNumber(px) && cJSON_IsNumber(py)) {     // normalized 0..1 of the room bbox
             double hx = mnx + px->valuedouble * (mxx - mnx);
             double hy = mny + py->valuedouble * (mxy - mny);
-            device_chip(parent, d, scr_x(hx), scr_y(hy));
+            device_chip(parent, d, room_id, scr_x(hx), scr_y(hy));
             nplaced++;
         } else {
             if (strip_x > pw - 66) { strip_x = PAD + 66; strip_y += 46; }   // wrap to a 2nd strip row
-            if (strip_y < ph - 12) { device_chip(parent, d, strip_x, strip_y); strip_x += 138; nstrip++; }
+            if (strip_y < ph - 12) { device_chip(parent, d, room_id, strip_x, strip_y); strip_x += 138; nstrip++; }
         }
     }
     ESP_LOGI(TAG, "room-zoom %s: %d placed, %d in strip, %d rings", room_id, nplaced, nstrip, s_nring);
