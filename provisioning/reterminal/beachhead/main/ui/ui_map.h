@@ -20,3 +20,13 @@ typedef void (*ui_map_room_cb)(const char *area_id, const char *name);
 // Build/refresh the house map into `parent` from a parsed /api/v1/rooms response (`root` = the whole
 // object with .rooms[]). Clears `parent` first. Must be called under the LVGL lock. `cb` may be NULL.
 void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb);
+
+// Device tap callback in the spatial room-zoom: tapped device's id + name (pointers valid only during
+// the call — copy if retained).
+typedef void (*ui_map_device_cb)(const char *device_id, const char *name);
+
+// Spatial room-zoom (arc 3): render ONE room (by area id) — its polygon zoomed to fill `parent`, its
+// placed devices (non-null normalized placement, 0..1 of the room bbox) as callouts, and unplaced
+// devices in a bottom fallback strip. Returns false if the room has no geometry (caller falls back to
+// the tile grid). Clears `parent`; must hold the LVGL lock. `cb` fires on a device tap (may be NULL).
+bool ui_map_render_room(cJSON *root, const char *room_id, lv_obj_t *parent, ui_map_device_cb cb);

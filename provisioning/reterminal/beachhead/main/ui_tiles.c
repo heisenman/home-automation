@@ -47,6 +47,7 @@ static lv_obj_t *s_batt_lbl;  // battery indicator in the top bar
 static char s_room[28];            // selected room slug for room-zoom; "" = house map (landing)
 static char s_room_name[28];       // its display name (for the title label)
 static volatile bool s_devview;    // devices-management screen active (overrides map/room)
+static volatile bool s_roomspatial;// room-zoom shows the spatial diagram (arc 3); a device tap -> grid
 static volatile bool s_nav_dirty;  // set on a nav change -> ui_task re-renders promptly (no 10s wait)
 
 // House-map room tap -> enter that room's zoom view (the device grid filtered to this room).
@@ -57,9 +58,20 @@ static void on_room_tap(const char *area_id, const char *name)
     s_room[sizeof s_room - 1] = 0;
     strncpy(s_room_name, (name && name[0]) ? name : area_id, sizeof s_room_name - 1);
     s_room_name[sizeof s_room_name - 1] = 0;
+    s_roomspatial = true;        // enter the room on its spatial diagram (falls to grid if no geometry)
     ui_expand_clear();           // nav change -> drop any inline charts (LVGL lock held in this cb)
     s_nav_dirty = true;
     ESP_LOGI(TAG, "nav -> room %s", s_room);
+}
+
+// Spatial room-zoom device tap -> drop to that room's tile grid, where the full inline detail
+// (expand + 72h chart + controls) lives. The panel stays read-only; this is just navigation.
+static void on_room_device_tap(const char *device_id, const char *name)
+{
+    (void)name;
+    ESP_LOGI(TAG, "room-device tap %s -> grid detail", device_id ? device_id : "?");
+    s_roomspatial = false;
+    s_nav_dirty = true;
 }
 
 // Back button (room-zoom OR devices view) -> return to the house map.
@@ -181,8 +193,29 @@ static void do_render_cycle(bool nav)
         if (bm) heap_caps_free(bm);
         if (bmeta) heap_caps_free(bmeta);
       }
+    } else if (s_room[0] && s_roomspatial) {
+        // ── room-zoom (arc 3): spatial diagram — placed devices on the room polygon ──
+        int lm = 0;
+        char *bm = ui_http_get(s_map_url, &lm);          // /api/v1/rooms (geometry + devices + placement)
+        cJSON *rm = (bm && lm > 0) ? cJSON_Parse(bm) : NULL;
+        bool ok = false;
+        if (rm && lvgl_port_lock(0)) {
+            ok = ui_map_render_room(rm, s_room, s_map, on_room_device_tap);
+            if (ok) {
+                lv_obj_clear_flag(s_map, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_devices, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_clear_flag(s_back, LV_OBJ_FLAG_HIDDEN);
+                lv_label_set_text(s_header, s_room_name);
+            }
+            lvgl_port_unlock();
+        }
+        if (rm) cJSON_Delete(rm);
+        if (bm) heap_caps_free(bm);
+        if (!ok) { s_roomspatial = false; s_nav_dirty = true; }   // no geometry -> tile grid next cycle
     } else if (s_room[0]) {
-        // ── room-zoom: the device grid filtered to the selected room ──
+        // ── room-zoom: the device grid filtered to the selected room (detail lives here) ──
         int l1 = 0, l2 = 0;
         char *b1 = ui_http_get(s_url, &l1);         // sensors
         char *b2 = ui_http_get(s_disp_url, &l2);    // controllable devices

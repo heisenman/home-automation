@@ -30,17 +30,25 @@ static const char *TAG = "ui.map";
 #define ML_MAX        14         // max content lines below the room name
 #define ML_LEN        56
 
+#define MAX_DEVS      48
+
 static struct { char id[28]; char name[28]; } s_reg[MAX_ROOMS];
 static int s_nreg;
 static lv_point_precise_t s_ring[MAX_RINGS][MAX_RING_PTS];   // point pool (lv_line keeps the pointer)
 static int s_nring;
 static ui_map_room_cb s_cb;
 
-// scale state (house-space -> screen), set per render
-static double s_mnx, s_mny, s_scale;
+// device registry for the spatial room-zoom (tap -> id/name, since cJSON is freed after render)
+static struct { char id[40]; char name[40]; } s_dreg[MAX_DEVS];
+static int s_ndreg;
+static ui_map_device_cb s_dcb;
 
-static int scr_x(double hx) { return (int)(PAD + (hx - s_mnx) * s_scale); }
-static int scr_y(double hy) { return (int)(PAD + (hy - s_mny) * s_scale); }
+// scale state (house-space -> screen), set per render. s_xoff/s_yoff center a single zoomed room.
+static double s_mnx, s_mny, s_scale;
+static int s_xoff, s_yoff;
+
+static int scr_x(double hx) { return (int)(PAD + s_xoff + (hx - s_mnx) * s_scale); }
+static int scr_y(double hy) { return (int)(PAD + s_yoff + (hy - s_mny) * s_scale); }
 
 static void room_clicked_cb(lv_event_t *e)
 {
@@ -48,6 +56,14 @@ static void room_clicked_cb(lv_event_t *e)
     if (idx < 0 || idx >= s_nreg || !s_cb) return;
     ESP_LOGI(TAG, "tap -> room %s", s_reg[idx].id);
     s_cb(s_reg[idx].id, s_reg[idx].name);
+}
+
+static void device_clicked_cb(lv_event_t *e)
+{
+    int idx = (int)(intptr_t)lv_event_get_user_data(e);
+    if (idx < 0 || idx >= s_ndreg || !s_dcb) return;
+    ESP_LOGI(TAG, "tap -> device %s", s_dreg[idx].id);
+    s_dcb(s_dreg[idx].id, s_dreg[idx].name);
 }
 
 // --- geometry helpers ------------------------------------------------------
@@ -382,6 +398,7 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
     s_cb = cb;
     s_nreg = 0;
     s_nring = 0;
+    s_xoff = 0; s_yoff = 0;                    // house map: no centering offset
     lv_obj_clean(parent);
     lv_obj_set_layout(parent, LV_LAYOUT_NONE);
 
@@ -463,4 +480,112 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
         }
     }
     ESP_LOGI(TAG, "rendered floor plan: %d rooms, %d wall rings (space=%d)", s_nreg, s_nring, have_space);
+}
+
+// --- spatial room-zoom (arc 3) ---------------------------------------------
+// One device callout: its room-fill line (name + metrics or actuator action), colored by state,
+// clickable. Registered in s_dreg so the tap survives the cJSON free. `cx,cy` = center (px).
+static void device_chip(lv_obj_t *parent, cJSON *dev, int cx, int cy)
+{
+    if (s_ndreg >= MAX_DEVS) return;
+    const cJSON *jid = cJSON_GetObjectItem(dev, "device_id");
+    const cJSON *jn = cJSON_GetObjectItem(dev, "name");
+    int idx = s_ndreg++;
+    strncpy(s_dreg[idx].id, cJSON_IsString(jid) ? jid->valuestring : "?", sizeof s_dreg[idx].id - 1);
+    s_dreg[idx].id[sizeof s_dreg[idx].id - 1] = 0;
+    strncpy(s_dreg[idx].name, cJSON_IsString(jn) ? jn->valuestring : s_dreg[idx].id, sizeof s_dreg[idx].name - 1);
+    s_dreg[idx].name[sizeof s_dreg[idx].name - 1] = 0;
+
+    char line[ML_LEN];
+    dev_line(dev, false, line, sizeof line);
+    uint32_t col = dev_color(dev);
+    int w, hh = text_wh(line, 0, &w);
+
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_set_size(box, w + 14, hh + 10);
+    lv_obj_set_pos(box, cx - (w + 14) / 2, cy - (hh + 10) / 2);
+    lv_obj_set_style_bg_color(box, lv_color_hex(0x0b1021), 0);
+    lv_obj_set_style_bg_opa(box, 220, 0);
+    lv_obj_set_style_border_width(box, 2, 0);
+    lv_obj_set_style_border_color(box, lv_color_hex(col), 0);
+    lv_obj_set_style_radius(box, 6, 0);
+    lv_obj_set_style_pad_all(box, 3, 0);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(box, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(box, device_clicked_cb, LV_EVENT_CLICKED, (void *)(intptr_t)idx);
+
+    lv_obj_t *t = lv_label_create(box);
+    lv_label_set_text(t, line);
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_14, 0);
+    lv_obj_set_style_text_color(t, lv_color_hex(col), 0);
+    lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
+    lv_obj_center(t);
+}
+
+bool ui_map_render_room(cJSON *root, const char *room_id, lv_obj_t *parent, ui_map_device_cb cb)
+{
+    s_dcb = cb;
+    s_ndreg = 0;
+    s_nring = 0;
+
+    cJSON *rooms = cJSON_GetObjectItem(root, "rooms");
+    if (!cJSON_IsArray(rooms) || !room_id) return false;
+    cJSON *r, *room = NULL;
+    cJSON_ArrayForEach(r, rooms) {
+        cJSON *id = cJSON_GetObjectItem(r, "id");
+        if (cJSON_IsString(id) && strcmp(id->valuestring, room_id) == 0) { room = r; break; }
+    }
+    if (!room) return false;
+    cJSON *geo = cJSON_GetObjectItem(room, "geometry");
+    if (!cJSON_IsObject(geo)) return false;                 // no polygon -> caller uses the tile grid
+
+    double mnx = 1e9, mny = 1e9, mxx = -1e9, mxy = -1e9;
+    room_bounds(geo, &mnx, &mny, &mxx, &mxy);
+    if (!(mxx > mnx && mxy > mny)) return false;
+
+    lv_obj_clean(parent);
+    lv_obj_set_layout(parent, LV_LAYOUT_NONE);
+    lv_obj_update_layout(parent);
+    int pw = lv_obj_get_width(parent), ph = lv_obj_get_height(parent);
+    if (pw <= 0) pw = 780;
+    if (ph <= 0) ph = 1140;
+    const int strip_h = 132;                                // bottom strip for unplaced devices
+    int maph = ph - strip_h;
+
+    s_mnx = mnx; s_mny = mny;
+    double sx = (double)(pw - 2 * PAD) / (mxx - mnx);
+    double sy = (double)(maph - 2 * PAD) / (mxy - mny);
+    s_scale = sx < sy ? sx : sy;                            // uniform, preserve aspect
+    int roomw = (int)((mxx - mnx) * s_scale), roomh = (int)((mxy - mny) * s_scale);
+    s_xoff = (pw - 2 * PAD - roomw) / 2;                    // center the room in the top region
+    s_yoff = (maph - 2 * PAD - roomh) / 2;
+
+    // walls
+    cJSON *poly = cJSON_GetObjectItem(geo, "poly");
+    if (cJSON_IsArray(poly)) draw_ring(poly, parent, WALL_COL);
+    cJSON *polys = cJSON_GetObjectItem(geo, "polys");
+    if (cJSON_IsArray(polys)) {
+        cJSON *ring;
+        cJSON_ArrayForEach(ring, polys) draw_ring(ring, parent, WALL_COL);
+    }
+
+    // devices: placed (non-null normalized x/y) on the diagram, unplaced -> bottom fallback strip
+    cJSON *devs = cJSON_GetObjectItem(room, "devices"), *d;
+    int strip_x = PAD + 66, strip_y = maph + 30, nplaced = 0, nstrip = 0;
+    cJSON_ArrayForEach(d, devs) {
+        cJSON *pl = cJSON_GetObjectItem(d, "placement");
+        cJSON *px = pl ? cJSON_GetObjectItem(pl, "x") : NULL;
+        cJSON *py = pl ? cJSON_GetObjectItem(pl, "y") : NULL;
+        if (cJSON_IsNumber(px) && cJSON_IsNumber(py)) {     // normalized 0..1 of the room bbox
+            double hx = mnx + px->valuedouble * (mxx - mnx);
+            double hy = mny + py->valuedouble * (mxy - mny);
+            device_chip(parent, d, scr_x(hx), scr_y(hy));
+            nplaced++;
+        } else {
+            if (strip_x > pw - 66) { strip_x = PAD + 66; strip_y += 46; }   // wrap to a 2nd strip row
+            if (strip_y < ph - 12) { device_chip(parent, d, strip_x, strip_y); strip_x += 138; nstrip++; }
+        }
+    }
+    ESP_LOGI(TAG, "room-zoom %s: %d placed, %d in strip, %d rings", room_id, nplaced, nstrip, s_nring);
+    return true;
 }
