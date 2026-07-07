@@ -1,8 +1,10 @@
 # ADR-0027 — Actuator telemetry / area-stamping contract: one stamp, one source
 
 **Date:** 2026-07-06
-**Status:** Proposed — dev-authored from `docs/design/actuator-telemetry-contract.md` (ops) + dev review;
-ops ACKed Option 3 + both additions (board `actuator-telemetry-contract`, 2026-07-06). Out for Hugh's nod.
+**Status:** **Accepted** (Hugh, 2026-07-07). Dev-authored from `docs/design/actuator-telemetry-contract.md`
+(ops) + dev review; ops ACKed Option 3 + both additions (board `actuator-telemetry-contract`, 2026-07-06).
+Implemented + deployed (shared stamp helper `server/control/actuator_state.py`, Levoit single-source; 210 +
+.245). Remaining rollout step 4 (remove `levoit-devices.yaml:area` + drift-guard test) is a follow-up.
 **Builds on:** ADR-0026 (canonical area taxonomy), the registry live-reload pattern
 (`server/util/registry_reload.py`), ADR-0001 (dictator owns the registry).
 **Related:** ADR-0011 (control loop), ADR-0013 (BFF = UI truth), `docs/design/ingest-registry-map.md`
