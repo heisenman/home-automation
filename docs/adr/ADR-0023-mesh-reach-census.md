@@ -110,6 +110,28 @@ Mechanism:
 Resolved knobs (open to shadow-tuning): **trigger cadence** = the 900 s reconcile loop; **node fallback** ≈
 30 min (≈2× cadence); **RSSI EWMA** α = 0.3; **table** = 16 slots; **report staleness** = 15 min.
 
+**Amendment (2026-07-08, dev) — event-driven reconcile reacts to HARD drops, not just graceful ones.**
+The census cadence above is the server-PUSH path (we ask, nodes report). Its **inverse** — *event-driven
+reconcile* — lets a node PUSH a state change on `home/edge/<node>/event` so the coordinator rebalances
+*now* (5 s coalesce, 30 s/node rate-limit) instead of at the next 900 s pass. A `relaying: true→false`
+transition is urgent: fire a reach census immediately (so the post-drop graph is fresh in `mesh.db`),
+then reconcile after the coalesce window; a `false→true` return is lazy (dwelled like any rebalance).
+
+The gap this amendment closes: a node that dies **hard** (power loss / unplug) cannot push a graceful
+`/event` — its only signal is the MQTT **Last Will**, `home/edge/<node>/status = "offline"`. So a hard
+drop, the *common* failure, was invisible to the fast path and recovered only by the 900 s backstop
+(staleness → reassign). The coordinator now also subscribes to `home/edge/+/status`; an `offline` is fed
+into the **same** dispatcher as a synthetic `{relaying: false}`, so the reconciler's `was→now` guard
+raises the exact same urgent **relay-drop** intent **iff that node was in fact relaying**. A non-relay
+going offline is a no-op (no reconcile storm; the retained-`/event` first-sighting guard still holds).
+Net: both graceful posture flips (`/event`) *and* hard drops (`/status` LWT) hit the fast rebalance path,
+with the 900 s loop as backstop. Code: `coordinator.py` `parse_status` + `on_mesh_message` (routes both
+topics into one `EventDispatcher`); tests in `tests/test_event_reconcile.py`.
+
+Bound: the trigger keys on the node having been a *known* relay (its retained/live `/event` posture); a
+relay whose `/event` the coordinator never observed still falls to the backstop — acceptable, since
+relays publish `/event` and the periodic pass is the safety net.
+
 ## Open follow-ups
 
 - Tuning knobs (start conservative, shadow-tune per ADR-0016): **census interval** ~5 min; **RSSI EWMA**

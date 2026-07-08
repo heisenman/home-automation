@@ -72,6 +72,7 @@ DEFAULT_DWELL_S = 900.0          # decision #5: a node's set must hold this long
 RELAY_TOPIC = "home/edge/{node}/relay"
 REACH_REQ_TOPIC = "home/edge/{node}/reach/req"   # ADR-0023: signed census trigger (server-push cadence)
 EVENT_TOPIC = "home/edge/+/event"                # ADR-0023 inverse: node-pushed state-change events
+STATUS_TOPIC = "home/edge/+/status"              # LWT presence: a relaying node going 'offline' = a hard drop
 
 
 def sign_envelope(secret: str, payload: dict) -> dict:
@@ -127,6 +128,21 @@ def parse_event(topic: str, payload) -> tuple:
     if not isinstance(state, dict):
         return None, None
     return node, state
+
+
+def parse_status(topic: str, payload) -> tuple:
+    """home/edge/<node>/status LWT presence ('online'|'offline') → (node, is_offline). A node's Last Will
+    lands here on a HARD drop (power loss / unplug) — the case /event can't cover, because a dying node
+    can't push a graceful posture event. Returns (None, None) on a malformed topic so a bad publish can
+    never crash the loop."""
+    parts = topic.split("/")
+    if len(parts) != 4 or parts[0] != "home" or parts[1] != "edge" or parts[3] != "status":
+        return None, None
+    try:
+        text = payload.decode() if isinstance(payload, (bytes, bytearray)) else str(payload)
+    except (ValueError, TypeError, AttributeError):
+        return None, None
+    return parts[2], (text.strip().lower() == "offline")
 
 
 class EventReconciler:
@@ -390,17 +406,31 @@ def main() -> None:
         dispatcher = EventDispatcher(EventReconciler(dwell_return=a.dwell),
                                      coalesce_s=a.event_coalesce, rate_limit_s=a.event_rate_limit)
 
-        def on_event_message(_cl, _ud, msg):
-            node, state = parse_event(msg.topic, getattr(msg, "payload", b""))
-            if node is None:
-                return
+        def on_mesh_message(_cl, _ud, msg):
+            # Two triggers into the SAME dispatcher: a node-pushed /event (graceful posture flip) and a
+            # /status LWT going 'offline' — a HARD drop (power loss/unplug) that a dying node can't
+            # announce on /event. An offline is fed as a synthetic relaying:false, so the reconciler's
+            # was→now guard fires a relay-drop ONLY if that node was in fact relaying (else it's a no-op,
+            # and the retained-/event first-sighting guard still prevents a startup storm).
+            topic, payload = msg.topic, getattr(msg, "payload", b"")
+            if topic.endswith("/status"):
+                node, offline = parse_status(topic, payload)
+                if node is None or not offline:
+                    return                                 # 'online'/reconnect is driven by the node's own /event
+                state, why = {"relaying": False}, "offline (hard drop)"
+            else:
+                node, state = parse_event(topic, payload)
+                if node is None:
+                    return
+                why = "relay-drop"
             res = dispatcher.observe(node, state, time.time())
             if res and res.get("census_now"):              # drop → freshen neighbour reach during coalesce
                 trigger_reach(client, lut)
-                print(f"# event: {node} relay-drop → census fired, reconcile in {a.event_coalesce:.0f}s")
+                print(f"# {why}: {node} → census fired, reconcile in {a.event_coalesce:.0f}s")
 
-        client.on_message = on_event_message
+        client.on_message = on_mesh_message
         client.subscribe(EVENT_TOPIC, qos=1)
+        client.subscribe(STATUS_TOPIC, qos=1)
 
         def event_loop():
             while not stop.is_set():
@@ -413,7 +443,7 @@ def main() -> None:
 
         ev_thread = threading.Thread(target=event_loop, name="event-reconcile", daemon=True)
         ev_thread.start()
-        print(f"# event-driven reconcile ARMED: {EVENT_TOPIC} "
+        print(f"# event-driven reconcile ARMED: {EVENT_TOPIC} + {STATUS_TOPIC} (offline=hard-drop) "
               f"(coalesce {a.event_coalesce:.0f}s, rate-limit {a.event_rate_limit:.0f}s/node)")
 
     try:

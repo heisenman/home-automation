@@ -10,6 +10,7 @@ from server.mesh.coordinator import (
     EventDispatcher,
     EventReconciler,
     parse_event,
+    parse_status,
 )
 
 
@@ -30,6 +31,32 @@ def test_parse_event_rejects_bad_topic_and_payload():
     assert parse_event("home/edge/x/event", "not json") == (None, None)     # unparseable
     assert parse_event("home/edge/x/event", json.dumps({"no": "state"})) == (None, None)
     assert parse_event("home/edge/x/event", json.dumps([1, 2])) == (None, None)   # not a dict
+
+
+# ── parse_status: LWT presence = the HARD-drop trigger ────────────────────────────────────────────────
+def test_parse_status_offline_online_and_bad():
+    assert parse_status("home/edge/hbed_s3/status", b"offline") == ("hbed_s3", True)
+    assert parse_status("home/edge/hbed_s3/status", "online") == ("hbed_s3", False)
+    assert parse_status("home/edge/hbed_s3/status", b"  OFFLINE\n") == ("hbed_s3", True)   # tolerant
+    assert parse_status("home/edge/x/event", b"offline") == (None, None)      # wrong leaf
+    assert parse_status("home/edge/x/y/status", b"offline") == (None, None)   # malformed topic
+
+
+def test_hard_drop_offline_maps_to_relay_drop_when_node_was_relaying():
+    # on_mesh_message feeds an offline /status as a synthetic {relaying: False} into the SAME reconciler,
+    # so a hard drop (LWT) reuses the exact urgent relay-drop path as a graceful /event drop.
+    r = EventReconciler()
+    r.observe("n", {"relaying": True})                       # node was an active relay (from its /event)
+    node, offline = parse_status("home/edge/n/status", b"offline")
+    assert offline
+    intent = r.observe(node, {"relaying": False})            # what the handler synthesizes on offline
+    assert intent == {"node": "n", "dwell_s": 0.0, "census": True, "reason": "relay-drop"}
+
+
+def test_hard_drop_of_non_relay_is_a_noop():
+    r = EventReconciler()
+    r.observe("n", {"relaying": False})                      # node wasn't relaying anything
+    assert r.observe("n", {"relaying": False}) is None       # offline for a non-relay → no reconcile storm
 
 
 # ── EventReconciler: transitions only, asymmetric ─────────────────────────────────────────────────────
