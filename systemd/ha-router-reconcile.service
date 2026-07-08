@@ -1,0 +1,15 @@
+[Unit]
+Description=HA dictator task — reconcile the air-gap router config-of-record (DJ-6)
+Documentation=file:///home/visko/home_automation/docs/airgap/MIGRATION-DESIGN-LOG.md
+After=network.target
+# The router is a dictator-managed device: keep its live UCI matching the committed config-of-record.
+# PHASE 5 (once keepalived floats the air-gap VIP): add
+#   ExecCondition=/usr/bin/test -n "$(ip -o addr show to 192.168.1.200)"
+# so ONLY the box currently holding the VIP reconciles the router (mirrors ha-relay-coordinator's gate).
+
+[Service]
+Type=oneshot
+User=visko
+ExecStart=/usr/bin/python3 /home/visko/home_automation/server/maintenance/router_reconcile.py apply
+# non-fatal if the router is briefly unreachable — the timer will retry
+SuccessExitStatus=0 2

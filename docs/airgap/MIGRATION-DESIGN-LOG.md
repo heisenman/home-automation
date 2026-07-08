@@ -473,3 +473,20 @@ generalizations from §5 already applied), so the next migration is fill-in-the-
   **active `ha-controller` activates as devices migrate** (Phase 4, when its control set becomes real
   air-gap devices). Keepalived is still generalized + *deployed-but-not-started* as prep. Also:
   `healthcheck.sh` must skip the household-Midea ping for an air-gap box (else ha-2 is marked unfit).
+
+- **✅ Cluster primitives generalized (keepalived prep for Phase 5).** `keepalived.conf.tmpl` now takes
+  `@VIP@`/`@VRID@`/`@CIDR@` (was hardcoded `.0.200`/VRID 51); `deploy.sh` fills them from `cluster.env`
+  with backward-compat defaults + an explicit `IFACE` (needed on the dual-homed `.210`);
+  `cluster.env.example` gains `NET_NAME`/`VRID`/`CIDR`/`IFACE`/`BROKER_HOST`; `healthcheck.sh` is API-only
+  when `NET_NAME=airgap`. **Backward-compat proven** (rendering the household values reproduces `.210`'s
+  live config byte-for-byte). ha-2's air-gap keepalived config **deployed** (MASTER, VIP `192.168.1.200`,
+  VRID 61, `eno1`) but **not started** (DJ-16).
+- **✅ Router as a managed device (DJ-6).** `server/maintenance/router_reconcile.py` — config-as-code
+  reconciler for the R7800: `check` (drift vs the config-of-record), `apply` (correct + commit + reload),
+  `health` (LAN IP / DHCP / radios / SSID / ha-2 reservation / WAN-off). **Tested live:** 6/6 health,
+  and a drift induced on the router was detected (exit 1) + auto-corrected. Authorized the shared
+  `id_cluster` on the R7800 so the **dictator** (ha-2) manages it. `systemd/ha-router-reconcile.{service,
+  timer}` run it on ha-2 every 15 min (the VIP-gate is deferred to Phase 5 per DJ-16, with the exact
+  `ExecCondition` noted in the unit).
+- **git-bundle-over-SSH** is the repo-update path for air-gapped ha-2 (no `github.com`): `git bundle
+  create` on `.210` → scp over the bridge → `git pull <bundle>` on ha-2. Recurring; worth a helper.

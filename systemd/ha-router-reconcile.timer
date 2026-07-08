@@ -1,0 +1,10 @@
+[Unit]
+Description=Periodic air-gap router config-of-record reconcile (DJ-6)
+
+[Timer]
+OnBootSec=2min
+OnUnitActiveSec=15min
+RandomizedDelaySec=30
+
+[Install]
+WantedBy=timers.target
