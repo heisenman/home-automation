@@ -31,3 +31,12 @@ nodes:
     area: c_office
     broker: "mqtt://192.168.0.210:1883"
     ota_host: "192.168.0.210"
+
+  hbed_c6:
+    mac: "10:BD:A3:A0:FF:34"
+    target: esp32c6
+    sensor: sgp30            # PLACEHOLDER for the RF/antenna bring-up (no gas chip attached yet).
+                             # Intended: BME680 — needs a NEW ha_gas.c driver (HA_GAS_BME680); not yet supported.
+    area: h_bed
+    broker: "mqtt://192.168.0.210:1883"
+    ota_host: "192.168.0.210"
