@@ -40,3 +40,11 @@ nodes:
     area: h_bed
     broker: "mqtt://192.168.0.210:1883"
     ota_host: "192.168.0.210"
+
+  hoffice_c6:
+    mac: "A0:F2:62:87:AF:2C"
+    target: esp32c6
+    sensor: bme680           # Bosch BME680 — T/RH/P + gas resistance (Ω) — H office air sensor
+    area: h_office
+    broker: "mqtt://192.168.0.210:1883"
+    ota_host: "192.168.0.210"

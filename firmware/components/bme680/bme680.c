@@ -107,17 +107,22 @@ esp_err_t bme680_init(bme680_t *s, i2c_master_bus_handle_t bus, uint8_t addr, ui
     if ((e = wr(s, REG_RESET, SOFT_RESET_CMD)) != ESP_OK) return e;
     vTaskDelay(pdMS_TO_TICKS(10));
 
-    // Load calibration, RETRY, and VALIDATE it populated. Right after reset/power-on the sensor is still
-    // copying its NVM into the coeff registers; read too soon and they come back all-zero — the I2C read
-    // "succeeds" but par_t1==0 then silently yields 0.0 °C/%RH/hPa forever (gas still computes, since it
-    // uses different registers). So: reject a zero par_t1 and re-read. (Observed 2026-07-08 after a move.)
+    // Load calibration, RETRY, and VALIDATE BOTH coefficient blocks populated. Right after reset the sensor
+    // is still copying NVM into the coeff registers; read too soon and a block comes back all-zero — the I2C
+    // read "succeeds" but the missing coeffs then silently yield 0.0 forever. The two blocks can fail
+    // INDEPENDENTLY: `par_t1` lives in block 2 (0xE1, with humidity+gas), while `par_t2`/`par_p*` live in
+    // block 1 (0x89). Validating only par_t1 (the original bug) passed while block 1 was zero → temperature
+    // AND pressure read 0.0 while humidity/gas worked (observed 2026-07-08 on hoffice_c6). So require a
+    // coefficient from EACH block to be non-zero (they're never legitimately zero on a real part), and
+    // re-read the whole calibration until both are present.
     uint8_t coeff[41];
     for (int tries = 0; ; tries++) {
         if ((e = rd(s, REG_COEFF1, &coeff[0], 25)) != ESP_OK) return e;
         if ((e = rd(s, REG_COEFF2, &coeff[25], 16)) != ESP_OK) return e;
         parse_calib(s, coeff);
-        if (s->par_t1 != 0) break;                 // calibration present -> good
-        if (tries >= 5) { ESP_LOGW(TAG, "calibration read all-zero after retries"); return ESP_ERR_INVALID_RESPONSE; }
+        if (s->par_t1 != 0 && s->par_t2 != 0 && s->par_p1 != 0) break;   // block 2 (par_t1) + block 1 (par_t2/p1) both loaded
+        if (tries >= 8) { ESP_LOGW(TAG, "calibration incomplete after retries (t1=%u t2=%d p1=%u)",
+                                   s->par_t1, s->par_t2, s->par_p1); return ESP_ERR_INVALID_RESPONSE; }
         vTaskDelay(pdMS_TO_TICKS(20));
     }
     uint8_t rhv, rhr, rse;
