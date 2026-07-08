@@ -49,6 +49,7 @@ def sweep(cc, hot, now: float | None = None) -> dict:
     """Resolve every pending device. Pure over the two connections + injected clock (unit-testable)."""
     now = time.time() if now is None else now
     kept = cleared = dropped = 0
+    dropped_ids = []
     for did, m in store.all_device_meta(cc).items():
         pu = m.get("pending_until")
         if not pu:
@@ -60,18 +61,26 @@ def sweep(cc, hot, now: float | None = None) -> dict:
             continue
         exp = _iso_epoch(pu)
         if exp is None or now >= exp:                               # window over (or unparseable) → drop
-            store.set_device_meta(cc, did, retired=True, pending_until=None); dropped += 1
+            store.set_device_meta(cc, did, retired=True, pending_until=None)
+            dropped += 1; dropped_ids.append(did)
             print(f"  {did}: hold expired, no fresh data → dropped (retired; history kept)")
         else:
             kept += 1                                               # still holding, still quiet
-    return {"kept": kept, "cleared": cleared, "dropped": dropped}
+    # dropped_ids drives the IMPURE post-step in main() (MQTT + yaml cleanup); sweep() stays pure/testable.
+    return {"kept": kept, "cleared": cleared, "dropped": dropped, "dropped_ids": dropped_ids}
 
 
 def main():
+    from server.maintenance import device_push               # impure layer only (MQTT + yaml side-effects)
     cc = sqlite3.connect(str(CONTROL)); store.ensure_schema(cc)
     hot = sqlite3.connect(f"file:{HOT}?mode=ro", uri=True)
     try:
-        print(f"pending-sweep: {sweep(cc, hot)}")
+        res = sweep(cc, hot)
+        # DROP cleanup (ADR-0028): for each dropped device, clear its retained ghost + deregister the yaml.
+        for did in res.get("dropped_ids", []):
+            rep = device_push.drop_cleanup(did)
+            print(f"  cleanup {did}: retained_cleared={rep['retained_cleared']} deregistered={rep['deregistered']}")
+        print(f"pending-sweep: {res}")
     finally:
         cc.close(); hot.close()
 

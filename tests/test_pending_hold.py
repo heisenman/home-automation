@@ -64,3 +64,44 @@ def test_sweep_leaves_active_hold_alone():
     h = _hot("d1", _iso(now - 999999))                                            # stale, but window open
     r = PS.sweep(c, h, now=now)
     assert r["kept"] == 1 and store.get_device_meta(c, "d1")["pending_until"] is not None
+
+
+# ── ADR-0028 drop cleanup: LWT-clear + tasmota-devices.yaml deregister folded into the drop ──
+from server.maintenance import device_push as DP
+
+
+def _tas_yaml(tmp_path):
+    p = tmp_path / "tasmota-devices.yaml"
+    p.write_text("plug_x:\n  device_id: plug_x\n  area: office\n  device_type: power_plug\n"
+                 "keep_y:\n  device_id: keep_y\n  area: shop\n  device_type: energy_meter\n")
+    return p
+
+
+def test_sweep_returns_dropped_ids():
+    now = 2000.0
+    c = _cc(); store.set_device_meta(c, "ghost", pending_until=_iso(now - 100))    # expired
+    h = _hot("ghost", _iso(now - 999999))                                          # stale
+    r = PS.sweep(c, h, now=now)
+    assert r["dropped_ids"] == ["ghost"]                                           # drives main()'s cleanup
+
+
+def test_deregister_tasmota_removes_only_that_entry(tmp_path):
+    p = _tas_yaml(tmp_path)
+    assert DP.deregister_tasmota("plug_x", path=p) == "plug_x"
+    import yaml
+    data = yaml.safe_load(p.read_text())
+    assert "plug_x" not in data and "keep_y" in data                              # surgical removal
+
+
+def test_deregister_tasmota_dry_run_is_noop(tmp_path):
+    p = _tas_yaml(tmp_path)
+    assert DP.deregister_tasmota("plug_x", dry_run=True, path=p) == "plug_x"       # reports the key
+    import yaml
+    assert "plug_x" in yaml.safe_load(p.read_text())                              # but changes nothing
+
+
+def test_drop_cleanup_builds_state_and_lwt_topics(tmp_path):
+    p = _tas_yaml(tmp_path)
+    rep = DP.drop_cleanup("plug_x", dry_run=True, tas_path=p)                      # dry → no MQTT/yaml write
+    assert rep["retained_cleared"] == ["home/office/plug_x/state", "tele/plug_x/LWT"]
+    assert rep["deregistered"] == "plug_x"

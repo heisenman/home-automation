@@ -9,7 +9,7 @@ LAST step and only after ha-2 CONFIRMS the device is reporting — so an abort n
 Device classes handled here: tasmota (MQTT repoint) and ble (no repoint — ha-2 just scans). ESP32/panel/
 ESPHome repointers plug into `repoint()` as they're built. See docs/airgap/MIGRATION-DESIGN-LOG.md Phase 3/4.
 """
-import argparse, json, sqlite3, subprocess, sys, time
+import argparse, json, os, sqlite3, subprocess, sys, time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -19,6 +19,8 @@ from server.maintenance import device_migrate      # noqa: E402
 
 STATE_DB = REPO / "instance/db/migration.db"
 BRIDGE = "https://192.168.0.210"          # ha-2's API via the .210 web bridge
+BROKER_HOST = os.environ.get("HA_BROKER_HOST", "localhost")   # .210's broker (where retained ghosts live)
+BROKER_PORT = int(os.environ.get("HA_BROKER_PORT", "1883"))
 STAGES = ["queued", "transferred", "applied", "repointed", "confirmed", "retired"]
 PENDING_HOURS = 6                         # grace window: hold the migrated device quiet, then the sweeper drops it
 
@@ -58,6 +60,57 @@ def classify(device_id):
         if any(isinstance(v, dict) and v.get("device_id") == device_id for v in data.values()):
             return "ble"
     return "unknown"
+
+
+def _tas_path(path=None):
+    return Path(path) if path is not None else REPO / "instance/tasmota-devices.yaml"
+
+
+def _tasmota_entry(device_id, path=None):
+    """(topic, area) for a tasmota device_id from tasmota-devices.yaml, else (None, None).
+    The yaml KEY is the Tasmota %topic%; the value may also carry an explicit device_id + area."""
+    import yaml
+    tas = _tas_path(path)
+    if not tas.exists():
+        return None, None
+    data = yaml.safe_load(tas.read_text()) or {}
+    for topic, entry in data.items():
+        if topic == device_id or (isinstance(entry, dict) and entry.get("device_id") == device_id):
+            return topic, (entry.get("area") if isinstance(entry, dict) else None)
+    return None, None
+
+
+def deregister_tasmota(device_id, *, dry_run=False, path=None):
+    """Remove device_id's entry from tasmota-devices.yaml so classify() no longer resurrects it
+    (and .245's reconcile can't revive it). Returns the removed topic key, or None if absent."""
+    import yaml
+    tas = _tas_path(path)
+    if not tas.exists():
+        return None
+    data = yaml.safe_load(tas.read_text()) or {}
+    key = next((t for t, e in data.items()
+                if t == device_id or (isinstance(e, dict) and e.get("device_id") == device_id)), None)
+    if key is not None and not dry_run:
+        del data[key]
+        tas.write_text(yaml.safe_dump(data, sort_keys=False))
+    return key
+
+
+def drop_cleanup(device_id, *, dry_run=False, broker=None, broker_port=None, tas_path=None):
+    """ADR-0028 pending-DROP cleanup (folded here from the sweeper). Once a hold expires with no fresh
+    data and the device is marked retired, this removes the ghost the retire would otherwise leave:
+      • clear the lingering RETAINED MQTT — the server state topic AND the Tasmota LWT, and
+      • DEREGISTER the device from tasmota-devices.yaml.
+    History is untouched (data-storage-is-primary). Idempotent + best-effort. Returns a report dict."""
+    broker = BROKER_HOST if broker is None else broker
+    broker_port = BROKER_PORT if broker_port is None else broker_port
+    topic, area = _tasmota_entry(device_id, path=tas_path)   # read BEFORE deregister removes the entry
+    topics = ([f"home/{area}/{device_id}/state"] if area else []) + ([f"tele/{topic}/LWT"] if topic else [])
+    return {
+        "device_id": device_id,
+        "retained_cleared": device_migrate.clear_retained(broker, broker_port, topics, dry_run=dry_run),
+        "deregistered": deregister_tasmota(device_id, dry_run=dry_run, path=tas_path),
+    }
 
 
 def _run(cmd, dry):
