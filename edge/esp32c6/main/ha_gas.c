@@ -37,8 +37,16 @@ static const char *TAG = "ha_gas";
 #define GAS_SCL_HZ        400000
 #define GAS_I2C_PORT      I2C_NUM_0
 
-#define GAS_SAMPLE_MS     1000     // Sensirion algorithms REQUIRE a fixed 1 Hz cadence
-#define GAS_PUBLISH_EVERY 10       // publish 1 in 10 samples -> a reading every ~10 s
+#if defined(HA_GAS_BME680)
+  // BME680 is forced-mode single-shot: it does NOT need a fixed 1 Hz cadence (that's a Sensirion-algorithm
+  // rule). Sample once per ~10 s so the 320 °C gas heater's duty cycle stays low and doesn't self-heat the
+  // die — otherwise T/RH read ~10 °C hot / correspondingly dry. Publish every read.
+  #define GAS_SAMPLE_MS     10000
+  #define GAS_PUBLISH_EVERY 1
+#else
+  #define GAS_SAMPLE_MS     1000     // Sensirion algorithms REQUIRE a fixed 1 Hz cadence
+  #define GAS_PUBLISH_EVERY 10       // publish 1 in 10 samples -> a reading every ~10 s
+#endif
 
 // Registry key (payload "mac" — resolved by edge_mapper against instance/devices.yaml) + topic segment.
 // NOT a BLE MAC; the mapper does a plain dict lookup. Derived from the node id so each gas node is
