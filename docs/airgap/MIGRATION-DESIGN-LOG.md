@@ -112,11 +112,12 @@ Each entry: **decision** · context · options weighed · **why this** · gotcha
   completed — NOT a `.210↔.245` drill now.** Dropped the Phase-0 drill on the `.210↔.245` pair: `.245`
   is being retired, so proving *its* failover teaches us little. The meaningful validation is the real
   future cluster — `.210` (air-gap failover leg) ⇄ ha-2 (dictator) — on the air-gap net. Run it as a
-  **two-step exercise** once the air-gap network is actually completed (both boxes on it). *TBD to pin
-  (see §7): (a) exact meaning of the two steps — working assumption: **Step 1 = failover (kill ha-2 → `.210`
-  seizes the air-gap VIP + controller, household bridge still serves); Step 2 = failback (ha-2 returns →
-  preempts/reclaims → `.210` back to standby+bridge)**; (b) timing — right after `.210` joins the air-gap
-  cluster (before device migration, to prove failover before devices depend on it) vs. at the very end.*
+  **two-step exercise** once the air-gap network is actually completed (both boxes on it). **Resolved:**
+  the two steps are **Step 1 = failover** (kill ha-2 → `.210` seizes the air-gap VIP + controller; the
+  household bridge keeps serving) and **Step 2 = failback** (ha-2 returns → preempts/reclaims → `.210`
+  drops back to standby + bridge-only). **Timing: at the very end** — devices migrate onto the single-
+  dictator air-gap net first (Phases 2–4), then `.210` joins as failover (Phase 5) and the two-step
+  exercise runs there (reuse `failover-drill.sh`, generalized for the air-gap cluster, VRID 61).
 
 ---
 
