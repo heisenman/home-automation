@@ -299,3 +299,46 @@ def test_build_sensor_list_emits_graphs_field():
 
 if __name__ == "__main__":
     run_module(globals())
+
+
+# ── ADR-0029: paginated panel tiles (bounded per-page transfer) ──
+from server.api.viewmodel import paginate_panel_tiles, PANEL_TILES_MAX_PER
+
+
+def _sens(did, graphs=True):
+    return {"device_id": did, "room": did, "metrics": {"temperature_c": 20.0},
+            "graphs": [{"key": "temperature_c", "unit": "C", "precision": 1}] if graphs else []}
+
+
+def test_paginate_empty_is_one_page():
+    assert paginate_panel_tiles([], 0, 6) == {"page": 0, "pages": 1, "per": 6, "total": 0, "sensors": []}
+
+
+def test_paginate_drops_non_renderable():           # no graphs -> not shown -> not counted
+    r = paginate_panel_tiles([_sens("a"), _sens("b", graphs=False), _sens("c")], 0, 6)
+    assert r["total"] == 2 and [s["device_id"] for s in r["sensors"]] == ["a", "c"]
+
+
+def test_paginate_slices_pages_in_order():
+    sensors = [_sens(f"d{i}") for i in range(13)]
+    r0 = paginate_panel_tiles(sensors, 0, 6)
+    assert r0["pages"] == 3 and len(r0["sensors"]) == 6
+    assert [s["device_id"] for s in r0["sensors"]] == [f"d{i}" for i in range(6)]
+    r2 = paginate_panel_tiles(sensors, 2, 6)
+    assert len(r2["sensors"]) == 1 and r2["sensors"][0]["device_id"] == "d12"
+
+
+def test_paginate_clamps_page_overflow_to_last():
+    r = paginate_panel_tiles([_sens(f"d{i}") for i in range(3)], 99, 6)
+    assert r["page"] == 0 and len(r["sensors"]) == 3
+
+
+def test_paginate_clamps_per_to_bounds():
+    sensors = [_sens(f"d{i}") for i in range(50)]
+    assert paginate_panel_tiles(sensors, 0, 999)["per"] == PANEL_TILES_MAX_PER   # O(1) buffer guarantee
+    assert paginate_panel_tiles(sensors, 0, 0)["per"] == 1
+
+
+def test_paginate_preserves_sensor_shape_for_panel_parse():
+    r = paginate_panel_tiles([_sens("a")], 0, 6)
+    assert r["sensors"][0]["graphs"][0]["key"] == "temperature_c"

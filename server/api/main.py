@@ -892,6 +892,29 @@ def sensor_list():
     return {"sensors": sensors, "metrics": ui_metric_catalog()}
 
 
+@app.get("/api/v1/panel/tiles", include_in_schema=True)
+def panel_tiles(page: int = 0, per: int = 6):
+    """One BOUNDED page of tiles for a memory-constrained panel (ADR-0029). Same per-sensor shape as
+    /api/v1/sensors, sliced to the requested page — the panel fetches only what it shows, so its HTTP
+    response buffer stays small + fixed regardless of fleet size. Read-only."""
+    import time
+
+    from server.api.viewmodel import build_sensor_list, paginate_panel_tiles
+    from server.control import control_store as store
+    hc = _hot_conn() if DB_PATH.exists() else None
+    cc = _control_conn()
+    try:
+        meta = store.all_device_meta(cc) if cc is not None else {}
+        calib = store.all_calibration(cc) if cc is not None else {}
+        sensors = build_sensor_list(hc, time.time(), meta=meta, calib=calib)
+    finally:
+        if hc is not None:
+            hc.close()
+        if cc is not None:
+            cc.close()
+    return paginate_panel_tiles(sensors, page, per)
+
+
 def _load_yaml_section(path: Path, section: str) -> dict:
     """Read `section:` out of a small instance YAML; {} on any absence/parse error (never fatal)."""
     if not path.exists():

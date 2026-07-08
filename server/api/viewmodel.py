@@ -100,6 +100,29 @@ def sensor_graphs(metrics: dict) -> list[dict]:
     return [metric_spec(k) for k, s in METRIC_CATALOG.items() if s["graph"] and metrics.get(k) is not None]
 
 
+PANEL_TILES_MAX_PER = 40             # a panel page is small; cap defends the panel's fixed response buffer
+
+
+def paginate_panel_tiles(sensors: list[dict], page: int, per: int) -> dict:
+    """Slice a full sensor list into ONE bounded page for a memory-constrained panel (ADR-0029).
+
+    A sensor is renderable iff it has ≥1 graphable metric present (non-empty `graphs`, which
+    `sensor_graphs` already filters to present metrics) — matching the panel's own skip rule, so
+    `pages`/`total` equal what the panel actually shows. Returns the SAME per-sensor shape the panel
+    already parses (sliced), so only the fetch loop changes, not the parse. `sensors` is assumed to be in
+    a stable order (build_sensor_list sorts by room, device_id) so pages stay coherent across fetches.
+
+    Pure over its inputs — unit-testable with no DB/HTTP."""
+    per = max(1, min(int(per), PANEL_TILES_MAX_PER))
+    renderable = [s for s in sensors if s.get("graphs")]
+    total = len(renderable)
+    pages = max(1, (total + per - 1) // per)
+    page = max(0, min(int(page), pages - 1))
+    start = page * per
+    return {"page": page, "pages": pages, "per": per, "total": total,
+            "sensors": renderable[start:start + per]}
+
+
 def _latest(hot, device_id: str, metric: str, authoritative: int):
     """Most recent (value, ts) for a metric at the given trust level, or None."""
     r = hot.execute(
