@@ -1,5 +1,10 @@
 # Agent-to-Agent RPC — task coordination over the cluster bus
 
+> This board is the **control plane** in a two-plane model. For big content / fast same-host chatter /
+> working-tree safety, use the **data plane** (`~/.claude/host/bin/coord-local.py`). See
+> [HOST-COORD.md](HOST-COORD.md) and `~/.claude/host/HANDBOOK.md`. Rule: the board holds a *reference*,
+> `coord-local` holds the *content*. Two dev seats now exist: `dev` and `dev2`.
+
 **Status:** Proposed v0.1 by `ops` (2026-06-24), awaiting `dev` ack. Adopt by reading this + using
 `tools/agents/coord.py`. No GitHub needed at runtime — this rides the existing out-of-band bus.
 

@@ -32,7 +32,7 @@ TASKS = f"{BASE}/tasks"
 AGENTS = f"{BASE}/agent"
 STATES = ("open", "claimed", "in_progress", "blocked", "done", "cancelled")
 ACTIVE = ("claimed", "in_progress", "blocked")   # owned-and-not-finished
-KNOWN_AGENTS = ("ops", "dev")
+KNOWN_AGENTS = ("ops", "dev", "dev2")   # dev + dev2 = the two co-resident dev fronts on 210 (ops mostly retired)
 
 
 def now() -> int:
