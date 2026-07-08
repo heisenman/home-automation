@@ -12,6 +12,8 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 
+from server.gas_compensation import air_quality_index, clean_air_baseline
+
 
 def dewpoint_c(temp_c, rh_pct):
     """Dew point (°C) from temperature (°C) + relative humidity (%), Magnus-Tetens. None if undefined."""
@@ -49,6 +51,7 @@ METRIC_CATALOG: dict[str, dict] = {
     "pressure_hpa":  {"label": "Pressure",    "unit": "hPa",   "color": "#34d399", "precision": 0, "graph": True},
     "pm25_ugm3":     {"label": "PM2.5",       "unit": "µg/m³", "color": "#fb7185", "precision": 0, "graph": True},
     "aqi":           {"label": "AQI",         "unit": "",      "color": "#fbbf24", "precision": 0, "graph": True},
+    "air_quality":   {"label": "Air Quality", "unit": "",      "color": "#4ade80", "precision": 0, "graph": True},
     "voc_index":     {"label": "VOC Index",   "unit": "",      "color": "#34d399", "precision": 0, "graph": True},
     "voc_raw":       {"label": "VOC (raw)",   "unit": "",      "color": "#6ee7b7", "precision": 0, "graph": True},
     "eco2":          {"label": "eCO₂",        "unit": "ppm",   "color": "#f59e0b", "precision": 0, "graph": True},
@@ -135,6 +138,56 @@ def build_alerts(sensors: list[dict], displays: list[dict], now: float) -> list[
     return out
 
 
+def _resolve_ambient_ref(gas: dict, devices: list[dict]) -> dict | None:
+    """Auto-pick the reference T/H sensor for a self-heated gas node — the SYSTEM's own guess, NO config:
+    the nearest reliable same-room sensor that reports both temperature + humidity and isn't itself a
+    (self-heated) gas node. Prefers a 'pro' meter, then the freshest. Same area is the proximity proxy."""
+    area = gas.get("area")
+    best = None
+    for d in devices:
+        if d is gas or d.get("area") != area:
+            continue
+        dt = (d.get("device_type") or "").lower()
+        if "gas" in dt or "bme680" in dt:                     # skip self-heated / gas nodes
+            continue
+        dm = d.get("metrics") or {}
+        if dm.get("humidity_pct") is None or dm.get("temperature_c") is None:
+            continue
+        score = (1 if "pro" in d.get("device_id", "") else 0, d.get("ts") or "")
+        if best is None or score > best[0]:
+            best = (score, d)
+    return best[1] if best else None
+
+
+def _gas_baseline(hot_conn, device_id: str):
+    """Clean-air gas-resistance baseline from recent history (bounded window). See clean_air_baseline()."""
+    rows = hot_conn.execute(
+        "SELECT value FROM readings WHERE device_id=? AND metric='gas_ohm' AND authoritative=1 "
+        "ORDER BY ts DESC LIMIT 720", (device_id,)).fetchall()
+    return clean_air_baseline([r[0] for r in rows])
+
+
+def _compensate_gas_nodes(devices: list[dict], hot_conn) -> None:
+    """BME680 gas nodes self-heat, so their own temp/RH aren't valid ambient — HIDE them, and derive a
+    humidity-compensated `air_quality` (0..100, higher = cleaner) from the auto-picked reference sensor's
+    TRUE humidity. No per-node config: the reference is resolved from live data. If no reference/gas data
+    is available we still hide the bad T/RH so the UI never shows a misleading self-heated number."""
+    for gas in devices:
+        if (gas.get("device_type") or "") != "bme680_gas":
+            continue
+        gm = gas["metrics"]
+        gas_ohm = gm.get("gas_ohm")
+        ref = _resolve_ambient_ref(gas, devices)
+        rh = (ref.get("metrics") or {}).get("humidity_pct") if ref else None
+        if gas_ohm is not None and rh is not None:
+            base = _gas_baseline(hot_conn, gas["device_id"]) or gas_ohm
+            gm["air_quality"] = air_quality_index(gas_ohm, rh, base)["air_quality"]
+            gas["ambient_ref"] = ref["device_id"]             # surfaced for transparency
+        for bad in ("temperature_c", "humidity_pct", "dewpoint_c"):
+            gm.pop(bad, None)                                 # self-heated / derived-from-self-heated → drop
+        gas["graphs"] = sensor_graphs(gm)                     # rebuild after mutating metrics
+
+
 def build_sensor_list(hot_conn, now: float, meta: dict | None = None,
                       calib: dict | None = None) -> list[dict]:
     """All TRUSTED sensors with their latest value per metric, grouped per device (one query). Device
@@ -182,6 +235,7 @@ def build_sensor_list(hot_conn, now: float, meta: dict | None = None,
         e["climate_role"] = m.get("climate_role")   # primary|secondary|None -> room climate resolver
         e["age_s"] = _age_s(e["ts"], now)
         e["graphs"] = sensor_graphs(e["metrics"])    # shared UI spec: which metrics graph, +unit/color/label
+    _compensate_gas_nodes(out, hot_conn)             # BME680: hide self-heated T/RH, derive air_quality (fusion)
     out.sort(key=lambda e: (e["room"], e["device_id"]))
     return out
 
