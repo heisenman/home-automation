@@ -1,0 +1,13 @@
+# Resolve devices on a migration pending-hold (device_meta.pending_until): fresh data → clear the hold;
+# window expired with no data → drop (retired, HISTORY KEPT); else keep holding. Oneshot, timer-fired.
+[Unit]
+Description=HA migration pending-hold sweeper (resolve/drop held devices)
+Documentation=file:///home/visko/home_automation/server/maintenance/pending_sweeper.py
+
+[Service]
+Type=oneshot
+User=visko
+WorkingDirectory=/home/visko/home_automation
+ExecStart=/home/visko/home_automation/venv/bin/python server/maintenance/pending_sweeper.py
+Nice=15
+IOSchedulingClass=idle

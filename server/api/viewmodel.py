@@ -36,6 +36,19 @@ def _age_s(ts_iso: str | None, now: float) -> float | None:
         return None
 
 
+def _pending_active(m: dict, now: float) -> bool:
+    """True while a device is on a migration pending-hold (meta.pending_until in the future): held OUT of
+    the sensor list, so it neither shows in the GUI nor generates alerts/ntfy. When the window passes the
+    sweeper drops it (or clears the hold if it reported fresh data). Malformed/absent → not pending."""
+    pu = (m or {}).get("pending_until")
+    if not pu:
+        return False
+    try:
+        return now < datetime.fromisoformat(pu.replace("Z", "+00:00")).timestamp()
+    except (ValueError, TypeError):
+        return False
+
+
 # ── shared UI spec (ADR-0019 merge) ──────────────────────────────────────────────
 # The SINGLE source of metric-presentation truth. Both renderers — the PWA (server/web
 # /app.js) and the D1001 LVGL panel — render from this instead of hardcoding label/unit/
@@ -210,7 +223,7 @@ def build_sensor_list(hot_conn, now: float, meta: dict | None = None,
         if did.startswith("unknown"):       # unregistered MAC the scanner saw — not a user device; hide
             continue
         m = meta.get(did) or {}
-        if m.get("hidden") or m.get("retired"):      # user-hidden or retired (R8 lifecycle) — drop from view
+        if m.get("hidden") or m.get("retired") or _pending_active(m, now):   # hidden/retired/pending-hold → drop from view
             continue
         e = by_dev.setdefault(did, {"device_id": did, "device_type": dtype or "unknown",
                                     "area": area or "unknown", "ts": ts, "metrics": {}})

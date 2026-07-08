@@ -20,6 +20,7 @@ from server.maintenance import device_migrate      # noqa: E402
 STATE_DB = REPO / "instance/db/migration.db"
 BRIDGE = "https://192.168.0.210"          # ha-2's API via the .210 web bridge
 STAGES = ["queued", "transferred", "applied", "repointed", "confirmed", "retired"]
+PENDING_HOURS = 6                         # grace window: hold the migrated device quiet, then the sweeper drops it
 
 
 def _state_con():
@@ -139,11 +140,20 @@ def push(device_id, *, dry, history_hours, confirm_timeout):
             set_stage(device_id, "failed", cls, "confirm")
         return 1
 
-    # 5. retired on .210 (LAST — only after confirm). do_peer=False: the cross-net side already has it.
-    print("  retired: removing from .210 (device_migrate retire, do_peer=False)")
+    # 5. PENDING-hold on .210 (LAST — only after confirm). NOT a hard retire: an immediate retire can
+    #    half-fail and leave a stale ghost (readings/registry/LWT lingering, GUI complaints). Instead mark
+    #    the device pending — hidden from the GUI + suppressed from alerts/ntfy NOW — and let the
+    #    pending-sweeper drop it after the grace window UNLESS it reports fresh data (a failed migration
+    #    self-heals instead of vanishing). History is kept (data-storage-is-primary).
+    print(f"  pending: holding {device_id} quiet on .210 for {PENDING_HOURS}h (sweeper resolves it)")
     if not dry:
-        device_migrate.run_migration("retire", device_id, do_peer=False, dry_run=False)
-    advance("retired", True)
+        import sqlite3
+        from server.control import control_store as store
+        cc = sqlite3.connect(str(REPO / "instance/db/control.db"))
+        store.ensure_schema(cc)
+        until = store.set_pending(cc, device_id, PENDING_HOURS); cc.close()
+        print(f"    pending_until={until}")
+    advance("retired", True)     # stage name kept for continuity; it's now a pending-hold, not a delete
     print(f"{'[DRY-RUN] ' if dry else ''}✓ {device_id} migrated to ha-2")
     return 0
 

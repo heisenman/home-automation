@@ -1,0 +1,13 @@
+# Resolve pending-holds every 15 min (holds are hours long; 15 min is ample granularity to catch a
+# device coming back OR a window expiring). Persistent=false: a missed fire resumes next interval.
+[Unit]
+Description=Run the migration pending-hold sweeper every 15 min
+
+[Timer]
+OnBootSec=5min
+OnUnitActiveSec=15min
+AccuracySec=90s
+RandomizedDelaySec=30s
+
+[Install]
+WantedBy=timers.target
