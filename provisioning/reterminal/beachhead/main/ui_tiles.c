@@ -14,6 +14,7 @@
 #include "freertos/queue.h"
 #include "esp_log.h"
 #include "esp_heap_caps.h"
+#include "esp_timer.h"     // esp_timer_get_time() for the time-boxed catalog re-prime
 #include "cJSON.h"
 #include "lvgl.h"
 #include "esp_lvgl_port.h"
@@ -37,9 +38,12 @@ static char s_url[192];       // /api/v1/sensors
 static char s_disp_url[192];  // /api/v1/displays (controllable devices)
 static char s_house_url[256]; // /api/v1/house
 static char s_map_url[256];   // /api/v1/rooms (house map — the landing view)
-static bool s_catalog_primed;  // /api/v1/rooms carries no metric catalog, so the landing map would
-                               // render with the temp/hum fallback (gas/index metrics missing). Prime
-                               // the shared catalog once from /api/v1/sensors before the first render.
+static int64_t s_catalog_primed_ms;  // last time the shared catalog was (re)primed from /api/v1/sensors
+                               // (0 = never). /api/v1/rooms carries no metric catalog, so the landing map
+                               // renders off this primed copy; re-priming periodically (not once-per-boot)
+                               // lets server catalog changes — new metrics / units like AQ, VOC — reach the
+                               // map without a panel reboot.
+#define CATALOG_REPRIME_MS (10 * 60 * 1000)  // re-prime cadence: one cheap /api/v1/sensors GET / 10 min
 static lv_obj_t *s_header, *s_grid;
 static lv_obj_t *s_map;       // house-map container (absolute-positioned room chips)
 static lv_obj_t *s_devices;   // devices-management screen container (list -> reassign room)
@@ -171,9 +175,11 @@ static void render(cJSON *sensors, cJSON *devices, cJSON *catalog, const char *r
 // no 10s full-table teardown, no flicker. The map/room views still refresh live sensor values each tick.
 static void do_render_cycle(bool nav)
 {
-    // Prime the shared metric catalog once (the map's /api/v1/rooms doesn't carry it, so without this
-    // the landing view renders gas/index metrics as bare device names on the temp/hum fallback).
-    if (!s_catalog_primed) {
+    // (Re)prime the shared metric catalog periodically (the map's /api/v1/rooms doesn't carry it, so
+    // without this the landing view renders gas/index metrics on the temp/hum fallback — and server-added
+    // metrics/units would need a reboot). Time-boxed re-prime keeps it fresh at negligible cost.
+    int64_t now_ms = esp_timer_get_time() / 1000;
+    if (s_catalog_primed_ms == 0 || now_ms - s_catalog_primed_ms >= CATALOG_REPRIME_MS) {
         int lc = 0;
         char *bc = ui_http_get(s_url, &lc);          // /api/v1/sensors carries the `metrics` catalog
         if (bc && lc > 0) {
@@ -182,7 +188,7 @@ static void do_render_cycle(bool nav)
             if (cJSON_IsArray(cat) && cJSON_GetArraySize(cat) > 0 && lvgl_port_lock(0)) {
                 ui_format_load_catalog(cat);
                 lvgl_port_unlock();
-                s_catalog_primed = true;
+                s_catalog_primed_ms = now_ms;
             }
             if (rc) cJSON_Delete(rc);
         }
