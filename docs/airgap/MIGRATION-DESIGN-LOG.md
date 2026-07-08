@@ -379,3 +379,14 @@ generalizations from §5 already applied), so the next migration is fill-in-the-
   pending** (Tier-2: Phase-3 tooling + full `:import` dry-run, which ride the SSH channel later). Control
   plane proven both directions; ha-2 API `/health`=200. ha-2 is pre-provisioned and remotely operable with
   the household fallback intact. **Next: Phase 0** (failover drill + `provision-peer` parity) on go-ahead.
+
+### Phase 0 (foundation, household net, 2026-07-08)
+- **Failover-drill dropped** from Phase 0 per DJ-14 (it moves to the two-step `.210↔ha-2` exercise at the
+  very end).
+- **ha-2 quiesced to standby posture** — stopped `ha-scanner`/`ha-edge-mapper`/`ha-edge-history` (the
+  standby receives via reconcile, it doesn't ingest). Note: ha-2's own brief BLE ingest before this left
+  no junk on `.210` — the bidirectional reconcile pushed **0 new** rows back.
+- **✅ `provision-peer.sh --from 192.168.0.210` PASSED.** Synced config-of-record (registries, `control.db`,
+  `mesh.db`, VAPID) + hot tier (27,788 rows) + all 7 Parquet partitions. **HARD archive-parity gate:**
+  ha-2 `rows=10,537,962 earliest=2026-01-07T17:43Z` == source exactly → **RECORD-KEEPING ELIGIBLE**. ha-2
+  now carries the full dataset into the migration. Took ~1 min (LAN).
