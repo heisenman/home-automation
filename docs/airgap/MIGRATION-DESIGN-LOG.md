@@ -176,6 +176,12 @@ Each entry: **decision** · context · options weighed · **why this** · gotcha
     and the repo + all migration scripts. Reuse the signed-bundle mechanism in
     `provisioning/03-sneakernet-updates.md`. Discovering a missing dep post-gap = a sneakernet round-trip;
     the Phase -1 readiness gate exists precisely to prevent it.
+15. **mDNS discovery is link-local + multicast (DJ-17's portability floor has a cost).** `_mqtt._tcp` /
+    `ha-dictator.local` works with **zero router config**, but (a) it's **single-subnet** (needs a reflector
+    across VLANs) and (b) **multicast-over-WiFi is throttled/dropped by many APs** → unreliable for low-power
+    nodes doing periodic rediscovery. So server-mDNS is the router-**independent** fallback, **not** a strict
+    upgrade over router-DNS: where the router is code-configurable (our R7800), unicast router-DNS is the
+    more robust primary.
 
 ---
 
@@ -473,6 +479,46 @@ generalizations from §5 already applied), so the next migration is fill-in-the-
   **active `ha-controller` activates as devices migrate** (Phase 4, when its control set becomes real
   air-gap devices). Keepalived is still generalized + *deployed-but-not-started* as prep. Also:
   `healthcheck.sh` must skip the household-Midea ping for an air-gap box (else ha-2 is marked unfit).
+
+- **DJ-17 — Retire baked-in network identity: network-agnostic firmware + name-based, provider-pluggable
+  dictator discovery.** The reason every device class needs a *different* repoint mechanism (Tasmota
+  `Backlog`, ESP-IDF NVS op, ESPHome rebuild) — and why the ESPHome displays are barely movable at all —
+  is that firmware bakes in a **fixed broker IP + a single SSID**. Dissolve it: (1) firmware carries **no
+  fixed dictator IP** — it resolves the dictator **by name**; (2) firmware carries credentials for **every
+  network it may live on** (multi-SSID + fallback AP) so it roams by RF availability. The name is resolved
+  by a **system-provided discovery service with pluggable providers**: **router-DNS** (`ha-dictator.lan`,
+  unicast, preferred where the router is code-configurable — the dictator maintains the record via
+  `router_reconcile` and rewrites it on failover) **or server-mDNS** (`ha-dictator.local`, Avahi on the
+  dictator, **router-independent + self-contained**, re-advertised by the new dictator on failover — the
+  portability floor for black-box routers). A `.local` name routes to mDNS and a `.lan` name to unicast
+  DNS, so device config is near-identical across providers. Effect: a network move becomes **RF +
+  discovery**, uniform across Tasmota/ESP-IDF/ESPHome, instead of a per-device firmware op — the
+  "fill-in-the-blanks, no-AI, reusable-next-time" ideal. Bonus: name-based discovery is a cleaner failover
+  mechanism for WiFi clients than a floating VIP they can't ARP-chase (gotcha 2). **Why pluggable, not
+  just router-DNS:** the reference build deliberately uses code-configurable hardware (the OpenWRT R7800)
+  → router-DNS; but the architecture must stay buildable on an uncooperative router → server-mDNS. Caveats
+  in gotcha 15. *(Adoption is opportunistic — fold the convention into every firmware build from here on;
+  each device becomes network-agnostic the next time we OTA it, and that becomes its LAST hand-repoint.)*
+
+- **DJ-18 — The automation boundary: programmatic above the physical layer; a human only where code cannot
+  reach.** The throughline requirement for this whole effort is *no entity in the loop*. The goal is **not**
+  the impossible "zero human touch ever" — someone must rack hardware and run the first flash — but to make
+  **every operation code CAN perform require no intervention**, and to make the irreducible physical touches
+  **rare, bounded, and safe.**
+  - **Programmatic (no entity):** discovery + its failover upkeep (DJ-17), firmware *build*, *OTA* delivery,
+    the network migration itself once devices are network-agnostic (RF + discovery), and device
+    intake/repoint/confirm/retire (`device_push`). This is most of the system.
+  - **Requires a physical entity (irreducible — the RF/physical layer code can't reach):** the initial
+    USB/serial flash of never-before-seen hardware; recovery of a device stranded on *no known network*
+    (brick / bad flash / dead radio); antenna / resistor / placement / hardware changes; the first power-on
+    + bootstrap-USB of a brand-new network.
+  - **Design corollary — keep failed programmatic ops from *falling* to physical:** fallback-AP + captive
+    portal (a bad OTA → rejoin an AP, not a USB trip), boot-count NVS-revert (a mis-repoint self-heals),
+    multi-SSID (roaming needs no touch). The one genuinely delicate crossing is migrating a device **from**
+    baked-in-identity firmware **to** network-agnostic firmware — you're changing the very thing that makes
+    it reachable, so it's OTA (programmatic) but the likeliest to fall to physical; sequence it with
+    fallbacks and treat it as the **last required per-device touch**. After that crossing, network
+    membership is a **programmatic system property**, permanently.
 
 - **✅ Cluster primitives generalized (keepalived prep for Phase 5).** `keepalived.conf.tmpl` now takes
   `@VIP@`/`@VRID@`/`@CIDR@` (was hardcoded `.0.200`/VRID 51); `deploy.sh` fills them from `cluster.env`
