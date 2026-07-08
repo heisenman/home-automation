@@ -108,6 +108,16 @@ Each entry: **decision** · context · options weighed · **why this** · gotcha
   be validated from the router's *real* location, not the bench; and the air gap must be **re-proven
   after the move**. Resume (Phases 2→4) only after a post-move re-verify.
 
+- **DJ-14 — Failover is validated as a two-step `.210↔ha-2` exercise, once the air-gap network is
+  completed — NOT a `.210↔.245` drill now.** Dropped the Phase-0 drill on the `.210↔.245` pair: `.245`
+  is being retired, so proving *its* failover teaches us little. The meaningful validation is the real
+  future cluster — `.210` (air-gap failover leg) ⇄ ha-2 (dictator) — on the air-gap net. Run it as a
+  **two-step exercise** once the air-gap network is actually completed (both boxes on it). *TBD to pin
+  (see §7): (a) exact meaning of the two steps — working assumption: **Step 1 = failover (kill ha-2 → `.210`
+  seizes the air-gap VIP + controller, household bridge still serves); Step 2 = failback (ha-2 returns →
+  preempts/reclaims → `.210` back to standby+bridge)**; (b) timing — right after `.210` joins the air-gap
+  cluster (before device migration, to prove failover before devices depend on it) vs. at the very end.*
+
 ---
 
 ## 3. Gotchas & landmine register (the hard-won details)
@@ -241,10 +251,11 @@ losing the safety net. This is the "do it while we DEFINITELY have control" phas
 **Rollback:** trivial (nothing air-gapped yet). **Risk/why:** this phase EXISTS to eliminate the
 "missing-dep/broken-hook discovered after the gap" failure class — the most expensive kind post-move.
 
-**Phase 0 — Foundation (household net only).** Green `failover-drill.sh` on `.210↔.245`; decide the
-air-gap **broker-auth posture** (per-device creds) now; bring ha-2 up via `stage2-finish.sh` as a same-
-LAN peer and run `provision-peer.sh --from 192.168.0.210` → must PASS the archive-parity gate; snapshot
-`.210`'s dataset (`tools/backup-dataset.sh`) as the rollback anchor. **Gate:** provision-peer PASS +
+**Phase 0 — Foundation (household net only).** Decide the air-gap **broker-auth posture** (per-device
+creds) now; ha-2 is already Stage-2'd as a same-LAN peer (Phase -1), so run `provision-peer.sh --from
+192.168.0.210` → must PASS the archive-parity gate; snapshot `.210`'s dataset (`tools/backup-dataset.sh`)
+as the rollback anchor. **The failover *drill* is NOT here** — per DJ-14 it's a two-step `.210↔ha-2`
+exercise once the air-gap net is completed, not a `.210↔.245` drill. **Gate:** provision-peer PASS +
 cluster-doctor HEALTHY. **Rollback:** trivial (ha-2 passive).
 
 **Phase 1 — Stand up the real air-gap network.** Re-cut the R7800 UCI drafts to `192.168.1.0/24` +
