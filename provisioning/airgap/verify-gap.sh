@@ -3,7 +3,7 @@
 # a boot-time systemd oneshot: the gap is a userspace policy (gotcha 1) — assert it, never assume it.
 set -uo pipefail
 HH_IFACE="${HH_IFACE:-enp4s0}"; HH_NET="${HH_NET:-192.168.0}"
-AG_IFACE="${AG_IFACE:-eno1}";   AG_NET="${AG_NET:-192.168.1}"
+AG_IFACE="${AG_IFACE:-wlp2s0}";   AG_NET="${AG_NET:-192.168.1}"
 HA2="${HA2:-192.168.1.210}"; ROUTER="${ROUTER:-192.168.1.1}"
 KEY="${CLUSTER_KEY:-/home/visko/.ssh/id_cluster}"
 SSHO="-i $KEY -o BatchMode=yes -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null -o ConnectTimeout=6"
