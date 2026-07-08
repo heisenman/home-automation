@@ -9,7 +9,7 @@ LAST step and only after ha-2 CONFIRMS the device is reporting — so an abort n
 Device classes handled here: tasmota (MQTT repoint) and ble (no repoint — ha-2 just scans). ESP32/panel/
 ESPHome repointers plug into `repoint()` as they're built. See docs/airgap/MIGRATION-DESIGN-LOG.md Phase 3/4.
 """
-import argparse, json, os, sqlite3, subprocess, sys, time
+import argparse, json, os, shlex, sqlite3, subprocess, sys, time
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
@@ -52,6 +52,45 @@ def _node_manifests(edge_dir=None):
     return sorted((Path(edge_dir) if edge_dir else REPO / "edge").glob("*/nodes.yaml"))
 
 
+def _current_node_ids(edge_dir=None):
+    """Set of live edge node_ids across all edge/*/nodes.yaml manifests."""
+    import yaml
+    ids = set()
+    for man in _node_manifests(edge_dir):
+        try:
+            doc = yaml.safe_load(man.read_text()) or {}
+        except Exception:
+            continue
+        nodes = doc.get("nodes", doc) if isinstance(doc, dict) else {}
+        if isinstance(nodes, dict):
+            ids |= set(nodes)
+    return ids
+
+
+def resolve_node_id(device_id, *, edge_dir=None, devices_path=None):
+    """Map a registry device_id to its edge firmware node_id (the home/edge/<node>/cmd owner), or None.
+    Two cases: (1) device_id IS a node_id — relay nodes, device_id==node_id; (2) the gas-node SPLIT where
+    the registry device_id (e.g. gas_hbed) differs from the firmware node_id (hbed_c6), carried as a
+    `node_id:` field on the devices.yaml record. When a device_id has DUPLICATE records (a retired node +
+    its live replacement — e.g. c6-bench-gas vs coffice_c6-gas both device_id=gas_c_office), PREFER the
+    node_id that is a current edge node in nodes.yaml, so a stale record can't win the repoint target."""
+    import yaml
+    node_ids = _current_node_ids(edge_dir)
+    if device_id in node_ids:
+        return device_id
+    dev = Path(devices_path) if devices_path else REPO / "instance/devices.yaml"
+    if dev.exists():
+        data = (yaml.safe_load(dev.read_text()) or {}).get("devices", {})
+        cands = [v.get("node_id") for v in data.values()
+                 if isinstance(v, dict) and v.get("device_id") == device_id and v.get("node_id")]
+        for nid in cands:
+            if nid in node_ids:
+                return nid
+        if cands:
+            return cands[0]   # mapped but manifest-absent (e.g. not yet enrolled) — surface, don't drop
+    return None
+
+
 def classify(device_id, *, edge_dir=None):
     import yaml
     tas = REPO / "instance/tasmota-devices.yaml"
@@ -59,16 +98,10 @@ def classify(device_id, *, edge_dir=None):
         data = yaml.safe_load(tas.read_text()) or {}
         if device_id in data or any(isinstance(v, dict) and v.get("device_id") == device_id for v in data.values()):
             return "tasmota"
-    # esp32 edge nodes: SOURCE-OF-TRUTH is edge/*/nodes.yaml, node_ids under the top-level `nodes:` key
-    # (tolerate a flat map too).
-    for man in _node_manifests(edge_dir):
-        try:
-            doc = yaml.safe_load(man.read_text()) or {}
-        except Exception:
-            continue
-        nodes = doc.get("nodes", doc) if isinstance(doc, dict) else {}
-        if isinstance(nodes, dict) and device_id in nodes:
-            return "esp32"
+    # esp32 edge nodes: device_id is a node_id in edge/*/nodes.yaml (relay nodes), OR maps to one via a
+    # devices.yaml `node_id:` field (the gas-node device_id<->node_id split, e.g. gas_hbed -> hbed_c6).
+    if resolve_node_id(device_id, edge_dir=edge_dir):
+        return "esp32"
     dev = REPO / "instance/devices.yaml"
     if dev.exists():
         data = (yaml.safe_load(dev.read_text()) or {}).get("devices", {})
@@ -85,8 +118,18 @@ def _airgap_target():
     env = REPO / "instance/openwrt/airgap_router.env"
     if not psk and env.exists():
         for line in env.read_text().splitlines():
-            if line.strip().startswith("WIFI_PSK="):
-                psk = line.split("=", 1)[1].strip().strip('"')
+            s = line.strip()
+            if s.startswith("WIFI_PSK="):
+                # Parse the RHS with SHELL semantics (honor quotes, drop inline `# comment`). A naive
+                # split("=",1)[1].strip().strip('"') mangles a `WIFI_PSK="val"  # note` line — it leaves
+                # the closing quote + comment (observed: a 61-char "psk" vs the real 19). This file is
+                # shell-sourced elsewhere (airgap-bridge-up.sh), so match that.
+                try:
+                    toks = shlex.split(s.split("=", 1)[1], comments=True)
+                    psk = toks[0] if toks else ""
+                except ValueError:
+                    psk = s.split("=", 1)[1].strip().strip('"')
+                break
     return ssid, psk, f"mqtt://{host}:1883", host
 
 
@@ -196,11 +239,18 @@ def _repoint_esp32(device_id, dry, revert):
         print("   ✗ HA_CMD_SECRET not set — export the node's per-device command secret before migrating "
               "(resolve from node_secrets.enc via enroll_node; a human/cron supplies it)")
         return False
+    node_id = resolve_node_id(device_id)
+    if not node_id:
+        print(f"   ✗ can't resolve a firmware node_id for '{device_id}' — add `node_id: <node>` to its "
+              f"devices.yaml record (the home/edge/<node>/cmd owner)")
+        return False
+    if node_id != device_id:
+        print(f"   device '{device_id}' -> firmware node '{node_id}'")
     ssid, psk, broker, host = _airgap_target()
     if not psk:
         print("   ✗ no Wi-Fi PSK — set $WIFI_PSK or instance/openwrt/airgap_router.env WIFI_PSK")
         return False
-    cmd = [sys.executable, str(REPO / "tools/repoint_node.py"), "--node", device_id,
+    cmd = [sys.executable, str(REPO / "tools/repoint_node.py"), "--node", node_id,
            "--ssid", ssid, "--broker", broker, "--ntp", host, "--ota-host", host,
            "--broker-host", "localhost", "--wait"]
     if dry:

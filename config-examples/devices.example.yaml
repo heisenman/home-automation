@@ -75,3 +75,17 @@ devices:
     area: "crawlspace"
     capabilities: [co2, temperature, humidity, pressure, radon, battery]
     notes: "Enable Smart Home Integration on device; lives near server"
+
+  # ── Node-local sensor on an ESP32 edge node (e.g. a BME680/SGP gas sensor over I2C) ───────────────
+  # The "mac" key is a synthetic registry lookup token the edge node puts in its adv payload (not a real
+  # MAC). For an ESP32-backed device, add `node_id:` — the FIRMWARE node that owns home/edge/<node>/cmd.
+  # This is what the air-gap migration (device_push -> repoint_node.py) targets, and it can DIFFER from
+  # device_id: the registry device_id (gas_hbed) is human-facing, the node_id (hbed_c6) is the firmware
+  # identity. Omit node_id for pure BLE devices (ha-2 just scans those; no repoint).
+  "hbed_c6-gas":
+    device_id: "gas_hbed"
+    node_id: "hbed_c6"                # firmware node (home/edge/hbed_c6/cmd) — air-gap repoint target
+    device_type: "bme680_gas"
+    area: "h_bed"
+    capabilities: [temperature_c, humidity_pct, pressure_hpa, gas_ohm]
+    notes: "BME680 over I2C on a XIAO ESP32-C6; publishes home/edge/hbed_c6/gas/adv"
