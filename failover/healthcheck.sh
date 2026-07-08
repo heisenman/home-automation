@@ -10,6 +10,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && p
 # 1. local ha-api up (proves the stack is alive)
 curl -fsS --max-time 4 "$API/api/v1/sensors" >/dev/null 2>&1 || exit 1
 
+# Air-gap dictator: no household actuators to reach (its actuator set grows as devices migrate) —
+# fit on API alone, else it'd be wrongly marked unfit for a .0.x Midea it can't reach. (DJ-16)
+[ "${NET_NAME:-}" = airgap ] && exit 0
+
 # 2. Midea reachable on the LAN (can we actually actuate?)
 ENVF="$REPO/instance/midea-device.env"
 if [ -f "$ENVF" ]; then

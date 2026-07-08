@@ -17,15 +17,20 @@ case "$ROLE" in
   standby) STATE=BACKUP; PRIORITY=100;;
   *) echo "ERROR: ROLE must be primary|standby (got '$ROLE')"; exit 1;;
 esac
-IFACE=$(ip route show default 2>/dev/null | awk '/default/{print $5; exit}')
-[ -n "$IFACE" ] || { echo "ERROR: could not detect default-route interface"; exit 1; }
-echo "==> role=$ROLE  state=$STATE  priority=$PRIORITY  iface=$IFACE"
+: "${VRID:=51}"; : "${CIDR:=24}"          # per-cluster; defaults = the household values (backward-compat)
+: "${VIP:?set VIP in instance/cluster.env}"
+# IFACE: honor an explicit setting — required on the dual-homed .210, where the default-route leg is the
+# WRONG interface for the air-gap cluster. Otherwise auto-detect the default-route interface.
+IFACE="${IFACE:-$(ip route show default 2>/dev/null | awk '/default/{print $5; exit}')}"
+[ -n "$IFACE" ] || { echo "ERROR: could not resolve IFACE (set it in instance/cluster.env)"; exit 1; }
+echo "==> role=$ROLE state=$STATE priority=$PRIORITY iface=$IFACE vip=$VIP/$CIDR vrid=$VRID net=${NET_NAME:-household}"
 
 chmod +x "$REPO"/failover/*.sh
 
 command -v keepalived >/dev/null || { echo "ERROR: keepalived not installed -> sudo apt install -y keepalived"; exit 1; }
 sudo mkdir -p /etc/keepalived
 sed -e "s/@STATE@/$STATE/" -e "s/@PRIORITY@/$PRIORITY/" -e "s#@IFACE@#$IFACE#" \
+    -e "s#@VIP@#$VIP#" -e "s/@VRID@/$VRID/" -e "s/@CIDR@/$CIDR/" \
     "$REPO/failover/keepalived.conf.tmpl" | sudo tee /etc/keepalived/keepalived.conf >/dev/null
 echo "    wrote /etc/keepalived/keepalived.conf"
 

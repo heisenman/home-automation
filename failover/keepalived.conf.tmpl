@@ -1,10 +1,12 @@
 # keepalived VRRP for the HA dictator — rendered per box by deploy.sh.
-# Placeholders @STATE@ / @PRIORITY@ / @IFACE@ are filled from instance/cluster.env + the detected LAN iface.
-# One floating VIP (192.168.0.200) = the dictator address; whoever holds it runs ha-controller (notify.sh).
+# Placeholders @STATE@ / @PRIORITY@ / @IFACE@ / @VIP@ / @CIDR@ / @VRID@ are filled from instance/cluster.env.
+# One floating VIP = the dictator address; whoever holds it runs ha-controller (notify.sh).
 #
-#   primary (210):  STATE=MASTER  PRIORITY=150
-#   standby (245):  STATE=BACKUP  PRIORITY=100
-# preempt is ON (no 'nopreempt') so a recovered primary RECLAIMS — enforcing PRIMARY SUPREMACY.
+# Per-CLUSTER (so two independent clusters can coexist — e.g. the household net and the air-gap net):
+#   household:  VIP=192.168.0.200  VRID=51   (primary .210 MASTER/150, standby .245 BACKUP/100)
+#   air-gap:    VIP=192.168.1.200  VRID=61   (ha-2 MASTER/150, .210's air-gap leg BACKUP/100 in Phase 5)
+# DISTINCT VRIDs are mandatory when one box (.210) straddles both segments — VRRP must never collide.
+# preempt is ON (no 'nopreempt') so a recovered primary RECLAIMS — enforcing PRIMARY/dictator SUPREMACY.
 
 global_defs {
     enable_script_security
@@ -23,13 +25,13 @@ vrrp_script chk_dictator {
 vrrp_instance HA_DICTATOR {
     state @STATE@
     interface @IFACE@
-    virtual_router_id 51
+    virtual_router_id @VRID@
     priority @PRIORITY@
     advert_int 1
     preempt_delay 30           # on the primary's return, wait 30s stable before reclaiming (anti-flap / debounce)
 
     virtual_ipaddress {
-        192.168.0.200/24
+        @VIP@/@CIDR@
     }
     track_script {
         chk_dictator
