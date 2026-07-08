@@ -18,6 +18,7 @@ set(EXTRA_COMPONENT_DIRS
     "${_shared}/ha_reach"
     "${_shared}/sgp40"
     "${_shared}/sgp30"
-    "${_shared}/sensirion_gas_index")
+    "${_shared}/sensirion_gas_index"
+    "${_shared}/bme680")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(ha-edge-c6)

@@ -18,6 +18,9 @@
 #if defined(HA_GAS_SGP30)
   #include "sgp30.h"
   #define GAS_DEV_TYPE "sgp30_gas"
+#elif defined(HA_GAS_BME680)
+  #include "bme680.h"                        // Bosch BME680 (T/RH/P + gas resistance) — compensation baked in
+  #define GAS_DEV_TYPE "bme680_gas"
 #else
   #include "sgp40.h"
   #include "sensirion_gas_index_algorithm.h"
@@ -45,6 +48,8 @@ static const char *TAG = "ha_gas";
 
 #if defined(HA_GAS_SGP30)
 static sgp30_t s_sgp;
+#elif defined(HA_GAS_BME680)
+static bme680_t s_bme;
 #else
 static sgp40_t s_sgp;
 static GasIndexAlgorithmParams s_voc;
@@ -55,13 +60,24 @@ static void gas_task(void *arg) {
     int since_pub = GAS_PUBLISH_EVERY;     // publish the first sample promptly
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(GAS_SAMPLE_MS));
-        char metrics[64];
+        char metrics[128];
 #if defined(HA_GAS_SGP30)
         uint16_t eco2 = 0, tvoc = 0;       // first ~15 reads after init are the fixed 400 ppm / 0 ppb warmup
         esp_err_t e = sgp30_measure(&s_sgp, &eco2, &tvoc);
         if (e != ESP_OK) { ESP_LOGW(TAG, "sgp30_measure: %s", esp_err_to_name(e)); continue; }
         if (++since_pub < GAS_PUBLISH_EVERY) continue;
         snprintf(metrics, sizeof(metrics), "{\"eco2\":%u,\"tvoc\":%u}", (unsigned)eco2, (unsigned)tvoc);
+#elif defined(HA_GAS_BME680)
+        // Forced-mode T/RH/P + gas-Ω; the driver already applied the Bosch compensation (physical units).
+        bme680_reading_t r;
+        esp_err_t e = bme680_measure(&s_bme, &r);
+        if (e != ESP_OK) { ESP_LOGW(TAG, "bme680_measure: %s", esp_err_to_name(e)); continue; }
+        if (++since_pub < GAS_PUBLISH_EVERY) continue;
+        snprintf(metrics, sizeof(metrics),
+                 "{\"temperature_c\":%.2f,\"humidity_pct\":%.1f,\"pressure_hpa\":%.1f,"
+                 "\"gas_ohm\":%.0f,\"gas_valid\":%u}",
+                 r.temperature_c, r.humidity_pct, r.pressure_hpa, r.gas_resistance_ohm,
+                 (unsigned)r.gas_valid);
 #else
         uint16_t sraw = 0;
         esp_err_t e = sgp40_measure_raw(&s_sgp, SGP40_DEFAULT_RH, SGP40_DEFAULT_T, &sraw);
@@ -99,6 +115,16 @@ void ha_gas_start(void) {
     }
     ha_mqtt_log("SGP30 up — eCO2/TVOC lane running (SDA=GPIO%d SCL=GPIO%d, 1Hz, ~15s warmup at 400/0)",
                 GAS_SDA_GPIO, GAS_SCL_GPIO);
+#elif defined(HA_GAS_BME680)
+    // Try addr 0x76 (SDO->GND) then 0x77 (SDO->VCC); init verifies chip id 0x61 = the live wiring check.
+    if ((e = bme680_init(&s_bme, bus, BME680_I2C_ADDR_PRIMARY, GAS_SCL_HZ)) != ESP_OK &&
+        (e = bme680_init(&s_bme, bus, BME680_I2C_ADDR_SECONDARY, GAS_SCL_HZ)) != ESP_OK) {
+        ha_mqtt_log("BME680 NOT ready (init: %s) — check D4=SDA / D5=SCL / 3V3 / GND / addr 0x76|0x77; "
+                    "BLE relay continues", esp_err_to_name(e));
+        return;
+    }
+    ha_mqtt_log("BME680 up — T/RH/P + gas-Ω lane running (SDA=GPIO%d SCL=GPIO%d, ~10s cadence, "
+                "heater 320C/150ms, compensation baked in)", GAS_SDA_GPIO, GAS_SCL_GPIO);
 #else
     if ((e = sgp40_init(&s_sgp, bus, GAS_SCL_HZ)) != ESP_OK) {
         ha_mqtt_log("SGP40: add-device failed: %s", esp_err_to_name(e)); return;

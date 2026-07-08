@@ -16,7 +16,7 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = REPO / "edge" / "esp32c6" / "nodes.yaml"
 
-SENSORS = ("sgp30", "sgp40")            # eCO2+TVOC / VOC-index — compile-time select in secrets.h
+SENSORS = ("sgp30", "sgp40", "bme680")  # eCO2+TVOC / VOC-index / BME680 (T·RH·P·gas-Ω) — compile-time select
 REQUIRED = ("mac", "target", "sensor", "area", "broker", "ota_host")
 
 
@@ -26,6 +26,8 @@ def sensor_define(sensor: str) -> str | None:
         return "#define HA_GAS_SGP30            // Sensirion SGP30 (eCO2 + TVOC)"
     if sensor == "sgp40":
         return None                     # default path in ha_gas.c — no #define
+    if sensor == "bme680":
+        return "#define HA_GAS_BME680           // Bosch BME680 (T·RH·P + gas resistance, Ω)"
     raise ValueError(f"unknown sensor {sensor!r} (expected one of {SENSORS})")
 
 
