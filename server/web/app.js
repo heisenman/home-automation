@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v40 house map — devices at their placed spots with curated readings (temp/hum + gas index, no raw)";
+const BUILD = "v41 air_quality (BME680 gas index) in glance + value row; self-heated temp/RH hidden server-side";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -637,6 +637,7 @@ const GRAPHABLE = [
   { key: "temperature_c", unit: "°C", color: "#f87171", label: "Temperature" },
   { key: "humidity_pct", unit: "%RH", color: "#4aa3ff", label: "Humidity" },
   { key: "dewpoint_c", unit: "°C", color: "#22d3ee", label: "Dew point" },
+  { key: "air_quality", unit: "", color: "#4ade80", label: "Air Quality" },   // gas index (0-100, higher=cleaner); leads the glance for gas nodes
   { key: "co2_ppm", unit: "ppm", color: "#fbbf24", label: "CO₂" },
   { key: "radon_bqm3", unit: "Bq", color: "#a78bfa", label: "Radon" },
   { key: "pressure_hpa", unit: "hPa", color: "#34d399", label: "Pressure" },
@@ -661,6 +662,7 @@ function SensorVals({ m, unit }) {
     ${m.pressure_hpa != null && html`<span class="sv"><b>${Math.round(m.pressure_hpa)}</b>hPa</span>`}
     ${m.pm25_ugm3 != null && html`<span class="sv"><b>${Math.round(m.pm25_ugm3)}</b>µg/m³</span>`}
     ${m.aqi != null && html`<span class="sv"><b>${m.aqi}</b>AQI</span>`}
+    ${m.air_quality != null && html`<span class="sv"><b>${Math.round(m.air_quality)}</b> AQ</span>`}
     ${m.voc_index != null && html`<span class="sv"><b>${m.voc_index}</b> VOC</span>`}
     ${m.power_w != null && html`<span class="sv"><b>${Math.round(m.power_w)}</b>W</span>`}
     ${m.energy_today_kwh != null && html`<span class="sv"><b>${round1(m.energy_today_kwh)}</b>kWh today</span>`}
