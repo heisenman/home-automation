@@ -1,6 +1,6 @@
 // Service worker — caches the app SHELL only (so the UI loads offline), never the API.
 // Live device state always goes to the network; if the box is unreachable the app shows last-known.
-const CACHE = "ha-shell-v35";   // v35: air_quality (BME680 gas index) in the map glance + value row
+const CACHE = "ha-shell-v36";   // v36: air_quality carries an AQ unit label on the map glance
 const SHELL = [
   "/app/", "/app/index.html", "/app/app.js", "/app/push.js", "/app/styles.css",
   "/app/vendor/preact-htm.standalone.module.js", "/app/manifest.webmanifest", "/app/icon.svg",

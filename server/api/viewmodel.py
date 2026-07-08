@@ -51,7 +51,7 @@ METRIC_CATALOG: dict[str, dict] = {
     "pressure_hpa":  {"label": "Pressure",    "unit": "hPa",   "color": "#34d399", "precision": 0, "graph": True},
     "pm25_ugm3":     {"label": "PM2.5",       "unit": "µg/m³", "color": "#fb7185", "precision": 0, "graph": True},
     "aqi":           {"label": "AQI",         "unit": "",      "color": "#fbbf24", "precision": 0, "graph": True},
-    "air_quality":   {"label": "Air Quality", "unit": "",      "color": "#4ade80", "precision": 0, "graph": True},
+    "air_quality":   {"label": "Air Quality", "unit": "AQ",    "color": "#4ade80", "precision": 0, "graph": True},
     "voc_index":     {"label": "VOC Index",   "unit": "",      "color": "#34d399", "precision": 0, "graph": True},
     "voc_raw":       {"label": "VOC (raw)",   "unit": "",      "color": "#6ee7b7", "precision": 0, "graph": True},
     "eco2":          {"label": "eCO₂",        "unit": "ppm",   "color": "#f59e0b", "precision": 0, "graph": True},

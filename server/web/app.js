@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v41 air_quality (BME680 gas index) in glance + value row; self-heated temp/RH hidden server-side";
+const BUILD = "v42 air_quality shows AQ unit on the map glance (identify the bare number)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -637,7 +637,7 @@ const GRAPHABLE = [
   { key: "temperature_c", unit: "°C", color: "#f87171", label: "Temperature" },
   { key: "humidity_pct", unit: "%RH", color: "#4aa3ff", label: "Humidity" },
   { key: "dewpoint_c", unit: "°C", color: "#22d3ee", label: "Dew point" },
-  { key: "air_quality", unit: "", color: "#4ade80", label: "Air Quality" },   // gas index (0-100, higher=cleaner); leads the glance for gas nodes
+  { key: "air_quality", unit: "AQ", color: "#4ade80", label: "Air Quality" },  // gas index (0-100, higher=cleaner); "AQ" identifies the bare number on the map glance
   { key: "co2_ppm", unit: "ppm", color: "#fbbf24", label: "CO₂" },
   { key: "radon_bqm3", unit: "Bq", color: "#a78bfa", label: "Radon" },
   { key: "pressure_hpa", unit: "hPa", color: "#34d399", label: "Pressure" },
