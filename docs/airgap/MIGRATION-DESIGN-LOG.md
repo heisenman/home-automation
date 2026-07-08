@@ -633,3 +633,41 @@ ESP32 mesh relays them). Building it now (task `esp32-repoint-fwop`).
   - **Stage plan:** `gas_standby` (dormant spare) FIRST — OTA the new fw on the household net, send a good
     repoint (verify it lands on ha-2), then a deliberately-bad repoint (bad PSK) to **prove the revert**
     self-heals before any live node is touched. Then the gas fleet, then the relay-mesh nodes.
+
+### Phase 4 (cont.) — `gas_standby` repoint HARDWARE VALIDATION (2026-07-08)
+
+First real hardware exercise of the DJ-19 repoint op, on `standby_c6` (device `gas_standby`, the dormant
+BME680 spare) while it was **on USB at the computer** (trivial recovery). Fleet fw OTA'd first
+(`standby_c6@rp1`, slot `ota_0`→`ota_1`, identity+hash verified). Serial captured on `/dev/ttyACM0`
+throughout (resilient reopen-on-reboot — the C6 USB-serial-JTAG re-enumerates each boot).
+
+- **✅ BOOT-COUNT REVERT PROVEN (the safety net).** A deliberate bad-PSK repoint made the node associate
+  to `autohome_airgap` then fail the 4-way handshake; the early `boot_check` counted `trial boot 1/3…3/3`
+  and after 3 failures logged `repoint REVERTED after 3 failed boots -> restoring ssid=CTWap_24g
+  broker=.0.210` and rejoined the household net — **zero intervention**. The backup captured the effective
+  pre-repoint config faithfully (incl. the compile-default `ntp=pool.ntp.org`). It then self-healed a
+  SECOND time, unplanned, on the WHOOPSIE below.
+- **✅ REAL MIGRATION SUCCEEDED.** With the correct PSK the node connected to ha-2 on `trial boot 1/3`,
+  logged `edge node up: broker=mqtt://192.168.1.210:1883` then `repoint CONFIRMED (broker reachable) —
+  committed` (late confirm cleared pending, no revert). Verified: `standby_c6` online + publishing
+  `gas/adv` on ha-2 `.1.210`; **0 messages on `.210` in 6 s → migrated away cleanly.** First ESP32-class
+  device on the air-gap net via the signed repoint op.
+- **WHOOPSIE #8 — the tool mangled the Wi-Fi PSK; the firmware was right to reject it.** My first "good"
+  repoint ALSO failed (identical associate→4-way-fail→revert). Root cause was server-side, not firmware:
+  extracting `WIFI_PSK` from `instance/openwrt/airgap_router.env` with `awk -F=` + `tr -d '"'\'' '`
+  grabbed the trailing comment and stripped real characters (got a 48/60-char blob; the real key is 19).
+  **Fix/lesson: never `tr`-scrub a secret or split it on `-F=` — `source` the env so the shell honors the
+  quoting.** Validated the passphrase BEFORE re-firing by PBKDF2-hashing it against `.210`'s live
+  `wpa_supplicant-wlp2s0.conf` psk (matched) — the reversible design turned a bad cred into a 3-min
+  self-healed cycle instead of a bricked node. The confirm-then-commit + boot-count-revert invariant
+  earned its keep on the very first hardware run (cf. WHOOPSIE #7).
+- **Security once-over (per Hugh's standing ask):** repoint rides the same signed+fresh+replay gate as
+  OTA → **no new injection point** (forging it needs the per-node cmd secret, which already permits a
+  worse malicious OTA); the revert takes no network input and is net-defensive. The real future surface
+  is DJ-17 network-agnostic discovery (rogue-AP/mDNS-spoof) → **gate DJ-17 on broker auth + TLS**
+  (`broker-auth-posture` / `tls-r9-auth`).
+- **Follow-ups:** (a) wire `repoint_node.py` into `device_push.py`'s ESP32 class so real migrations run the
+  full serialize→import→confirm→pending-hold-retire pipeline (COORDINATE — dev2 is in `device_push` for
+  the ADR-0028 cleanup); (b) `gas_standby` still shows on `.210`'s registry (direct repoint bypassed the
+  retire step) — clean via the device_push path; (c) S3 + D1001 `app_main` need the same 3-line wiring
+  (S3 also a wired-node tweak: make ssid/psk optional) when their turn comes.
