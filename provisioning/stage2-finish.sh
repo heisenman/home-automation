@@ -63,8 +63,11 @@ done
 
 step "Stage 2b finisher — host: $(hostname), user: $RUN_USER, repo: $REPO_DIR"
 ok "$(. /etc/os-release 2>/dev/null && echo "$PRETTY_NAME") · kernel $(uname -r) · python $(python3 --version 2>&1 | awk '{print $2}')"
-# Warm the sudo cache once up front so prompts (if any) happen here, not mid-step.
-sudo -v || die "sudo is required."
+# Confirm sudo works NON-INTERACTIVELY. Use `sudo -n true`, not `sudo -v`: `-v` validates against
+# ALL of the user's rules and prompts for a password even when a NOPASSWD rule covers every command
+# (because the `%sudo` group rule requires one) — which dies on a headless/over-SSH run with no TTY.
+# The bootstrap 90-visko-bootstrap grant (NOPASSWD: ALL) makes every real `sudo` call below work.
+sudo -n true 2>/dev/null || die "passwordless sudo is required. Restore /etc/sudoers.d/90-visko-bootstrap (visko ALL=(ALL) NOPASSWD: ALL), or run once interactively to warm the cache."
 
 # ── §4  Full system package set (superset of spec §4 + install.sh + firstboot) ─
 step "§4  System packages"

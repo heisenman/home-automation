@@ -329,3 +329,25 @@ generalizations from §5 already applied), so the next migration is fill-in-the-
   `provisioning/airgap/{210-airgap-nic.sh,verify-gap.sh,bridge/*}`;
   `systemd/{ha-web-bridge,ha-router-reconcile}.service`; `tools/{repoint_tasmota,repoint_node}.py`;
   `docs/airgap/*`
+
+## 10. Execution log (build journal — real-time whoopsies + fixes)
+
+> Dated, chronological record of what actually happened as we built each phase — including the bugs we
+> hit and how we fixed them. These are the details that make the future ADR/template battle-tested.
+
+### Phase -1 (pre-provision ha-2 while on the household net, 2026-07-08)
+- **Control-plane hooks established.** Set up the shared `id_cluster` back-channel: authorized
+  `id_cluster.pub` on both `.210` and ha-2 and copied the shared keypair to ha-2. Verified **bidirectional**
+  passwordless SSH (`.210`↔ha-2). This is the exact channel that becomes the post-gap control path.
+- **ha-2 baseline:** Debian 13 (kernel 6.12.95), 208 G free, 15 G RAM, repo current, internet reachable,
+  broker-isolated (no `instance/mqtt.env` → services default to its own localhost broker, so ha-2 can't
+  disturb `.210`'s live bus).
+- **WHOOPSIE #1 — `stage2-finish.sh` died with "sudo: a password is required" over headless SSH.** Root
+  cause: line 67 used `sudo -v`, which *validates against every one of the user's sudoers rules* and so
+  prompts for a password even though the bootstrap `90-visko-bootstrap` grant is `NOPASSWD: ALL` —
+  because visko is also in the `sudo` group (`%sudo ALL=(ALL:ALL) ALL`, password-required), and `-v`
+  doesn't get to "last match wins." With no TTY (BatchMode SSH) the prompt can't be answered → die. Real
+  `sudo` commands were fine the whole time (`sudo -n true` = rc 0). **Fix:** replaced `sudo -v` with
+  `sudo -n true` (the correct non-interactive check). **Lesson for the template:** every provisioning
+  script that may run headless over SSH must use `sudo -n`, never `sudo -v`/bare `sudo`, for its preflight
+  — this whole migration operates boxes headlessly, so it's a class of bug, not a one-off.
