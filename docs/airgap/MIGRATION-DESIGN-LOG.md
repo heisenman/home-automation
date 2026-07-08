@@ -519,3 +519,17 @@ generalizations from §5 already applied), so the next migration is fill-in-the-
   multi-net cluster-doctor.
 - **First migration target (Phase 4, needs Hugh's go):** `failover_pm` + `airgap_router_pm` — the PMs
   whose data is directly relevant to the new network.
+
+### Phase 4 (execute migration — first batch, 2026-07-08)
+- **✅ FIRST REAL MIGRATIONS: `failover_pm` + `airgap_router_pm` (the PMs).** `device_push.py` ran the
+  full pipeline on live hardware: repoint (Tasmota `Backlog` → `autohome_airgap` + ha-2 broker) → confirm
+  (ha-2's API shows a fresh `ts` through the bridge, ~1-3 s old) → retire on `.210`. Both **live on ha-2**
+  (`h_office`) and **gone from `.210`** (0 in device_last_seen). These PMs meter ha-2 + the R7800 — their
+  data now lives on the network they measure.
+- **WHOOPSIE #7 (the safety earned its keep) — `device_push` invoked sub-tools with system `python3`
+  (no `yaml`), so the repoint failed.** The **confirm-then-retire** design worked perfectly: repoint
+  failed → marked `failed` → **did NOT retire** → `failover_pm` stayed safe on `.210`, untouched. Fixed by
+  invoking sub-tools with `sys.executable` (the venv). Lesson: the reversibility/never-retire-before-confirm
+  invariant paid off on the very first real run.
+- ha-2's `ha-tasmota-bridge` started as the first ingest activation (DJ-16). Note: `install.sh`'s fixed
+  unit list omits the bridges, so it was installed directly (pointed at ha-2's local broker).

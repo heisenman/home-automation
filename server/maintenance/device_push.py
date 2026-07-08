@@ -90,7 +90,7 @@ def confirm_on_ha2(device_id, timeout_s, dry):
 
 def repoint(device_id, cls, dry, revert=False):
     if cls == "tasmota":
-        cmd = ["python3", str(REPO / "tools/repoint_tasmota.py"), device_id] + (["--revert"] if revert else [])
+        cmd = [sys.executable, str(REPO / "tools/repoint_tasmota.py"), device_id] + (["--revert"] if revert else [])
         rc, out = _run(cmd + (["--dry-run"] if dry else []), dry=False)
         return rc == 0
     if cls == "ble":
