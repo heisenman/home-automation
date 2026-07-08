@@ -81,6 +81,15 @@ static void edge_on_reading(const char *mac_str, const sb_reading_t *r, int rssi
         ha_mqtt_publish_reading(mac_str, r, rssi);
 }
 
+// Generic (non-SwitchBot) relay sink — e.g. the Aranet radon sensor over BLE5 extended advertising.
+// Same Phase-B relay gate as edge_on_reading, then publish via the generic device path.
+static void edge_on_device(const char *mac_str, const char *device_type, const char *metrics_json,
+                           int rssi, void *user) {
+    (void)user;
+    if (ha_relay_allowed(mac_str))
+        ha_mqtt_publish_device(mac_str, device_type, metrics_json, rssi);
+}
+
 // Reach-census tap (ADR-0023): every heard endpoint feeds the RSSI-EWMA table, regardless of the relay
 // allowlist — so the coordinator sees this node's whole neighborhood, not just what it currently relays.
 static void edge_on_sighting(const uint8_t mac[6], int rssi, void *user) {
@@ -151,6 +160,7 @@ void app_main(void) {
     ha_ble_scan_cfg_t scan_cfg = {
         .controller_init = NULL,          // native controller (nimble_port_init brings it up)
         .on_reading      = edge_on_reading,
+        .on_device       = edge_on_device,     // non-SwitchBot devices (Aranet radon) — ext-adv builds only
         .on_sighting     = edge_on_sighting,   // ADR-0023 reach census tap (allowlist-independent)
         .shared_radio    = on_wifi,       // duty-cycle when on WiFi (shared radio); continuous when wired
         .user            = NULL,

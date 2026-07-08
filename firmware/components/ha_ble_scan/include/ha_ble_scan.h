@@ -35,6 +35,12 @@ typedef struct {
     void (*on_reading)(const char *mac_str, const sb_reading_t *r, int rssi, void *user);
     void *user;
 
+    // Optional: a non-SwitchBot decoded device (e.g. Aranet radon over BLE5 extended advertising) — the
+    // scanner hands a caller-built metrics JSON so the edge relays it via ha_mqtt_publish_device, exactly
+    // like on_reading but for arbitrary device types. Only invoked on builds with extended-adv scanning
+    // (CONFIG_BT_NIMBLE_EXT_ADV); NULL on legacy-scan nodes. mac_str is display order.
+    void (*on_device)(const char *mac_str, const char *device_type, const char *metrics_json, int rssi, void *user);
+
     // Optional per-sighting tap (ADR-0023 reach census). Called for EVERY heard SwitchBot advert —
     // BEFORE the dedup publish-gate and INDEPENDENT of any relay allowlist — on the NimBLE host task.
     // mac is display order. NULL => off (default; panel + un-migrated nodes are unaffected). Runs in the

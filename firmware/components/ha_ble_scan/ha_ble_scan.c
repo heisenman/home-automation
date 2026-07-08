@@ -15,6 +15,27 @@
 
 static const char *TAG = "ha_ble_scan";
 
+#if CONFIG_BT_NIMBLE_EXT_ADV
+// Inline Aranet Radon Plus decoder (manufacturer company 0x0702, SAF Tehnika), broadcast via BLE5
+// EXTENDED advertising. Kept HERE (not a shared component) so it compiles ONLY on ext-adv builds — the
+// C6/panel fleet's component graph is untouched. Byte layout mirrors server/ingest/decoders/aranet.py
+// (company id already stripped; readings block at offset 8; type 3 = Radon; 0xFFFF radon = warming up).
+#define ARANET_COMPANY_ID 0x0702
+typedef struct { int radon; float temp, pres, hum; int batt; } aranet_rd_t;
+static bool aranet_decode_inline(const uint8_t *m, int n, aranet_rd_t *o) {
+    if (!m || n < 24 || m[0] != 0x03) return false;
+    float t = (m[10] | (m[11] << 8)) / 20.0f;
+    if (t < -40.0f || t > 85.0f) return false;
+    uint16_t rn = m[8] | (m[9] << 8);
+    o->radon = (rn == 0xFFFF) ? -1 : (int)rn;      // omit while warming up
+    o->temp  = t;
+    o->pres  = (m[12] | (m[13] << 8)) / 10.0f;
+    o->hum   = (m[14] | (m[15] << 8)) / 10.0f;
+    o->batt  = m[17];
+    return true;
+}
+#endif
+
 static ha_ble_scan_cfg_t s_cfg;
 static uint8_t  own_addr_type;
 static volatile bool s_paused;
@@ -55,6 +76,7 @@ typedef struct {
     bool used;
     int64_t last_ms;
     float t; int h; int b;
+    int rn;                   // last radon (Aranet path only); unused for SwitchBot slots
 } dedup_t;
 static dedup_t s_seen[DEDUP_SLOTS];
 
@@ -85,6 +107,26 @@ static bool should_publish(dedup_t *slot, const uint8_t mac[6], const sb_reading
     return false;
 }
 
+#if CONFIG_BT_NIMBLE_EXT_ADV
+// Aranet publish gate: the sensor re-advertises ~1 Hz, so rate-limit to a radon/temp change or the same
+// 30 s heartbeat as SwitchBot. Reuses the per-MAC dedup slot (rn/t fields).
+static bool should_publish_aranet(dedup_t *slot, const uint8_t mac[6], const aranet_rd_t *ar) {
+    int64_t now = esp_log_timestamp();
+    if (!slot->used || memcmp(slot->mac, mac, 6) != 0) {
+        memcpy(slot->mac, mac, 6); slot->used = true;
+        slot->last_ms = now; slot->rn = ar->radon; slot->t = ar->temp;
+        return true;
+    }
+    bool changed = (ar->radon != slot->rn)
+                || (ar->temp - slot->t > TEMP_EPS) || (slot->t - ar->temp > TEMP_EPS);
+    if (changed || (now - slot->last_ms) >= REPUBLISH_MIN_MS) {
+        slot->last_ms = now; slot->rn = ar->radon; slot->t = ar->temp;
+        return true;
+    }
+    return false;
+}
+#endif
+
 bool ha_ble_lookup_addr(const char *mac_str, ble_addr_t *out) {
     uint8_t mac[6];
     if (sscanf(mac_str, "%2hhx:%2hhx:%2hhx:%2hhx:%2hhx:%2hhx",
@@ -99,32 +141,38 @@ bool ha_ble_lookup_addr(const char *mac_str, ble_addr_t *out) {
 static int gap_event(struct ble_gap_event *event, void *arg);
 
 static void start_scan(void) {
+#if CONFIG_BT_NIMBLE_EXT_ADV
+    // Extended scanning (BLE5): required to receive Aranet's EXTENDED advertisements. It also delivers
+    // legacy advs (SwitchBot) as BLE_GAP_EVENT_EXT_DISC, so this single scan covers both device families.
+    struct ble_gap_ext_disc_params up = { .itvl = s_scan_itvl, .window = s_scan_window, .passive = 1 };
+    int rc = ble_gap_ext_disc(own_addr_type, 0, 0, 0, 0, 0, &up, NULL, gap_event, NULL);
+    if (rc != 0) { s_running = false; ESP_LOGE(TAG, "ble_gap_ext_disc failed rc=%d", rc); }
+    else         { s_running = true;  ESP_LOGI(TAG, "EXTENDED passive scan started (own_addr_type=%d)", own_addr_type); }
+#else
     struct ble_gap_disc_params dp = {0};
     dp.passive = 1; dp.filter_duplicates = 0;
     dp.itvl = s_scan_itvl; dp.window = s_scan_window;
     int rc = ble_gap_disc(own_addr_type, BLE_HS_FOREVER, &dp, gap_event, NULL);
     if (rc != 0) { s_running = false; ESP_LOGE(TAG, "ble_gap_disc failed rc=%d", rc); }
     else         { s_running = true;  ESP_LOGI(TAG, "passive scan started (own_addr_type=%d)", own_addr_type); }
+#endif
 }
 
 void ha_ble_scan_pause(void)  { s_paused = true;  ble_gap_disc_cancel(); }
 void ha_ble_scan_resume(void) { s_paused = false; start_scan(); }
 
-static int gap_event(struct ble_gap_event *event, void *arg) {
-    if (event->type == BLE_GAP_EVENT_DISC_COMPLETE) {
-        if (!s_paused) start_scan();   // don't restart while a GATT pull holds the radio
-        return 0;
-    }
-    if (event->type != BLE_GAP_EVENT_DISC) return 0;
-
+// Decode + relay ONE advertisement. Shared by the legacy and (CONFIG_BT_NIMBLE_EXT_ADV) extended paths so
+// their behaviour is identical; the extended build additionally recognizes Aranet (company 0x0702).
+static void handle_adv(const uint8_t *d, int len, int rssi, const ble_addr_t *addr) {
     s_total_adv++;
-    s_last_rssi = event->disc.rssi;
+    s_last_rssi = rssi;
 
-    const uint8_t *d = event->disc.data;
-    int len = event->disc.length_data;
     const uint8_t *svc = NULL, *mfr = NULL;
     int svc_len = 0, mfr_len = 0;
     bool has_0969 = false, has_fd3d = false;
+#if CONFIG_BT_NIMBLE_EXT_ADV
+    const uint8_t *aranet = NULL; int aranet_len = 0;
+#endif
     for (int i = 0; i + 1 < len; ) {
         uint8_t flen = d[i];
         if (flen == 0 || i + 1 + flen > len) break;
@@ -134,34 +182,81 @@ static int gap_event(struct ble_gap_event *event, void *arg) {
         if (type == 0xFF && vlen >= 2) {
             uint16_t company = val[0] | (val[1] << 8);
             if (company == SB_MFR_COMPANY_ID) { mfr = val + 2; mfr_len = vlen - 2; has_0969 = true; }
+#if CONFIG_BT_NIMBLE_EXT_ADV
+            else if (company == ARANET_COMPANY_ID) { aranet = val + 2; aranet_len = vlen - 2; }
+#endif
         } else if (type == 0x16 && vlen >= 2) {
             uint16_t uuid = val[0] | (val[1] << 8);
             if (uuid == SB_SVC_UUID16) { svc = val + 2; svc_len = vlen - 2; has_fd3d = true; }
         }
         i += 1 + flen;
     }
-    if (!sb_is_switchbot(has_0969, has_fd3d)) return 0;
 
-    const uint8_t *a = event->disc.addr.val;
+    const uint8_t *a = addr->val;
     uint8_t mac[6] = { a[5], a[4], a[3], a[2], a[1], a[0] };
+    char mac_str[18];
+
+#if CONFIG_BT_NIMBLE_EXT_ADV
+    // Aranet radon (extended adv): decode + relay like a SwitchBot reading, via the generic on_device path.
+    if (aranet) {
+        aranet_rd_t ar;
+        if (!aranet_decode_inline(aranet, aranet_len, &ar)) return;
+        if (s_cfg.on_sighting) s_cfg.on_sighting(mac, rssi, s_cfg.user);   // reach census sees radon too
+        dedup_t *slot = find_or_alloc(mac);
+        slot->addr = *addr;
+        if (!should_publish_aranet(slot, mac, &ar)) return;
+        char metrics[128];
+        if (ar.radon >= 0)
+            snprintf(metrics, sizeof(metrics),
+                "{\"radon_bqm3\":%d,\"temperature_c\":%.2f,\"pressure_hpa\":%.1f,\"humidity_pct\":%.1f,\"battery_pct\":%d}",
+                ar.radon, ar.temp, ar.pres, ar.hum, ar.batt);
+        else                       // still warming up → omit radon (matches the server decoder)
+            snprintf(metrics, sizeof(metrics),
+                "{\"temperature_c\":%.2f,\"pressure_hpa\":%.1f,\"humidity_pct\":%.1f,\"battery_pct\":%d}",
+                ar.temp, ar.pres, ar.hum, ar.batt);
+        snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
+                 mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+        s_decoded++;
+        if (s_cfg.on_device) s_cfg.on_device(mac_str, "aranet_radon_plus", metrics, rssi, s_cfg.user);
+        return;
+    }
+#endif
+
+    if (!sb_is_switchbot(has_0969, has_fd3d)) return;
 
     // Reach census tap (ADR-0023): feed EVERY heard endpoint — before dedup, before the relay filter —
     // so the coordinator sees a node's full neighborhood, not just what it currently relays.
-    if (s_cfg.on_sighting) s_cfg.on_sighting(mac, event->disc.rssi, s_cfg.user);
+    if (s_cfg.on_sighting) s_cfg.on_sighting(mac, rssi, s_cfg.user);
 
     sb_reading_t r;
-    if (!sb_decode(svc, svc_len, mfr, mfr_len, &r) || !r.valid) return 0;
+    if (!sb_decode(svc, svc_len, mfr, mfr_len, &r) || !r.valid) return;
 
     dedup_t *slot = find_or_alloc(mac);
-    slot->addr = event->disc.addr;     // cache full address (type + val) for GATT connect
-    if (!should_publish(slot, mac, &r)) return 0;
+    slot->addr = *addr;                // cache full address (type + val) for GATT connect
+    if (!should_publish(slot, mac, &r)) return;
 
-    char mac_str[18];
     snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     s_decoded++;
-    if (s_cfg.on_reading) s_cfg.on_reading(mac_str, &r, event->disc.rssi, s_cfg.user);
-    return 0;
+    if (s_cfg.on_reading) s_cfg.on_reading(mac_str, &r, rssi, s_cfg.user);
+}
+
+static int gap_event(struct ble_gap_event *event, void *arg) {
+    switch (event->type) {
+    case BLE_GAP_EVENT_DISC:
+        handle_adv(event->disc.data, event->disc.length_data, event->disc.rssi, &event->disc.addr);
+        return 0;
+    case BLE_GAP_EVENT_DISC_COMPLETE:
+        if (!s_paused) start_scan();   // don't restart while a GATT pull holds the radio
+        return 0;
+#if CONFIG_BT_NIMBLE_EXT_ADV
+    case BLE_GAP_EVENT_EXT_DISC:
+        handle_adv(event->ext_disc.data, event->ext_disc.length_data, event->ext_disc.rssi, &event->ext_disc.addr);
+        return 0;
+#endif
+    default:
+        return 0;
+    }
 }
 
 static void on_sync(void) {

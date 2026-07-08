@@ -303,14 +303,26 @@ void ha_mqtt_start(const char *broker_uri, const char *node_id) {
 
 bool ha_mqtt_is_connected(void) { return s_connected; }
 
-void ha_mqtt_publish_reading(const char *mac_str, const sb_reading_t *r, int rssi) {
+// Generic relayed-BLE-device publish (ADR-0020): emit the canonical home/edge/<node>/<mac>/adv envelope
+// with a caller-built device_type + metrics JSON. edge_mapper ingests it by MAC (device-type-agnostic),
+// so any decoder (SwitchBot, Aranet, …) reuses this — the server needs no per-type change.
+void ha_mqtt_publish_device(const char *mac_str, const char *device_type, const char *metrics_json, int rssi) {
     if (!s_connected) return;
     char mf[13]; macflat(mac_str, mf);
     char topic[80];
     snprintf(topic, sizeof(topic), "home/edge/%s/%s/adv", s_node, mf);
-
     char ts[24];
     if (!ha_sntp_iso_utc(ts, sizeof(ts))) ts[0] = '\0';
+    char payload[320];
+    int n = snprintf(payload, sizeof(payload),
+        "{\"schema\":1,\"node\":\"%s\",\"mac\":\"%s\",\"device_type\":\"%s\","
+        "\"ts\":\"%s\",\"transport\":\"ble-adv\",\"metrics\":%s,\"meta\":{\"rssi\":%d}}",
+        s_node, mac_str, device_type, ts, metrics_json, rssi);
+    if (n <= 0 || n >= (int)sizeof(payload)) return;
+    esp_mqtt_client_publish(s_client, topic, payload, n, 1, false);
+}
+
+void ha_mqtt_publish_reading(const char *mac_str, const sb_reading_t *r, int rssi) {
     char metrics[96];
     if (r->battery_pct >= 0)
         snprintf(metrics, sizeof(metrics), "{\"temperature_c\":%.1f,\"humidity_pct\":%d,\"battery_pct\":%d}",
@@ -318,14 +330,7 @@ void ha_mqtt_publish_reading(const char *mac_str, const sb_reading_t *r, int rss
     else
         snprintf(metrics, sizeof(metrics), "{\"temperature_c\":%.1f,\"humidity_pct\":%d}",
                  r->temperature_c, r->humidity_pct);
-
-    char payload[320];
-    int n = snprintf(payload, sizeof(payload),
-        "{\"schema\":1,\"node\":\"%s\",\"mac\":\"%s\",\"device_type\":\"%s\","
-        "\"ts\":\"%s\",\"transport\":\"ble-adv\",\"metrics\":%s,\"meta\":{\"rssi\":%d}}",
-        s_node, mac_str, r->device_type, ts, metrics, rssi);
-    if (n <= 0 || n >= (int)sizeof(payload)) return;
-    esp_mqtt_client_publish(s_client, topic, payload, n, 1, false);
+    ha_mqtt_publish_device(mac_str, r->device_type, metrics, rssi);
 }
 
 void ha_mqtt_publish_history(const char *mac_str, const char *payload) {

@@ -8,6 +8,11 @@ CONFIG_BT_NIMBLE_ENABLED=y
 CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
 CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
 # (peripheral/broadcaster left off — we only scan and connect-out)
+# BLE5 EXTENDED advertising scan: the Aranet radon sensor broadcasts via extended adv (mfr 0x0702).
+# ext-scan ALSO delivers legacy advs (SwitchBot), so the one scan covers both. S3-ONLY: this flag is
+# NOT set on the C6 fleet's sdkconfig, so ha_ble_scan's ext path (#if CONFIG_BT_NIMBLE_EXT_ADV) compiles
+# only here and the C6 nodes keep their legacy scan unchanged. (aranet-radon-edge, 2026-07-08.)
+CONFIG_BT_NIMBLE_EXT_ADV=y
 # Host task builds history-relay JSON payloads on its stack during a pull:
 CONFIG_BT_NIMBLE_HOST_TASK_STACK_SIZE=6144
 

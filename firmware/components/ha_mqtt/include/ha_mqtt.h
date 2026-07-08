@@ -36,6 +36,10 @@ bool ha_mqtt_is_connected(void);
 // Publish a decoded reading keyed by MAC to home/edge/<node>/<mac>/adv. mac_str is "AA:BB:..", rssi dBm.
 void ha_mqtt_publish_reading(const char *mac_str, const sb_reading_t *r, int rssi);
 
+// Generic variant: same envelope/topic, but with a caller-built device_type + metrics JSON string (e.g.
+// a non-SwitchBot decoder like Aranet). metrics_json is the inner object, e.g. {"radon_bqm3":42,...}.
+void ha_mqtt_publish_device(const char *mac_str, const char *device_type, const char *metrics_json, int rssi);
+
 // Publish a raw history-relay message to home/edge/<node>/<mac>/history (qos 1).
 void ha_mqtt_publish_history(const char *mac_str, const char *payload);
 
