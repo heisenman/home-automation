@@ -1,0 +1,15 @@
+# Derived-metric sampler — persist air_quality (BME680 gas fusion) so it has a STORED time-series
+# (data-storage-is-primary directive; server/AGENTS.md). Oneshot, fired by ha-gas-quality-sampler.timer.
+# Reuses the viewmodel fusion, so a stored point == the live-view value. Backfill was a one-time
+# `gas_quality_persist.py --backfill`; this keeps it going forward.
+[Unit]
+Description=HA derived-metric sampler — persist air_quality (BME680 gas index)
+Documentation=file:///home/visko/home_automation/server/maintenance/gas_quality_persist.py
+
+[Service]
+Type=oneshot
+User=visko
+WorkingDirectory=/home/visko/home_automation
+ExecStart=/home/visko/home_automation/venv/bin/python server/maintenance/gas_quality_persist.py --once
+Nice=15
+IOSchedulingClass=idle

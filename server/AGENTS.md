@@ -6,6 +6,14 @@ config lives in `../instance/` (git-ignored); templates in [`../config-examples/
 *↑ The by-location node for `server/` in the [root AGENTS.md](../AGENTS.md) tree (ADR-0021/0025); the
 by-capability index is [`docs/REUSE.md`](../docs/REUSE.md). Link up, don't duplicate.*
 
+> **PRIMARY REQUIREMENT — data collection + storage (Hugh, 2026-07-08).** Sensors are data; the system's
+> job is to collect and **store** it. Data may be used for anything later, so **every server activity that
+> produces data must persist it** — including **derived/computed metrics** (compute-and-**store**, not
+> compute-in-flight-only; a UI metric should have a stored time-series). Treat a gap in stored history as a
+> bug. **Deletion is allowed but never implicit** — only on explicit user or deliberate system request
+> (retention/compaction). Rank this alongside correctness when designing ingest, rollups, retention, and
+> migrations.
+
 ## Layout
 
 | Dir/file | Role | ADR |

@@ -1,0 +1,13 @@
+# Persist air_quality every 60s. Air quality moves slowly, so 1/min is ample resolution and the rollup
+# downsamples it like any metric. Persistent=false: a missed fire just resumes next interval.
+[Unit]
+Description=Persist air_quality every 60s (derived metric -> stored series)
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=60s
+AccuracySec=15s
+RandomizedDelaySec=10s
+
+[Install]
+WantedBy=timers.target
