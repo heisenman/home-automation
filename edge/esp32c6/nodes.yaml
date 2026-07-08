@@ -48,3 +48,12 @@ nodes:
     area: h_office
     broker: "mqtt://192.168.0.210:1883"
     ota_host: "192.168.0.210"
+
+  standby_c6:
+    mac: "A0:F2:62:86:DC:4C"
+    target: esp32c6
+    sensor: bme680           # Bosch BME680 — STANDBY spare (location TBD). Banks raw data wherever powered;
+                             # air_quality stays dormant until a real area is assigned (one-line relocate).
+    area: standby
+    broker: "mqtt://192.168.0.210:1883"
+    ota_host: "192.168.0.210"
