@@ -390,3 +390,22 @@ generalizations from §5 already applied), so the next migration is fill-in-the-
   `mesh.db`, VAPID) + hot tier (27,788 rows) + all 7 Parquet partitions. **HARD archive-parity gate:**
   ha-2 `rows=10,537,962 earliest=2026-01-07T17:43Z` == source exactly → **RECORD-KEEPING ELIGIBLE**. ha-2
   now carries the full dataset into the migration. Took ~1 min (LAN).
+
+### Phase 1a (headless prep before the physical move, 2026-07-08)
+- **ha-2 captured + shut down.** Grabbed ha-2's NIC (`eno1`, MAC `8c:1f:64:c2:26:5c`) for the R7800
+  DHCP reservation, confirmed sshd + id_cluster + DHCP, then a clean poweroff. ha-2 is **off, ready to
+  move**. **WHOOPSIE #3 (minor):** a backgrounded `(sleep 3; poweroff) &` over SSH gets SIGHUP'd when the
+  session closes, so it never ran — issue `poweroff` directly and let the connection drop.
+- **R7800 UCI configs re-cut** to the air-gap target (`provisioning/openwrt/etc/config/{network,dhcp,
+  wireless,system}`): lan `192.168.1.1`; hidden SSID `autohome_airgap` (both bands, 5 GHz ch 149);
+  `noresolv` (no upstream DNS); pool `.100–.149`; reservations **ha-2→`.210`**, `.210`-leg→`.245`; NTP
+  anchored on `.1.210`/`.1.245`; WAN disabled. Real MACs/PSK/paths in gitignored
+  `instance/openwrt/airgap_router.env` (never committed).
+- **New scripts:** `provisioning/airgap/210-airgap-nic.sh` (brings `.210`'s `eno1` up static
+  `192.168.1.245`, persistent ifupdown drop-in, **no default route via the leg + `ip_forward=0` = the
+  gap**) and `verify-gap.sh` (asserts `ip_forward=0`, dual-homed, no cross-route, + the **negative test**
+  that ha-2 cannot reach the household net).
+- **Deferred to bring-up (1b):** `router_reconcile.py` + `ha-router-reconcile` and the keepalived /
+  `cluster.env` generalization — written where they can be **tested live** against the R7800/cluster,
+  not blind. Applied over `.210`'s air-gap leg (SSH, no internet needed).
+- **➡ Handoff: ha-2 + R7800 ready to physically move/cable** (see the move runbook / Phase 1b).

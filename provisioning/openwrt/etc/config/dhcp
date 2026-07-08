@@ -1,13 +1,13 @@
-# OpenWRT /etc/config/dhcp — DRAFT pre-stage for the R7800. dnsmasq = LAN DHCP + DNS.
-# Air-gap posture: serve the LAN only, resolve LAN names locally, no internet upstream.
+# OpenWRT /etc/config/dhcp — R7800, dnsmasq = LAN DHCP + DNS for the AIR-GAP net.
+# Air-gap posture: serve the LAN only, resolve LAN names locally, NO internet upstream.
 #
-# Address plan on 192.168.0.0/24 (gateway .1 = the router):
-#   .1            router
+# Address plan on 192.168.1.0/24 (gateway .1 = the router):
+#   .1            router (ha-router-airgap)
 #   .100–.149     dynamic DHCP pool (50 leases)
-#   .150–.199     static infra / edge nodes (assign via `config host` below)
+#   .150–.199     static infra / edge nodes (assign via `config host` below, MACs at flash time)
 #   .200          VIP (VRRP floating, NEVER in the pool, NEVER a static lease — keepalived owns it)
-#   .210          ha-dev (dictator)        .245  fileserver (warm standby)
-# So the pool (.100–.149) is disjoint from .200/.210/.245 — the VIP can never collide with a lease.
+#   .210          ha-2 (air-gap DICTATOR)      .245  .210's air-gap leg (bridge, static via 210-airgap-nic.sh)
+# Pool (.100–.149) is disjoint from .200/.210/.245 — the VIP can never collide with a lease.
 
 config dnsmasq
 	option domainneeded '1'
@@ -20,16 +20,15 @@ config dnsmasq
 	option readethers '1'
 	option leasefile '/tmp/dhcp.leases'
 	option localservice '1'
-	# AIR-GAP: with WAN disabled there is no upstream resolver. Uncomment to make that explicit:
-	#option noresolv '1'
+	option noresolv '1'                # AIR GAP: no upstream resolver (WAN disabled) — LAN names only
 
 config dhcp 'lan'
 	option interface 'lan'
 	option start '100'
 	option limit '50'                  # .100–.149
 	option leasetime '12h'
-	list dhcp_option '6,192.168.0.1'   # DNS = the router (LAN-only resolver)
-	list dhcp_option '3,192.168.0.1'   # gateway
+	list dhcp_option '6,192.168.1.1'   # DNS = the router (LAN-only resolver)
+	list dhcp_option '3,192.168.1.1'   # gateway
 
 config dhcp 'wan'
 	option interface 'wan'
@@ -40,20 +39,21 @@ config odhcpd 'odhcpd'
 	option leasefile '/tmp/hosts/odhcpd'
 	option loglevel '4'
 
-# ── static leases + names (MACs are SECRET → fill at flash time, never commit) ─────
-# Pinning the servers means they keep their IPs even if they DHCP, and `expandhosts` gives every host a
-# resolvable <name>.lan. The VIP is added as a plain hostname (not a lease) so `ha-vip.lan` resolves.
+# ── static leases + names (MACs are in the gitignored instance/openwrt/airgap_router.env → filled by
+# router_reconcile.py; placeholders here so nothing sensitive is committed) ─────────
+# ha-2 (dictator) MUST get .210 so it comes up at a known address on the air-gap net (this is how .210
+# regains control over its eno1 leg after ha-2 moves — see gotcha 13).
 config host
-	option name 'ha-dev'
-	option ip '192.168.0.210'
-	option mac '__MAC_210__'
+	option name 'ha-2'
+	option ip '192.168.1.210'
+	option mac '__HA2_MAC__'
 
+# .210's air-gap leg is static (210-airgap-nic.sh), but pin its name for DNS/`expandhosts`.
 config host
-	option name 'fileserver'
-	option ip '192.168.0.245'
-	option mac '__MAC_245__'
+	option name 'ha-dev-airgap'
+	option ip '192.168.1.245'
+	option mac '__BRIDGE_MAC__'
 
-# ha-vip.lan -> .200 (resolve only; the address itself floats via VRRP). Also add to /etc/hosts:
-#   192.168.0.200  ha-vip ha-vip.lan
-# Edge nodes (S3 north, C6 south, …) get static leases here once their MACs are filled in at flash time,
-# in the .150–.199 band — keep them OFF wifi-isolation (./wireless) so they reach the VIP.
+# ha-vip.lan -> .200 (resolve only; the address floats via VRRP). Also add to /etc/hosts:
+#   192.168.1.200  ha-vip ha-vip.lan
+# Edge nodes get static leases here (.150–.199) once their MACs are filled in, OFF wifi-isolation.

@@ -1,12 +1,13 @@
-# OpenWRT /etc/config/network — DRAFT pre-stage for the Netgear R7800 (ipq806x, DSA).
-# Target: the air-gapped HA network's router. Keeps 192.168.0.0/24 so NOTHING re-addresses (the .245
-# fileserver + SMB clients, .210, the .200 VIP, and all edge nodes keep their IPs through the cutover).
+# OpenWRT /etc/config/network — the AIR-GAP HA network's router (Netgear R7800, ipq806x, DSA).
+# Subnet: 192.168.1.0/24, gateway .1 = this router. This is a SEPARATE, PERMANENT network from the
+# household internet net (192.168.0.0/24) — deliberately a different subnet so the bridge host .210 can
+# hold one interface on EACH net without a same-subnet collision (see docs/airgap/MIGRATION-DESIGN-LOG.md,
+# DJ-5). NOT a plug-swap of the household router.
 #
-# KEY DESIGN — single bridged L2 segment (br-lan = LAN ports + both wifi radios), NO VLAN split of the HA
-# devices. This is the fix for `vip-unreachable-from-wifi`: with wifi and wired on one bridge and AP
-# isolation OFF (see ./wireless), ARP + keepalived's gratuitous-ARP for the floating VIP .200 cross the
-# bridge, so wifi edge nodes/clients follow a dictator failover. A VLAN/L3 split would re-break exactly
-# that, so the trusted HA devices stay on one segment by design.
+# KEY DESIGN — single bridged L2 segment (br-lan = LAN ports + both wifi radios), NO VLAN split. This is
+# the fix for `vip-unreachable-from-wifi`: with wifi + wired on one bridge and AP isolation OFF
+# (./wireless), ARP + keepalived's gratuitous-ARP for the floating VIP .200 cross the bridge, so wifi
+# edge nodes follow a dictator failover. A VLAN/L3 split would re-break that — keep HA devices on one seg.
 
 config interface 'loopback'
 	option device 'lo'
@@ -29,19 +30,15 @@ config device
 config interface 'lan'
 	option device 'br-lan'
 	option proto 'static'
-	option ipaddr '192.168.0.1'        # MUST match the current router's LAN IP = every host's gateway
+	option ipaddr '192.168.1.1'        # air-gap gateway = every air-gap host's gateway
 	option netmask '255.255.255.0'
 	option ip6assign '60'
-	# NB: .200 (VIP, VRRP-managed) / .210 / .245 are reserved out of the DHCP pool in ./dhcp — the router
-	# must never claim .200 and never hand it out.
+	# .200 (VIP, VRRP-managed) / .210 (ha-2 dictator) / .245 (.210 bridge leg) are reserved out of the
+	# DHCP pool in ./dhcp — the router must never claim .200 nor hand it out.
 
 # ── WAN ───────────────────────────────────────────────────────────────────────────
-# Air-gapped END STATE = no uplink: leave WAN DISABLED (commented). For a TRANSITIONAL uplink (keep
-# internet during/right after cutover, pull it later), uncomment these two and set the wan zone in
-# ./firewall back to reject+masq. SMB/fileserver traffic is intra-LAN and is unaffected either way.
+# AIR GAP: no uplink, ever. WAN stays DISABLED (commented). This net is genuinely isolated — there is no
+# transitional-uplink story here (the household net keeps the family's internet; this one never touches it).
 #config interface 'wan'
 #	option device 'wan'
 #	option proto 'dhcp'
-#config interface 'wan6'
-#	option device 'wan'
-#	option proto 'dhcpv6'
