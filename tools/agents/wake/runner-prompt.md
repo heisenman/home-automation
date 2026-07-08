@@ -22,6 +22,13 @@ Work the wake, then exit. Be terse and act, don't deliberate aloud.
        `done` with a `--note` pointing at the commit, `git push`.
      - The peer asked you to receive/ack something → read it, `note` your acknowledgement, update beacon.
      - Nothing actionable in-policy → that's fine; `note` what you observed and exit.
+     - **You were woken for an assignment but must DEFER** (the owning seat's interactive session is
+       active so you'd collide, OR the work is off-whitelist/outward): do NOT silently no-op — that leaves
+       the responsible session with nothing. Post an explicit handoff on the DATA plane so it gets a clear
+       work order on its next turn:
+       `python3 ~/.claude/host/bin/coord-local.py --as $HA_AGENT_ID post "@$HA_AGENT_ID HANDOFF: <task-id> is yours and waiting — <what's needed / why I deferred>" --kind handoff`
+       then beacon + `wake-activity.log` + exit. (This is load-balancing: the wake couldn't do the work, so
+       it makes sure the work is unmistakably queued for whoever can.)
 3. Do the work (in-policy only). Commit + push if you produced repo changes (never force-push).
 4. **Report:** update your beacon (`coord.py beacon --note "<what you did>"`) and append a one-line summary
    to `instance/wake-activity.log`. If you escalated, make the note say exactly what Hugh needs to decide.
