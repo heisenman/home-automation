@@ -449,3 +449,15 @@ generalizations from §5 already applied), so the next migration is fill-in-the-
 - **⚠ OPEN — bridge persistence.** `.210`'s WiFi leg (`wlp2s0` association + `.1.245`) is **RUNTIME-ONLY**
   right now — a `.210` reboot would strand the air-gap net. Needs a persistent `wpa_supplicant` +
   static-IP unit (systemd or ifupdown). **NEXT before anything else load-bearing.**
+- **✅ Bridge persistence DONE.** `/etc/wpa_supplicant/wpa_supplicant-wlp2s0.conf` (HASHED psk, 600) +
+  `systemd/ha-airgap-bridge.service` (Type=simple, Restart=always) running
+  `provisioning/airgap/airgap-bridge-up.sh` (up `wlp2s0` → static `.1.245` → `ip_forward=0` → exec
+  `wpa_supplicant` foreground). Handed off from the manual supplicant + verified: re-associates in ~6 s,
+  restores `.1.245` + reachability, gap still 7/7. Survives reboot (enabled) + self-heals. WIFI_PSK +
+  radio paths recorded in gitignored `instance/openwrt/airgap_router.env`.
+- **✅ ha-2 WiFi radio OFF (Hugh's request — power + RF).** ha-2 is wired (`eno1`); its onboard MT7922
+  WiFi is pure waste. `rfkill` isn't installed (air-gapped, no `apt`) → set `wlp1s0` down, then unloaded +
+  **blacklisted `mt7921e`** (`/etc/modprobe.d/ha-airgap-no-wifi.conf`). Verified ha-2's **Bluetooth is
+  independent** (`btmtk`/`btusb` over USB) and stays UP — BLE scanning unaffected. **Lesson:** on a
+  MT7922 combo, the WiFi driver (`mt7921e`) and BT (`btmtk`) are separate — you can kill WiFi without
+  losing BLE; and `rfkill` may be absent on a minimal/air-gapped box (blacklist the module instead).

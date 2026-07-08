@@ -1,0 +1,17 @@
+[Unit]
+Description=HA air-gap WiFi bridge leg (.210 wlp2s0 -> autohome_airgap, static .1.245, no forwarding)
+Documentation=file:///home/visko/home_automation/docs/airgap/MIGRATION-DESIGN-LOG.md
+Wants=network.target
+After=network.target
+
+[Service]
+Type=simple
+# Brings up wlp2s0 on the air-gap net + supervises wpa_supplicant in the foreground.
+ExecStart=/home/visko/home_automation/provisioning/airgap/airgap-bridge-up.sh
+# Re-assert the gap on every (re)start — a stray ip_forward=1 elsewhere must never persist.
+ExecStartPost=/usr/sbin/sysctl -w net.ipv4.ip_forward=0
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
