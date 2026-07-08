@@ -104,7 +104,12 @@ void app_main(void) {
         ESP_ERROR_CHECK(nvs_flash_init());
     }
 
-    ha_config_t cfg;
+    // STATIC, not stack: app_main() RETURNS after setup, but consumers (ha_ota's identity gate, ha_reach)
+    // hold POINTERS into cfg and dereference them LATER (e.g. at OTA time). A stack cfg dangles the moment
+    // app_main returns → the OTA gate reads a garbage node_id ("unknown") and REJECTS every OTA (observed
+    // on hbed_s3 v19: "OTA REJECTED ... this node=unknown"). The C6 fork hit + fixed this 2026-07-08; the
+    // S3 fork still had the stack cfg. Because the running image rejects OTA, the fix ships by CABLE flash.
+    static ha_config_t cfg;
     ha_config_load(&cfg, &(ha_config_t){ .wifi_ssid = HA_WIFI_SSID, .wifi_psk = HA_WIFI_PSK,
         .broker_uri = HA_BROKER_URI, .node_id = HA_NODE_ID, .ntp_server = HA_NTP_SERVER });
 

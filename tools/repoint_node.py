@@ -61,7 +61,10 @@ def repoint(node, ssid, psk, broker, ntp, ota_host, broker_host, broker_port=188
             result["outcome"] = "left"
             left.set()
 
-    c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    try:
+        c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)   # paho v2
+    except AttributeError:
+        c = mqtt.Client()                                   # paho v1 (esphome pins paho<2 in the shared venv)
     if os.environ.get("HA_MQTT_USER"):
         c.username_pw_set(os.environ["HA_MQTT_USER"], os.environ.get("HA_MQTT_PASS"))
     c.on_connect = on_connect
