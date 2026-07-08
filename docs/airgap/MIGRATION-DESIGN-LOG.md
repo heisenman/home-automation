@@ -101,6 +101,13 @@ Each entry: **decision** · context · options weighed · **why this** · gotcha
   round-trip — eliminate that whole failure class up front, while we still "DEFINITELY have control." A
   scripted readiness gate must be 100% green before the move.
 
+- **DJ-13 — Planned relocation window after Phase 1 (bench → final location).** ha-2 and the router are
+  configured and validated on `192.168.1.0/24` *at the bench* (Phase 1); the plan then **PAUSES** so
+  Hugh physically relocates BOTH to their final/medium-term spot in the house **before** device
+  migration. Why: Phase 4 repoints the fleet onto the router's wifi — coverage/range (channel 149) must
+  be validated from the router's *real* location, not the bench; and the air gap must be **re-proven
+  after the move**. Resume (Phases 2→4) only after a post-move re-verify.
+
 ---
 
 ## 3. Gotchas & landmine register (the hard-won details)
@@ -248,6 +255,13 @@ VRID 61) via the parameterized template; ha-2 becomes sole dictator; `verify-gap
 household↔air-gap; validate one edge node against the hidden SSID. **Gate:** ha-2 holds VIP+controller;
 negative reachability probe passes (air-gap proof). **Rollback:** `210-airgap-nic.sh --down`; ha-2 back
 to household; versioned configs restore.
+
+**⏸ RELOCATION CHECKPOINT (after Phase 1) — PAUSE (DJ-13).** With ha-2 + the router configured and
+validated on `192.168.1.0/24` at the bench, **pause the plan**; Hugh physically relocates BOTH to their
+final/medium-term location. On resume, **re-verify from the new location before proceeding**:
+`verify-gap.sh` green (air gap intact after the move), `cluster-doctor` green (ha-2 still dictator,
+`.210` air-gap leg reachable), `router_reconcile.py --dry-run` zero drift, and ≥1 edge node confirms wifi
+reach to `autohome_airgap` from a representative device spot. Only then continue Phases 2→4.
 
 **Phase 2 — The `.210` web bridge (app-level, no routing).** Reverse proxy on `192.168.0.210:443` → ha-2
 API on the air-gap side (terminate + re-originate = no forwarding). `provisioning/airgap/bridge/`
