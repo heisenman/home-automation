@@ -19,7 +19,10 @@ set -euo pipefail
 SRC_ISO="${1:?usage: build-seed-iso.sh <src-netinst.iso> <out.iso>}"
 OUT_ISO="${2:?usage: build-seed-iso.sh <src-netinst.iso> <out.iso>}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
-PRESEED="${HERE}/../autoinstall/preseed.cfg"
+# PRESEED defaults to the tracked template, but you SHOULD point it at a filled, gitignored copy
+# (e.g. PRESEED=instance/g11/preseed.cfg) so the real hostname / password hash / SSH key never land
+# in git. The tracked template keeps its <PLACEHOLDER>s and would fail the check below anyway.
+PRESEED="${PRESEED:-${HERE}/../autoinstall/preseed.cfg}"
 FIRSTBOOT="${HERE}/firstboot.sh"
 WORK="$(mktemp -d)"; ISO="${WORK}/iso"
 trap 'rm -rf "$WORK"' EXIT

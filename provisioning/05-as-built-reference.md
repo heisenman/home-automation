@@ -119,6 +119,29 @@ truly active on the VIP holder) · `ha-cluster-heartbeat` · `ha-edge-mapper` ·
 
 ## F. Cluster / failover topology (the incoming box's real job)
 
+### F.1 Two intake modes — decide this before Stage 2
+
+**The install media is scenario-agnostic and loads NO instance data.** Stage 1 (the preseed) produces
+an identical bare box for every unit — Debian + repo clone, zero secrets. PII (`instance/devices.yaml`
+real MACs, `instance/weather.env` lat/lon) and the data DBs are git-ignored and **never** touch the ISO
+or git. *How* the data of record arrives is a **Stage-2** decision, and it forks:
+
+| | **Mode A — greenfield** (first box / no existing record-keeper) | **Mode B — join an existing system** (e.g. `ha-2` joining `.210`) |
+|---|---|---|
+| Device registry | sneakernet `devices.yaml` + `weather.env` onto the box (spec §7a) | comes with the config-of-record pull (below) |
+| Historical data | none — starts fresh; weather backfilled from Open-Meteo (spec §8.1) | **pulled from the current record-keeper** |
+| How | manual copy + `install.sh` | **`failover/provision-peer.sh --from <dictator>`** |
+| Gate | weather reaches ≥ Parquet archive start | **hard archive-parity gate** before the box is dictator-eligible |
+
+**Why the data is NOT loaded during the d-i install** (a deliberate choice, not an omission): the ISO
+carries no secrets/creds by design (the `dictator-files.manifest` even marks some files `preposition` =
+*never sent over the wire*); the archive pull is a months-deep, resumable, **parity-gated** reconcile
+that must not run in a `late_command`; and it needs the venv + the `id_cluster` SSH back-channel, which
+only exist post-install. So data intake is a first-class **Stage-2** step (see the finisher's step 5),
+not part of the image. **`ha-2` is Mode B** — pull from `.210` via `provision-peer.sh`.
+
+### F.2 Cluster / VIP
+
 The `.210` box is the VRRP **MASTER**. The failover pair and all its tooling already exist under
 `failover/` — the provisioning docs simply never linked to it. Present config:
 

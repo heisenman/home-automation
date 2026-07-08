@@ -224,6 +224,13 @@ sudo systemctl enable --now ha-compactor.timer ha-verify-hashes.timer ha-weather
 
 ## 8. Data migration from .245
 
+> **Intake mode (see [`05-as-built-reference.md`](05-as-built-reference.md) §F.1).** This section is the
+> raw-rsync recipe. For **joining an existing system** (Mode B — a new peer/replacement), prefer
+> **`failover/provision-peer.sh --from <dictator>`** instead: it composes these copies AND hard-gates on
+> archive parity, so a box can't become dictator with a truncated archive (the 2026-06-25 incident). For
+> a **greenfield** box (Mode A) there's no peer — use §7a (sneakernet registry) + §8.1 (weather backfill).
+> Either way, data is a Stage-2 step; it never rides on the install image.
+
 While both boxes are online (pre-cutover), copy the historical data:
 ```bash
 # DBs + Parquet archive (stop the writer briefly on the SOURCE for a clean hot.db copy, or use .backup)

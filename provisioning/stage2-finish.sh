@@ -221,13 +221,19 @@ cat <<EOF
 
    4. REBOOT TEST (spec §9): sudo reboot; confirm all ha-* services + scanner return.
 
-   5. CLUSTER / INFRA LAYER (this box is a failover peer — see 05-as-built-reference.md §F/§G):
-      the app layer above does NOT set up keepalived (VIP .200), chrony (LAN NTP), or ntfy.
-        a. elevate to record-keeper (syncs config+hot+archive, hard-gates on parity):
-               failover/provision-peer.sh --from 192.168.0.210
-        b. keepalived: render failover/keepalived.conf.tmpl as BACKUP/100, enable AFTER (a) passes.
-        c. chrony:  provisioning/ntp/install-ntp-serve.sh
-        d. ntfy:    provisioning/ntfy/  (server on :8095)
+   5. DATA-OF-RECORD INTAKE — pick your mode (05-as-built-reference.md §F.1):
+        MODE A (greenfield / first box):  step 3 above (sneakernet devices.yaml + weather.env),
+                then backfill weather from Open-Meteo (spec §8.1). No peer to pull from.
+        MODE B (JOIN AN EXISTING SYSTEM — e.g. this box joining .210): do NOT hand-copy the
+                registry; pull the config-of-record + hot tier + months-deep archive, parity-gated:
+                    failover/provision-peer.sh --from 192.168.0.210
+                (This is intake, not the install image — data never rides on the ISO. See §F.1 for why.)
+
+   6. CLUSTER / INFRA LAYER (failover peer — 05-as-built-reference.md §F.2/§G): the app layer does
+      NOT set up keepalived (VIP .200), chrony (LAN NTP), or ntfy.
+        a. keepalived: render failover/keepalived.conf.tmpl as BACKUP/100, enable AFTER step 5B passes.
+        b. chrony:  provisioning/ntp/install-ntp-serve.sh
+        c. ntfy:    provisioning/ntfy/  (server on :8095)
 
    Prefer to drive interactively with Claude instead? See provisioning/04-post-install.md
    ("Drive with Claude") — it doubles as the on-device LLM directive.
