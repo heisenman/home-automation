@@ -1,5 +1,27 @@
 # Follow-ups & clarifications for Hugh
 
+## 🧪 2026-07-08 — Someday (UNASSIGNED): house-wide COMPARABLE air-quality synthesis
+
+Today's `air_quality` (`server/gas_compensation.py` + the `viewmodel` fusion) is a useful **per-sensor** v1
+index, but it is **NOT comparable across the house** (Hugh flagged 2026-07-08 — "whether it's consistent
+across the house sensors"). Two structural reasons:
+1. **Each sensor's index is relative to ITS OWN rolling baseline.** MOX gas resistance varies ~10× chip-to-
+   chip, so we normalize each sensor against its own recent cleanest air. Good for one sensor's *trend*, but
+   a "45" in the bedroom ≠ a "45" in the office — and the ~2 h baseline window isn't even stable yet (BSEC
+   uses *days*).
+2. **Sensor TYPES report incompatible metrics:** BME680 → `air_quality` 0–100, SGP40 → `voc_index` 0–500,
+   SGP30 → `eco2`/`tvoc`, AirThings → `aqi`/`pm25`/`radon`. No common scale exists house-wide.
+
+**The synthesis project (backend):** (a) map every gas sensor type onto ONE canonical, comparable
+representation; (b) long-term per-sensor baseline tracking so "clean = 100" means the same everywhere;
+(c) cross-calibrate using the house's redundancy (overlapping rooms + the reliable reference meters, cf.
+`viewmodel._resolve_ambient_ref`); (d) anchor to a real scale (TVOC ppb / AQI band) so the number *means*
+something. A genuine effort, not a formula tweak.
+
+**Feasible RETROACTIVELY** — thanks to [[data-storage-is-primary]], every raw signal (`gas_ohm`, `voc_raw`,
+per-sensor humidity refs) is stored, so the synthesis can be built and run over banked history later. Board
+task: `air-quality-synthesis`.
+
 ## 📌 2026-07-05 — Action item (UNASSIGNED): device admin in the UI
 
 Expose the device **rename + relocate** maintenance ops as a UI "Services"/admin action — change a device's
