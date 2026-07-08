@@ -7,6 +7,12 @@ This directory is the single source of truth for standing up a box from bare met
 written so that **a fresh LLM instance with shell access on the target machine** can execute
 it end-to-end.
 
+> **Provisioning the second (failover) box? Read [`05-as-built-reference.md`](05-as-built-reference.md)
+> first.** `01`…`04` were written before/during the first build and still carry speculative language;
+> `05` is a live snapshot of the running `.210` dictator (confirmed hardware, exact package set, full
+> service inventory, connection paths, and the keepalived/failover topology) so the next box comes up
+> matching production instead of re-discovering it. Captured 2026-07-08.
+
 ---
 
 ## Target hardware (confirmed: Amazon ASIN B0CXSRR796)
@@ -16,15 +22,16 @@ it end-to-end.
 | CPU | AMD **Ryzen Embedded R2514** — 4C/8T Zen+, ~2.1–3.7 GHz | `amd64`, `amd64-microcode`, no Intel ucode |
 | GPU | Radeon Vega (integrated) | headless; `amdgpu`/`radeon` in `linux-firmware` for console only |
 | RAM | DDR4 SO-DIMM (16 GB in this SKU; up to 32 GB) | plenty for this workload |
-| Storage | **2× M.2 2280 PCIe 3.0** NVMe | NVMe-A = OS, NVMe-B = data (`instance/`) — see spec §3 |
-| LAN | **Dual 2.5GbE** — almost certainly **Realtek RTL8125** | in-tree `r8169` (Debian 13 kernel 6.12) handles it well; keep `r8125-dkms` source in the offline bundle as fallback. **Verify with `lspci` on-device** — could be Intel i226 |
-| Wi-Fi/BT | WiFi6E + BT5.2 (likely MediaTek MT7922) | **not used** — server is wired; BLE runs on the proven USB dongle below |
-| BLE radio | **TP-Link UB500 (Realtek RTL8761B)** USB dongle — already owned & working on .245 | the BLE path. Onboard radio stays disabled to avoid the MediaTek-on-Linux risk we already hit |
+| Storage | **2× M.2 2280 PCIe 3.0** NVMe (this SKU shipped with **one** populated) | Split/mirror (spec §3) only if a 2nd NVMe is present; the `.210` build ran single-disk. See `05` §A. |
+| LAN | **Dual 2.5GbE Realtek RTL8125** `[10ec:8125]` — **confirmed** | in-tree **`r8169`** (Debian 13 kernel 6.12), **stable for weeks — no DKMS**. Primary `enp4s0`. See `05` §A. |
+| Wi-Fi/BT | Onboard **MediaTek MT7922** (WiFi6E + BT5.2) | Wi-Fi unused (server is wired). **BT is in use — see below.** |
+| BLE radio | **Onboard MT7922 Bluetooth** (`hci0`) — proven in production | **As-built reality overrides the original "use a dongle" plan:** the onboard MT7922 BT has run the passive scanner for weeks with no stalls. Needs **`firmware-mediatek`**. The **TP-Link UB500 (RTL8761B)** dongle is a known-good *fallback* only. See `05` §A. |
 
-> **Why ignore the onboard Wi-Fi/BT?** BLE is the critical path for this project and we already
-> burned time on a MediaTek USB radio that exposed no BT interface on Linux. The server is wired
-> (2.5GbE), so onboard Wi-Fi is unnecessary, and the RTL8761B UB500 dongle is known-good. De-risk
-> by using it and leaving onboard radios off.
+> **Onboard MT7922 BT — the plan changed.** The original caution (avoid MediaTek, fit the UB500 dongle)
+> was written before testing. On the actual `.210` box the onboard MT7922 Bluetooth carried the BLE
+> scanner reliably for weeks, so **no dongle was fitted**. It only requires the `firmware-mediatek`
+> package. Keep the UB500 on hand as a fallback if a given box's onboard BT misbehaves. Onboard Wi-Fi
+> stays down (server is wired). Full detail in `05-as-built-reference.md`.
 
 ---
 
@@ -87,6 +94,7 @@ unit and all future rebuilds.
 
 | Path | What |
 |---|---|
+| **`05-as-built-reference.md`** | **Live snapshot of the running `.210` dictator — read first for the next build (hardware, packages, services, connection paths, cluster topology)** |
 | `01-bootstrap-iso.md` | How to build & flash the Stage-1 bootstrap ISO |
 | `02-full-server-spec.md` | The Stage-2 spec (full reference + on-device findings + LLM directive) |
 | `stage2-finish.sh` | **One-shot, idempotent Stage-2 finisher — run once after first login (no LLM)** |
@@ -99,8 +107,12 @@ unit and all future rebuilds.
 
 ## Failover unit (second G11)
 
-Buy **one** G11 first, validate it as primary, then buy the second as failover. The failover is
-provisioned from the **same** Stage-1 ISO + Stage-2 spec, then kept current by applying the **same
-sneakernet bundles** to both boxes. Data parity via periodic `rsync` of `instance/db/` from prime →
-failover (pull model on the failover). Promotion = point the LAN's HA hostname/IP at the failover and
-start its services. Details in spec §12.
+**The second G11 has arrived (2026-07). It becomes the new record-keeper / next dictator, paired with
+`.210` (not a `.245` drill).** Provision it from the **same** Stage-1 ISO + Stage-2 spec, add the
+host-level infra layer (keepalived / chrony / ntfy / `firmware-mediatek` — see
+[`05-as-built-reference.md`](05-as-built-reference.md) §G), then elevate it with
+**`failover/provision-peer.sh --from 192.168.0.210`**, which syncs config + hot tier + the months-deep
+parquet archive and **hard-gates on archive parity** before the box is eligible to hold the VIP. The
+cluster topology (keepalived VRRP, VIP `.200`, MASTER/BACKUP priorities, `notify.sh`) lives under
+`failover/`; `05` §F walks the peer bring-up end-to-end. `.245` retires from the HA role once the new
+box is validated.

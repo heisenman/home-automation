@@ -300,6 +300,13 @@ returns rows from January.
 
 ## On-device findings — ha-dev (Stage 2, 2026-06-24)
 
+> **As-built update (2026-07-08):** ha-dev became the **production dictator `.210`** and has run for
+> weeks. The findings below are from bring-up; several open questions are now settled and the box grew
+> a full cluster/infra layer (keepalived VIP `.200`, chrony, ntfy, TLS API, edge mapper, relay
+> coordinator, Tasmota/Levoit bridges). The authoritative present-state snapshot — confirmed hardware,
+> the exact package set, the complete service inventory, connection paths, and the failover topology —
+> is **[`05-as-built-reference.md`](05-as-built-reference.md)**. Read it before provisioning the next box.
+
 Recorded per the "record anything non-obvious" rule. ha-dev is a **DEV/validation** box, not yet
 the production dictator — it must not fight .245 for live devices or publish onto .245's broker.
 

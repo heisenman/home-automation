@@ -65,16 +65,21 @@ sudo passwd visko
 
 ## Hardware notes carried over from ha-dev
 
-- **BLE radio:** the spec's intended radio is the **TP-Link UB500 (RTL8761B)** USB
-  dongle. `ha-dev` had no dongle fitted and the **onboard MediaTek MT7922 BT worked**
-  for passive `or_patterns` scanning — but it's the known-risk radio. The script
-  detects which radio is present and warns if you're on the onboard one; fit the
-  UB500 if the scanner shows watchdog restarts/stalls.
+> These are settled facts now — full as-built detail in
+> [`05-as-built-reference.md`](05-as-built-reference.md).
+
+- **BLE radio:** the **onboard MediaTek MT7922 BT** (`hci0`) is the **proven production radio** — it
+  ran the passive `or_patterns` scanner for weeks on `.210` with no stalls, and **no UB500 dongle was
+  fitted**. It just needs the **`firmware-mediatek`** package (now in the finisher's package set). The
+  TP-Link UB500 (RTL8761B) is a fallback only. The script reports which radio is up.
 - **Storage:** `ha-dev` had a **single NVMe**, so the dual-disk split/mirror (spec §3)
   was skipped and `instance/db/` stays on the OS disk. A box with a real second NVMe
   should still do §3 by hand before running the finisher.
-- **Python:** Debian 13 ships **3.13**; `requirements.txt` is already bumped to the
+- **Python:** Debian 13 ships **3.13.5**; `requirements.txt` is already bumped to the
   cp313 wheels (`pyarrow 18.x`), so the venv build Just Works.
+- **Cluster/infra layer:** the app services alone are not a full box. keepalived (VIP `.200`), chrony
+  (LAN NTP), and ntfy (`:8095`) were hand-built and are **not** installed by the finisher — see the
+  new step 5 in the finisher's manual-steps printout and `05` §G.
 
 ---
 

@@ -72,7 +72,11 @@ PKGS=(git curl ca-certificates build-essential pkg-config
       python3 python3-venv python3-dev python3-pip
       mosquitto mosquitto-clients
       bluez bluetooth libdbus-1-dev
-      ethtool rsync)
+      firmware-mediatek firmware-realtek       # REQUIRED: onboard MT7922 BLE + RTL8125 NIC firmware
+      ethtool rsync sqlite3)
+# NOTE (as-built .210, see 05-as-built-reference.md §G): keepalived / chrony / ntfy are NOT installed
+# here — they need config, not just a binary. They're the cluster/infra layer, provisioned separately
+# (keepalived via failover/, chrony via provisioning/ntp/, ntfy via provisioning/ntfy/). Printed at the end.
 missing=()
 for p in "${PKGS[@]}"; do dpkg -s "$p" >/dev/null 2>&1 || missing+=("$p"); done
 if ((${#missing[@]})); then
@@ -141,11 +145,11 @@ step "BLE radio"
 if command -v bluetoothctl >/dev/null && bluetoothctl list 2>/dev/null | grep -q Controller; then
   bluetoothctl list 2>/dev/null | sed 's/^/   /'
   if lsusb 2>/dev/null | grep -qiE '0bda:(8771|a771)|RTL8761'; then
-    ok "TP-Link UB500 (RTL8761B) dongle detected — the intended BLE radio"
+    ok "TP-Link UB500 (RTL8761B) dongle detected — the fallback BLE radio"
   else
-    warn "No UB500 dongle detected; scanner will use the onboard adapter."
-    warn "On ha-dev the onboard MediaTek BT worked for passive scanning, but it is the"
-    warn "known-risk radio — fit the UB500 if you see scanner watchdog restarts/stalls."
+    ok "Using the onboard MediaTek MT7922 BT — PROVEN as the production radio on .210"
+    warn "  (ran the passive scanner for weeks, no stalls; needs firmware-mediatek, installed above)."
+    warn "  Keep the UB500 dongle only as a fallback if this box's onboard BT misbehaves."
   fi
 else
   warn "No BLE controller is up yet. Plug in the UB500 (or check 'rfkill list')."
@@ -216,6 +220,14 @@ cat <<EOF
           sudo systemctl restart ha-writer ha-scanner    # after copying
 
    4. REBOOT TEST (spec §9): sudo reboot; confirm all ha-* services + scanner return.
+
+   5. CLUSTER / INFRA LAYER (this box is a failover peer — see 05-as-built-reference.md §F/§G):
+      the app layer above does NOT set up keepalived (VIP .200), chrony (LAN NTP), or ntfy.
+        a. elevate to record-keeper (syncs config+hot+archive, hard-gates on parity):
+               failover/provision-peer.sh --from 192.168.0.210
+        b. keepalived: render failover/keepalived.conf.tmpl as BACKUP/100, enable AFTER (a) passes.
+        c. chrony:  provisioning/ntp/install-ntp-serve.sh
+        d. ntfy:    provisioning/ntfy/  (server on :8095)
 
    Prefer to drive interactively with Claude instead? See provisioning/04-post-install.md
    ("Drive with Claude") — it doubles as the on-device LLM directive.
