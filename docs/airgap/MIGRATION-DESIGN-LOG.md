@@ -501,3 +501,21 @@ generalizations from §5 already applied), so the next migration is fill-in-the-
   `install-bridge.sh` (+`--uninstall`) makes it reproducible; nginx enabled for boot. **NOT VIP-gated** —
   it always runs on `.210` (the permanent bridge), unlike the air-gap dictator duties. **Hardening TODO:**
   default-deny allowlist (`provisioning/airgap/bridge/allowlist.md`).
+
+### Phase 3 (migration machinery, 2026-07-08)
+- **✅ Core migration pipeline built + dry-run tested.**
+  - `server/maintenance/device_descriptor.py` — serialize a device (registry entry + `control.db` rows +
+    secret-presence + hot history window) to JSON; reuses `device_migrate`'s exact store lists; handles
+    flat (`tasmota-devices.yaml`) AND nested (`devices.yaml` → `devices:` → MAC) registries.
+  - `tools/repoint_tasmota.py` — MQTT `Backlog` to switch a Tasmota's SSID + MqttHost to the air-gap
+    side; PSK from the gitignored env (redacted in logs); reversible.
+  - `server/maintenance/device_push.py` — per-device **state machine** (`queued→transferred→applied→
+    repointed→confirmed→retired`, +`failed`) persisted in `instance/db/migration.db`. Confirm = ha-2's
+    API shows the device with a fresh `ts` (through the bridge); **retire on `.210` is LAST and only after
+    confirm** → reversible, never loses a device. Dry-run walks the whole pipeline for Tasmota + BLE.
+- **Ready classes:** Tasmota (MQTT repoint) + BLE (ha-2 just scans). **Remaining Phase-3 pieces** (build
+  as those classes migrate): ESP32/D1001 signed-NVS-config firmware op + repointers, ESPHome rebuild, the
+  ha-2 `:import` endpoint (a convenience — ha-2 already holds config via provision-peer, DJ-16), and a
+  multi-net cluster-doctor.
+- **First migration target (Phase 4, needs Hugh's go):** `failover_pm` + `airgap_router_pm` — the PMs
+  whose data is directly relevant to the new network.
