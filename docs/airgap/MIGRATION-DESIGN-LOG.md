@@ -461,3 +461,15 @@ generalizations from §5 already applied), so the next migration is fill-in-the-
   independent** (`btmtk`/`btusb` over USB) and stays UP — BLE scanning unaffected. **Lesson:** on a
   MT7922 combo, the WiFi driver (`mt7921e`) and BT (`btmtk`) are separate — you can kill WiFi without
   losing BLE; and `rfkill` may be absent on a minimal/air-gapped box (blacklist the module instead).
+
+- **DJ-16 — ha-2's VIP + *active* `ha-controller` are DEFERRED past Phase 1 (not free to turn on yet).**
+  Discovered while going to make ha-2 the formal dictator: ha-2 holds a **full copy of `.210`'s control
+  state** from provision-peer — `control.db` has the **4 household actuators** and `midea-device.env` is
+  present. So (a) starting `ha-controller` on ha-2 now would have it try to actuate household devices at
+  `.0.x` IPs it **cannot reach** (errors / false alerts); and (b) the VIP `.1.200` is a *failover*
+  mechanism — **pointless with a single node** (devices target the real broker `.1.210`, not the VIP).
+  **Refinement:** ha-2 IS the air-gap dictator *functionally* now (runs broker `.1.210` + API + holds all
+  data/config); the **VIP/keepalived activates in Phase 5** (when `.210` joins as failover peer) and
+  **active `ha-controller` activates as devices migrate** (Phase 4, when its control set becomes real
+  air-gap devices). Keepalived is still generalized + *deployed-but-not-started* as prep. Also:
+  `healthcheck.sh` must skip the household-Midea ping for an air-gap box (else ha-2 is marked unfit).
