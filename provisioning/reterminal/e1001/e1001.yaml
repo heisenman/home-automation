@@ -159,6 +159,14 @@ wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
   power_save_mode: none
+  on_connect:                          # ADR-0029: self-populate once after the first connect (no manual
+    - if:                              # Green press needed, even in dev mode where the wake-fetch is skipped)
+        condition:
+          lambda: 'return !id(g_booted_fetch);'
+        then:
+          - lambda: 'id(g_booted_fetch) = true;'
+          - delay: 2s                  # let SNTP + the API settle before the first page fetch
+          - button.press: fetch_spec
   ap:
     ssid: "${wifi_ap_ssid}"
     password: !secret fallback_ap_password
@@ -443,6 +451,14 @@ globals:                             # parsed tiles as parallel string vectors (
     type: int
     restore_value: false
     initial_value: '0'
+  - id: g_pages                      # total pages, server-authored (ADR-0029 /panel/tiles `pages`); the
+    type: int                        # panel fetches ONE page at a time so its buffer never sees the fleet
+    restore_value: false
+    initial_value: '1'
+  - id: g_booted_fetch               # one-shot: auto-fetch page 0 once after the first wifi connect so the
+    type: bool                       # panel self-populates (no manual Green press needed) even in dev mode
+    restore_value: false
+    initial_value: 'false'
   - id: g_alerts                     # active alerts (formatted strings) from /api/v1/alerts
     type: std::vector<std::string>
     restore_value: false
@@ -682,17 +698,17 @@ display:
       it.line(0, hy + sh, w, hy + sh);
       // --- sensor grid (paginated; e-ink = discrete pages, buttons navigate) ---
       const int per = 6;                          // tiles per page
-      int n = (int) id(g_tile_labels).size();
-      int maxp = n == 0 ? 0 : (n - 1) / per;
+      int n = (int) id(g_tile_labels).size();     // ADR-0029: g_tile_labels holds ONLY the current page
+      int pages = id(g_pages) < 1 ? 1 : id(g_pages);   // server-authored page count (not derived locally)
       int page = id(g_page);
-      if (page > maxp) { page = maxp; id(g_page) = maxp; }
+      if (page > pages - 1) { page = pages - 1; id(g_page) = page; }
       int gtop = hy + sh, ftop = h - 30;          // grid band [gtop, ftop); footer below ftop
-      it.printf(w - 16, gtop + 4, id(font_label), TextAlign::TOP_RIGHT, "%d/%d", page + 1, maxp + 1);
+      it.printf(w - 16, gtop + 4, id(font_label), TextAlign::TOP_RIGHT, "%d/%d", page + 1, pages);
       if (n == 0) {
         it.print(w / 2, (gtop + ftop) / 2, id(font_label), TextAlign::CENTER, "press Green to fetch");
       } else {
         int top = gtop + 30, bot = ftop - 4, rowh = (bot - top) / per, y = top;
-        for (int i = page * per; i < n && i < (page + 1) * per; i++) {
+        for (int i = 0; i < n && i < per; i++) {   // the fetched page's tiles (server already sliced)
           it.print(16, y + 4, id(font_label), id(g_tile_labels)[i].c_str());
           it.print(16, y + 26, id(font_val), id(g_tile_lines)[i].c_str());
           it.line(0, y + rowh, w, y + rowh);
@@ -869,44 +885,41 @@ binary_sensor:
         max_length: 450ms
         then:
           - button.press: fetch_spec
-      - min_length: 600ms            # Green long = home (page 0)
+      - min_length: 600ms            # Green long = home (page 0), re-fetch
         max_length: 5000ms
         then:
           - lambda: 'id(g_page) = 0;'
-          - component.update: epaper
+          - button.press: fetch_spec
   - platform: gpio
     name: "Button Right"
     id: btn_right
     pin: { number: GPIO4, mode: { input: true, pullup: true }, inverted: true, allow_other_uses: true }
     on_click:
-      - min_length: 30ms             # Right short = next page
+      - min_length: 30ms             # Right short = next page (ADR-0029: bounded by server pages, re-fetch)
         max_length: 450ms
         then:
-          - lambda: |-
-              int per = 6;
-              int maxp = id(g_tile_labels).empty() ? 0 : ((int) id(g_tile_labels).size() - 1) / per;
-              if (id(g_page) < maxp) id(g_page) += 1;
-          - component.update: epaper
+          - lambda: 'if (id(g_page) < id(g_pages) - 1) id(g_page) += 1;'
+          - button.press: fetch_spec
       - min_length: 600ms            # Right long = last page
         max_length: 5000ms
         then:
-          - lambda: 'id(g_page) = id(g_tile_labels).empty() ? 0 : ((int) id(g_tile_labels).size() - 1) / 6;'
-          - component.update: epaper
+          - lambda: 'id(g_page) = id(g_pages) - 1;'
+          - button.press: fetch_spec
   - platform: gpio
     name: "Button Left"
     id: btn_left
     pin: { number: GPIO5, mode: { input: true, pullup: true }, inverted: true, allow_other_uses: true }
     on_click:
-      - min_length: 30ms             # Left short = previous page
+      - min_length: 30ms             # Left short = previous page (ADR-0029: re-fetch that page)
         max_length: 450ms
         then:
           - lambda: 'if (id(g_page) > 0) id(g_page) -= 1;'
-          - component.update: epaper
+          - button.press: fetch_spec
       - min_length: 600ms            # Left long = first page
         max_length: 5000ms
         then:
           - lambda: 'id(g_page) = 0;'
-          - component.update: epaper
+          - button.press: fetch_spec
 
 # ── Runtime deep-sleep controls (toggle/tune battery mode over MQTT — NO reflash) ──────
 # g_sleep_enable / g_sleep_dur_s / g_awake_grace_s are the persisted source of truth; these just view+set them.
@@ -1062,9 +1075,12 @@ button:
     id: fetch_spec
     on_press:
       - http_request.get:
-          url: ${bff_base_url}/api/v1/sensors
+          url: !lambda |-
+            static char u[112];
+            snprintf(u, sizeof(u), "${bff_base_url}/api/v1/panel/tiles?per=6&page=%d", id(g_page));
+            return std::string(u);
           capture_response: true
-          max_response_buffer_size: 24kB   # /api/v1/sensors ~10KB (16 sensors); default truncates it
+          max_response_buffer_size: 16kB   # ADR-0029: ONE page (~4KB @ per=6), NOT the fleet firehose — bounded
           on_response:
             - lambda: |-
                 ESP_LOGI("spec", "GET -> HTTP %d, %d bytes, %d ms",
@@ -1073,8 +1089,8 @@ button:
                 id(g_tile_labels).clear();
                 id(g_tile_lines).clear();
                 bool ok = json::parse_json(body, [](JsonObject root) -> bool {
-                  for (JsonObject s : root["sensors"].as<JsonArray>()) {
-                    if (id(g_tile_labels).size() >= 40) break;   // safety cap; buttons paginate the full set
+                  id(g_pages) = root["pages"] | 1;               // ADR-0029: server-authored page count
+                  for (JsonObject s : root["sensors"].as<JsonArray>()) {   // one page (<=per); no client cap
                     const char *room = !s["room"].isNull() ? s["room"].as<const char *>()
                                                            : s["device_id"].as<const char *>();
                     JsonObject m = s["metrics"].as<JsonObject>();
