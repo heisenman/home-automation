@@ -47,19 +47,47 @@ def set_stage(device_id, stage, cls, note=""):
     con.commit(); con.close()
 
 
-def classify(device_id):
+def _node_manifests(edge_dir=None):
+    """The ESP32 edge-node identity manifests (ADR-0020): edge/*/nodes.yaml. Keys = node_ids."""
+    return sorted((Path(edge_dir) if edge_dir else REPO / "edge").glob("*/nodes.yaml"))
+
+
+def classify(device_id, *, edge_dir=None):
     import yaml
     tas = REPO / "instance/tasmota-devices.yaml"
     if tas.exists():
         data = yaml.safe_load(tas.read_text()) or {}
         if device_id in data or any(isinstance(v, dict) and v.get("device_id") == device_id for v in data.values()):
             return "tasmota"
+    # esp32 edge nodes: SOURCE-OF-TRUTH is edge/*/nodes.yaml, node_ids under the top-level `nodes:` key
+    # (tolerate a flat map too).
+    for man in _node_manifests(edge_dir):
+        try:
+            doc = yaml.safe_load(man.read_text()) or {}
+        except Exception:
+            continue
+        nodes = doc.get("nodes", doc) if isinstance(doc, dict) else {}
+        if isinstance(nodes, dict) and device_id in nodes:
+            return "esp32"
     dev = REPO / "instance/devices.yaml"
     if dev.exists():
         data = (yaml.safe_load(dev.read_text()) or {}).get("devices", {})
         if any(isinstance(v, dict) and v.get("device_id") == device_id for v in data.values()):
             return "ble"
     return "unknown"
+
+
+def _airgap_target():
+    """(ssid, psk, broker_uri, host) for the air-gap net. psk from instance/openwrt/airgap_router.env
+    (WIFI_PSK) or $WIFI_PSK. host/broker match repoint_tasmota + the migrated PMs."""
+    ssid, host = "autohome_airgap", "192.168.1.210"
+    psk = os.environ.get("WIFI_PSK")
+    env = REPO / "instance/openwrt/airgap_router.env"
+    if not psk and env.exists():
+        for line in env.read_text().splitlines():
+            if line.strip().startswith("WIFI_PSK="):
+                psk = line.split("=", 1)[1].strip().strip('"')
+    return ssid, psk, f"mqtt://{host}:1883", host
 
 
 def _tas_path(path=None):
@@ -147,11 +175,41 @@ def repoint(device_id, cls, dry, revert=False):
         cmd = [sys.executable, str(REPO / "tools/repoint_tasmota.py"), device_id] + (["--revert"] if revert else [])
         rc, out = _run(cmd + (["--dry-run"] if dry else []), dry=False)
         return rc == 0
+    if cls == "esp32":
+        return _repoint_esp32(device_id, dry, revert)
     if cls == "ble":
         print("   BLE: no device repoint — ha-2 scans it (ensure ha-scanner is running on ha-2 for its area)")
         return True
-    print(f"   ✗ no repointer for class '{cls}' yet (ESP32/panel/ESPHome are built as those classes migrate)")
+    print(f"   ✗ no repointer for class '{cls}' yet (panel/ESPHome are built as those classes migrate)")
     return False
+
+
+def _repoint_esp32(device_id, dry, revert):
+    """Drive tools/repoint_node.py (signed `repoint` op) for a native-C esp32 node. Secrets (HA_CMD_SECRET
+    per-node + WIFI_PSK) travel via ENV, never argv, so they never hit logs. repoint_node has no --dry-run,
+    so in dry mode we print the command and don't send. Node revert is firmware-automatic (boot-count)."""
+    if revert:
+        print("   esp32 revert = firmware boot-count auto-revert (or re-run repoint_node with household "
+              "params); not driven from device_push")
+        return False
+    if not os.environ.get("HA_CMD_SECRET"):
+        print("   ✗ HA_CMD_SECRET not set — export the node's per-device command secret before migrating "
+              "(resolve from node_secrets.enc via enroll_node; a human/cron supplies it)")
+        return False
+    ssid, psk, broker, host = _airgap_target()
+    if not psk:
+        print("   ✗ no Wi-Fi PSK — set $WIFI_PSK or instance/openwrt/airgap_router.env WIFI_PSK")
+        return False
+    cmd = [sys.executable, str(REPO / "tools/repoint_node.py"), "--node", device_id,
+           "--ssid", ssid, "--broker", broker, "--ntp", host, "--ota-host", host,
+           "--broker-host", "localhost", "--wait"]
+    if dry:
+        print("   $ (dry, NOT sent)", " ".join(cmd), "  [WIFI_PSK + HA_CMD_SECRET via env]")
+        return True
+    print("   $", " ".join(cmd), "  [secrets via env]")
+    r = subprocess.run(cmd, capture_output=True, text=True, env={**os.environ, "WIFI_PSK": psk})
+    print("   ", (r.stdout or r.stderr).strip())
+    return r.returncode == 0
 
 
 def push(device_id, *, dry, history_hours, confirm_timeout):
