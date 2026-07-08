@@ -46,10 +46,15 @@ echo "==> copying firstboot.sh to /ha on the ISO"
 mkdir -p "$ISO/ha"; cp "$FIRSTBOOT" "$ISO/ha/firstboot.sh"
 
 echo "==> wiring boot menus for an automated install"
-# priority=high (not critical): everything we preseed still auto-answers, but genuinely-unset
-# high-priority prompts — i.e. the Wi-Fi ESSID/passphrase on wired-failure fallback — are shown
-# to the user instead of being skipped. Keep it 'high' for the wired-first/Wi-Fi-fallback flow.
-AUTO='auto=true priority=high preseed/file=/preseed.cfg ---'
+# WIRED-ONLY installer network (the first build's Wi-Fi fallback caused a painful dead-end):
+#   * modprobe.blacklist=mt7921e — do NOT load the G11's MediaTek Wi-Fi driver in the installer, so
+#     netcfg sees only wired NICs and can never prompt for / fall back to Wi-Fi. Installer-only:
+#     the installed system loads mt7921e normally (verified on .210). To re-enable Wi-Fi on a box
+#     with no wired link, edit the boot entry at the menu and delete that token.
+#   * priority=high (not critical): our preseed still auto-answers everything on the happy wired
+#     path; high just means a genuine failure surfaces the (wired-only) network menu instead of a
+#     silent halt, rather than skipping to an unattended Wi-Fi bail.
+AUTO='auto=true priority=high modprobe.blacklist=mt7921e preseed/file=/preseed.cfg ---'
 # BIOS (isolinux)
 if [ -f "$ISO/isolinux/txt.cfg" ]; then
   cat > "$ISO/isolinux/txt.cfg" <<EOF
