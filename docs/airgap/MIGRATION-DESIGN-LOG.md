@@ -490,3 +490,14 @@ generalizations from §5 already applied), so the next migration is fill-in-the-
   `ExecCondition` noted in the unit).
 - **git-bundle-over-SSH** is the repo-update path for air-gapped ha-2 (no `github.com`): `git bundle
   create` on `.210` → scp over the bridge → `git pull <bundle>` on ha-2. Recurring; worth a helper.
+
+### Phase 2 (the `.210` web bridge, 2026-07-08)
+- **✅ Household → ha-2 web bridge LIVE.** Installed nginx on `.210`;
+  `provisioning/airgap/bridge/ha-web-bridge.conf` reverse-proxies `https://192.168.0.210/` (bound to the
+  **household NIC only**, `.210`'s TLS cert) → ha-2's API `192.168.1.210:8123` over the WiFi bridge. It's
+  an **app-level** gateway (nginx terminates the household TLS + originates a fresh upstream conn) — **NOT
+  IP forwarding**, so the gap holds (`ip_forward=0`). Auth is end-to-end (bearer passed through to ha-2's
+  `api_authz`). **Verified:** `GET https://192.168.0.210/api/v1/sensors` → 200, serving **ha-2's** data.
+  `install-bridge.sh` (+`--uninstall`) makes it reproducible; nginx enabled for boot. **NOT VIP-gated** —
+  it always runs on `.210` (the permanent bridge), unlike the air-gap dictator duties. **Hardening TODO:**
+  default-deny allowlist (`provisioning/airgap/bridge/allowlist.md`).
