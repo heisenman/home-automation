@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v42 air_quality shows AQ unit on the map glance (identify the bare number)";
+const BUILD = "v43 SGP voc_index badged VOC on the map (every gas number now identified)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -643,7 +643,7 @@ const GRAPHABLE = [
   { key: "pressure_hpa", unit: "hPa", color: "#34d399", label: "Pressure" },
   { key: "pm25_ugm3", unit: "µg/m³", color: "#fb7185", label: "PM2.5" },
   { key: "aqi", unit: "", color: "#fbbf24", label: "AQI" },
-  { key: "voc_index", unit: "", color: "#34d399", label: "VOC Index" },
+  { key: "voc_index", unit: "VOC", color: "#34d399", label: "VOC Index" },
   { key: "voc_raw", unit: "", color: "#6ee7b7", label: "VOC (raw)" },
   { key: "eco2", unit: "ppm", color: "#f59e0b", label: "eCO₂" },
   { key: "tvoc", unit: "ppb", color: "#a3e635", label: "TVOC" },
