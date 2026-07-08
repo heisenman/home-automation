@@ -64,6 +64,10 @@ static void edge_on_sighting(const uint8_t mac[6], int rssi, void *user) {
     ha_reach_note(mac, rssi);
 }
 
+// Repoint confirm health (DJ-19): "the move worked" == the broker on the new net is reachable. Same
+// signal ha_ota uses for its trial-image self-test.
+static bool edge_repoint_healthy(void *user) { (void)user; return ha_mqtt_is_connected(); }
+
 void app_main(void) {
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -85,7 +89,13 @@ void app_main(void) {
     // hbed_c6 hit exactly this; older nodes only "worked" because their freed stack happened to survive.)
     static ha_config_t cfg;
     ha_config_load(&cfg, &(ha_config_t){ .wifi_ssid = HA_WIFI_SSID, .wifi_psk = HA_WIFI_PSK,
-        .broker_uri = HA_BROKER_URI, .node_id = HA_NODE_ID, .ntp_server = HA_NTP_SERVER });
+        .broker_uri = HA_BROKER_URI, .node_id = HA_NODE_ID, .ntp_server = HA_NTP_SERVER,
+        .ota_host = HA_OTA_HOST });
+
+    // Air-gap repoint safety (DJ-19): BEFORE we touch Wi-Fi, count this boot if a repoint is pending and
+    // revert to the last-good config after too many failures. Must be here — a bad SSID fails the connect
+    // below and reboots before any late hook, so only an early counter catches that failure mode.
+    ha_config_repoint_boot_check();
 
     if (ha_wifi_connect(cfg.wifi_ssid, cfg.wifi_psk, 30000) != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi connect failed — restarting in 10s");
@@ -99,7 +109,7 @@ void app_main(void) {
     ha_sntp_start_periodic(30 * 60 * 1000);   // re-sync every 30 min (the C6 RTC drifts fast)
 
     ha_relay_init();                // load the persisted Phase-B coverage allowlist (default: relay-all)
-    ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = HA_CMD_SECRET, .ota_host = HA_OTA_HOST,
+    ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = HA_CMD_SECRET, .ota_host = cfg.ota_host,
         .mqtt_user = HA_MQTT_USER, .mqtt_pass = HA_MQTT_PASS, .fw_version = HA_FW_VERSION,
         .enable_reach = true });
     ha_mqtt_start(cfg.broker_uri, cfg.node_id);
@@ -127,4 +137,9 @@ void app_main(void) {
 
     // If we just booted a freshly-OTA'd image, self-test now and confirm-or-rollback.
     ha_ota_confirm_if_pending();
+
+    // If we just booted from a repoint (DJ-19), wait for the broker on the new net; confirm-or-reboot.
+    // Up to 60 s — a fresh network needs Wi-Fi assoc + SNTP + MQTT connect. Timeout -> reboot -> the early
+    // boot_check counts it -> revert after RP_MAX_TRIES. No-op if no repoint is pending.
+    ha_config_repoint_confirm(edge_repoint_healthy, NULL, 60000);
 }

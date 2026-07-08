@@ -579,3 +579,57 @@ generalizations from §5 already applied), so the next migration is fill-in-the-
   invariant paid off on the very first real run.
 - ha-2's `ha-tasmota-bridge` started as the first ingest activation (DJ-16). Note: `install.sh`'s fixed
   unit list omits the bridges, so it was installed directly (pointed at ha-2's local broker).
+
+### Phase 3 (cont.) — ESP32 signed-NVS-config REPOINT op (the riskiest build, 2026-07-08)
+
+The remaining Phase-3 item that gates the bulk of the fleet (the 6 gas nodes AND, via the edge-relay
+mesh, most of the BLE sensors — the SwitchBot/Aranet meters don't publish to a broker themselves, the
+ESP32 mesh relays them). Building it now (task `esp32-repoint-fwop`).
+
+- **DJ-19 — Ship an imperative signed `repoint` command NOW; treat full DJ-17 network-agnostic firmware
+  as the opportunistic follow-on.** Options: (a) build the full DJ-17 model first — multi-SSID roaming +
+  name-based dictator discovery (mDNS/router-DNS) so a network move is "RF + discovery" with no per-device
+  op; (b) build a minimal imperative `repoint` op that writes the new SSID/broker into the `ha` NVS overlay
+  and reboots. **Chose (b) as the unblock, (a) as the follow-on.** Why: (a) needs new dictator-side infra
+  (Avahi on ha-2 / DNS records via `router_reconcile`) across several components — multi-day, and not
+  required to move a device *today*; (b) is firmware-only, reversible, stageable on `gas_standby` now, and
+  rides the existing ADR-0010/0020 gate unchanged. Both touches are **programmatic** (OTA the new fw on the
+  household net → send one signed command → node moves), so no physical fall (DJ-18 holds). (b) is
+  forward-compatible with (a): `broker_uri` can later be a `.local`/`.lan` NAME and the SSID a multi-entry
+  list — additive. Per DJ-17's own note, network-agnostic adoption is opportunistic; this op is a strict
+  improvement and, once DJ-17 lands, becomes each node's last hand-repoint.
+
+- **Design of the `repoint` op:**
+  - **Envelope:** rides the *existing* `handle_cmd` signed path — HMAC-SHA256 `{p,s}` + freshness +
+    monotonic `(ts,seq)` replay guard — unchanged. New op in `dispatch_cmd`:
+    `{"op":"repoint","ts":..,"seq":..,"ssid":..,"psk":..,"broker":"mqtt://192.168.1.210:1883","ntp":..,"ota_host":".."}`.
+    **`node_id` is never changed** (identity is fixed; the OTA identity gate still keys off it).
+  - **Freshness class = TIGHT (300 s), not the wide OTA window.** The command is always *received* on the
+    node's current, healthy, SNTP-synced network (that's how it's reachable), so drift isn't a concern and
+    the tight window keeps the replay defense strong. (Contrast: OTA gets 86400 s precisely because it may
+    need to reach an already-drifted node.)
+  - **`ota_host` promoted into `ha_config_t` + the `ha` overlay**, and `app_main` passes `cfg.ota_host`
+    into `ha_mqtt_init` (default `HA_OTA_HOST`). Without this, a repointed node keeps OTA-pinned to the
+    OLD host and can't be updated on the new net.
+  - **Boot-count NVS-revert safety (NEW — no config-revert exists today; OTA's rollback is partition-based
+    and can't cover a config change).** New NVS namespace `ha_repoint`: `pending` (u8), `tries` (u8), and a
+    backup of the pre-repoint effective config (`bk_ssid/bk_psk/bk_broker/bk_ntp/bk_host`). Flow:
+    - *Apply* (in the verified `repoint` handler): back up the current **effective** cfg (ha_config caches
+      it at load), write the new values into `ha`, set `pending=1 tries=0`, commit, `esp_restart()`.
+    - *Early boot* (right after `ha_config_load`, **before** `ha_wifi_connect`): if `pending` — if
+      `tries >= MAX (3)` → **revert** (restore `bk_*` into `ha`, clear pending) + `esp_restart()` → node
+      returns to the last-good net; else `tries++`, persist, continue boot. **This early increment is the
+      crux** — it's the only place that counts a *Wi-Fi-connect* failure (which `esp_restart()`s before any
+      late hook), so a bad SSID/PSK still self-heals instead of looping forever (the boot-flow trap above).
+    - *Late confirm* (end of `app_main`, mirrors `ha_ota_confirm_if_pending`): if `pending`, poll
+      `is_healthy()` (= broker connected) for up to ~60 s. Connected → clear `pending`+`tries` (repoint
+      committed). Not connected → `esp_restart()` (→ next boot `tries++` → eventual revert). This covers the
+      "Wi-Fi OK but broker unreachable" mode, which otherwise never reboots on its own.
+    - Net effect: both failure modes (bad Wi-Fi creds; unreachable broker) auto-revert within a few minutes
+      and the node rejoins its old network — recoverable **over the air**, no physical trip (DJ-18 corollary).
+  - **Server side:** new `tools/repoint_node.py` + a `repoint` signer path in `tools/edge_sign.py`; wired
+    as the ESP32 class handler in `device_push.py`. Confirm = the existing bridge check (ha-2 API shows a
+    fresh `ts`), retire-on-`.210`-last unchanged.
+  - **Stage plan:** `gas_standby` (dormant spare) FIRST — OTA the new fw on the household net, send a good
+    repoint (verify it lands on ha-2), then a deliberately-bad repoint (bad PSK) to **prove the revert**
+    self-heals before any live node is touched. Then the gas fleet, then the relay-mesh nodes.

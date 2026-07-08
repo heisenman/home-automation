@@ -10,6 +10,7 @@
 #include "ha_ota.h"
 #include "ha_relay.h"
 #include "ha_reach.h"
+#include "ha_config.h"        // ha_config_repoint_apply (the signed "repoint" op)
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
@@ -121,6 +122,22 @@ static void dispatch_cmd(const cJSON *cmd) {
             ESP_LOGI(TAG, "cmd: ota url=%s", url->valuestring);
             ha_ota_start(url->valuestring, cJSON_IsString(sha) ? sha->valuestring : NULL);
         } else ESP_LOGW(TAG, "ota cmd: missing url");
+    } else if (cJSON_IsString(op) && strcmp(op->valuestring, "repoint") == 0) {
+        // Air-gap migration (DJ-19): {"op":"repoint","ssid":..,"psk":..,"broker":"mqtt://host:1883",
+        // "ntp":..,"ota_host":..}. Rewrites the "ha" overlay + reboots onto the new net; a boot-count
+        // revert self-heals a bad move over the air. Rides the same signed/fresh/replay gate as every op.
+        const cJSON *ssid   = cJSON_GetObjectItem(cmd, "ssid");
+        const cJSON *psk    = cJSON_GetObjectItem(cmd, "psk");
+        const cJSON *broker = cJSON_GetObjectItem(cmd, "broker");
+        const cJSON *ntp    = cJSON_GetObjectItem(cmd, "ntp");
+        const cJSON *host   = cJSON_GetObjectItem(cmd, "ota_host");
+        if (cJSON_IsString(ssid) && cJSON_IsString(psk) && cJSON_IsString(broker)) {
+            ha_mqtt_log("cmd: repoint ssid=%s broker=%s — arming + reboot", ssid->valuestring, broker->valuestring);
+            ha_config_repoint_apply(ssid->valuestring, psk->valuestring, broker->valuestring,
+                                    cJSON_IsString(ntp)  ? ntp->valuestring  : NULL,
+                                    cJSON_IsString(host) ? host->valuestring : NULL);
+            ha_mqtt_log("repoint apply returned — NVS write failed, node not moved");  // apply reboots on success
+        } else ha_mqtt_log("repoint cmd: missing ssid/psk/broker");
     } else {
         ESP_LOGW(TAG, "unknown/!malformed cmd");
     }

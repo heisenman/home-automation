@@ -5,4 +5,4 @@
 idf_component_register(SRCS "ha_mqtt.c"
                        INCLUDE_DIRS "include"
                        REQUIRES mqtt mbedtls nvs_flash app_update json
-                                switchbot_decode ha_sntp ha_gatt ha_gatt_exec ha_ota ha_relay ha_reach ha_ble_scan)
+                                switchbot_decode ha_sntp ha_gatt ha_gatt_exec ha_ota ha_relay ha_reach ha_ble_scan ha_config)
