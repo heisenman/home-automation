@@ -671,3 +671,33 @@ throughout (resilient reopen-on-reboot — the C6 USB-serial-JTAG re-enumerates 
   the ADR-0028 cleanup); (b) `gas_standby` still shows on `.210`'s registry (direct repoint bypassed the
   retire step) — clean via the device_push path; (c) S3 + D1001 `app_main` need the same 3-line wiring
   (S3 also a wired-node tweak: make ssid/psk optional) when their turn comes.
+
+### Phase 4 — fleet migration ORDER + planner tool (2026-07-08)
+
+- **New tool `server/maintenance/migration_topology.py`** (read-only; rerun any time) turns the live mesh
+  reach census (`mesh.db` relay_state + mesh_links) + `devices.yaml` into: per-sensor PRIMARY relay +
+  FALLBACK path, per-node footprint, coverage warnings, and a chunked one-at-a-time migration ORDER.
+  `--order` prints the plan; `--json` for machines. Detects already-migrated nodes from `.210` staleness
+  (hot.db). +6 tests. This replaces hand-crunching — the plan re-derives from reality on every run.
+- **Load-bearing invariant:** a repoint is NETWORK-ONLY (the node stays physically put → BLE reach
+  unchanged), so moving a node only ADDS air-gap coverage. A BLE sensor is air-gap-safe the instant ANY
+  node hearing it moves; pending-hold ensures `.210` never drops a sensor before ha-2 confirms it.
+- **Order (as of this run):** ① gas-only C6s `cbed_c6`,`coffice_c6` (relay only their own gas → safest);
+  ② BLE hubs by coverage `hbed_c6`(58) then `hoffice_c6`(44) (front-loads air-gap coverage); ③ retire the
+  11 BLE meters on `.210` (no repoint — ha-2 already hears them); ④ S3/panel class (`s3-crawlspace`,
+  `d1001-beachhead`) GATED on S3 `app_main` wiring — move the panel LAST (universal fallback, adv~7 for
+  everything); ⑤ ESPHome (`e1001`, Levoit) rebuild+OTA LAST. `standby_c6` already done.
+- **Two coverage gaps the tool surfaces (both real, both flagged as tasks):**
+  1. **`radon_crawlspace` is decoded ONLY by the server's BlueZ scanner** (Aranet broadcasts EXTENDED adv,
+     mfr `0x0702`). **No edge firmware decodes it** — `firmware/components` has only `switchbot_decode` +
+     `ha_ble_scan` (no Aranet, no extended-scan). So on air-gap, radon needs ha-2's own scanner in range OR
+     a new edge feature: extended-adv scan + an Aranet `0x0702` decoder. Target the **S3** (`hbed_s3`, more
+     capable, being placed near the crawlspace; it IS enrolled — has a secret/brand `v19-hbed`). Task:
+     `aranet-radon-edge`.
+  2. **`s3-crawlspace` (kitchen SGP40 + BLE) is UNENROLLED** — `edge/esp32s3-eth/nodes.yaml` is `nodes: {}`
+     (its entry is a TODO). No captured eFuse MAC, not in `node_secrets.enc`. It relays live load but
+     CANNOT be branded/OTA'd/repointed until enrolled. Blocks its migration (④). Task: `s3-crawlspace-enroll`.
+- **Device name/location edits are NOT yet a UI action** — the PWA "Services" admin panel
+  (`ui-device-admin`, open/unassigned) is unbuilt; the backend cores exist (`device_migrate.rename_everywhere`,
+  `device_relocate.relocate`, `apply_rename_worksheet`). Until then, relocating a node (e.g. `hbed_s3` →
+  crawlspace) is a server-side `device_relocate` run, not a PWA/D1001 action.
