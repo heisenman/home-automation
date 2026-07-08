@@ -8,11 +8,14 @@
 # TODO(dev): s3-crawlspace (live, kitchen SGP40) is NOT yet enrolled in node_secrets.enc as its own node
 # and its eFuse MAC isn't captured (mid hardware-swap, see memory s3-crawlspace-hardware-swap). Enroll it
 # + add its entry here before branding/OTA'ing it, so the identity gate has a real node to key on.
-nodes:
-  hbed_s3:
-    mac: "28:84:85:54:AB:E0"
-    target: esp32s3
-    sensor: sgp40            # Sensirion SGP40 — VOC index — H bedroom
-    area: h_bed
-    broker: "mqtt://192.168.0.210:1883"
-    ota_host: "192.168.0.210"
+# DECOMMISSIONED 2026-07-08: hbed_s3 (eFuse 28:84:85:54:AB:E0, esp32s3, SGP40, H bedroom) was physically
+# REMOVED and REPLACED by the C6 node `hbed_c6` (BME680) — see edge/esp32c6/nodes.yaml. Retired identity
+# kept here as a record; re-add it under `nodes:` if this board is ever redeployed.
+#  hbed_s3:
+#    mac: "28:84:85:54:AB:E0"
+#    target: esp32s3
+#    sensor: sgp40            # Sensirion SGP40 — VOC index — H bedroom
+#    area: h_bed
+#    broker: "mqtt://192.168.0.210:1883"
+#    ota_host: "192.168.0.210"
+nodes: {}

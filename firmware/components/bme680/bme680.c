@@ -107,10 +107,19 @@ esp_err_t bme680_init(bme680_t *s, i2c_master_bus_handle_t bus, uint8_t addr, ui
     if ((e = wr(s, REG_RESET, SOFT_RESET_CMD)) != ESP_OK) return e;
     vTaskDelay(pdMS_TO_TICKS(10));
 
+    // Load calibration, RETRY, and VALIDATE it populated. Right after reset/power-on the sensor is still
+    // copying its NVM into the coeff registers; read too soon and they come back all-zero — the I2C read
+    // "succeeds" but par_t1==0 then silently yields 0.0 °C/%RH/hPa forever (gas still computes, since it
+    // uses different registers). So: reject a zero par_t1 and re-read. (Observed 2026-07-08 after a move.)
     uint8_t coeff[41];
-    if ((e = rd(s, REG_COEFF1, &coeff[0], 25)) != ESP_OK) return e;
-    if ((e = rd(s, REG_COEFF2, &coeff[25], 16)) != ESP_OK) return e;
-    parse_calib(s, coeff);
+    for (int tries = 0; ; tries++) {
+        if ((e = rd(s, REG_COEFF1, &coeff[0], 25)) != ESP_OK) return e;
+        if ((e = rd(s, REG_COEFF2, &coeff[25], 16)) != ESP_OK) return e;
+        parse_calib(s, coeff);
+        if (s->par_t1 != 0) break;                 // calibration present -> good
+        if (tries >= 5) { ESP_LOGW(TAG, "calibration read all-zero after retries"); return ESP_ERR_INVALID_RESPONSE; }
+        vTaskDelay(pdMS_TO_TICKS(20));
+    }
     uint8_t rhv, rhr, rse;
     if ((e = rd(s, REG_RES_HEAT_VAL, &rhv, 1)) != ESP_OK) return e;
     if ((e = rd(s, REG_RES_HEAT_RNG, &rhr, 1)) != ESP_OK) return e;
