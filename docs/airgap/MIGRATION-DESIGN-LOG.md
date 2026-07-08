@@ -351,3 +351,19 @@ generalizations from §5 already applied), so the next migration is fill-in-the-
   `sudo -n true` (the correct non-interactive check). **Lesson for the template:** every provisioning
   script that may run headless over SSH must use `sudo -n`, never `sudo -v`/bare `sudo`, for its preflight
   — this whole migration operates boxes headlessly, so it's a class of bug, not a one-off.
+- **Stage-2 re-run green.** ha-2 now has the full app layer: packages (incl `firmware-mediatek`), BlueZ
+  `--experimental`, venv, all core `ha-*` services active on its **own** localhost broker (BLE scanner
+  live on the onboard MT7922), `ha-controller` correctly OFF.
+- **Infra + offline artifacts prepositioned** (while ha-2 still has internet — gotcha 14): `keepalived`
+  (installed, left **inactive**), `chrony`, `ntfy` (a stock Debian package — no vendored `.deb` needed).
+  Copied `instance/openwrt/` images (~18 MB) and the `preposition`-class `instance/.master_pass` (mode
+  600) to ha-2 over the trusted household channel.
+- **WHOOPSIE #2 (minor, self-inflicted) — unterminated `'` in `preflight-readiness.sh`.** Nesting
+  `awk "…"` inside `$(CL '…')` left a single-quote unclosed; the string swallowed everything to the next
+  `'`, so `bash -n` flagged a misleading line ~30 lines later. **Fix:** extract the remote command to a
+  var (`pyv=$(CL 'python3 -V 2>&1')`). **Lesson:** in the `CL '…'` SSH-wrapper pattern, keep the remote
+  command a single simple single-quoted string — never nest quotes inside it.
+- **✅ Phase -1 GATE PASSED.** `provisioning/airgap/preflight-readiness.sh` → **34 passed, 0 failed, 2
+  pending** (Tier-2: Phase-3 tooling + full `:import` dry-run, which ride the SSH channel later). Control
+  plane proven both directions; ha-2 API `/health`=200. ha-2 is pre-provisioned and remotely operable with
+  the household fallback intact. **Next: Phase 0** (failover drill + `provision-peer` parity) on go-ahead.
