@@ -20,7 +20,16 @@ static volatile bool s_busy;
 
 // ── Platform seams (ha_ota_init) ─────────────────────────────────────────────────
 static ha_ota_cfg_t s_cfg;
-void ha_ota_init(const ha_ota_cfg_t *cfg) { if (cfg) s_cfg = *cfg; }
+static char s_node_id[32];               // OWN copy of node_id — never hold the caller's pointer
+void ha_ota_init(const ha_ota_cfg_t *cfg) {
+    if (!cfg) return;
+    s_cfg = *cfg;
+    // The identity gate dereferences node_id LATER (at OTA time), long after ha_ota_init returned. Copy it
+    // into our own storage instead of trusting the caller's pointer to still be alive — a dangling node_id
+    // reads as "unknown" and rejects EVERY OTA (2026-07-08: app_main passed a pointer into its stack cfg).
+    if (cfg->node_id) { snprintf(s_node_id, sizeof(s_node_id), "%s", cfg->node_id); s_cfg.node_id = s_node_id; }
+    else s_cfg.node_id = NULL;
+}
 
 static const char *node_id(void) { return (s_cfg.node_id && s_cfg.node_id[0]) ? s_cfg.node_id : "unknown"; }
 
