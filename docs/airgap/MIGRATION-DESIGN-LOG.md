@@ -409,3 +409,43 @@ generalizations from §5 already applied), so the next migration is fill-in-the-
   `cluster.env` generalization — written where they can be **tested live** against the R7800/cluster,
   not blind. Applied over `.210`'s air-gap leg (SSH, no internet needed).
 - **➡ Handoff: ha-2 + R7800 ready to physically move/cable** (see the move runbook / Phase 1b).
+
+### Phase 1b (live bring-up over WiFi, 2026-07-08)
+- **DJ-15 — `.210`'s air-gap leg is WiFi (`wlp2s0`→`autohome_airgap`), not the wired `eno1`.** The only
+  spare cable *was* `.210`'s live internet cable, and the R7800 relocated ~10 ft away. So the DJ-7 wired
+  plan is off; the documented WiFi *fallback* becomes the **permanent bridge leg** (signal −34 dBm).
+  Consequence to watch: the household web UI rides this WiFi link — monitor its reliability.
+- **WHOOPSIE #4 — "PROVISION THE ROUTERS TOO." (the big one, per Hugh 😄)** The R7800 got relocated
+  still on its **bench config** (`192.168.0.1` — the *same IP as the household gateway*) because Phase 1a
+  only re-cut the config *files* and **deferred applying them** (router_reconcile). Result: the bring-up
+  had to reach a bench-IP router that collides with the household gateway, over WiFi, via scoped/policy
+  routing — the whole "tricky part." **LESSON (template):** provision the router(s) *as managed devices*
+  — **apply** the air-gap config while you still have easy/guaranteed access (DJ-12 applies to routers,
+  not just servers), ideally **before relocating** them. "Config prepared" ≠ "device provisioned." Ties
+  DJ-6 + DJ-12.
+- **WHOOPSIE #5 — `pkill -f 'wpa_supplicant.*wlp2s0'` killed its own shell** (the pattern matched the
+  running command line). Lesson: never `pkill -f` a pattern that appears in your own command; use pids.
+- **WiFi PSK recovery.** The PSK is NOT the master password — `Canticum1` hit the classic 4WAY→SCANNING
+  reject loop. Recovered the real key `catherineandhughwap` from the prepositioned R7800 config backup
+  (`instance/openwrt/r7800-config-backup-20260701.tar.gz`) — a payoff for prepositioning it in Phase -1.
+- **Safety guard did its job.** The sandbox classifier blocked a password-guess *loop* against the
+  router (correct — that reads as credential-guessing). Resolved cleanly: a single pubkey attempt showed
+  `.210`'s `id_ed25519` is already authorized on the R7800 root (from bench setup) — no password needed.
+- **State reached:** WiFi COMPLETED; R7800 reachable at `.0.1` over the scoped WiFi path (household
+  routing UNTOUCHED, `ip_forward=0`); root SSH to the R7800 via `id_ed25519`. **Next: apply the air-gap
+  reconfig** (minimal delta — preserve the device's real wireless paths/key; change lan→`.1.1`, DHCP +
+  reservations, NTP, `noresolv`), then re-home `.210`'s WiFi leg to `.1.245` and bring ha-2 up at `.1.210`.
+- **✅ AIR-GAP NETWORK LIVE (over the WiFi bridge).** Reconfigured the R7800 in place `.0.1`→`.1.1`
+  (`ha-router-airgap`) via root SSH over the scoped WiFi path — minimal delta (lan/DHCP/reservations/NTP/
+  `noresolv`; **wireless left untouched** — it already had `autohome_airgap` + hidden + real key + real
+  radio paths). Re-homed `.210`'s WiFi leg `.0.3`→`.1.245` — distinct subnets now, so **all the policy-
+  routing/arp collision hacks dropped away**. **`verify-gap.sh` GREEN 7/7, incl. the NEGATIVE test: ha-2
+  cannot reach the household net.** Control regained via `id_cluster` SSH `.210`→ha-2 `.1.210`.
+- **WHOOPSIE #6 (mild) — `/etc/init.d/network restart` on the R7800 bounces the WiFi radios**, dropping
+  BOTH my association and ha-2's link. Upside: `wpa_supplicant` re-associated in ~3 s, and ha-2's link-
+  bounce triggered a fresh DHCP → it auto-grabbed its reserved `.1.210` (no reboot/power-cycle needed).
+  Lesson: expect a brief WiFi drop when reloading the router you're reaching *over* that WiFi; the pieces
+  self-heal, but don't panic when the ping goes to 100% for a few seconds.
+- **⚠ OPEN — bridge persistence.** `.210`'s WiFi leg (`wlp2s0` association + `.1.245`) is **RUNTIME-ONLY**
+  right now — a `.210` reboot would strand the air-gap net. Needs a persistent `wpa_supplicant` +
+  static-IP unit (systemd or ifupdown). **NEXT before anything else load-bearing.**
