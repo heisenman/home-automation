@@ -25,7 +25,7 @@ external_components:
     components: [levoit]
 
 logger:
-  level: DEBUG                    # MCU-comms debug rides to MQTT levoit-office/debug while we verify
+  level: INFO                     # final flash — bump back to DEBUG only when diagnosing MCU comms
 
 api:
 
@@ -34,8 +34,11 @@ ota:
     password: !secret ota_password
 
 wifi:
-  ssid: !secret wifi_ssid
-  password: !secret wifi_password
+  networks:
+    - ssid: !secret wifi_ssid           # autohome_airgap (air-gap, primary)
+      password: !secret wifi_password
+    - ssid: !secret wifi_ssid_2          # CTWap_24g (household — fallback so OTA still works if air-gap wifi drops)
+      password: !secret wifi_password_2
   power_save_mode: none
   ap:
     ssid: "${wifi_ap_ssid}"
@@ -43,8 +46,14 @@ wifi:
 
 captive_portal:
 
+# Recovery margin: reboot-loop -> minimal OTA-able safe mode; + always-on local control/config UI.
+safe_mode:
+
+web_server:
+  port: 80
+
 mqtt:
-  broker: 192.168.0.210          # dictator real IP (VIP .200 unreachable from CTWap_24g wifi)
+  broker: 192.168.1.210          # ha-2 air-gap dictator (born air-gap; broker is anonymous-on-LAN, no creds)
   port: 1883
 
 uart:
