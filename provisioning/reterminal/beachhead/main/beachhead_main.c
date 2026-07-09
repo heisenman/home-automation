@@ -69,12 +69,12 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v104-golden-part"
+#define APP_BUILD_TAG "v105-btnfix"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
 #define BLE_NODE "d1001-beachhead"
-#define BSP_BUTTON_IN  GPIO_NUM_3     // back-of-device button, active-low w/ pull-up
+#define BSP_BUTTON_IN  GPIO_NUM_3     // back-of-device button, ACTIVE-HIGH (released=0/held=1, verified; see recovery.h)
 static const char *TAG = "beachhead";
 
 #define T_STATUS "d1001-beachhead/status"
@@ -241,7 +241,8 @@ static void heartbeat_task(void *pv)
     for (;;) { publish_status(); vTaskDelay(pdMS_TO_TICKS(15000)); }
 }
 
-// Back button (GPIO3, active-low): short-press toggles the screen on/off. A tiny
+// Back button (GPIO3, ACTIVE-HIGH: released=0, held=1 — VERIFIED 2026-07-08, see recovery.h;
+// the old "active-low" comment was wrong). Short-press toggles the screen on/off. A tiny
 // debounced poll task — no button component (zero deps, no API-version churn).
 // Toggle is a no-op until the display has been brought up (cmd/display on).
 static void button_task(void *pv)
@@ -249,17 +250,17 @@ static void button_task(void *pv)
     gpio_config_t io = {
         .pin_bit_mask = 1ULL << BSP_BUTTON_IN,
         .mode = GPIO_MODE_INPUT,
-        .pull_up_en = GPIO_PULLUP_ENABLE,
+        .pull_up_en = GPIO_PULLUP_ENABLE,      // config under which released=0/held=1 was verified
         .pull_down_en = GPIO_PULLDOWN_DISABLE,
         .intr_type = GPIO_INTR_DISABLE,
     };
     gpio_config(&io);
-    int prev = 1;                       // released (pull-up high)
+    int prev = 0;                       // released (active-high: released reads 0)
     for (;;) {
         int lvl = gpio_get_level(BSP_BUTTON_IN);
-        if (prev == 1 && lvl == 0) {    // high->low = press edge
+        if (prev == 0 && lvl == 1) {    // low->high = press edge
             vTaskDelay(pdMS_TO_TICKS(30));                 // debounce settle
-            if (gpio_get_level(BSP_BUTTON_IN) == 0) {      // still down = real press
+            if (gpio_get_level(BSP_BUTTON_IN) == 1) {      // still down = real press
                 if (bsp_display_ready()) {
                     bsp_display_toggle();
                     if (s_client && s_mqtt_up)
@@ -268,7 +269,7 @@ static void button_task(void *pv)
                     publish_screen_state();
                 }
                 // wait for release so a held button = one toggle
-                while (gpio_get_level(BSP_BUTTON_IN) == 0) vTaskDelay(pdMS_TO_TICKS(20));
+                while (gpio_get_level(BSP_BUTTON_IN) == 1) vTaskDelay(pdMS_TO_TICKS(20));
             }
         }
         prev = lvl;
