@@ -274,7 +274,7 @@ static void do_render_cycle(bool nav)
         bool mapped = false;
         if (cJSON_IsArray(rooms) && cJSON_GetArraySize(rooms) > 0) {
             if (lvgl_port_lock(0)) {
-                ui_map_render(rm, s_map, on_room_tap);
+                ui_map_render(rm, s_map, on_room_tap, nav);
                 lv_obj_clear_flag(s_map, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_devices, LV_OBJ_FLAG_HIDDEN);

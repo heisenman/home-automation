@@ -605,13 +605,58 @@ static bool house_room_spatial(lv_obj_t *parent, cJSON *room, cJSON *geo, int re
 }
 
 // --- render ----------------------------------------------------------------
-void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
+// Two persistent layers under `parent`: s_wall_c (static vector walls — never change) and s_box_c
+// (live value labels — rebuilt each refresh). The walls span the whole floor plan, so tearing them
+// down + redrawing every 10 s invalidated the WHOLE screen -> the flicker. Now the walls are built
+// once and only the (much smaller) box layer is cleared+rebuilt per cycle, keyed on a structural
+// signature so a device/geometry/size change still triggers a full rebuild. (panel map-flicker fix)
+static lv_obj_t *s_wall_c, *s_box_c, *s_map_parent;
+static unsigned  s_shape_sig;
+
+// FNV-1a over the STRUCTURE only (room ids + device ids + parent px) — NOT the values, so it is stable
+// across value drift and flips only when the set of things shown / geometry-scale / size changes.
+static unsigned map_shape_sig(cJSON *rooms, int pw, int ph)
+{
+    unsigned h = 2166136261u;
+    #define MIX(b) (h ^= (unsigned char)(b), h *= 16777619u)
+    cJSON *r;
+    cJSON_ArrayForEach(r, rooms) {
+        const cJSON *id = cJSON_GetObjectItem(r, "id");
+        if (cJSON_IsString(id)) for (const char *s = id->valuestring; *s; s++) MIX(*s);
+        MIX('|');
+        cJSON *devs = cJSON_GetObjectItem(r, "devices");
+        cJSON *d;
+        cJSON_ArrayForEach(d, devs) {
+            const cJSON *did = cJSON_GetObjectItem(d, "device_id");
+            if (cJSON_IsString(did)) for (const char *s = did->valuestring; *s; s++) MIX(*s);
+            MIX(',');
+        }
+    }
+    MIX(pw & 0xff); MIX((pw >> 8) & 0xff); MIX(ph & 0xff); MIX((ph >> 8) & 0xff);
+    #undef MIX
+    return h;
+}
+
+static lv_obj_t *map_make_layer(lv_obj_t *parent, int pw, int ph)
+{
+    lv_obj_t *c = lv_obj_create(parent);
+    lv_obj_set_size(c, pw, ph);
+    lv_obj_set_pos(c, 0, 0);
+    lv_obj_set_style_bg_opa(c, LV_OPA_TRANSP, 0);
+    lv_obj_set_style_border_width(c, 0, 0);
+    lv_obj_set_style_pad_all(c, 0, 0);
+    lv_obj_set_style_radius(c, 0, 0);
+    lv_obj_set_layout(c, LV_LAYOUT_NONE);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_clear_flag(c, LV_OBJ_FLAG_CLICKABLE);   // pass taps through to the child boxes
+    return c;
+}
+
+void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb, bool nav)
 {
     s_cb = cb;
     s_nreg = 0;
-    s_nring = 0;
     s_xoff = 0; s_yoff = 0;                    // house map: no centering offset
-    lv_obj_clean(parent);
     lv_obj_set_layout(parent, LV_LAYOUT_NONE);
 
     cJSON *rooms = cJSON_GetObjectItem(root, "rooms");
@@ -632,23 +677,39 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb)
     double sy = have_space ? (double)(ph - 2 * PAD) / (mxy - mny) : 1;   // full screen height now
     s_scale = sx < sy ? sx : sy;                 // uniform, preserve aspect
 
-    // pass 1: walls (so labels draw on top)
-    if (have_space) {
-        cJSON_ArrayForEach(r, rooms) {
-            cJSON *geo = cJSON_GetObjectItem(r, "geometry");
-            if (!cJSON_IsObject(geo)) continue;
-            cJSON *counts = cJSON_GetObjectItem(r, "counts");
-            cJSON *ca = cJSON_IsObject(counts) ? cJSON_GetObjectItem(counts, "actuators") : NULL;
-            uint32_t col = (cJSON_IsNumber(ca) && ca->valueint > 0) ? ACT_WALL_COL : WALL_COL;
-            cJSON *poly = cJSON_GetObjectItem(geo, "poly");
-            if (cJSON_IsArray(poly)) draw_ring(poly, parent, col);
-            cJSON *polys = cJSON_GetObjectItem(geo, "polys");
-            if (cJSON_IsArray(polys)) {
-                cJSON *ring;
-                cJSON_ArrayForEach(ring, polys) draw_ring(ring, parent, col);
+    // Rebuild the static wall layer only when the structure changed (else reuse it, redraw-free);
+    // always clear+rebuild the value-box layer.
+    unsigned sig = map_shape_sig(rooms, pw, ph);
+    // nav (view entry) forces rebuild: another view may have lv_obj_clean'd `parent`, freeing our layers,
+    // so s_box_c could be stale — the rebuild branch never derefs it (it lv_obj_clean's parent + recreates).
+    bool rebuild_walls = (nav || !s_box_c || parent != s_map_parent || sig != s_shape_sig);
+    if (rebuild_walls) {
+        lv_obj_clean(parent);
+        s_wall_c = map_make_layer(parent, pw, ph);
+        s_box_c  = map_make_layer(parent, pw, ph);   // created after -> drawn on top of the walls
+        s_map_parent = parent; s_shape_sig = sig;
+        s_nring = 0;
+        // pass 1: walls (into the persistent wall layer)
+        if (have_space) {
+            cJSON_ArrayForEach(r, rooms) {
+                cJSON *geo = cJSON_GetObjectItem(r, "geometry");
+                if (!cJSON_IsObject(geo)) continue;
+                cJSON *counts = cJSON_GetObjectItem(r, "counts");
+                cJSON *ca = cJSON_IsObject(counts) ? cJSON_GetObjectItem(counts, "actuators") : NULL;
+                uint32_t col = (cJSON_IsNumber(ca) && ca->valueint > 0) ? ACT_WALL_COL : WALL_COL;
+                cJSON *poly = cJSON_GetObjectItem(geo, "poly");
+                if (cJSON_IsArray(poly)) draw_ring(poly, s_wall_c, col);
+                cJSON *polys = cJSON_GetObjectItem(geo, "polys");
+                if (cJSON_IsArray(polys)) {
+                    cJSON *ring;
+                    cJSON_ArrayForEach(ring, polys) draw_ring(ring, s_wall_c, col);
+                }
             }
         }
+    } else {
+        lv_obj_clean(s_box_c);                   // walls persist; only the value layer redraws
     }
+    parent = s_box_c;                            // pass 2 (labels) target the value layer
 
     // pass 2: labels (placed rooms at centroids; monolithic/geometry-less-with-devices -> right column)
     int col_y = PAD + 30;

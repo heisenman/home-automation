@@ -18,8 +18,12 @@
 typedef void (*ui_map_room_cb)(const char *area_id, const char *name);
 
 // Build/refresh the house map into `parent` from a parsed /api/v1/rooms response (`root` = the whole
-// object with .rooms[]). Clears `parent` first. Must be called under the LVGL lock. `cb` may be NULL.
-void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb);
+// object with .rooms[]). Must be called under the LVGL lock. `cb` may be NULL.
+// The map keeps two persistent layers under `parent`: a STATIC wall layer (built once) and a value-box
+// layer (rebuilt each refresh) — so a periodic refresh no longer tears down the whole-screen walls (the
+// 10 s flicker). `nav`=true (view entry — another view may have cleaned/freed `parent`'s children) forces
+// a full rebuild and is safe against stale layer pointers; `nav`=false (periodic) reuses the wall layer.
+void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb, bool nav);
 
 // Device tap callback in the spatial room-zoom: tapped device's id + name (pointers valid only during
 // the call — copy if retained).
