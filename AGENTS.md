@@ -46,6 +46,11 @@ mirrors the dictator with keepalived/VRRP auto-failover behind a VIP.
   or host-config target. Touch only its `ha-*` guest services, nothing else on the box.
 - Deep reference: [home-automation-architecture-plan.md](home-automation-architecture-plan.md),
   [docs/ROADMAP.md](docs/ROADMAP.md), the [ADR index](docs/adr/).
+- **Air-gap migration:** [docs/airgap/AIRGAP-MIGRATION.md](docs/airgap/AIRGAP-MIGRATION.md) — requirements +
+  final architecture + learnings/whoopsies (read before touching air-gap devices); the running journal is
+  [docs/airgap/MIGRATION-DESIGN-LOG.md](docs/airgap/MIGRATION-DESIGN-LOG.md).
+- **Secrets:** [docs/SECRETS.md](docs/SECRETS.md) — the discovery index (where each secret class lives). Don't
+  hunt; look here first.
 
 ## Machines & repo checkouts — READ BEFORE BUILDING/FLASHING
 

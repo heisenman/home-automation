@@ -17,6 +17,9 @@ docs here are organized.
 | `retro/` | Retrospectives | After milestones/incidents |
 | `cutover/`, `CUTOVER-*.md` | Cutover procedures/history | Migrations |
 | `device-onboarding.md`, `*-intake.md`, `*-protocol.md` | Device/protocol how-tos | Onboarding, protocol work |
+| `airgap/AIRGAP-MIGRATION.md` (+ `MIGRATION-DESIGN-LOG.md`) | Air-gap migration: requirements, architecture, learnings + running journal | Any air-gap / device-migration work |
+| `SECRETS.md` | Secrets **discovery index** — where each secret class lives (values stay gitignored) | Onboarding, credential hunts |
+| `runbook-device-verification.md` | How to VERIFY a device's state/function (trust-but-verify, AGENTS §5) | Before relying on any device state |
 
 ## ADR index (authoritative decisions)
 

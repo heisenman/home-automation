@@ -18,6 +18,13 @@ already exists → what's the thin new glue → prove it → register it.
 
 ## The intake flow
 
+> **⚠️ Air-gap join prerequisite — un-hide the SSID for ESPHome/vendor devices.** `autohome_airgap` is a
+> hidden SSID, and **ESPHome cannot reliably join a hidden network** (scan, `fast_connect`, and BSSID-pin all
+> fail — verified on the Levoit, 2026-07-09). The native-C edge fleet joins hidden fine; ESPHome does not. So
+> before joining any ESPHome/vendor device: `ssh root@192.168.1.1 'uci set wireless.default_radio0.hidden=0;
+> uci set wireless.default_radio1.hidden=0; uci commit wireless; wifi'`. Re-hiding after is optional (≈useless
+> security). See memory `intake-unhide-ssid` and [airgap/AIRGAP-MIGRATION.md](airgap/AIRGAP-MIGRATION.md) §3.
+
 ### Stage 0 — Docs-first hardware survey  → *the authoritative docs*
 Before asserting a single pin, register, or part, **read the schematic + vendor BSP/datasheet** (Principle 2).
 Produce the honest hardware surface: MCU(s), radios, sensors, actuators, storage, power, buses. **Note what's
