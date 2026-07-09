@@ -861,3 +861,23 @@ The last non-panel edge node. VERIFIED end-to-end.
 
 **Remaining migration:** Levoit purifier (USB reflash, whenever) + panels (D1001 handoff pending ops ack; E1001
 on ops go-ahead). All other edge/actuator devices are on ha-2, verified.
+
+---
+
+## 2026-07-09 — ✅ Levoit purifier migrated (never-open-again ESPHome) + hidden-SSID lesson
+
+Levoit Vital 200S (`levoit-office`, ESP32-C3). Reflashed once via the on-PCB UART header
+(`EN|GND|VCC|TXD|RXD|IO0`; IO0 = boot strap — memory `levoit-programming-header`) to set a **recorded
+`ota_password`** (the whole point: enable OTA forever). Full `tuct/levoit` entity set already present.
+- **Final firmware:** dual-wifi (`autohome_airgap` priority 10 + `CTWap_24g` fallback), MQTT → ha-2
+  (anon-on-LAN), recorded `ota_password`, `safe_mode` + `web_server` + `captive_portal` + fallback AP.
+- **VERIFIED:** online on ha-2 at `.1.148` (−40 dBm), PM2.5 live, control mapping present (`purifier_h_office`).
+- **HIDDEN-SSID LESSON:** ESPHome CANNOT reliably join a hidden SSID. Tried and ALL FAILED — plain scan,
+  `fast_connect`, and BSSID-pin+`fast_connect` (the re-hide test knocked it offline). It joins fine only when
+  the SSID is visible (−37/−40 dBm). The native-C fleet joins hidden fine (directed probe); ESPHome does not.
+  → `autohome_airgap` kept **UN-HIDDEN**; directive `intake-unhide-ssid` (applies to E1001). The ENTIRE saga
+  was fixed over OTA + one user power-cycle — **no reopening** (validated the recorded-`ota_password`
+  never-open-again design; OTA'd ~6× this session).
+
+**Remaining migration: ONLY the panels** — D1001 → dev (pending ops handoff ack), E1001 → ops. Every other
+edge + actuator device is on ha-2, verified.
