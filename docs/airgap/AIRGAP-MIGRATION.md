@@ -69,7 +69,19 @@ state live before trusting it (see Learning #8).
 10. **`esphome upload` does NOT compile** — run `esphome compile` first, then `upload`.
 11. **`repoint_node --wait` / departure watch false-fails on LWT lag** — the authoritative signal is arrival on
     the NEW broker (device_push confirms via the bridge), not departure from the old one.
-12. **The air-gap has NO authoritative time source (no internet).** Panels/devices can only NTP-sync from a
+12. **Panel repoint moves wifi/broker/ntp but NOT the HTTP BFF URL.** D1001's BFF base is a compile-time
+    `#define BFF_BASE_URL "http://192.168.0.210:8123"` (household), separate from the `ha_config` NVS overlay
+    the signed `repoint` op writes — so on the air-gap it stayed household → "House (offline)" (scene/admin
+    HTTP fetches fail; tiles still work, they come via MQTT). Fix: set BFF to ha-2 (`192.168.1.210:8123`) +
+    reflash. **Better: fold the BFF URL into the `ha_config` repoint overlay** so it's runtime-repointable like
+    broker/ntp (no reflash on future moves). (E1001's BFF is a yaml substitution — handled at its rebuild.)
+13. **`mqtt_task` watchdog hang on reconnect (D1001).** `MQTT_EVENT_DATA` processes the retained
+    `home/+/+/state` burst (now ~23 msgs — the WHOLE fleet is on ha-2) directly on the mqtt task via
+    `ui_tiles_on_state` (heavy LVGL). The code's own `ui_grid.c` comment says this MUST run on `state_task`,
+    NOT the mqtt callback — the bug is line ~605 violating that. The migration made it bite (bigger burst on
+    ha-2). Intermittent (timing/size). Fix: offload the state parse+apply off the mqtt callback (non-blocking
+    enqueue to `state_task`). Recovery meanwhile: USB-reset the panel (P4 — `esptool --chip esp32p4`).
+14. **The air-gap has NO authoritative time source (no internet).** Panels/devices can only NTP-sync from a
     server that actually SERVES time. ha-2's clock was correct but (a) it wasn't serving NTP (panels drifted —
     E1001 showed a wrong wall clock) and (b) it has **no chrony sources**, so it's undisciplined and will drift.
     Fix applied: ha-2 chrony `allow 192.168.1.0/24` (⚠ **NO inline `#` comment** — chrony fatals on it), panels
