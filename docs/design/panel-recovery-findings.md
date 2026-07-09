@@ -3,6 +3,50 @@
 Living log of tests, failures, and findings while building the button-held → known-good-firmware recovery.
 Newest at top. Failures are kept on purpose (Hugh: "document everything including failures and findings").
 
+## 2026-07-08 (B) — Verification B PROVEN: 2nd-stage bootloader override (crash-boot coverage)
+
+**Goal:** cover the case the app-level gate (A2) cannot — a *bad/crash boot* where the app never runs, so
+only the 2nd-stage bootloader can divert to golden. Long-press (3 s, confirmed w/ Hugh) → golden.
+
+**Config facts verified first (DOCS-FIRST):** `CONFIG_SECURE_BOOT` **off**, `CONFIG_SECURE_FLASH_ENC` **off**
+→ a custom bootloader needs no signing and a bad flash is ROM-download-mode + JTAG recoverable. Golden =
+**ota_1 = boot index 1** (partitions csv: ota_0@0x10000, ota_1@0x620000). `CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y`.
+
+**Primitive (official IDF API, not hand-rolled):** `bootloader_common_check_long_hold_gpio_level(pin, delay_sec,
+level)` — enables the **internal pull-up** (same config polarity was verified under), returns immediately if the
+pin is NOT at `level` (so a released boot pays **zero** delay), else `GPIO_LONG_HOLD` after `delay_sec`. With
+`level=true` this is our active-HIGH long-press exactly.
+
+**Mechanism:** ESP-IDF `bootloader_components/` in the project. `recovery.h` is single-sourced into the
+bootloader via `INCLUDE_DIRS`.
+- **B0 (read-only hook, `bootloader_after_init`)** — prints the GPIO3 classification only; cannot redirect
+  boot (safest first bootloader flash). CONFIRMED: released→`NOT_HOLD`, held→`LONG_HOLD`, printed at ~55 ms
+  (bootloader stage, ~360 ms before the app loads). **Bootloader-context read matches the app read.**
+- **B1 (full override, `bootloader_components/main/bootloader_start.c`)** — verbatim from the IDF
+  `custom_bootloader/bootloader_override` example; the ONLY change is in `select_partition_number()`: on a
+  3 s GPIO3 high-hold, return the golden index instead of `get_selected_boot_partition()`. Never writes otadata.
+
+**B1 results (captured):**
+| Button | Captured behaviour |
+|---|---|
+| released | no RECOVERY line; boot ota_0@0x10000 at ~406 ms; **zero delay**; normal v101. |
+| held 3 s | `[boot] ADR-0030 RECOVERY: gpio3 held 3s -> booting GOLDEN (ota_1)` → **direct** load of 0x620000 at ~3401 ms → `GOLDEN RECOVERY IMAGE ACTIVE` + red LED. **No ota_0 load, no app A2 line** — the bootloader diverted before the app ran. |
+| release + reset | auto-returns to v101/ota_0 (transient — no otadata write, no otatool flip needed). |
+
+**Safety property:** a released boot takes the exact stock path (`get_selected_boot_partition`); only a held
+boot hits new code — so a bug in the held path cannot break normal boots. Secure boot off = recoverable.
+
+**Gotcha logged:** adding/removing a `bootloader_components/` component requires `idf.py fullclean` — a plain
+incremental build does NOT re-scan the bootloader subproject, so the first B0 build silently produced a STOCK
+bootloader (verified via `nm bootloader.elf`: `bootloader_hooks_include` = `U`). Always `nm` the bootloader
+elf to confirm the override/hook linked *before* flashing.
+
+**Bootloader size:** override = 0x5cb0, 0x350 (3%) free — fits, tight. Watch this if the hook grows.
+
+**Still to prove (B1c):** flash a deliberately-crashing app into ota_0 → confirm a stable boot-loop (a
+serially-flashed app is marked valid so it won't auto-rollback) → 3 s hold → bootloader boots golden → restore
+the good app. This is the empirical capstone; B1 already proves the divert happens *before* the app runs.
+
 ## 2026-07-08 (later) — polarity CORRECTED to active-HIGH; Verification A PROVEN (app-level)
 
 **⚠️ CORRECTION of the Phase-1a conclusion below.** The Phase-1a table concluded "GPIO3 active-LOW
