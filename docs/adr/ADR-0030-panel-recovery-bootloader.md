@@ -1,11 +1,37 @@
 # ADR-0030 — Button-held bootloader recovery to a known-good panel firmware
 
 **Date:** 2026-07-09
-**Status:** **Proposed** (design; Hugh accepted the phased approach 2026-07-09, pending ADR review). Follows
-the D1001 near-brick during an E1001 flash mix-up (esptool reset the wrong panel into the bootloader; only a
-battery-drain + reset recovered it) and the standing gap noted in `bsp_display.h:8` — *"bootloader rollback
-isn't enabled yet."* Complements **[[ADR-0019]]** (panels are thin renderers) and the open
-`ota-verify-window-rollback` hardening.
+**Status:** **Accepted & implemented on the D1001** (2026-07-08) — Verification A + B and the immutable golden
+partition are all proven on-device and captured to file (see `docs/design/panel-recovery-findings.md`).
+E1001 port is TODO. Follows the D1001 near-brick during an E1001 flash mix-up (esptool reset the wrong panel
+into the bootloader; only a battery-drain + reset recovered it) and the standing gap noted in `bsp_display.h:8`
+— *"bootloader rollback isn't enabled yet."* Complements **[[ADR-0019]]** (panels are thin renderers) and the
+open `ota-verify-window-rollback` hardening.
+
+## Implementation as-built (D1001, 2026-07-08) — deviations from the original design below
+
+The as-built design matches the intent but differs in specifics; the design sections further down are kept for
+history. What actually shipped and was proven:
+- **Button polarity is ACTIVE-HIGH (held = GPIO3 level 1)** — the opposite of the "active-low" assumption in
+  the design below and in the old code comments. Verified (released=0/held=1), single-sourced in
+  `main/recovery.h`. This inversion was the root cause of an early golden-boot loop.
+- **Mechanism = a full 2nd-stage bootloader OVERRIDE, not a hook.** Hooks (`bootloader_after_init`) cannot
+  redirect boot selection, so the impl is `bootloader_components/main/bootloader_start.c` (verbatim from the
+  IDF `custom_bootloader/bootloader_override` example) with one change in `select_partition_number()`.
+- **Trigger = a 3 s high-hold** via the official `bootloader_common_check_long_hold_gpio_level(GPIO3, 3, high)`
+  (not a ~1 s debounce). A released pin returns instantly → zero normal-boot delay.
+- **Golden = an immutable `test`-subtype partition** (`golden,app,test,0xA20000,4M`), booted by
+  `TEST_APP_INDEX`. `test` (not an `ota_N` slot) is provably outside the OTA rotation, so a normal OTA can
+  never clobber it, and it is never booted by default. Recovery is **transient** (no otadata write): release +
+  reboot auto-returns to the normal app.
+- **An app-level gate (A2) was built then RETIRED** — `esp_ota_set_boot_partition` only accepts `ota_N`
+  partitions, incompatible with an immutable `test` golden, and the bootloader path is strictly more robust
+  (covers crash-at-boot too). Recovery is now **bootloader-only**.
+- **Prereqs verified:** secure boot + flash encryption are OFF → the custom bootloader needs no signing and a
+  bad flash is ROM-download-mode + JTAG recoverable. 0xA20000..0xE20000 was flash-health surveyed before
+  blessing golden.
+- **Provenance caveat:** the golden binary bakes in `secrets.h` creds → archive it off-repo, never in the
+  public repo. A golden build-from-source should be documented.
 
 ## Context — a stuck panel has no dead-simple physical recovery
 
