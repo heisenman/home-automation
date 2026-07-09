@@ -61,6 +61,7 @@
 #include "esp_netif_sntp.h"
 #include "esp_sntp.h"
 #include "ha_rtc.h"                 // roadmap #1 (ability G): PCF8563 wall clock
+#include "ha_config.h"              // ADR-0028/DJ-19: wifi/broker/ota_host = secrets.h defaults + NVS "ha" overlay (repoint)
 
 #ifndef NTP_SERVER
 #define NTP_SERVER "192.168.0.210"  // dictator LAN IP — serves NTP via chrony (unblocks the wall clock)
@@ -69,7 +70,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v105-btnfix"
+#define APP_BUILD_TAG "v106-cfgoverlay"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -985,10 +986,15 @@ static void battdump_task(void *pv)
     vTaskDelete(NULL);
 }
 
+// Effective node config (secrets.h defaults overlaid by the NVS "ha" namespace). FILE-SCOPE STATIC, not
+// stack: consumers (ha_ota's ota_host pin, the MQTT uri) hold pointers into it that are dereferenced after
+// app_main returns — a stack cfg would dangle (the edge hit exactly this). Populated once by ha_config_load.
+static ha_config_t s_cfg;
+
 static void start_mqtt(void)
 {
     esp_mqtt_client_config_t cfg = {
-        .broker.address.uri = MQTT_BROKER_URI,
+        .broker.address.uri = s_cfg.broker_uri,   // was MQTT_BROKER_URI; now overlay-able (repoint)
         .credentials.client_id = "d1001-beachhead",
         .session.keepalive = 15,
         .session.last_will = {
@@ -1252,11 +1258,17 @@ void app_main(void)
         ESP_ERROR_CHECK(nvs_flash_erase());
         ESP_ERROR_CHECK(nvs_flash_init());
     }
+    // Resolve effective wifi/broker/ota_host: secrets.h compile-time defaults, then the NVS "ha" overlay
+    // (repoint). node_id stays BLE_NODE (fixed identity — the OTA gate keys off it). With no overlay written
+    // this yields the exact old values, so boot behavior is unchanged until a repoint lands. (ADR-0028/DJ-19)
+    ha_config_load(&s_cfg, &(ha_config_t){
+        .wifi_ssid = WIFI_SSID, .wifi_psk = WIFI_PASS, .broker_uri = MQTT_BROKER_URI,
+        .node_id = BLE_NODE, .ntp_server = NTP_SERVER, .ota_host = "" });
     scene_dim_init();   // load the device-local per-scene backlight table (NVS override or baked default)
     ha_gatt_init(&(ha_gatt_cfg_t){ .publish = gatt_hist_publish, .log = gatt_log_cb });   // roadmap #5
     ha_ota_init(&(ha_ota_cfg_t){                 // shared OTA client: identity gate keyed on this node id (ADR-0020)
         .node_id    = BLE_NODE,                  // "d1001-beachhead" — refuse any image not branded "<node_id>@…"
-        .ota_host   = "",                        // host-pin left OFF (bench serves from .112; prod host varies) — identity is the gate
+        .ota_host   = s_cfg.ota_host,            // overlay-able host pin (repoint moves it); default "" = pin OFF, identity is the gate
         .log        = ha_ota_log_cb,
         .is_healthy = ha_ota_healthy_cb,
         .on_fail    = ha_ota_fail_cb,
@@ -1276,12 +1288,12 @@ void app_main(void)
                                                         wifi_event_handler, NULL, NULL));
 
     wifi_config_t wc = { 0 };
-    strncpy((char *)wc.sta.ssid, WIFI_SSID, sizeof(wc.sta.ssid) - 1);
-    strncpy((char *)wc.sta.password, WIFI_PASS, sizeof(wc.sta.password) - 1);
+    strncpy((char *)wc.sta.ssid, s_cfg.wifi_ssid, sizeof(wc.sta.ssid) - 1);       // was WIFI_SSID; overlay-able (repoint)
+    strncpy((char *)wc.sta.password, s_cfg.wifi_psk, sizeof(wc.sta.password) - 1);// was WIFI_PASS
     ESP_ERROR_CHECK(esp_wifi_set_mode(WIFI_MODE_STA));
     ESP_ERROR_CHECK(esp_wifi_set_config(WIFI_IF_STA, &wc));
     ESP_ERROR_CHECK(esp_wifi_start());
-    ESP_LOGI(TAG, "WiFi started — joining %s", WIFI_SSID);
+    ESP_LOGI(TAG, "WiFi started — joining %s", s_cfg.wifi_ssid);
 
     xEventGroupWaitBits(s_evt, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
     ESP_LOGI(TAG, "WiFi up — starting MQTT");
