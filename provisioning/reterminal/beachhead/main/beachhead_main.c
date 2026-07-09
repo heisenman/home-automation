@@ -70,7 +70,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v106-cfgoverlay"
+#define APP_BUILD_TAG "v108-repoint-fix"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -512,6 +512,29 @@ static const char *dispatch_signed_cmd(const cJSON *inner, esp_mqtt_client_handl
                           cJSON_IsNumber(amp) ? (int)amp->valuedouble : 70);
         } else ha_audio_chime();
         return "beep:ok";
+    } else if (strcmp(op->valuestring, "repoint") == 0) {
+        // ADR-0028/DJ-19 air-gap migration: rewrite the "ha" NVS overlay + reboot onto the new net; a
+        // boot-count revert self-heals a bad move over the air (no physical trip). Rides THIS signed path
+        // (HMAC + TIGHT 300 s freshness + anti-replay) unchanged. node_id is NEVER changed (fixed identity;
+        // the OTA gate keys off it). broker required; ssid/psk/ntp/ota_host optional (a wired node could
+        // repoint broker-only — N/A on this Wi-Fi panel, but the contract is shared with the edge).
+        const cJSON *ssid   = cJSON_GetObjectItem(inner, "ssid");
+        const cJSON *psk    = cJSON_GetObjectItem(inner, "psk");
+        const cJSON *broker = cJSON_GetObjectItem(inner, "broker");
+        const cJSON *ntp    = cJSON_GetObjectItem(inner, "ntp");
+        const cJSON *host   = cJSON_GetObjectItem(inner, "ota_host");
+        if (!cJSON_IsString(broker)) return "repoint:no-broker";
+        // Ack BEFORE apply — apply reboots on success and never returns, so this is the only over-the-wire
+        // signal the sender (device_push) gets that the repoint was accepted.
+        if (client) esp_mqtt_client_publish(client, T_ACK, "repoint:arming", 0, 0, 0);
+        ESP_LOGW(TAG, "repoint: broker=%s ssid=%s — arming overlay + reboot", broker->valuestring,
+                 cJSON_IsString(ssid) ? ssid->valuestring : "(unchanged)");
+        ha_config_repoint_apply(cJSON_IsString(ssid) ? ssid->valuestring : NULL,
+                                cJSON_IsString(psk)  ? psk->valuestring  : NULL,
+                                broker->valuestring,
+                                cJSON_IsString(ntp)  ? ntp->valuestring  : NULL,
+                                cJSON_IsString(host) ? host->valuestring : NULL);
+        return "repoint:nvs-write-failed";   // apply reboots on success; returns only if the NVS write failed
     }
     return "unknown-op";
 }
@@ -1264,6 +1287,11 @@ void app_main(void)
     ha_config_load(&s_cfg, &(ha_config_t){
         .wifi_ssid = WIFI_SSID, .wifi_psk = WIFI_PASS, .broker_uri = MQTT_BROKER_URI,
         .node_id = BLE_NODE, .ntp_server = NTP_SERVER, .ota_host = "" });
+    // Repoint self-heal (DJ-19), EARLY — before any Wi-Fi bring-up: if a repoint is pending, count this
+    // trial boot and, after RP_MAX_TRIES failures, revert to the backed-up config + reboot. Must be here —
+    // a bad SSID fails the connect below and reboots before the late confirm runs, so only this early
+    // counter catches that mode. No-op when nothing is pending. (paired with ha_config_repoint_confirm)
+    ha_config_repoint_boot_check();
     scene_dim_init();   // load the device-local per-scene backlight table (NVS override or baked default)
     ha_gatt_init(&(ha_gatt_cfg_t){ .publish = gatt_hist_publish, .log = gatt_log_cb });   // roadmap #5
     ha_ota_init(&(ha_ota_cfg_t){                 // shared OTA client: identity gate keyed on this node id (ADR-0020)
@@ -1325,6 +1353,12 @@ void app_main(void)
     xTaskCreate(power_task, "pwr", 4096, NULL, 3, NULL);    // power-context watcher (BLE now default-off; still tracks wall/notify)
     if (s_battlog_enabled) bat_profile_start(battprofile_publish);   // discharge-curve CSV (profiling done → off)
     fs_ops_start(fs_publish);                 // SD file-ops over MQTT (cmd/fs)
+    // Repoint confirm (DJ-19), LATE — mirrors ha_ota_confirm_if_pending. If a repoint is pending, poll the
+    // broker-reachable predicate for up to 60 s: connected -> commit (clear pending); timed out -> reboot to
+    // retry (-> the early boot_check counts it -> eventual revert). Covers the "Wi-Fi OK but broker
+    // unreachable" mode, which never reboots on its own. No-op when nothing is pending. Reuses the OTA
+    // health cb (== s_mqtt_up). Runs after the worker tasks are up, so the device stays live while it polls.
+    ha_config_repoint_confirm(ha_ota_healthy_cb, NULL, 60000);
     // Display is NOT started here — trigger it over MQTT with cmd/display "on"
     // once the device is confirmed live, so a failed bring-up can't brick boot.
 }

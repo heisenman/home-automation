@@ -93,7 +93,17 @@ def build_inner(argv: list[str]) -> dict:
         if len(argv) >= 4:
             inner["window"] = int(argv[3])
         return inner
-    sys.exit(f"unknown op '{op}' (ota|fs|gpio|exp|gattprobe|gathist|beep|audio)")
+    if op == "repoint":                         # ADR-0028/DJ-19: move wifi/broker(+ntp/ota_host) at runtime
+        if len(argv) < 2:
+            sys.exit("repoint needs a broker uri, e.g.\n"
+                     "  d1001_cmd.py repoint mqtt://192.168.1.210:1883 [ssid] [psk] [ntp] [ota_host]\n"
+                     "  (broker required; ssid/psk/ntp/ota_host optional — omit to leave unchanged)")
+        inner = {"op": "repoint", "broker": argv[1]}
+        for key, idx in (("ssid", 2), ("psk", 3), ("ntp", 4), ("ota_host", 5)):
+            if len(argv) > idx and argv[idx]:
+                inner[key] = argv[idx]
+        return inner
+    sys.exit(f"unknown op '{op}' (ota|fs|gpio|exp|gattprobe|gathist|beep|audio|repoint)")
 
 
 def main() -> None:

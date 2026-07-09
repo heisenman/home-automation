@@ -97,8 +97,12 @@ bool ha_config_repoint_apply(const char *ssid, const char *psk, const char *brok
     }
 
     // 3) Reboot into the new config, armed for revert.
+    // NB: ssid is NULL on a broker-only repoint (wired S3-ETH, or a Wi-Fi node moving broker only) — %s on
+    // NULL is a Load-access-fault panic on ESP32 newlib-nano, so guard it. (Caught on the D1001 bench,
+    // 2026-07-09: a broker-only repoint panicked here; it self-healed only because the overlay was already
+    // committed above before the crash.)
     ESP_LOGW(TAG, "repoint ARMED: ssid=%s broker=%s — rebooting (revert after %d failed boots)",
-             ssid, broker, RP_MAX_TRIES);
+             ssid ? ssid : "(unchanged)", broker, RP_MAX_TRIES);
     vTaskDelay(pdMS_TO_TICKS(500));   // let the log flush + the MQTT ack settle
     esp_restart();
     return true;                      // unreachable
