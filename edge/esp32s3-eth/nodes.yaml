@@ -5,13 +5,12 @@
 # node_id -> { mac (eFuse, `esptool read_mac`), target, sensor, area, broker, ota_host }
 # Materialize: enroll_node.py --node-id <n> --from-manifest --reuse --out edge/esp32s3-eth/main/secrets.h
 #
-# TODO(dev): s3-crawlspace (live, kitchen SGP40) is NOT yet enrolled in node_secrets.enc as its own node
-# and its eFuse MAC isn't captured (mid hardware-swap, see memory s3-crawlspace-hardware-swap). Enroll it
-# + add its entry here before branding/OTA'ing it, so the identity gate has a real node to key on.
-# hbed_s3 REDEPLOYED 2026-07-09: the ORIGINAL unit (eFuse 28:84:85:54:AB:E0, H bedroom) was decommissioned
-# + replaced by the C6 `hbed_c6` (BME680). A DIFFERENT physical S3 (eFuse 44:1B:F6:85:B7:F8) now carries the
-# `hbed_s3` identity as a BLE + Aranet-radon relay in the H office closet (crawlspace access). It's the only
-# edge node that hears radon_crawlspace (BLE5 extended-adv, 0x0702) — closes the air-gap radon coverage gap.
+# hbed_s3 REDEPLOYED 2026-07-09: the ORIGINAL hbed_s3 unit (eFuse 28:84:85:54:AB:E0, H bedroom) was FREED from
+# the hbed_s3 role (replaced there by the C6 `hbed_c6`/BME680) and REPURPOSED as `s3-crawlspace` (kitchen SGP40
+# gas node — see its entry below; MAC captured + enrolled 2026-07-09). A DIFFERENT physical S3 (eFuse
+# 44:1B:F6:85:B7:F8, W5500 + antenna) now carries the `hbed_s3` identity as a BLE + Aranet-radon relay in the
+# H office closet. BOTH S3s build the Aranet ext-adv (0x0702) radon decode — but ha-2's own scanner is the
+# VERIFIED primary radon source (~60s); the S3 decoders are redundancy (per the redundancy directive).
 nodes:
   hbed_s3:
     mac: "44:1B:F6:85:B7:F8"        # re-attached S3 (NOT the old 28:84:85 unit) — W5500 ETH board + external
@@ -25,3 +24,11 @@ nodes:
     area: h_office_closet           # physical node location (crawlspace-access spot); relays radon_crawlspace
     broker: "mqtt://192.168.0.210:1883"
     ota_host: "192.168.0.210"
+  s3-crawlspace:
+    mac: "28:84:85:54:AB:E0"        # repurposed ORIGINAL hbed_s3 board (freed when hbed_s3 moved to 44:1B:F6…).
+    target: esp32s3
+    sensor: sgp40                   # WIRED Grove SGP-40 over I2C -> gas_kitchen (SDA=GPIO42/SCL=GPIO41)
+    area: kitchen                   # physical node location; relays gas_kitchen. Also builds Aranet-radon decode
+                                    # (redundancy; likely out of range in the kitchen, but built in per directive).
+    broker: "mqtt://192.168.0.210:1883"   # BORN household; repoint to air-gap (ha-2 mqtt://192.168.1.210:1883) after
+    ota_host: "192.168.0.210"             # cable-flash + verify on .210, then migrate.
