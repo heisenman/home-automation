@@ -23,7 +23,6 @@
 #include "freertos/queue.h"
 #include "freertos/event_groups.h"
 #include "esp_log.h"
-#include "esp_rom_sys.h"   // esp_rom_printf: earliest UART log (ADR-0030 recovery probe)
 #include "esp_wifi.h"
 #include "esp_event.h"
 #include "esp_netif.h"
@@ -70,7 +69,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v97-recoveryprobe"
+#define APP_BUILD_TAG "v96-mapmetrics"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -1227,19 +1226,6 @@ static void presence_task(void *pv)
 
 void app_main(void)
 {
-    // RECOVERY PROBE (ADR-0030 Phase 1a) — earliest-possible read of the recovery button (GPIO3,
-    // active-low + pull-up). Proves (a) the pin is readable at app entry and (b) holding it at boot is
-    // BENIGN (the device still reaches app_main and continues). Uses esp_rom_printf so it lands on the
-    // UART console even though the MQTT log pipe / custom vprintf aren't installed yet. Serial-only.
-    {
-        gpio_config_t rprobe = { .pin_bit_mask = 1ULL << BSP_BUTTON_IN, .mode = GPIO_MODE_INPUT,
-                                 .pull_up_en = GPIO_PULLUP_ENABLE, .pull_down_en = GPIO_PULLDOWN_DISABLE,
-                                 .intr_type = GPIO_INTR_DISABLE };
-        gpio_config(&rprobe);
-        int rlvl = gpio_get_level(BSP_BUTTON_IN);
-        esp_rom_printf("\n>>> RECOVERY-PROBE: GPIO3 at app_main entry = %d (0=HELD/LOW, 1=released/HIGH) <<<\n", rlvl);
-    }
-
     bsp_display_predark();   // FIRST: hold the panel dark across boot (kills the OTA-reboot strobe)
     led_init();                                // red status LED off; used by the boot gate + warn
     s_pp_cfg = ha_power_policy_d1001_cfg();     // set before MQTT-connect can fire the boot gate
