@@ -3,6 +3,43 @@
 Living log of tests, failures, and findings while building the button-held → known-good-firmware recovery.
 Newest at top. Failures are kept on purpose (Hugh: "document everything including failures and findings").
 
+## 2026-07-08 (C) — IMMUTABLE golden partition + bootloader-only recovery (A2 retired)
+
+**Goal:** make golden un-clobberable by a normal OTA and remove the redundant app-level path.
+
+**Decision (Hugh):** bootloader-only recovery. Golden moves to a dedicated **`test`-subtype** app partition;
+the app-level A2 gate is retired (it switched via `esp_ota_set_boot_partition`, which only accepts `ota_N`
+partitions — incompatible with a non-ota golden, and B1 already covers everything A2 did, more robustly).
+
+**Why `test` works (verified from `bootloader_utility.c`):** `esp_ota_get_next_update_partition` only cycles
+`ota_N` slots → a `test` partition is **never** an OTA target; `get_selected_boot_partition` only returns the
+otadata-selected ota slot → golden is **never** booted by default; `load_boot_image(bs, TEST_APP_INDEX)` loads
+`bs->test` directly → the bootloader can boot it explicitly. All three properties hold simultaneously.
+
+**Flash-health survey first (Hugh asked; the region was unproven):** full 32 MB chunked read
+(`scratchpad/flash_survey.sh` → `flashdump/results.log`) — **all 16×2 MB chunks read OK**, no FAIL/TIMEOUT;
+the historically-flagged 0x600000 sector read OK this pass (it's routed around regardless). **Surprise:** the
+"free" golden target (0xA20000..~0xCC0000) was **not blank** — it held **orphaned audio/factory assets**
+(Adobe BWF/XMP + PCM), not referenced by any partition. Surfaced to Hugh (don't erase unidentified data);
+he OK'd erasing it (also backed up in the survey dump). Its being written confirms the region is *writable*.
+
+**Placement:** read golden off ota_1 (0x620000), cut a clean image at the exact end (0x227630 bytes,
+image_info hash-valid → `golden_clean.bin`). New table row `golden, app, test, 0xA20000, 0x400000`
+(ota_0/ota_1 unchanged). Bootloader override now returns `TEST_APP_INDEX` on the 3 s hold. Erased the golden
+region, wrote `golden_clean.bin`, **read back → sha MATCH** (`bee6e942…`) — pristine, verified on-flash.
+
+**Proven on-device (app `v104-golden-part`, captured):**
+| Button | Result |
+|---|---|
+| released | bootloader enumerates `golden test app 0xa20000`; boots ota_0/v104; no recovery line; clean. |
+| held 3 s | `ADR-0030 RECOVERY: gpio3 held 3s -> booting GOLDEN (test @0xa20000)` → load **0xa20000** → `RECOVERY(v98-GOLDEN): running=golden` + red LED. |
+| release+reset | auto-returns to v104/ota_0 (transient). |
+
+**Immutability** is guaranteed by ESP-IDF design (test ∉ OTA rotation; table has exactly ota_0/ota_1 as the
+`ota_N` slots). **Provenance gap to close:** the golden *binary* (v98-GOLDEN) is placed on-device from a dump;
+it is NOT in the repo, so a from-scratch reflash needs it archived/documented. Empirical OTA-survives-golden
+demo optional.
+
 ## 2026-07-08 (B) — Verification B PROVEN: 2nd-stage bootloader override (crash-boot coverage)
 
 **Goal:** cover the case the app-level gate (A2) cannot — a *bad/crash boot* where the app never runs, so

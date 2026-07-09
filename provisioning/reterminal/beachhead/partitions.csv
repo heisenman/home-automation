@@ -2,9 +2,16 @@
 # Routed AROUND the flaky flash sector at 0x600000 (found during the factory
 # backup) so neither app/OTA slot ever writes it. The region 0x410000..0x620000
 # is left UNMAPPED on purpose — the bad 0x600000 sector (+ margin) lives there.
+#
+# ADR-0030: `golden` is an IMMUTABLE recovery image. It is subtype `test`, NOT an
+# ota_N slot, so the OTA ping-pong (esp_ota_get_next_update_partition cycles ota_0/ota_1
+# only) can NEVER overwrite it, and the default boot never selects it. The 2nd-stage
+# bootloader override boots it explicitly (TEST_APP_INDEX) on a 3s button-hold. Its
+# region 0xA20000..0xE20000 was read+write surveyed clean (2026-07-08). Never auto-updated.
 # Name,     Type, SubType,  Offset,    Size
 nvs,        data, nvs,      0x9000,    0x4000,
 otadata,    data, ota,      0xd000,    0x2000,
 phy_init,   data, phy,      0xf000,    0x1000,
 ota_0,      app,  ota_0,    0x10000,   0x400000,
 ota_1,      app,  ota_1,    0x620000,  0x400000,
+golden,     app,  test,     0xA20000,  0x400000,

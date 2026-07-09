@@ -31,8 +31,9 @@
 
 // Deliberate long-press so a transient touch never diverts a good boot. Confirmed with Hugh 2026-07-08.
 #define RECOVERY_HOLD_SEC   3
-// ota_1 (golden) is boot index 1 in a [ota_0, ota_1] table (verified from partitions csv).
-#define GOLDEN_BOOT_INDEX   1
+// Golden is the IMMUTABLE `test`-subtype partition (partitions.csv) — never an ota_N slot, so a normal
+// OTA can't clobber it. The bootloader boots it explicitly by TEST_APP_INDEX (see bootloader_utility.c
+// load_boot_image: start_index==TEST_APP_INDEX loads bs->test directly).
 
 static const char* TAG = "boot";
 
@@ -78,14 +79,15 @@ static int select_partition_number(bootloader_state_t *bs)
         return INVALID_INDEX;
     }
 
-    // 2. ADR-0030 recovery: GPIO3 held HIGH for RECOVERY_HOLD_SEC -> force golden (ota_1).
-    //    Released pin returns immediately (no normal-boot delay). Guarded on the slot existing.
-    if (bs->app_count > GOLDEN_BOOT_INDEX &&
+    // 2. ADR-0030 recovery: GPIO3 held HIGH for RECOVERY_HOLD_SEC -> force the immutable golden
+    //    (test) partition. Released pin returns immediately (no normal-boot delay). Guarded on the
+    //    test partition actually existing in the table.
+    if (bs->test.offset != 0 &&
         bootloader_common_check_long_hold_gpio_level(
             RECOVERY_BUTTON_GPIO, RECOVERY_HOLD_SEC, RECOVERY_BUTTON_ACTIVE_LVL) == GPIO_LONG_HOLD) {
-        esp_rom_printf("[%s] ADR-0030 RECOVERY: gpio%d held %ds -> booting GOLDEN (ota_%d)\n",
-                       TAG, RECOVERY_BUTTON_GPIO, RECOVERY_HOLD_SEC, GOLDEN_BOOT_INDEX);
-        return GOLDEN_BOOT_INDEX;
+        esp_rom_printf("[%s] ADR-0030 RECOVERY: gpio%d held %ds -> booting GOLDEN (test @0x%x)\n",
+                       TAG, RECOVERY_BUTTON_GPIO, RECOVERY_HOLD_SEC, bs->test.offset);
+        return TEST_APP_INDEX;
     }
 
     // 3. Otherwise, the normal otadata-selected boot partition.
