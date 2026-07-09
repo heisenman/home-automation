@@ -14,9 +14,14 @@
 # edge node that hears radon_crawlspace (BLE5 extended-adv, 0x0702) — closes the air-gap radon coverage gap.
 nodes:
   hbed_s3:
-    mac: "44:1B:F6:85:B7:F8"        # re-attached S3 (NOT the old 28:84:85 unit — different physical board)
+    mac: "44:1B:F6:85:B7:F8"        # re-attached S3 (NOT the old 28:84:85 unit) — W5500 ETH board + external
+                                    # BLE antenna. NO gas-sensor hardware fitted.
     target: esp32s3
-    sensor: sgp40                   # SGP40 present-but-unwired; live role is BLE relay + Aranet radon decode
+    # `sensor` MUST be one of sgp30|sgp40|bme680 (edge_nodes.SENSORS has no 'none'), so it's tagged sgp40 to
+    # satisfy the manifest + match what's compiled — BUT there is NO physical/wired SGP40 here. This node
+    # emits NO gas_* data by design; its live role is BLE relay + Aranet-radon decode. Do NOT expect or try
+    # to register a gas reading for it. (The WIRED SGP40 -> gas_kitchen lives on the s3-crawlspace node.)
+    sensor: sgp40                   # compiled-in ONLY; gas hardware absent — see note above
     area: h_office_closet           # physical node location (crawlspace-access spot); relays radon_crawlspace
     broker: "mqtt://192.168.0.210:1883"
     ota_host: "192.168.0.210"
