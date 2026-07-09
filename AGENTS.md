@@ -5,7 +5,7 @@ terse; it **routes** to the deep docs, it doesn't duplicate them. (Conventions: 
 
 ## Principles (non-negotiable — read before you build)
 
-These four govern all work here; they are first on purpose. Detail lives in the ADRs they cite.
+These five govern all work here; they are first on purpose. Detail lives in the ADRs they cite.
 
 1. **Reuse-first.** Before building anything, find what already exists: [`docs/REUSE.md`](docs/REUSE.md) (the
    capability catalog), the ADR nearest your task, `firmware/components/`, existing `cmd/*` handlers, and
@@ -22,6 +22,13 @@ These four govern all work here; they are first on purpose. Detail lives in the 
    [`docs/CONFORMANCE.md`](docs/CONFORMANCE.md) (the ability→ADR conformance catalog), and **ADHERE** to every
    SHALL it binds. It isn't done until it conforms; a forgotten device-registration can't excuse a missed
    contract.
+5. **Trust but verify (device state).** A device's state or function is a *hypothesis* until **verified live** —
+   documented, remembered, or briefly-sampled state is not a fact (a short sample can miss a slow update cadence).
+   Verify before you rely on it in planning or execution, **even if it costs more time and tokens.** Any doc that
+   asserts a device's state/stance **SHALL** carry a companion reference to how to re-check it, kept in
+   [`docs/runbook-device-verification.md`](docs/runbook-device-verification.md) — verification procedures live there
+   (durable + separate), never inline in the churning design log. ([ADR-0010](docs/adr/ADR-0010-command-control-protocol.md)
+   pairs with this: signed control assumes the device is what the registry says — so confirm what it *does*.)
 
 **If your task writes or changes code, take the reuse self-test in [ADR-0025](docs/adr/ADR-0025-reuse-first-navigation.md)
 — honestly, before you build.** If you cannot say *"yes, I'd discover and reuse before building,"* you are the
