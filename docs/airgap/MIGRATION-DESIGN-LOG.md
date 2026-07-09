@@ -733,3 +733,44 @@ master_bath, radon_crawlspace) + `plug_g11` (Tasmota). Every safety mechanism he
 are ESPHome (rebuild+OTA, blocked on the missing E1001 ota_password); `meter_c_bed` awaits ha-2 mesh
 reassignment (self-resolving). `hbed_s3` is migratable but low-value (pure relay; ha-2 hears its radon
 directly). Resume: [[checkpoint-2026-07-09]].
+
+---
+
+## 2026-07-09 — Midea dehumidifier migrated (control cluster, whoopsie #12)
+
+The control-critical device: the `meter_pro_living_room -> dehumidifier_living_room` loop had to survive
+the net move intact. Done + verified live on ha-2.
+
+**Requirements disconnect (Hugh flagged):** we have full *control* of the Midea (LAN protocol via saved
+DEVICE_ID/KEY/TOKEN) but NOT its *WiFi association* — the stock module only accepts a new SSID via Midea's
+cloud app. So the WiFi move to `autohome_airgap` is a one-time human step (app, no factory-reset — a reset
+rotates key/token; a network change preserves them). Decision: one-time app move now, scope an ESPHome
+dongle-swap later to kill the latent app dep. See [[midea-app-dep-control-vs-provisioning]].
+
+**Transfer + verify recipe (proven):**
+1. Human: Midea app → change WiFi to `autohome_airgap` (same PSK as household), NO factory reset. (Hidden
+   SSID may need un-hiding on the router during provisioning; wasn't needed this time.)
+2. Find it on the air-gap net: old household `.0.211` goes dead; new device = freshest DHCP lease. Here
+   `.119`, MAC `b8:0b:da:1c:28:ac`, hostname `net_a1_28AC` (Midea WiFi-module signature). Confirm identity
+   by AUTHENTICATED status (`midea-beautiful-air-cli status --ip .119 --token/--key`) → `model=Dehumidifier`,
+   embedded MAC matches. NB: raw `/dev/tcp` probe of 6445 lies (encrypted listener drops bare probes) — the
+   driver handshake is the authoritative reachability test, not a port scan.
+3. Point ha-2 at it: `sed MIDEA_IP=192.168.1.119` in `instance/midea-device.env`.
+4. **ha-2 venv was missing `midea-beautiful-air`** — air-gapped, so `pip download` on `.210` (household leg
+   has internet) → scp wheels → `pip install --no-index --find-links` on ha-2. (Both boxes py3.13.5.)
+5. `sudo systemctl enable --now ha-controller` on ha-2. Verify: journal shows
+   `dehumidifier_living_room -> ON | RH 42 in deadband -> hold ON ... sensor=42` — controller read
+   meter_pro (42% RH) AND the appliance state, applied policy, no error. Loop closed.
+6. **Pin the IP:** control-critical device must not float DHCP. Added a static lease on the air-gap router
+   (`midea-dehum` MAC->.119, live uci + folded into committed `provisioning/openwrt/etc/config/dhcp` w/
+   `__MIDEA_MAC__` placeholder + `MIDEA_MAC` in gitignored env).
+
+**Split-brain guard:** the dev box (`.210`/`.245`, dual-homed) still runs `ha-controller` active+enabled
+and still lists the dehum. It's harmless ONLY because its `MIDEA_IP` stays at the dead `.0.211` — it can't
+reach `.119`, so ha-2 is the sole controller. DO NOT point `.210`'s env at `.119`. Proper cleanup (drop
+migrated prod actuators from the dev box's control scope, or run it dry_run for them) is a follow-up — not
+done unilaterally to avoid disturbing the dev platform. Revert path: dehum WiFi back to household (physical
+AP-mode button, not factory reset).
+
+**Remaining on 0.0 after this:** Levoit (flexible/USB-reflash exception), panels (ops track), `hbed_s3`
+(ready), `s3-crawlspace` (needs USB enroll), `meter_c_bed` (self-resolving), `plug_g11` (Tasmota).

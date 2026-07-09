@@ -54,6 +54,14 @@ config host
 	option ip '192.168.1.245'
 	option mac '__BRIDGE_MAC__'
 
+# Midea dehumidifier — control-critical: ha-2 drives it over the Midea LAN protocol (token/key), so its
+# IP must NOT float (a DHCP move would silently break the meter_pro_living_room -> dehum control loop).
+# Migrated onto the air-gap net 2026-07-09; MAC in the gitignored env.
+config host
+	option name 'midea-dehum'
+	option ip '192.168.1.119'
+	option mac '__MIDEA_MAC__'
+
 # ha-vip.lan -> .200 (resolve only; the address floats via VRRP). Also add to /etc/hosts:
 #   192.168.1.200  ha-vip ha-vip.lan
 # Edge nodes get static leases here (.150–.199) once their MACs are filled in, OFF wifi-isolation.
