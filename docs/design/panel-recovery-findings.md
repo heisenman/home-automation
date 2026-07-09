@@ -3,6 +3,35 @@
 Living log of tests, failures, and findings while building the button-held → known-good-firmware recovery.
 Newest at top. Failures are kept on purpose (Hugh: "document everything including failures and findings").
 
+## 2026-07-08 (D) — demonstrable power-off + golden recovery across a REAL power cycle
+
+**Context:** the D1001 has a battery + BQ25616 charger, so USB-unplug alone doesn't power it off. Full
+firmware shutdown = `bsp_power_off()` releases the `PWR_HOLD` latch (PCA9535 P8) → VDD_3V3 collapses (on
+battery). Power ON = physical side button (hardware CJ3407 latch, not firmware-reachable) or plugging USB.
+**On USB the rail is held up by VBUS**, so a true power-off can only be *observed* on battery. Can't probe the
+rail without disassembly — so we proved it by **signal, not scope**.
+
+**Method (no disassembly):** serial-node presence = P4 powered (USB-JTAG is inside the P4, off VDD_3V3); plus
+a timestamped MQTT status poll on `.210` (LWT + `uptime_s`). Baseline: serial present, `online ota_1
+uptime 634`. Hugh did the force-off gesture (button + USB unplug), then re-plugged.
+
+**Result (MQTT timeline — `scratchpad/poweroff_mqtt.log`):**
+```
+online ota_1  uptime 634   -> OFFLINE (LWT)  -> online GOLDEN uptime 4  -> OFFLINE -> online ota_1 uptime 3
+```
+- **Force-off is real:** LWT `offline` fired AND `uptime_s` reset 634→4. A dark-but-running device cannot
+  reset uptime — it genuinely power-cycled. (Confirmed by Hugh.)
+- **USB-plug auto-powers-on** (matches the BSP "power on = plug USB") — so there is no USB-plugged-but-off
+  state; the cold-boot signature is the proof.
+- **Golden recovery survives a TRUE power cycle:** the first cold boot came up on `partition:golden` — GPIO3
+  held ~3 s across the USB-plug cold boot tripped the bootloader recovery. So recovery works from a real
+  rail-down power-on, not just a warm `panel.sh reset`. (Hugh reproduced it deliberately.)
+
+**Note / open UX question:** the power-on-via-USB cold boot passes through the recovery gate, so holding the
+green button during re-power lands in golden. Whether the "power" gesture and the GPIO3 "recovery" gesture are
+the same physical button or separate (side button vs green back button) is a schematic detail to confirm; if
+separate they're independent, if overlapping it's a deliberate-hold UX note. Not a defect.
+
 ## 2026-07-08 (C) — IMMUTABLE golden partition + bootloader-only recovery (A2 retired)
 
 **Goal:** make golden un-clobberable by a normal OTA and remove the redundant app-level path.
