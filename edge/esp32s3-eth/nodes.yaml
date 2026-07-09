@@ -8,14 +8,15 @@
 # TODO(dev): s3-crawlspace (live, kitchen SGP40) is NOT yet enrolled in node_secrets.enc as its own node
 # and its eFuse MAC isn't captured (mid hardware-swap, see memory s3-crawlspace-hardware-swap). Enroll it
 # + add its entry here before branding/OTA'ing it, so the identity gate has a real node to key on.
-# DECOMMISSIONED 2026-07-08: hbed_s3 (eFuse 28:84:85:54:AB:E0, esp32s3, SGP40, H bedroom) was physically
-# REMOVED and REPLACED by the C6 node `hbed_c6` (BME680) — see edge/esp32c6/nodes.yaml. Retired identity
-# kept here as a record; re-add it under `nodes:` if this board is ever redeployed.
-#  hbed_s3:
-#    mac: "28:84:85:54:AB:E0"
-#    target: esp32s3
-#    sensor: sgp40            # Sensirion SGP40 — VOC index — H bedroom
-#    area: h_bed
-#    broker: "mqtt://192.168.0.210:1883"
-#    ota_host: "192.168.0.210"
-nodes: {}
+# hbed_s3 REDEPLOYED 2026-07-09: the ORIGINAL unit (eFuse 28:84:85:54:AB:E0, H bedroom) was decommissioned
+# + replaced by the C6 `hbed_c6` (BME680). A DIFFERENT physical S3 (eFuse 44:1B:F6:85:B7:F8) now carries the
+# `hbed_s3` identity as a BLE + Aranet-radon relay in the H office closet (crawlspace access). It's the only
+# edge node that hears radon_crawlspace (BLE5 extended-adv, 0x0702) — closes the air-gap radon coverage gap.
+nodes:
+  hbed_s3:
+    mac: "44:1B:F6:85:B7:F8"        # re-attached S3 (NOT the old 28:84:85 unit — different physical board)
+    target: esp32s3
+    sensor: sgp40                   # SGP40 present-but-unwired; live role is BLE relay + Aranet radon decode
+    area: h_office_closet           # physical node location (crawlspace-access spot); relays radon_crawlspace
+    broker: "mqtt://192.168.0.210:1883"
+    ota_host: "192.168.0.210"
