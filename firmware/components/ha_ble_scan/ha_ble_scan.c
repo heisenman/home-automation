@@ -205,6 +205,8 @@ static void handle_adv(const uint8_t *d, int len, int rssi, const ble_addr_t *ad
         dedup_t *slot = find_or_alloc(mac);
         slot->addr = *addr;
         if (!should_publish_aranet(slot, mac, &ar)) return;
+        // rate-limited (post-dedup, ~30 s / on-change) — verified byte-exact vs server aranet.py
+        ESP_LOGI(TAG, "aranet radon: radon=%d t=%.1f rssi=%d", ar.radon, ar.temp, rssi);
         char metrics[128];
         if (ar.radon >= 0)
             snprintf(metrics, sizeof(metrics),

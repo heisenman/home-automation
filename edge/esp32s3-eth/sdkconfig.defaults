@@ -41,3 +41,7 @@ CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
 # ── Misc ────────────────────────────────────────────────────────────────────────
 CONFIG_LOG_DEFAULT_LEVEL_INFO=y
 CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+# DEBUG (aranet-radon-edge): route the console to the USB-serial-JTAG so logs come out /dev/ttyACM0
+# (default was UART0 — physical pins, invisible over USB). Lets us see the ext-scan bring-up on this
+# S3 without a UART adapter. Harmless to keep; revert to UART default once radon is proven if desired.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
