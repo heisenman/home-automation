@@ -10,11 +10,11 @@
 #   MAC a4:cb:8f:cf:46:e8
 
 substitutions:
-  device_name: e1001-bench          # rename to e1001-<area> when it's mounted
-  friendly_name: "reTerminal E1001 (bench)"
-  wifi_ap_ssid: "e1001-bench-fallback"
+  device_name: e1001-c-office       # deployed to C Office 2026-07-09 (area c_office; ESPHome name = hyphens)
+  friendly_name: "reTerminal E1001 (C Office)"
+  wifi_ap_ssid: "e1001-c-office-fallback"
   bff_base_url: "http://192.168.0.210:8123"   # FastAPI BFF; read endpoints are open on the LAN (no auth on GET)
-  edge_node: "e1001"                 # edge-node id for home/edge/<node>/event (rename per-area on deploy)
+  edge_node: "e1001-c-office"        # edge-node id for home/edge/<node>/event; SHT40 mac = <edge_node>-sht40
   ntp_server: "192.168.0.210"        # dictator = LAN time anchor (holdover source; router serves NTP once onboarded)
   timezone: "America/Los_Angeles"    # display wall-clock zone; change to the house zone
   # P4e deep-sleep RUNTIME hooks — no reflash to toggle. These are first-boot DEFAULTS only; thereafter the
@@ -437,7 +437,7 @@ interval:
             id(g_prof_state), id(batt_v).state, id(charger)->hiz() ? "true" : "false",
             (int) id(charger)->charge_status(), id(charger)->power_good() ? "true" : "false",
             id(g_charge_mah), id(g_cycle), id(g_ocv_d), id(g_ocv_c), id(g_v_floor));
-          id(mqtt_client)->publish("e1001-bench/battprofile", std::string(p), 0, false);
+          id(mqtt_client)->publish("${device_name}/battprofile", std::string(p), 0, false);
 
 deep_sleep:                          # P4e Step 2: timer + button wake. Prevented at boot (pri 900); entered
   id: ds                             # explicitly at the end of the wake cycle, only when g_sleep_enable.
