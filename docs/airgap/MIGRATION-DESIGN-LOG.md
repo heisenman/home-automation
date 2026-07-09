@@ -701,3 +701,35 @@ throughout (resilient reopen-on-reboot — the C6 USB-serial-JTAG re-enumerates 
   (`ui-device-admin`, open/unassigned) is unbuilt; the backend cores exist (`device_migrate.rename_everywhere`,
   `device_relocate.relocate`, `apply_rename_worksheet`). Until then, relocating a node (e.g. `hbed_s3` →
   crawlspace) is a server-side `device_relocate` run, not a PWA/D1001 action.
+
+### Phase 4 — LIVE per-device migration, first big batch (2026-07-09)
+
+Executed the migration as a live "code test". **17 devices now on ha-2:** 2 PMs + `standby_c6` + all 4 C6
+gas nodes (`gas_c_bed`/cbed, `gas_c_office`/coffice, `gas_hbed`/hbed, `gas_h_office`/hoffice) + 10 BLE
+meters (attic, pro_c_office, h_bathroom, h_bed_closet, pro_h_bed, kitchen, living_room, pro_living_room,
+master_bath, radon_crawlspace) + `plug_g11` (Tasmota). Every safety mechanism held; **zero data loss.**
+
+- **Per-node recipe (proven):** enroll+build repoint fw → OTA → `device_push <device_id>`
+  (repoint→confirm-via-bridge→pending-hold retire). BLE meters skip OTA (confirm+retire only).
+- **WHOOPSIE #9 — deployed C6 fleet OTA-reject (dangling node_id).** `cbed_c6`/`coffice_c6` (pre-`975cb1e`)
+  read `node_id="unknown"` and reject ALL OTAs. **Break-glass:** build the node's own fw branded
+  `unknown@rp1` (the buggy gate's `want="unknown@"` accepts it) → boots fixed → normal `<n>@` OTA then
+  works. Proven end-to-end. `hbed_c6`/`hoffice_c6` (post-fix) took normal OTAs directly — the fleet is MIXED.
+- **WHOOPSIE #10 — `repoint_node --wait` false-fail.** The `.210` LWT lags past the 45 s departure watch,
+  so it exited non-zero on a node that HAD migrated (live on ha-2), and `device_push` marked it failed at
+  `repoint`, skipping confirm+retire. Fixed: departure is best-effort, arrival-on-new-broker (confirm) is
+  authoritative → `repoint_node` exits 0 after publishing.
+- **WHOOPSIE #11 — ha-2 registry stale.** `device_push`'s "applied" step ASSUMES ha-2 holds the record but
+  doesn't sync it. The BME680 gas records (`hbed_c6-gas`, `hoffice_c6-gas`, post ha-2's last sync) were
+  missing → `hbed_c6` migrated but its gas never mapped on ha-2; confirm caught it (no retire). Fix: `scp
+  instance/{devices,tasmota-devices}.yaml` to ha-2 + restart `ha-edge-mapper ha-writer ha-edge-history
+  ha-api` (+ `ha-tasmota-bridge`). Now folded in preemptively (full sync covers remaining nodes).
+- **BLE retires are PROVISIONAL** (see [[migration-ble-retire-after-relays]]): they self-heal at 6 h unless
+  the last household relays (`d1001-beachhead` + `s3-crawlspace`) migrate — so Chunk 4 must finalize them.
+
+**PAUSED — remaining work is all blocked/handed off:** `s3-crawlspace` needs USB enrollment (`gas_kitchen`);
+`d1001` + `e1001` panels handed to **ops** for a robust firmware rewrite (req filed as `panel-airgap-repoint`
+— adopt the ha_config NVS-overlay + DJ-19 repoint op so they're migratable); Levoit/purifier/dehumidifier
+are ESPHome (rebuild+OTA, blocked on the missing E1001 ota_password); `meter_c_bed` awaits ha-2 mesh
+reassignment (self-resolving). `hbed_s3` is migratable but low-value (pure relay; ha-2 hears its radon
+directly). Resume: [[checkpoint-2026-07-09]].
