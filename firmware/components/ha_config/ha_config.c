@@ -55,10 +55,12 @@ void ha_config_load(ha_config_t *cfg, const ha_config_t *defaults) {
 
 bool ha_config_repoint_apply(const char *ssid, const char *psk, const char *broker,
                              const char *ntp, const char *ota_host) {
-    if (!ssid || !ssid[0] || !psk || !broker || !broker[0]) {
-        ESP_LOGE(TAG, "repoint: missing ssid/psk/broker — refused");
+    if (!broker || !broker[0]) {
+        ESP_LOGE(TAG, "repoint: missing broker — refused");
         return false;
     }
+    // ssid/psk are OPTIONAL: a WIRED node (S3-ETH) repoints broker-only and keeps its existing Wi-Fi
+    // fallback creds; a Wi-Fi node passes ssid+psk to also switch SSID. NULL/"" = leave that key unchanged.
     // 1) Arm the revert: back up the current effective config + set pending, in one commit. If we have no
     //    cached effective config (shouldn't happen — load runs first), back up empties so a revert clears
     //    the overlay to compile defaults rather than restoring garbage.
@@ -79,9 +81,9 @@ bool ha_config_repoint_apply(const char *ssid, const char *psk, const char *brok
     nvs_handle_t h;
     esp_err_t err = nvs_open("ha", NVS_READWRITE, &h);
     if (err == ESP_OK) {
-        nvs_set_str(h, "wifi_ssid", ssid);
-        nvs_set_str(h, "wifi_psk", psk);
         nvs_set_str(h, "broker_uri", broker);
+        if (ssid && ssid[0])         nvs_set_str(h, "wifi_ssid", ssid);   // optional (wired node omits)
+        if (psk && psk[0])           nvs_set_str(h, "wifi_psk", psk);     // optional
         if (ntp && ntp[0])           nvs_set_str(h, "ntp_server", ntp);
         if (ota_host && ota_host[0]) nvs_set_str(h, "ota_host", ota_host);
         err = nvs_commit(h);

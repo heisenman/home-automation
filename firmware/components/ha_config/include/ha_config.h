@@ -24,8 +24,9 @@ void ha_config_load(ha_config_t *cfg, const ha_config_t *defaults);
 // --- Repoint (air-gap migration; the signed "repoint" cmd, ADR-0028/DJ-19) -------------------------
 // Move this node to a new Wi-Fi + broker by rewriting the "ha" overlay, then rebooting. node_id is
 // PRESERVED (identity is fixed; the OTA gate keys off it). Backs up the current effective config and arms
-// a boot-count revert (see below) so a bad repoint self-heals over the air. ssid/psk/broker are required;
-// ntp/ota_host optional (NULL/"" = leave that key unchanged). On success this REBOOTS (does not return);
+// a boot-count revert (see below) so a bad repoint self-heals over the air. Only `broker` is required;
+// ssid/psk/ntp/ota_host are optional (NULL/"" = leave that key unchanged) — a WIRED node (S3-ETH)
+// repoints broker-only and keeps its Wi-Fi fallback creds. On success this REBOOTS (does not return);
 // returns false only if the NVS write failed, in which case NOTHING changed and the node stays put.
 bool ha_config_repoint_apply(const char *ssid, const char *psk, const char *broker,
                              const char *ntp, const char *ota_host);
