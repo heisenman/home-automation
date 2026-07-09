@@ -15,10 +15,12 @@ this file records *how to re-check it*. Keep verification procedures here, not i
 - Each entry has four fields: **Claim** (the asserted state) · **How to verify** (exact commands) ·
   **Expected** (what a healthy result looks like) · **Cadence & gotchas** (what makes a naive check lie).
 
-> **Universal gotcha — cadence before absence.** A short MQTT/broker sample proving "no data" proves nothing
-> unless it exceeds the device's *update cadence*. Radon, PM, and other slow sensors update on multi-minute
-> intervals; a 30–90 s window lands in the gaps. Always check the expected cadence before concluding a device
-> is silent/dead/redundant. (This runbook exists because that exact mistake was made on the radon relay.)
+> **Universal gotcha 1 — right topic before absence.** "No data" on a broker watch means nothing if you're on
+> the wrong topic tree. ha-2's *scanner* publishes decoded BLE readings to `home/<area>/<device_id>/state`;
+> *edge nodes* relay to `home/edge/<node>/<mac>/adv`. Subscribing to one while the data flows on the other reads
+> as silence. (This is what first misled the radon investigation.)
+> **Universal gotcha 2 — cadence before absence.** Even on the right topic, a sample shorter than the device's
+> *republish interval* can legitimately show nothing. Check the expected cadence before concluding silent/dead.
 
 ---
 
@@ -35,7 +37,10 @@ advertising) is being recorded live on ha-2, and its source is **ha-2's own pass
   (only its `status` heartbeat) while radon advanced — so its Aranet decode is redundant on 1.0, not the path.
 - `scanner.py` decodes Aranet `0x0702` ext-adv and publishes decoded readings to `home/<area>/<device_id>/state`
   (a different topic tree than the edge nodes — which is why an edge-topic watch never sees radon).
-- **Positive source-ID (scanner caught publishing live):** _confirming via step-2 capture — see below._
+- **Positive source-ID — CONFIRMED live:** a 5-min watch of `home/+/radon_crawlspace/state` caught the scanner
+  publishing **6 fresh frames, one every ~60 s** (`18:30:40…18:34:41Z`), `ts` advancing each time, value moving
+  (10→24 Bq/m³ over the session), `meta.mac F4:37:5A:68:9F:1A`, `rssi -86`; `hot.db` advanced in lockstep. The
+  W5500 stayed silent throughout. Source = ha-2 `scanner.py`, definitively; `hbed_s3` radon decode is redundant.
 
 **How to verify:**
 ```bash
@@ -61,8 +66,8 @@ message, and `post` DB ts advances during the window; step 3 → `hbed_s3` publi
 step 4 → `active`.
 
 **Cadence & gotchas:**
-- Radon updates every **few minutes** (`scanner.py` `REPUBLISH_INTERVAL_S`, or a change > `1.0 Bq/m³`). A
-  window under ~5 min can legitimately show nothing — **not** evidence of a dead sensor.
+- Radon republishes **~60 s** (`scanner.py` `REPUBLISH_INTERVAL_S`; or sooner on a change > `1.0 Bq/m³`) —
+  verified: 6 frames in 5 min. A watch under ~90 s can still miss one, so give it ≥2 min on the right topic.
 - `ha-scanner` logs **nothing per-reading** (quiet passive scan); an empty `journalctl -u ha-scanner` is
   normal and is **not** evidence it isn't hearing the device. Verify by the published `/state` topic, not logs.
 - `hot.db.readings.ts` is a TEXT ISO-8601 string — `datetime(ts,'unixepoch')` / epoch subtraction gives
