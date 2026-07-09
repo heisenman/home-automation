@@ -801,3 +801,42 @@ pending-hold retire, so future appliance moves get this automatically instead of
 **App-dependency correction (Hugh):** don't "keep the vendor app installed" — install→use→uninstall is
 cheap. The requirement is to FLAG "vendor app required for WiFi (re)association" as an explicit dependency
 at device INTAKE and REPOINT, so a network move is never a surprise. See [[midea-app-dep-control-vs-provisioning]].
+
+---
+
+## 2026-07-09 — ✅ VERIFIED CURRENT STATE (authoritative; supersedes prior state summaries)
+
+Reconciliation pass (Hugh: stale planning data was plaguing decisions). **Every line here was verified LIVE**
+(DHCP leases on the air-gap router, broker `/status` LWT, fresh `device_last_seen`, MQTT `/state` topics) or
+via `git log` — NOT taken from the board or older doc summaries, which are to be treated as suspect leads.
+Point other planning docs here rather than duplicating state.
+
+**Topology:** air-gap dictator = **ha-2 (192.168.1.210)** on `192.168.1.0/24`; **.210 = permanent dual-homed
+dev platform + web bridge** on household `192.168.0.0/24` (NOT the air-gap failover).
+
+**Migrated & verified OFF the old net:**
+- C6 gas fleet: gas_c_bed·gas_c_office·gas_hbed·gas_h_office·gas_standby (household LWT offline; live on ha-2).
+- hbed_s3 (W5500, office closet — BLE + Aranet-radon decode): household LWT offline, online ha-2 `v19`.
+- dehumidifier_living_room (Midea): air-gap `192.168.1.119` (DHCP-pinned `midea-dehum`); **ha-2 controls it**;
+  dehum↔meter_pro_living_room rule verified firing (`ec0a7ab`). Guard: .210 ha-controller stays on dead
+  `.0.211` on purpose — do NOT repoint to .119.
+- plug_g11 (Tasmota): air-gap `192.168.1.121`; household LWT offline.
+- PMs failover_pm + airgap_router_pm: air-gap DHCP leases.
+
+**Still on the old net (real remaining work):**
+- **s3-crawlspace / gas_kitchen** (kitchen S3, wired SGP40 + BLE relay) — fresh on .210. Needs a USB session:
+  enroll (eFuse MAC → node_secrets.enc + nodes.yaml) → **ADD Aranet ext-adv decode (redundancy: 2nd radon
+  hearer)** → migrate.
+- **purifier_h_office (Levoit)** — fresh on .210; USB reflash (ota_password unrecorded); the flexible exception.
+- **Panels d1001 + e1001** — OPS track. D1001 repoint Chunks 1–2 committed by ops (`77bc42c`, `de99205`);
+  dev wires/runs the migration once robust fw lands.
+
+**BLE meters (10) + radon — DUAL-HEARD, not remaining work:** SwitchBot meters + the Aranet are broadcasts;
+BOTH .210's and ha-2's own passive scanners hear + record them independently (verified: .210's scanner
+publishes `home/<area>/<id>/state` live; ha-2 records the same). Radon on 1.0 is served by **ha-2's own
+scanner** (~60 s) — hbed_s3's decode is redundant (kept deliberately). The earlier "10 BLE meters retired"
+**self-healed** (they were never off .210). Removing them from .210 = a decision to stop .210's scanner
+(transition-end), which the redundancy directive says not to rush.
+
+**Directives adopted today:** trust-but-verify device state (AGENTS.md principle 5 + `runbook-device-verification.md`);
+redundancy is a design goal; board/docs are suspect (verify live/git before trusting).

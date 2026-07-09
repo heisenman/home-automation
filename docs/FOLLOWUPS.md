@@ -1,5 +1,12 @@
 # Follow-ups & clarifications for Hugh
 
+> **🔵 2026-07-09 — AUTHORITATIVE air-gap/migration state lives in
+> [`docs/airgap/MIGRATION-DESIGN-LOG.md`](airgap/MIGRATION-DESIGN-LOG.md) → "✅ VERIFIED CURRENT STATE".**
+> Any migration/device-state claim in the dated checkpoints BELOW predates the air-gap live deployment
+> (2026-07-08+) and is HISTORICAL — do not plan from it. In particular the `.210 ↔ .245` warm-standby framing
+> is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
+> not from these notes (they are suspect leads).
+
 ## 🧪 2026-07-08 — Someday (UNASSIGNED): house-wide COMPARABLE air-quality synthesis
 
 Today's `air_quality` (`server/gas_compensation.py` + the `viewmodel` fusion) is a useful **per-sensor** v1

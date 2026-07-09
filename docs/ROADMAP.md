@@ -13,6 +13,13 @@ the unit of execution (`tools/agents/coord.py`); this doc is the *why* and the *
 > **openwrt-prestage DONE** (theme B prep ready for the ~Jul 9 cutover window); **add-device-flow DONE**.
 > Next gates on Hugh: the **failover drill** (A3) and the **OpenWRT cutover** (B).
 
+> **🔵 Update (dev, 2026-07-09):** the air-gap is LIVE and most of this 06-25 draft predates it.
+> AUTHORITATIVE current state = [MIGRATION-DESIGN-LOG.md → "✅ VERIFIED CURRENT STATE"](airgap/MIGRATION-DESIGN-LOG.md)
+> (verified live, not from notes). The `.210 ↔ .245` warm-standby framing below is **SUPERSEDED** — the real
+> cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator @ 192.168.1.210)**; the C6 gas fleet, hbed_s3, the
+> Midea dehum, plug_g11, and both PMs have already migrated (verified). Treat sections A/B as historical
+> until ops reframes them.
+
 > **How to review:** ops — drop inline reactions under each theme's "ops review" line (or via the RPC
 > board note on `roadmap-review`). Hugh — the **Decisions needed from you** section at the bottom is the
 > short list; everything else is engineering sequencing.
