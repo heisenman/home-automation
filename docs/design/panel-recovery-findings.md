@@ -43,9 +43,20 @@ elf to confirm the override/hook linked *before* flashing.
 
 **Bootloader size:** override = 0x5cb0, 0x350 (3%) free — fits, tight. Watch this if the hook grows.
 
-**Still to prove (B1c):** flash a deliberately-crashing app into ota_0 → confirm a stable boot-loop (a
-serially-flashed app is marked valid so it won't auto-rollback) → 3 s hold → bootloader boots golden → restore
-the good app. This is the empirical capstone; B1 already proves the divert happens *before* the app runs.
+**B1c — crash-recovery capstone PROVEN (the exact ADR-0030 scenario):** temporarily replaced `app_main`'s
+first line with `abort()` (uncommitted; reverted via `git checkout` after), tag `v103-crashtest`, flashed to
+ota_0. Captured a **stable boot-loop**: `boot: Loaded app 0x10000` → `[CRASHTEST v103] deliberate abort` →
+`Rebooting` → `SW_CPU_RESET` → repeat every ~2 s, forever (a serially-flashed app stays valid → no
+auto-rollback; the device cannot self-recover). Then a **3 s button hold** while looping →
+`[boot] ADR-0030 RECOVERY: gpio3 held 3s -> booting GOLDEN (ota_1)` → direct load of 0x620000 →
+`GOLDEN RECOVERY IMAGE ACTIVE` + red LED. **The crashing app never ran** (no CRASHTEST line in the recovery
+capture — the bootloader diverted before it). Restored: reverted the edit, rebuilt + reflashed v101 to ota_0,
+confirmed normal boot. `PANIC_PRINT_REBOOT=y`/0 s delay makes the loop fast+stable.
+
+**Verification B COMPLETE.** Device: ota_0=v101-recovery-a2, ota_1=v98-GOLDEN, B1 override bootloader.
+Remaining ADR-0030 work: a real **immutable/sticky golden partition** (today golden reuses ota_1, which OTA
+ping-pongs; and app-A2 golden is one-shot). The bootloader path (B1) is already non-sticky-by-design and
+correct; the app-A2 path and the partition layout are the parts left to harden.
 
 ## 2026-07-08 (later) — polarity CORRECTED to active-HIGH; Verification A PROVEN (app-level)
 
