@@ -20,6 +20,7 @@ substitutions:
   # P4e deep-sleep RUNTIME hooks — no reflash to toggle. These are first-boot DEFAULTS only; thereafter the
   # Sleep Enable switch + Sleep Duration / Awake Grace numbers are MQTT-settable and PERSIST across sleeps.
   sleep_default: "false"            # DEV first-boot: never sleep -> OTA always reachable. Flip live over MQTT.
+  density_default: "false"          # display density: false=conservative (~9 tiles, big) / true=balanced (~16, small). Both whites toggle.
   sleep_dur_default_s: "900"        # 15 min timer cadence (battery/freshness knob), runtime-tunable
   grace_default_s: "25"             # awake window per wake (wifi + fetch + ~5s render + read), runtime-tunable
   # Battery profile BAKED DEFAULT (ADR-0024 §5 fallback when no profile is loaded/pushed). The LUT is
@@ -459,6 +460,18 @@ globals:                             # parsed tiles as parallel string vectors (
     type: bool                       # panel self-populates (no manual Green press needed) even in dev mode
     restore_value: false
     initial_value: 'false'
+  - id: g_density                    # display density: false=conservative (per=9, big) / true=balanced (per=16, small)
+    type: bool                       # toggled by BOTH white buttons together; PERSISTED across reboots
+    restore_value: true
+    initial_value: '${density_default}'
+  - id: g_combo                      # both-whites combo latched (one toggle per combo; cleared when both released)
+    type: bool
+    restore_value: false
+    initial_value: 'false'
+  - id: g_nav_block_ms               # suppress page-nav until this millis (set on a density toggle so the same
+    type: uint32_t                   # both-whites press doesn't also page-nav on release)
+    restore_value: false
+    initial_value: '0'
   - id: g_alerts                     # active alerts (formatted strings) from /api/v1/alerts
     type: std::vector<std::string>
     restore_value: false
@@ -649,6 +662,18 @@ font:
   - file: "fonts/DejaVuSans.ttf"
     id: font_label
     size: 20
+  # density-mode grid fonts (single-line tiles). conservative: font_label(20)+font_gval_c(28); balanced: font_glabel_b(14)+font_gval_b(20)
+  - file: "fonts/DejaVuSans-Bold.ttf"
+    id: font_gval_c
+    size: 28
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~°"
+  - file: "fonts/DejaVuSans-Bold.ttf"
+    id: font_gval_b
+    size: 20
+    glyphs: " !\"#$%&'()*+,-./0123456789:;<=>?@ABCDEFGHIJKLMNOPQRSTUVWXYZ[\\]^_`abcdefghijklmnopqrstuvwxyz{|}~°"
+  - file: "fonts/DejaVuSans.ttf"
+    id: font_glabel_b
+    size: 14
 
 display:
   - platform: waveshare_epaper
@@ -697,7 +722,7 @@ display:
         it.strftime(w - 16, hy + 6, id(font_title), TextAlign::TOP_RIGHT, "%H:%M", id(sntp_time).now());
       it.line(0, hy + sh, w, hy + sh);
       // --- sensor grid (paginated; e-ink = discrete pages, buttons navigate) ---
-      const int per = 6;                          // tiles per page
+      int per = id(g_density) ? 16 : 9;           // density: conservative 9 / balanced 16 tiles per page
       int n = (int) id(g_tile_labels).size();     // ADR-0029: g_tile_labels holds ONLY the current page
       int pages = id(g_pages) < 1 ? 1 : id(g_pages);   // server-authored page count (not derived locally)
       int page = id(g_page);
@@ -708,9 +733,15 @@ display:
         it.print(w / 2, (gtop + ftop) / 2, id(font_label), TextAlign::CENTER, "press Green to fetch");
       } else {
         int top = gtop + 30, bot = ftop - 4, rowh = (bot - top) / per, y = top;
-        for (int i = 0; i < n && i < per; i++) {   // the fetched page's tiles (server already sliced)
-          it.print(16, y + 4, id(font_label), id(g_tile_labels)[i].c_str());
-          it.print(16, y + 26, id(font_val), id(g_tile_lines)[i].c_str());
+        for (int i = 0; i < n && i < per; i++) {   // single-line tile: label left, value right (server-sliced page)
+          int cy = y + rowh / 2;
+          if (id(g_density)) {                       // balanced: small fonts, more rows
+            it.print(16, cy, id(font_glabel_b), TextAlign::CENTER_LEFT, id(g_tile_labels)[i].c_str());
+            it.print(w - 16, cy, id(font_gval_b), TextAlign::CENTER_RIGHT, id(g_tile_lines)[i].c_str());
+          } else {                                   // conservative: bigger, fewer rows (default)
+            it.print(16, cy, id(font_label), TextAlign::CENTER_LEFT, id(g_tile_labels)[i].c_str());
+            it.print(w - 16, cy, id(font_gval_c), TextAlign::CENTER_RIGHT, id(g_tile_lines)[i].c_str());
+          }
           it.line(0, y + rowh, w, y + rowh);
           y += rowh;
         }
@@ -894,32 +925,68 @@ binary_sensor:
     name: "Button Right"
     id: btn_right
     pin: { number: GPIO4, mode: { input: true, pullup: true }, inverted: true, allow_other_uses: true }
+    on_press:                        # BOTH whites together = toggle display density (one-shot; suppresses nav)
+      - if:
+          condition: { lambda: 'return id(btn_left).state && id(btn_right).state && !id(g_combo);' }
+          then:
+            - lambda: |-
+                id(g_combo) = true;
+                id(g_density) = !id(g_density);
+                id(g_page) = 0;
+                id(g_nav_block_ms) = millis() + 1200;   // don't page-nav when THIS press releases
+            - button.press: fetch_spec                   # re-fetch page 0 at the new density + redraw
+    on_release:
+      - lambda: 'if (!id(btn_left).state && !id(btn_right).state) id(g_combo) = false;'
     on_click:
-      - min_length: 30ms             # Right short = next page (ADR-0029: bounded by server pages, re-fetch)
+      - min_length: 30ms             # Right short = next page (skipped if this was a both-whites density combo)
         max_length: 450ms
         then:
-          - lambda: 'if (id(g_page) < id(g_pages) - 1) id(g_page) += 1;'
-          - button.press: fetch_spec
+          - if:
+              condition: { lambda: 'return millis() >= id(g_nav_block_ms);' }
+              then:
+                - lambda: 'if (id(g_page) < id(g_pages) - 1) id(g_page) += 1;'
+                - button.press: fetch_spec
       - min_length: 600ms            # Right long = last page
         max_length: 5000ms
         then:
-          - lambda: 'id(g_page) = id(g_pages) - 1;'
-          - button.press: fetch_spec
+          - if:
+              condition: { lambda: 'return millis() >= id(g_nav_block_ms);' }
+              then:
+                - lambda: 'id(g_page) = id(g_pages) - 1;'
+                - button.press: fetch_spec
   - platform: gpio
     name: "Button Left"
     id: btn_left
     pin: { number: GPIO5, mode: { input: true, pullup: true }, inverted: true, allow_other_uses: true }
+    on_press:                        # mirror of btn_right: both whites -> density toggle
+      - if:
+          condition: { lambda: 'return id(btn_left).state && id(btn_right).state && !id(g_combo);' }
+          then:
+            - lambda: |-
+                id(g_combo) = true;
+                id(g_density) = !id(g_density);
+                id(g_page) = 0;
+                id(g_nav_block_ms) = millis() + 1200;
+            - button.press: fetch_spec
+    on_release:
+      - lambda: 'if (!id(btn_left).state && !id(btn_right).state) id(g_combo) = false;'
     on_click:
-      - min_length: 30ms             # Left short = previous page (ADR-0029: re-fetch that page)
+      - min_length: 30ms             # Left short = previous page (skipped if this was a density combo)
         max_length: 450ms
         then:
-          - lambda: 'if (id(g_page) > 0) id(g_page) -= 1;'
-          - button.press: fetch_spec
+          - if:
+              condition: { lambda: 'return millis() >= id(g_nav_block_ms);' }
+              then:
+                - lambda: 'if (id(g_page) > 0) id(g_page) -= 1;'
+                - button.press: fetch_spec
       - min_length: 600ms            # Left long = first page
         max_length: 5000ms
         then:
-          - lambda: 'id(g_page) = 0;'
-          - button.press: fetch_spec
+          - if:
+              condition: { lambda: 'return millis() >= id(g_nav_block_ms);' }
+              then:
+                - lambda: 'id(g_page) = 0;'
+                - button.press: fetch_spec
 
 # ── Runtime deep-sleep controls (toggle/tune battery mode over MQTT — NO reflash) ──────
 # g_sleep_enable / g_sleep_dur_s / g_awake_grace_s are the persisted source of truth; these just view+set them.
@@ -1077,7 +1144,8 @@ button:
       - http_request.get:
           url: !lambda |-
             static char u[112];
-            snprintf(u, sizeof(u), "${bff_base_url}/api/v1/panel/tiles?per=6&page=%d", id(g_page));
+            snprintf(u, sizeof(u), "${bff_base_url}/api/v1/panel/tiles?per=%d&page=%d",
+                     id(g_density) ? 16 : 9, id(g_page));   // density: conservative 9 / balanced 16 tiles/page
             return std::string(u);
           capture_response: true
           max_response_buffer_size: 16kB   # ADR-0029: ONE page (~4KB @ per=6), NOT the fleet firehose — bounded
