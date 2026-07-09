@@ -61,6 +61,8 @@
 #include "esp_netif_sntp.h"
 #include "esp_sntp.h"
 #include "ha_rtc.h"                 // roadmap #1 (ability G): PCF8563 wall clock
+#include "recovery.h"               // ADR-0030: recovery-button pin + polarity (VERIFIED active-HIGH)
+#include "esp_system.h"             // esp_restart() for the recovery switch
 
 #ifndef NTP_SERVER
 #define NTP_SERVER "192.168.0.210"  // dictator LAN IP — serves NTP via chrony (unblocks the wall clock)
@@ -69,7 +71,7 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v96-mapmetrics"
+#define APP_BUILD_TAG "v101-recovery-a2"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
@@ -1224,9 +1226,66 @@ static void presence_task(void *pv)
     }
 }
 
+// ADR-0030 recovery boot gate. Reads the recovery button as early as possible (GPIO3 input,
+// internal pull-up enabled — the config under which polarity was verified) and, if it is HELD,
+// switches the boot partition to the golden recovery image (ota_1) and reboots into it. Runs
+// before wifi/display bring-up so recovery is fast and does NOT depend on a healthy boot.
+//
+// Polarity is VERIFIED active-HIGH (held == RECOVERY_BUTTON_ACTIVE_LVL == 1); see recovery.h
+// and A1 capture logs. A glitch-reject re-read (3x over ~20ms, all must agree) guards against
+// a single spurious sample switching us out of a good image.
+//
+// One-shot semantics (ADR-0030 A2, confirmed 2026-07-08): this only SETS golden as the boot
+// partition. golden (v98-GOLDEN) does not mark itself valid, so with OTA rollback enabled the
+// bootloader returns to ota_0 on the next reboot. Sticky/immutable golden is a separate task.
+static void recovery_boot_gate(void)
+{
+    gpio_config_t io = {
+        .pin_bit_mask = 1ULL << RECOVERY_BUTTON_GPIO,
+        .mode = GPIO_MODE_INPUT,
+        .pull_up_en = GPIO_PULLUP_ENABLE,      // same config as the verified runtime/A1 read
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&io);
+
+    int lvl = gpio_get_level(RECOVERY_BUTTON_GPIO);
+    int held = (lvl == RECOVERY_BUTTON_ACTIVE_LVL);
+    // Straight to UART (runs before the vprintf hook) so it is unmissable in a captured log.
+    ESP_LOGW(TAG, ">>> RECOVERY boot-gate: gpio%d=%d held=%d (active-HIGH; %s) <<<",
+             RECOVERY_BUTTON_GPIO, lvl, held, held ? "BUTTON HELD" : "released");
+    if (!held) return;                          // normal boot
+
+    // Glitch-reject: confirm the hold is sustained before we act.
+    for (int i = 0; i < 2; i++) {
+        vTaskDelay(pdMS_TO_TICKS(12));          // ~12ms settle between confirm samples
+        if (gpio_get_level(RECOVERY_BUTTON_GPIO) != RECOVERY_BUTTON_ACTIVE_LVL) {
+            ESP_LOGW(TAG, ">>> RECOVERY: hold not sustained (sample %d); normal boot <<<", i);
+            return;
+        }
+    }
+
+    const esp_partition_t *golden =
+        esp_partition_find_first(ESP_PARTITION_TYPE_APP, ESP_PARTITION_SUBTYPE_APP_OTA_1, NULL);
+    if (!golden) {
+        ESP_LOGE(TAG, ">>> RECOVERY: golden (ota_1) partition NOT FOUND; normal boot <<<");
+        return;
+    }
+    esp_err_t e = esp_ota_set_boot_partition(golden);
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, ">>> RECOVERY: set_boot(golden@0x%lx) failed: %s; normal boot <<<",
+                 (unsigned long)golden->address, esp_err_to_name(e));
+        return;
+    }
+    ESP_LOGW(TAG, ">>> RECOVERY: BUTTON HELD -> booting golden (ota_1 @0x%lx); restarting <<<",
+             (unsigned long)golden->address);
+    esp_restart();                              // does not return
+}
+
 void app_main(void)
 {
     bsp_display_predark();   // FIRST: hold the panel dark across boot (kills the OTA-reboot strobe)
+    recovery_boot_gate();                       // ADR-0030 A2: held button -> boot golden (one-shot); else return
     led_init();                                // red status LED off; used by the boot gate + warn
     s_pp_cfg = ha_power_policy_d1001_cfg();     // set before MQTT-connect can fire the boot gate
     s_log_q = xQueueCreate(48, sizeof(char *));
