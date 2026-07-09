@@ -30,5 +30,5 @@ nodes:
     sensor: sgp40                   # WIRED Grove SGP-40 over I2C -> gas_kitchen (SDA=GPIO42/SCL=GPIO41)
     area: kitchen                   # physical node location; relays gas_kitchen. Also builds Aranet-radon decode
                                     # (redundancy; likely out of range in the kitchen, but built in per directive).
-    broker: "mqtt://192.168.0.210:1883"   # BORN household; repoint to air-gap (ha-2 mqtt://192.168.1.210:1883) after
-    ota_host: "192.168.0.210"             # cable-flash + verify on .210, then migrate.
+    broker: "mqtt://192.168.0.210:1883"   # born household; MIGRATED to air-gap (ha-2) 2026-07-09 via repoint (NVS
+    ota_host: "192.168.0.210"             # overlay). Manifest kept at born-household config (fleet convention); live on ha-2.

@@ -840,3 +840,24 @@ scanner** (~60 s) — hbed_s3's decode is redundant (kept deliberately). The ear
 
 **Directives adopted today:** trust-but-verify device state (AGENTS.md principle 5 + `runbook-device-verification.md`);
 redundancy is a design goal; board/docs are suspect (verify live/git before trusting).
+
+---
+
+## 2026-07-09 — ✅ s3-crawlspace (kitchen gas S3) migrated + redundant Aranet decode
+
+The last non-panel edge node. VERIFIED end-to-end.
+- **Board:** repurposed ORIGINAL hbed_s3 (eFuse `28:84:85:54:AB:E0`), freed when hbed_s3 moved to the W5500
+  (`44:1B:F6…`). MAC captured via esptool; enrolled (`s3-crawlspace` → node_secrets.enc, 8 nodes).
+- **Firmware:** built from `edge/esp32s3-eth` (WIRED SGP40 → gas_kitchen + BLE relay + **Aranet ext-adv radon
+  decode for redundancy**). Cable-flashed `/dev/ttyACM0` (hash-verified). NB: USB only enumerated on the port/
+  cable used for the C6s — a port/cable issue, not download mode.
+- **Verify (household, at bench):** online; SGP40 voc_index warming 0→21; relaying ~12 SwitchBot meters; AND
+  hearing the real Aranet (`F4:37:5A:68:9F:1A`, radon 28) — redundant hearer proven live.
+- **Migrate (in-place from the kitchen):** `repoint_node → autohome_airgap / ha-2`. Boot-count revert as the
+  safety net (kitchen coverage was unknown). Result: left household (LWT offline) → **online on ha-2**; the
+  **kitchen HAS autohome_airgap coverage** (no revert). ha-2 maps + ingests `gas_kitchen` (age 1 s; registry
+  already had the mapping — no sync needed).
+- Cosmetic follow-up: fw version label still reads `v19-hbed` (identity/topics correct); bump HA_FW_VERSION later.
+
+**Remaining migration:** Levoit purifier (USB reflash, whenever) + panels (D1001 handoff pending ops ack; E1001
+on ops go-ahead). All other edge/actuator devices are on ha-2, verified.
