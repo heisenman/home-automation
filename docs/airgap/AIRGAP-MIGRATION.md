@@ -69,6 +69,12 @@ state live before trusting it (see Learning #8).
 10. **`esphome upload` does NOT compile** — run `esphome compile` first, then `upload`.
 11. **`repoint_node --wait` / departure watch false-fails on LWT lag** — the authoritative signal is arrival on
     the NEW broker (device_push confirms via the bridge), not departure from the old one.
+12. **The air-gap has NO authoritative time source (no internet).** Panels/devices can only NTP-sync from a
+    server that actually SERVES time. ha-2's clock was correct but (a) it wasn't serving NTP (panels drifted —
+    E1001 showed a wrong wall clock) and (b) it has **no chrony sources**, so it's undisciplined and will drift.
+    Fix applied: ha-2 chrony `allow 192.168.1.0/24` (⚠ **NO inline `#` comment** — chrony fatals on it), panels
+    keep `ntp = 192.168.1.210`. RTC (PCF85063) holdover covers gaps. **Proper fix (remaining §5):** `.210`
+    (internet-connected, dual-homed) should serve NTP INTO the air-gap so ha-2 stays disciplined.
 
 ## 4. Standing directives this migration reinforced
 
@@ -83,3 +89,7 @@ state live before trusting it (see Learning #8).
   #6 — redundancy says keep). Split-brain tidy: `.210`'s `ha-controller` still points at the dead `.0.211`
   dehum on purpose — do NOT repoint it. **ha-2's codebase is behind `.210`'s** (only `server/` was synced for
   the panel fix) — a fuller ha-2 sync is worth scheduling.
+- **Establish the air-gap TIME authority** (Learning #12): `.210` (internet-connected) should serve NTP INTO
+  the air-gap so ha-2 stays disciplined; today ha-2 serves the panels but has no upstream, so the whole
+  air-gap drifts together. Also fold ha-2's `chrony allow` into committed provisioning config (it's a live
+  edit right now).
