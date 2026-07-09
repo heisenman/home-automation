@@ -156,6 +156,22 @@ ota:
   - platform: esphome
     password: !secret ota_password
 
+# Recovery: boot-loop protection + OTA-rollback validation — the ESPHome/e-paper equivalent of the D1001's
+# ADR-0030 golden recovery, at zero hardware cost (no golden partition / 32MB-flash surgery). Two mechanisms:
+#   1. esp-idf bootloader rollback (CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y): a freshly-OTA'd image boots
+#      PENDING_VERIFY; safe_mode.mark_successful() marks it valid after boot_is_good_after, so a GOOD image is
+#      kept and a bad one that resets first rolls back to the previous slot.
+#   2. boot-loop detection: after num_attempts rapid boots the panel comes up in a minimal wifi+OTA state so a
+#      crash-looping image can be re-flashed OTA instead of draining the battery unreachable.
+# ⚠ DEEP-SLEEP COUPLING: the boot counter lives in RTC memory and clears ONLY after the app runs
+# boot_is_good_after. This device deep-sleeps at g_awake_grace_s, so boot_is_good_after MUST be < the awake
+# window or a HEALTHY wake never clears the counter → false safe-mode trip after ~num_attempts sleeps. 6s << the
+# 10s awake_grace FLOOR (num_awake_grace min_value) → every good wake marks-valid + resets before it sleeps.
+safe_mode:
+  boot_is_good_after: 6s
+  num_attempts: 10
+  reboot_timeout: 5min
+
 wifi:
   ssid: !secret wifi_ssid
   password: !secret wifi_password
@@ -1017,9 +1033,14 @@ switch:
     id: sw_hiz
     lambda: 'return id(charger)->hiz();'
     restore_mode: DISABLED           # never auto-assert HIZ on boot; the charger's own state is the truth
-    turn_on_action:
-      - lambda: 'id(charger)->set_hiz(true);'
-    turn_off_action:
+    turn_on_action:                  # HIZ ON = run on battery (discharge). DEV-GATED: no-op on a deployed panel.
+      - if:
+          condition: { lambda: 'return !id(g_sleep_enable);' }
+          then:
+            - lambda: 'id(charger)->set_hiz(true);'
+          else:
+            - lambda: 'ESP_LOGW("charger", "Charger HIZ ON IGNORED: dev-only (bench mode / Sleep OFF)");'
+    turn_off_action:                 # HIZ OFF = reconnect USB (safe) — always allowed
       - lambda: 'id(charger)->set_hiz(false);'
   - platform: template
     name: "Charge Enable"           # OFF = stop charging (REG01 CHG_CONFIG=0) while leaving USB connected
@@ -1044,9 +1065,9 @@ number:
       - lambda: 'id(g_sleep_dur_s) = (int) x;'
   - platform: template
     name: "Awake Grace"              # e1001-bench/number/awake_grace/command  (seconds); awake window per wake
-    id: num_awake_grace
-    unit_of_measurement: s
-    min_value: 5
+    id: num_awake_grace              # FLOOR 10s: MUST stay > safe_mode boot_is_good_after (6s) so a healthy wake
+    unit_of_measurement: s           # clears the boot-loop counter before deep-sleep (else false safe-mode trip).
+    min_value: 10
     max_value: 300
     step: 5
     lambda: 'return id(g_awake_grace_s);'
@@ -1170,8 +1191,19 @@ button:
                       if (!key || m[key].isNull()) continue;
                       int prec = g["precision"] | 0;
                       const char *u = g["unit"] | "";
-                      std::string unit;                                  // ASCII-strip for the mono font: "°C"->"C"
-                      for (const char *p = u; *p; p++) if ((unsigned char) *p < 0x80) unit += *p;
+                      std::string unit;   // ASCII-normalize UTF-8 units for the mono font: µ->u ³->3 ²->2, keep °
+                      for (const char *p = u; *p;) {
+                        unsigned char c = (unsigned char) *p;
+                        if (c < 0x80) { unit += (char) c; p++; }
+                        else if (c == 0xC2 && p[1]) {           // Latin-1 supplement (2-byte)
+                          unsigned char d = (unsigned char) p[1];
+                          if (d == 0xB5) unit += 'u';           // µ micro   (µg/m³ -> ug/m3)
+                          else if (d == 0xB3) unit += '3';      // ³ cubed   (m³)
+                          else if (d == 0xB2) unit += '2';      // ² squared (m²)
+                          else if (d == 0xB0) unit += "\xC2\xB0";  // ° keep (font has the glyph)
+                          p += 2;
+                        } else { p++; }                        // drop other multi-byte
+                      }
                       float v = m[key].as<float>();
                       if (unit == "C") { v = v * 9.0f / 5.0f + 32.0f; unit = "\xC2\xB0" "F"; }   // C -> °F (font_val has °)
                       char fmt[8], val[16];
@@ -1264,16 +1296,21 @@ button:
   # battery_profiler (Module 2) safety-core controls + validation hooks
   - platform: template
     name: "Prof Start Cycle"         # full discharge->rest->charge->rest cycle(s) on the safe core
-    on_press:
-      - lambda: |-
-          id(charger)->set_watchdog_seconds(40);   // ensure WD on so a crash auto-recovers
-          id(charger)->kick_watchdog();
-          id(g_cycle) = 0; id(g_charge_mah) = 0;
-          id(charger)->set_charge_enable(false);
-          id(charger)->set_hiz(true);              // enter DISCHARGE
-          id(g_prof_state) = 1; id(g_state_ms) = millis();
-          ESP_LOGW("prof", "cycle run started: %d cycle(s), floor %.3f, rest %ds",
-                   id(g_num_cycles), id(g_v_floor), id(g_rest_s));
+    on_press:                        # DEV-GATED: drains the cell — no-op on a deployed (Sleep-enabled) panel
+      - if:
+          condition: { lambda: 'return !id(g_sleep_enable);' }
+          then:
+            - lambda: |-
+                id(charger)->set_watchdog_seconds(40);   // ensure WD on so a crash auto-recovers
+                id(charger)->kick_watchdog();
+                id(g_cycle) = 0; id(g_charge_mah) = 0;
+                id(charger)->set_charge_enable(false);
+                id(charger)->set_hiz(true);              // enter DISCHARGE
+                id(g_prof_state) = 1; id(g_state_ms) = millis();
+                ESP_LOGW("prof", "cycle run started: %d cycle(s), floor %.3f, rest %ds",
+                         id(g_num_cycles), id(g_v_floor), id(g_rest_s));
+          else:
+            - lambda: 'ESP_LOGW("prof", "Prof Start Cycle IGNORED: dev-only (bench mode / Sleep OFF)");'
   - platform: template
     name: "Prof Stop"                # clean stop -> IDLE safe state
     on_press:
@@ -1284,11 +1321,16 @@ button:
           ESP_LOGW("prof", "STOPPED -> safe (HIZ off, charge on)");
   - platform: template
     name: "Prof Sim Crash"           # VALIDATION: set HIZ but leave state IDLE (nothing kicks) -> the un-kicked
-    on_press:                        # watchdog must expire in ~40s and auto-clear HIZ. Proves the recovery net.
-      - lambda: |-
-          id(charger)->set_watchdog_seconds(40);
-          id(charger)->set_hiz(true);
-          ESP_LOGW("prof", "SIM CRASH: HIZ on, state IDLE (no kick) -> WD should recover in ~40s");
+    on_press:                        # watchdog must expire in ~40s and auto-clear HIZ. DEV-GATED (strands HIZ).
+      - if:
+          condition: { lambda: 'return !id(g_sleep_enable);' }
+          then:
+            - lambda: |-
+                id(charger)->set_watchdog_seconds(40);
+                id(charger)->set_hiz(true);
+                ESP_LOGW("prof", "SIM CRASH: HIZ on, state IDLE (no kick) -> WD should recover in ~40s");
+          else:
+            - lambda: 'ESP_LOGW("prof", "Prof Sim Crash IGNORED: dev-only (bench mode / Sleep OFF)");'
 
 text_sensor:
   - platform: debug
