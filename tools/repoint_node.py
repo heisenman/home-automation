@@ -118,9 +118,12 @@ def main() -> None:
         print(f"✓ repoint command published to {a.node}. Not waiting for departure; confirm on the new "
               f"broker via device_push. (Re-run with --wait to watch it drop off here.)")
     else:
-        print(f"? {a.node} did not drop off within {a.timeout:.0f}s. It may lack repoint-capable firmware, "
-              f"or already left before we subscribed. Verify on the new broker.", file=sys.stderr)
-        raise SystemExit(2)
+        # The command WAS published; we just didn't observe departure in time (the .210 LWT lags well past
+        # a short watch, or the node already left, or it lacks the op). Departure is best-effort — the
+        # AUTHORITATIVE signal is arrival on the NEW broker, which device_push confirms via the bridge. So
+        # exit 0 and let confirm decide; a non-zero here would false-fail a node that actually migrated.
+        print(f"→ repoint published to {a.node}; departure not observed within {a.timeout:.0f}s "
+              f"(LWT lag / already left / no-op). Confirm arrival on the new broker (device_push does this).")
 
 
 if __name__ == "__main__":
