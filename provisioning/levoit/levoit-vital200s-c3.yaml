@@ -7,8 +7,9 @@
 #   Download mode: hold IO0->GND, pulse EN->GND (reset), release EN, release IO0. `IO0` is the boot-strap pad
 #     (maker's conventional label; drive the pad, don't worry that the C3's internal strap is GPIO9). Release
 #     IO0 (HIGH) after flashing so it boots the app. esptool prints the chip on connect = the confirmation.
-#   Status: believed-correct from the header labels; CONFIRM on first successful esptool connect, then delete
-#     this caveat. (See memory levoit-programming-header.)
+#   Status: CONFIRMED 2026-07-09 — esptool connected via this header (ESP32-C3 rev v0.4, MAC
+#     dc:1e:d5:3d:34:d0), IO0 strapped download mode correctly, full factory image flashed + hash-verified.
+#     CP210x programmer auto-resets via RTS (no manual EN/IO0 dance needed). (memory: levoit-programming-header.)
 # = tuct/levoit's tested Vital 200S config (UART GPIO18/19 to the MCU, model VITAL200S, full entity set)
 #   merged with our beachhead networking (name levoit-office, our WiFi/OTA secrets, MQTT -> .210 for our bus).
 # Pushed via OTA over the beachhead. WiFi/OTA/fallback-AP unchanged, so recovery paths are intact.
