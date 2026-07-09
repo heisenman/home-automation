@@ -774,3 +774,30 @@ AP-mode button, not factory reset).
 
 **Remaining on 0.0 after this:** Levoit (flexible/USB-reflash exception), panels (ops track), `hbed_s3`
 (ready), `s3-crawlspace` (needs USB enroll), `meter_c_bed` (self-resolving), `plug_g11` (Tasmota).
+
+---
+
+## 2026-07-09 (cont.) — hbed_s3 migrated + Midea pending-hold retrofit
+
+**hbed_s3 -> air-gap (DONE).** `repoint_node --node hbed_s3 --ssid autohome_airgap --broker
+mqtt://192.168.1.210:1883 --wait` (secrets via env: HA_CMD_SECRET from `edge/esp32s3-eth/main/secrets.h`,
+HA_MQTT_USER/PASS from `instance/mqtt.env`, WIFI_PSK from airgap env). Verified: household `.0.210`
+`hbed_s3/status=offline` (left) + ha-2 `.1.210` `hbed_s3/status=online ota_1 v19-hbed` (arrived). NB: node
+emits ONLY `status` — no sensor telemetry in a 30s window, and NO devices.yaml entry for it anywhere. This
+is expected: it was the radon-DECODE dev node (BLE), redundant now (ha-2 hears the Aranet directly) with no
+local gas-sensor hardware producing. It's a healthy but dataless relay. OPEN: if we want its SGP40 as a
+real source, register it + sync ha-2 registry; else fine as-is. (Debug aside: the shared-venv paho probe
+lies about MQTT connects — use `mosquitto_sub` with the `dictator` creds from mqtt.env for liveness.)
+
+**Midea pending-hold retrofit.** The dehum was migrated as a MANUAL control-flip, so it never went through
+device_push and got NO ADR-0028 pending-hold — it would have lingered as a stale actuator ghost on .210.
+Applied the same treatment directly: `control_store.set_pending(control.db, 'dehumidifier_living_room', 6)`
+→ hidden+silenced now, sweeper drops it (history kept) at ~23:55Z unless fresh data reappears on .210 (it
+won't). CODE GAP / follow-up: `device_push.classify()` handles tasmota/ble/esp32 only — a `node:server` LAN
+actuator (Midea, Levoit) has no class, so appliance migrations skip the retire bookkeeping. Add a
+"server/LAN-actuator" class: no repoint step (WiFi move is the manual app step) but DO confirm-on-ha-2 +
+pending-hold retire, so future appliance moves get this automatically instead of a manual set_pending.
+
+**App-dependency correction (Hugh):** don't "keep the vendor app installed" — install→use→uninstall is
+cheap. The requirement is to FLAG "vendor app required for WiFi (re)association" as an explicit dependency
+at device INTAKE and REPOINT, so a network move is never a surprise. See [[midea-app-dep-control-vs-provisioning]].
