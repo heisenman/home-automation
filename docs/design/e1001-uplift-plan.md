@@ -1,4 +1,4 @@
-# E1001 uplift plan — applying the D1001 learnings (2026-07-09, ops)
+I'm# E1001 uplift plan — applying the D1001 learnings (2026-07-09, ops)
 
 Consolidates the E1001's remaining work into one prioritized plan, folding in the items that appeared
 after the gap register (2026-07-05) and **explicitly applying the D1001 session's learnings**. The
@@ -66,20 +66,21 @@ fix). (a) is a one-line firmware change + docker OTA; verify tiles return on `.7
 real now — but simpler than the D1001 (no firmware repoint op to write; it's build-config + OTA). Sequence
 after P0 (a broken panel shouldn't be migrated).
 
-**P3 — ADR-0030 recovery port (Phase 2, ops).** Biggest lift; its own project. Prereqs: enable 32 MB flash
-(experimental OTA flag) → golden slot; verify GPIO3 polarity on-device; inject the `bootloader_components/`
-override through ESPHome's esp-idf layer; carry the immutable-`test`-partition design. Interim recovery =
-the existing OTA-escape-hatch. Do NOT start until P0/P1 are settled and the flash-size change is proven safe.
+**P3 — ADR-0030 golden-partition recovery port: RETIRED (Hugh, 2026-07-09).** Redundant for the E1001
+architecture and not worth the cost. The E1001's recovery is already covered by three cheaper mechanisms:
+(1) **ESPHome `safe_mode`** — boot-loop detection → auto-fallback to the last-good OTA slot (live @8b1b4d7,
+`boot_is_good_after:6s`, validated on-device); (2) **archived known-good image** off-device
+(`instance/e1001-known-good-archive-2026-07-09/`, factory+ota bins); (3) **~5-min USB reflash** (the panel is
+physically grabbable — proven this session). A golden partition would need the 32 MB experimental-OTA flag +
+`bootloader_components/` surgery through ESPHome's esp-idf layer for near-zero added benefit. Not doing it.
 
 ## Sequencing
 1. **P0 fetch-buffer** (unblock the panel) — this week.
 2. **P1 Steps 4–5** (offset run + renderer/hardening) — bench + ops.
 3. **P1 Step 6 deploy** — gated on Hugh giving the AREA.
 4. **P2 repoint** — with dev, once the panel is healthy + deployed.
-5. **P1 Step 7** power/mic + **P3 recovery** — later, each its own focused project.
+5. **P1 Step 7** power/mic — later, its own focused project. (**P3 golden-recovery RETIRED** — see above.)
 
 ## Open gates for Hugh
-- The **AREA** for the E1001 (unblocks Step 6 deploy + the SHT40/enrollment rows).
 - A **bench window** (Step 4 offsets + Step 7 power meter + mic).
-- Whether the **32 MB flash enable** for P3 golden-recovery is worth the OTA-experimental-flag risk, or the
-  OTA-escape-hatch is enough.
+- (AREA settled = c_office; P3 golden-recovery retired.)
