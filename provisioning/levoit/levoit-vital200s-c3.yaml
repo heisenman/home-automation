@@ -1,4 +1,14 @@
 # Levoit Vital 200S (LAP-V201S, ESP32-C3-SOLO-1) — FULL purifier control.
+#
+# PROGRAMMING HEADER on this unit's PCB (labels as silk-screened): EN | GND | VCC(3.3V) | TXD | RXD | IO0.
+#   Flash over UART (NOT JTAG; NOT the SC95F keypad-MCU's separate 5V RX/TX pads). 3.3V logic ONLY.
+#   Wiring: prog TX->RXD, prog RX->TXD, GND, and VCC=3.3V (power the board from the programmer with the unit
+#     UNPLUGGED from mains — one power source only).
+#   Download mode: hold IO0->GND, pulse EN->GND (reset), release EN, release IO0. `IO0` is the boot-strap pad
+#     (maker's conventional label; drive the pad, don't worry that the C3's internal strap is GPIO9). Release
+#     IO0 (HIGH) after flashing so it boots the app. esptool prints the chip on connect = the confirmation.
+#   Status: believed-correct from the header labels; CONFIRM on first successful esptool connect, then delete
+#     this caveat. (See memory levoit-programming-header.)
 # = tuct/levoit's tested Vital 200S config (UART GPIO18/19 to the MCU, model VITAL200S, full entity set)
 #   merged with our beachhead networking (name levoit-office, our WiFi/OTA secrets, MQTT -> .210 for our bus).
 # Pushed via OTA over the beachhead. WiFi/OTA/fallback-AP unchanged, so recovery paths are intact.
