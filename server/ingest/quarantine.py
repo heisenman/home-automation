@@ -85,9 +85,13 @@ def open_db(path: str | Path) -> sqlite3.Connection:
     """Open (creating if needed) the quarantine SQLite file. WAL for concurrent bridge writers + CLI reads."""
     path = Path(path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), check_same_thread=False)
+    conn = sqlite3.connect(str(path), check_same_thread=False, timeout=5.0)
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA synchronous=NORMAL")
+    # Three bridge processes (tasmota/levoit/edge) share this one file. WAL allows concurrent readers
+    # with a single writer; a second concurrent writer must wait rather than fail — else a rare
+    # simultaneous capture would error out (and drop, the very thing we're preventing). Wait up to 5s.
+    conn.execute("PRAGMA busy_timeout=5000")
     conn.executescript(_DDL)
     conn.commit()
     return conn
