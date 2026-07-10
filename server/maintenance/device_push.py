@@ -6,8 +6,10 @@ Stages:  queued -> transferred -> applied -> repointed -> confirmed -> retired  
 State persists in instance/db/migration.db so a run resumes where it left off. The RETIRE on .210 is the
 LAST step and only after ha-2 CONFIRMS the device is reporting — so an abort never loses a device.
 
-Device classes handled here: tasmota (MQTT repoint) and ble (no repoint — ha-2 just scans). ESP32/panel/
-ESPHome repointers plug into `repoint()` as they're built. See docs/airgap/MIGRATION-DESIGN-LOG.md Phase 3/4.
+`classify()` is a **Node / transport-plane** classifier (ADR-0034): it answers *what repoint/migration
+procedure this physical unit needs* — NOT what the device is (that's its Abilities; see docs/DEVICE-MODEL.md).
+Node classes: mqtt-broker · edge-signed · ble-passive · local-driver (+ unknown). See docs/airgap/
+MIGRATION-DESIGN-LOG.md Phase 3/4.
 """
 import argparse, json, os, shlex, sqlite3, subprocess, sys, time
 from pathlib import Path
@@ -22,6 +24,8 @@ BRIDGE = "https://192.168.0.210"          # ha-2's API via the .210 web bridge
 BROKER_HOST = os.environ.get("HA_BROKER_HOST", "localhost")   # .210's broker (where retained ghosts live)
 BROKER_PORT = int(os.environ.get("HA_BROKER_PORT", "1883"))
 STAGES = ["queued", "transferred", "applied", "repointed", "confirmed", "retired"]
+# Node/transport-plane classes (ADR-0034) — the repoint procedure a physical unit needs, not what it IS.
+NODE_CLASSES = ("mqtt-broker", "edge-signed", "ble-passive", "local-driver")
 PENDING_HOURS = 6                         # grace window: hold the migrated device quiet, then the sweeper drops it
 
 
@@ -92,21 +96,36 @@ def resolve_node_id(device_id, *, edge_dir=None, devices_path=None):
 
 
 def classify(device_id, *, edge_dir=None):
+    """Node/transport-plane class (ADR-0034) = the repoint/migration procedure this physical unit needs.
+    Returns a NODE_CLASSES value or "unknown" (in no registry):
+      mqtt-broker  — rewrite the device's broker URI (Tasmota NVS / ESPHome)          [tasmota-devices.yaml]
+      edge-signed  — signed `repoint` directive to home/edge/<node>/cmd (ADR-0010)    [edge/*/nodes.yaml]
+      ble-passive  — no device repoint; the dictator scans it                         [devices.yaml BLE]
+      local-driver — driver runs on the dictator; the physical move is a MANUAL app/flash step, then
+                     confirm + pending-hold (LAN actuators, host)                      [control.yaml node: server]
+    """
     import yaml
+    # local-driver FIRST: a control.yaml actuator driven server-side (node: server) is authoritatively
+    # local-driver, whatever side-registry it also sits in (e.g. Levoit is also in levoit-devices.yaml).
+    ctrl = REPO / "instance/control.yaml"
+    if ctrl.exists():
+        v = ((yaml.safe_load(ctrl.read_text()) or {}).get("devices", {}) or {}).get(device_id)
+        if isinstance(v, dict) and v.get("node") == "server":
+            return "local-driver"
     tas = REPO / "instance/tasmota-devices.yaml"
     if tas.exists():
         data = yaml.safe_load(tas.read_text()) or {}
         if device_id in data or any(isinstance(v, dict) and v.get("device_id") == device_id for v in data.values()):
-            return "tasmota"
-    # esp32 edge nodes: device_id is a node_id in edge/*/nodes.yaml (relay nodes), OR maps to one via a
+            return "mqtt-broker"
+    # edge-signed: device_id is a node_id in edge/*/nodes.yaml (relay nodes), OR maps to one via a
     # devices.yaml `node_id:` field (the gas-node device_id<->node_id split, e.g. gas_hbed -> hbed_c6).
     if resolve_node_id(device_id, edge_dir=edge_dir):
-        return "esp32"
+        return "edge-signed"
     dev = REPO / "instance/devices.yaml"
     if dev.exists():
         data = (yaml.safe_load(dev.read_text()) or {}).get("devices", {})
         if any(isinstance(v, dict) and v.get("device_id") == device_id for v in data.values()):
-            return "ble"
+            return "ble-passive"
     return "unknown"
 
 
@@ -214,16 +233,28 @@ def confirm_on_ha2(device_id, timeout_s, dry):
 
 
 def repoint(device_id, cls, dry, revert=False):
-    if cls == "tasmota":
+    if cls == "mqtt-broker":
         cmd = [sys.executable, str(REPO / "tools/repoint_tasmota.py"), device_id] + (["--revert"] if revert else [])
         rc, out = _run(cmd + (["--dry-run"] if dry else []), dry=False)
         return rc == 0
-    if cls == "esp32":
+    if cls == "edge-signed":
         return _repoint_esp32(device_id, dry, revert)
-    if cls == "ble":
-        print("   BLE: no device repoint — ha-2 scans it (ensure ha-scanner is running on ha-2 for its area)")
+    if cls == "ble-passive":
+        print("   ble-passive: no device repoint — ha-2 scans it (ensure ha-scanner is running on ha-2 for its area)")
         return True
-    print(f"   ✗ no repointer for class '{cls}' yet (panel/ESPHome are built as those classes migrate)")
+    if cls == "local-driver":
+        # LAN actuator / host driver (ADR-0034 — closes device-push-actuator-class). The driver already runs
+        # on the destination dictator, so there is NO broker URI to rewrite: the physical network move is a
+        # MANUAL re-provision (vendor app / ESPHome reflash) done out-of-band. Run device_push AFTER that move
+        # so the next stages (confirm on ha-2 + pending-hold on .210) can see it. NEVER factory-reset a
+        # Midea/Levoit — it rotates the LAN key/token (see midea-app-dep memory).
+        if revert:
+            print("   local-driver revert = manual re-provision back to the household net; not driven here")
+            return False
+        print("   local-driver: no network repoint — the physical move is MANUAL (re-provision the appliance")
+        print("     onto the air-gap net via its app/ESPHome). Run this step AFTER that move so confirm sees it.")
+        return True
+    print(f"   ✗ no repointer for node class '{cls}' yet")
     return False
 
 
@@ -265,7 +296,8 @@ def _repoint_esp32(device_id, dry, revert):
 def push(device_id, *, dry, history_hours, confirm_timeout):
     cls = classify(device_id)
     if cls == "unknown":
-        print(f"✗ cannot classify '{device_id}' (not in tasmota-devices.yaml or devices.yaml)")
+        print(f"✗ cannot classify '{device_id}' (in no registry: control.yaml / tasmota-devices.yaml / "
+              f"edge nodes.yaml / devices.yaml)")
         return 2
     stage = get_stage(device_id) or "queued"
     print(f"{'[DRY-RUN] ' if dry else ''}push {device_id}  class={cls}  resume-from={stage}")

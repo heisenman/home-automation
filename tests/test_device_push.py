@@ -9,38 +9,56 @@ def _edge(tmp_path):
     return tmp_path
 
 
-def test_classify_esp32_from_nodes_manifest(tmp_path):
-    assert DP.classify("gas_test", edge_dir=_edge(tmp_path)) == "esp32"
+def test_classify_edge_signed_from_nodes_manifest(tmp_path):
+    assert DP.classify("gas_test", edge_dir=_edge(tmp_path)) == "edge-signed"
 
 
 def test_classify_unknown_when_not_a_node(tmp_path):
     assert DP.classify("ghost_node", edge_dir=_edge(tmp_path)) == "unknown"
 
 
-def test_repoint_esp32_refuses_without_secret(monkeypatch):
+def test_classify_local_driver_from_control_node_server(monkeypatch, tmp_path):
+    # ADR-0034: a control.yaml actuator driven server-side (node: server) is the 'local-driver' node class —
+    # the row that used to fall through to 'unknown' and abort (device-push-actuator-class).
+    inst = tmp_path / "instance"; inst.mkdir()
+    (inst / "control.yaml").write_text("devices:\n  dehum_x:\n    node: server\n    device_type: dehumidifier\n")
+    monkeypatch.setattr(DP, "REPO", tmp_path)                        # isolate from the real instance/
+    assert DP.classify("dehum_x") == "local-driver"
+
+
+def test_repoint_local_driver_is_manual_noop(monkeypatch):
+    # local-driver repoint sends NOTHING (the physical move is out-of-band) and returns True so push()
+    # proceeds to confirm + pending-hold. Guard: any subprocess spawn is a bug.
+    monkeypatch.setattr(DP.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("sent!")))
+    assert DP.repoint("dehum_x", "local-driver", dry=True) is True
+    assert DP.repoint("dehum_x", "local-driver", dry=False) is True         # no gating, no network
+    assert DP.repoint("dehum_x", "local-driver", dry=True, revert=True) is False  # revert is manual
+
+
+def test_repoint_edge_signed_refuses_without_secret(monkeypatch):
     monkeypatch.delenv("HA_CMD_SECRET", raising=False)
-    assert DP.repoint("gas_test", "esp32", dry=True) is False        # gated: no per-node secret
+    assert DP.repoint("gas_test", "edge-signed", dry=True) is False  # gated: no per-node secret
 
 
-def test_repoint_esp32_refuses_without_psk(monkeypatch, tmp_path):
+def test_repoint_edge_signed_refuses_without_psk(monkeypatch, tmp_path):
     monkeypatch.setenv("HA_CMD_SECRET", "s")
     monkeypatch.delenv("WIFI_PSK", raising=False)
     monkeypatch.setattr(DP, "REPO", tmp_path)                        # no airgap_router.env under tmp
-    assert DP.repoint("gas_test", "esp32", dry=True) is False        # gated: no Wi-Fi PSK
+    assert DP.repoint("gas_test", "edge-signed", dry=True) is False  # gated: no Wi-Fi PSK
 
 
-def test_repoint_esp32_dry_run_builds_and_sends_nothing(monkeypatch):
+def test_repoint_edge_signed_dry_run_builds_and_sends_nothing(monkeypatch):
     monkeypatch.setenv("HA_CMD_SECRET", "s"); monkeypatch.setenv("WIFI_PSK", "p")
     monkeypatch.setattr(DP, "resolve_node_id", lambda *a, **k: "gas_test")   # resolution has its own tests
     # dry-run must NOT spawn repoint_node; if it did, subprocess.run would be called — guard it
     monkeypatch.setattr(DP.subprocess, "run", lambda *a, **k: (_ for _ in ()).throw(AssertionError("sent!")))
-    assert DP.repoint("gas_test", "esp32", dry=True) is True
+    assert DP.repoint("gas_test", "edge-signed", dry=True) is True
 
 
-def test_repoint_esp32_refuses_when_node_id_unresolvable(monkeypatch):
+def test_repoint_edge_signed_refuses_when_node_id_unresolvable(monkeypatch):
     monkeypatch.setenv("HA_CMD_SECRET", "s"); monkeypatch.setenv("WIFI_PSK", "p")
     monkeypatch.setattr(DP, "resolve_node_id", lambda *a, **k: None)         # device_id maps to no node
-    assert DP.repoint("mystery_dev", "esp32", dry=True) is False
+    assert DP.repoint("mystery_dev", "edge-signed", dry=True) is False
 
 
 def test_resolve_node_id_gas_split(tmp_path):
@@ -72,9 +90,9 @@ def test_resolve_node_id_relay_style_device_is_own_node(tmp_path):
     assert DP.resolve_node_id("cbed_c6", edge_dir=edge, devices_path=tmp_path / "none.yaml") == "cbed_c6"
 
 
-def test_repoint_esp32_revert_not_driven_here(monkeypatch):
+def test_repoint_edge_signed_revert_not_driven_here(monkeypatch):
     monkeypatch.setenv("HA_CMD_SECRET", "s"); monkeypatch.setenv("WIFI_PSK", "p")
-    assert DP.repoint("gas_test", "esp32", dry=True, revert=True) is False   # firmware boot-count reverts
+    assert DP.repoint("gas_test", "edge-signed", dry=True, revert=True) is False   # firmware boot-count reverts
 
 
 def test_airgap_target_reads_psk_from_env(monkeypatch):

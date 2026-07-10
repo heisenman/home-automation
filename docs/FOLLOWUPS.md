@@ -16,9 +16,14 @@ Verified against live registries by **`tools/model_project.py`** — the descrip
 projects every device onto the model: **`MODEL_LEAKS: 0`** on both this checkout and a drifted standby (the model
 holds; stale/orphan data lands in named buckets, not failures).
 
-- **Phase 2 (next, code-touching):** re-frame `device_push.classify()` into the Node-class enum
-  (`mqtt-broker`/`edge-signed`/`ble-passive`/`local-driver`); the missing `local-driver` row **absorbs
-  `device-push-actuator-class`**. Gated — do with tests + a failover-rebuild correctness check.
+- **✅ Phase 2 DONE 2026-07-10:** `device_push.classify()` re-framed into the Node-class enum
+  (`mqtt-broker`/`edge-signed`/`ble-passive`/`local-driver`, +`unknown`); the new `local-driver` row **closes
+  `device-push-actuator-class`** — LAN actuators (Midea/Levoit/host) now classify + flow through
+  repoint-noop→confirm→pending-hold instead of aborting at `unknown` (dry-run push verified end-to-end; 41
+  migration-suite tests green). **Open caveat:** `confirm_on_ha2` polls `/api/v1/sensors`
+  (authoritative-sensors-only) — a *pure actuator* may not appear there, so for a real `local-driver` migration
+  use `tools/migration_activate.py check <id>` (device_last_seen, works for any device) as the authoritative
+  post-move confirm. Wiring that into `confirm_on_ha2` as a fallback needs a live ha-2 to validate → deferred.
 - **Hygiene finding (from the projection):** `gas_c_office` surfaces on **two nodes** — `coffice_c6` (current) +
   `c6-bench-gas` (legacy forward-compat alias in `devices.yaml`). Benign per the model (many-to-many), but the
   legacy alias is stale-forever; **retire the `c6-bench-gas` entry** once no build references it.

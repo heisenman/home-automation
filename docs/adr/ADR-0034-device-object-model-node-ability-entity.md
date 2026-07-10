@@ -1,8 +1,9 @@
 # ADR-0034 — Device object model: Node / Ability / Entity across two planes
 
 **Date:** 2026-07-10
-**Status:** **Proposed** — object-model spine; Phase-0 primitives **resolved with Hugh 2026-07-10** (see the
-Resolved section). Reference doc + `classify()` re-frame pending; no registry migration (Phase 3 deferred).
+**Status:** **Accepted** — object-model spine; Phase-0 primitives **resolved with Hugh 2026-07-10** (see the
+Resolved section). Phases 1–2 **shipped** (reference doc + `classify()` re-frame closing
+`device-push-actuator-class`); no registry migration (Phase 3 deferred).
 **Builds on:** ADR-0002 (trait capability contract), ADR-0012 (transport-agnostic comms events),
 [`docs/CONFORMANCE.md`](../CONFORMANCE.md) (the **ability catalog** — this ADR names the object model that catalog
 already assumes), ADR-0021/0025 (the by-location / by-capability navigation axes).
@@ -188,10 +189,15 @@ because there is no broker URI to rewrite — the move is manual by nature.
 - **Phase 1 — the reference doc + AGENTS wiring (dev, cheap, safe).** Land `docs/DEVICE-MODEL.md` (the explainer
   this ADR points to) and a short pointer from `AGENTS.md` / `docs/AGENTS.md` — the fourth navigation axis.
   No behavior change.
-- **Phase 2 — the `classify()` re-frame (dev).** Rework `device_push.classify()` into the Node-class enum above
-  and add the `local-driver` procedure (confirm + pending-hold, skip repoint) — closing
-  `device-push-actuator-class` *as a derived consequence*. Guarded by tests; the two live LAN actuators already
-  migrated, so this is forward-proofing + failover-rebuild correctness (a rebuild re-pushes every device).
+- **Phase 2 — the `classify()` re-frame (dev). ✅ Done 2026-07-10.** `device_push.classify()` now returns the
+  Node-class enum (`mqtt-broker`/`edge-signed`/`ble-passive`/`local-driver`, +`unknown`); the `local-driver`
+  procedure skips repoint (manual move) and flows into confirm + pending-hold — **closing
+  `device-push-actuator-class`**. A dry-run push of `dehumidifier_living_room` now completes the full state
+  machine instead of aborting at `unknown`; guarded by `tests/test_device_push.py` (41 migration-suite tests
+  green). *Caveat:* `confirm_on_ha2` polls `/api/v1/sensors` (authoritative-sensors-only), so a pure actuator
+  may not surface there — the existing `migration_activate.py check` fallback (device_last_seen, any device) is
+  the authoritative post-move gate (FOLLOWUPS). The two live LAN actuators already migrated by hand, so this is
+  forward-proofing + failover-rebuild correctness (a rebuild re-pushes every device).
 - **Phase 3 — optional registry/vocabulary convergence (gated, later; deferred per Phase-0 #4).** Where the registries carry ambiguous
   fields (e.g. `levoit-devices.yaml` area post-ADR-0027, the synthetic gas-key aliases), align them to
   "registries are the Node→Entity join table" — a cleanup, not a rewrite. This folds into the CONFORMANCE.md
