@@ -94,6 +94,9 @@ failover-protected. **New capability:** `.210` can now build/OTA the E1001 (dock
       slow-boot MQTT connect); retry stuck. E1001 may do the same → do in a window, be ready to re-OTA.
 
 ## Phase 3 — Residual bench items  *(Hugh-gated, low-pri, need physical bench + USB)*
+> **DECISION 2026-07-10 (Hugh):** **Step 6 (PDM mic) DROPPED** — not wanted. Step 4 offset + Step 5
+> power-budget remain **deferred low-pri** (both need physical hardware; the offset also needs a mid-SoC cell —
+> battery is near-full now).
 Parked with the physical device; not blocking production integration. Either keep on ops's `e1001-finish-features`
 or migrate here:
 - [ ] **Step 4** — USB/charging battery offset RE-run (mid-SoC + USB-unplug). e-ink = no display offset; USB+charging
@@ -101,6 +104,9 @@ or migrate here:
 - [ ] **Step 7** — power-budget bench (real idle/wake draw + duty-cycle ledger) + onboard **mic** bring-up.
 
 ## Phase 4 — Finalize + hand physical back to Hugh
+> **DECISION 2026-07-10 (Hugh):** **Sleep Enable DROPPED** — keep the panel **awake / OTA-reachable** (deep-sleep
+> only connects during brief wake windows → kills easy OTA; not worth it for a still-iterated device). Panel runs
+> always-on. Physical **mount stays optional/Hugh** and does NOT affect OTA (still on Wi-Fi, no sleep).
 - [ ] **Hugh:** physical mount, then flip **Sleep Enable** over MQTT (moves `sleep_default` effective → true;
       the panel becomes a wake-cycle deep-sleep node). Confirm wake→fetch→render→resleep on the wall.
 - [ ] Docs: mark `E1001-5C-REPOINT-HANDOFF.md` resolved, close the enrollment README, update the gap register /
