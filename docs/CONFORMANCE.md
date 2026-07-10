@@ -183,4 +183,7 @@ a device declares an ability it hasn't met — turning "reasoned" into "enforced
 
 *See also:* [AGENTS.md](../AGENTS.md) Principles (the DO/CHECK/ADHERE gate) · [the ADR index](adr/) ·
 [REUSE.md](REUSE.md) (capability reuse) · [ADR-0021](adr/ADR-0021-repo-documentation-tree-agent-navigation.md) /
-[ADR-0025](adr/ADR-0025-reuse-first-navigation.md) (the other two navigation axes).
+[ADR-0025](adr/ADR-0025-reuse-first-navigation.md) (the other two navigation axes) ·
+[DEVICE-MODEL.md](DEVICE-MODEL.md) / [ADR-0034](adr/ADR-0034-device-object-model-node-ability-entity.md) — the
+**object model** these abilities structure: a device is a **Node** *hosting* these abilities, each **originating**
+ability *composing* an **Entity** (the by-structure axis).

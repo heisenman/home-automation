@@ -20,6 +20,7 @@ docs here are organized.
 | `airgap/AIRGAP-MIGRATION.md` (+ `MIGRATION-DESIGN-LOG.md`) | Air-gap migration: requirements, architecture, learnings + running journal | Any air-gap / device-migration work |
 | `SECRETS.md` | Secrets **discovery index** — where each secret class lives (values stay gitignored) | Onboarding, credential hunts |
 | `runbook-device-verification.md` | How to VERIFY a device's state/function (trust-but-verify, AGENTS §5) | Before relying on any device state |
+| `DEVICE-MODEL.md` | The **object model** — Node / Ability / Entity, the by-structure nav axis (ADR-0034) | Reasoning about device classes, migration, or the registries |
 
 ## ADR index (authoritative decisions)
 

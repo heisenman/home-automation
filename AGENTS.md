@@ -46,6 +46,9 @@ mirrors the dictator with keepalived/VRRP auto-failover behind a VIP.
   or host-config target. Touch only its `ha-*` guest services, nothing else on the box.
 - Deep reference: [home-automation-architecture-plan.md](home-automation-architecture-plan.md),
   [docs/ROADMAP.md](docs/ROADMAP.md), the [ADR index](docs/adr/).
+- **Object model:** [docs/DEVICE-MODEL.md](docs/DEVICE-MODEL.md) — what a **Node**, **Ability**, and **Entity**
+  are (the by-structure nav axis; ADR-0034). Read before reasoning about device classes, migration, or the
+  registries: *category lives on the Ability, never the Node.*
 - **Air-gap migration:** [docs/airgap/AIRGAP-MIGRATION.md](docs/airgap/AIRGAP-MIGRATION.md) — requirements +
   final architecture + learnings/whoopsies (read before touching air-gap devices); the running journal is
   [docs/airgap/MIGRATION-DESIGN-LOG.md](docs/airgap/MIGRATION-DESIGN-LOG.md).
