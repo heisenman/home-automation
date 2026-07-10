@@ -197,7 +197,10 @@ because there is no broker URI to rewrite — the move is manual by nature.
   green). *Caveat:* `confirm_on_ha2` polls `/api/v1/sensors` (authoritative-sensors-only), so a pure actuator
   may not surface there — the existing `migration_activate.py check` fallback (device_last_seen, any device) is
   the authoritative post-move gate (FOLLOWUPS). The two live LAN actuators already migrated by hand, so this is
-  forward-proofing + failover-rebuild correctness (a rebuild re-pushes every device).
+  forward-proofing + failover-rebuild correctness (a rebuild re-pushes every device). **Committed but NOT yet
+  deployed to ha-2** (air-gap) — tracked with a code tripwire + sync test in
+  [`docs/airgap/HA2-DEPLOY-PENDING.md`](../airgap/HA2-DEPLOY-PENDING.md) so a rebuild-from-ha-2 that hits the
+  drift is routed to *deploy, don't re-implement*.
 - **Phase 3 — optional registry/vocabulary convergence (gated, later; deferred per Phase-0 #4).** Where the registries carry ambiguous
   fields (e.g. `levoit-devices.yaml` area post-ADR-0027, the synthetic gas-key aliases), align them to
   "registries are the Node→Entity join table" — a cleanup, not a rewrite. This folds into the CONFORMANCE.md

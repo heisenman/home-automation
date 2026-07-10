@@ -27,6 +27,13 @@ holds; stale/orphan data lands in named buckets, not failures).
 - **Hygiene finding (from the projection):** `gas_c_office` surfaces on **two nodes** — `coffice_c6` (current) +
   `c6-bench-gas` (legacy forward-compat alias in `devices.yaml`). Benign per the model (many-to-many), but the
   legacy alias is stale-forever; **retire the `c6-bench-gas` entry** once no build references it.
+- **⚠️ ha-2 deploy drift (TRACKED, not silent):** the Phase-2 `classify()` change is committed but **not yet
+  deployed to ha-2** (air-gap; git-committed ≠ deployed-there). Safe to defer — no running service executes
+  `classify()` (`pending_sweeper` uses only `drop_cleanup`) — but logged in
+  **[`docs/airgap/HA2-DEPLOY-PENDING.md`](airgap/HA2-DEPLOY-PENDING.md)** with a **code tripwire**
+  (`HA2-DEPLOY-DRIFT:adr0034-classify` at `device_push.classify()`) + a **sync test**
+  (`tests/test_ha2_deploy_pending.py`). Trigger that forces deployment: a migration/failover-rebuild run *from
+  ha-2* (a LAN actuator would abort at `unknown`). If you hit that: **deploy, don't re-implement.**
 - **Phase 3 (deferred per Hugh):** registry/vocabulary convergence (fold into the CONFORMANCE ability-declaration
   follow-on).
 
