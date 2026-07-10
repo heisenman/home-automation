@@ -1,7 +1,13 @@
 # Air-gap internet-service relay & data-transfer — design log (the full picture)
 
-> **Status: DRAFT / running design log (2026-07-10).** Destined for an ADR once ratified by Hugh.
-> **No live firewall/relay changes have been made** — this is the proposal to review first.
+> **Status: DRAFT / running design log (2026-07-10) — IN HUGH REVIEW.** Destined for an ADR once ratified.
+> **No live firewall/relay changes have been made, and none will be until Hugh's design review settles the §7
+> open questions** (Hugh 2026-07-10: "design review first, no code yet — then we scope PR1"). This is the
+> proposal to review.
+>
+> **Decisions so far (Hugh 2026-07-10):** §7-Q5 cert = **long-dated self-signed (`--days 3650`) + a `notAfter`
+> monitor alerting ~T-12mo** (not an internal CA). Trade-off accepted: each rotation re-touches every client
+> trust store, but the mechanism stays dead-simple.
 >
 > Scope note (Hugh, 2026-07-10): the *service count* is small, but the *lift is not* — the relay is the single
 > most security-sensitive component in the system (the one box straddling the trust boundary), so "doing it
@@ -126,8 +132,9 @@ must be handled — **not** by a naive "reaches https://" filter (that only find
   periodic, offline, auditable USB round-trip carries ha-2 backups OUT and vetted `.deb`/wheel/`tzdata`/CA
   bundles IN. Optional `.210` apt/pip mirror for routine patching in an explicit maintenance window. **No
   standing update path** — updates are an operator event, never ambient.
-- **D1 Cert lifecycle.** Ship a rotation tool + a `notAfter` monitor (alert at T-12mo) so Apr 2028 never
-  surprises us; consider a small internal CA so device/panel trust survives rotation.
+- **D1 Cert lifecycle (DECIDED).** Long-dated self-signed regen (`tools/gen_tls.py --days 3650`) + a
+  `notAfter` monitor that alerts ~T-12mo. No internal CA (Hugh 2026-07-10). Rotation re-touches each client's
+  trust store — accepted for simplicity.
 
 ---
 
@@ -178,8 +185,8 @@ Rough total **~4–6 weeks**, matching the "bigger lift" read. Each step: built 
    single-host allow-list? *Recommend close it.*
 3. **Updates:** sneakernet-only, `.210` mirror-only, or both? *Recommend both, sneakernet primary.*
 4. **Weather:** push-in (simple, one-way) vs request/response? *Recommend push-in.*
-5. **Cert (D1):** self-signed long-dated regen vs stand up a small **internal CA** for the air-gap? *Recommend
-   internal CA if we want painless future rotation + device trust.*
+5. ~~**Cert (D1):** self-signed long-dated regen vs internal CA?~~ **DECIDED (Hugh 2026-07-10):** long-dated
+   self-signed (`--days 3650`) + `notAfter` monitor at T-12mo. No internal CA.
 6. **First PR scope:** just Phase 1+2 (NTP + firewall — the security core), then iterate the data relays?
 7. **Self-sufficiency LLM (F):** track as a separate initiative, or fold a "how does hands-off get its brain
    air-gapped" section into this ADR?
