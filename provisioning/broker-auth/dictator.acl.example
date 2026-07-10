@@ -1,0 +1,5 @@
+user dictator
+topic readwrite #
+
+user cluster245
+topic readwrite ha/cluster/#
