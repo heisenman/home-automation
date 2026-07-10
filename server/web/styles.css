@@ -170,7 +170,11 @@ details > summary { cursor: pointer; }
 .expanded-list .sensor { margin-bottom: 12px; }
 .sensor {
   background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 10px 12px;
+  position: relative;
 }
+/* chip-only edit button (top-right); the expanded view nests its ✎ in .sensor-head instead */
+.sensor > .edit-btn { position: absolute; top: 8px; right: 8px; z-index: 1; }
+.sensor:not(.open) .sensor-name { padding-right: 26px; }
 .sensor-name { font-weight: 600; font-size: 14px; text-transform: capitalize; margin-bottom: 6px; }
 .sensor-vals { display: flex; flex-wrap: wrap; gap: 10px; }
 .sv { font-size: 13px; color: var(--muted); }

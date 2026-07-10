@@ -673,12 +673,14 @@ function SensorVals({ m, unit }) {
 }
 
 // minimized preview — one compact grid cell. Click to expand (handled by the parent).
-function SensorChip({ s, onOpen }) {
+function SensorChip({ s, onOpen, onEdit }) {
   const m = s.metrics || {};
   const unit = useTemp();
   const stale = s.age_s != null && s.age_s > 1800;             // 30m: meters report often
   return html`
     <div class="sensor" onClick=${onOpen}>
+      ${onEdit && html`<button class="btn sm ghost edit-btn"
+        onClick=${(e) => { e.stopPropagation(); onEdit(s); }}>✎</button>`}
       <div class="sensor-name">${dispName(s)} <span class="chev">▸</span></div>
       <div class="sensor-area">${dispRoom(s)}</div>
       <${SensorVals} m=${m} unit=${unit} />
@@ -772,7 +774,8 @@ function Sensors({ sensors, isAdmin, onEdit, onChange, roomFilter, onClearRoom }
       </h2>
       ${roomFilter && all.length === 0 && html`<p class="note">No sensors in this room.</p>`}
       <div class="sensor-grid">
-        ${mins.map((s) => html`<${SensorChip} key=${s.device_id} s=${s} onOpen=${() => open(s.device_id)} />`)}
+        ${mins.map((s) => html`<${SensorChip} key=${s.device_id} s=${s}
+          onOpen=${() => open(s.device_id)} onEdit=${onEdit} />`)}
       </div>
       ${exps.length > 0 && html`
         <div class="expanded-list">
