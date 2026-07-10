@@ -38,7 +38,15 @@ residual bench items, and hand the physical bits back to Hugh — no silent data
 - [ ] Snapshot: E1001 broker IP on ha-2, quarantine accrual (`tools/quarantine.py inspect edge E1001-C-OFFICE-SHT40`),
       current `ha-2:instance/devices.yaml`.
 
-## Phase 1 — Close the data gap  ⭐ highest value, additive, dev-only  *(one Hugh decision)*
+## Phase 1 — Close the data gap  ✅ **DONE 2026-07-10** (Hugh: record)
+Executed: SHT40 enrolled on ha-2 `devices.yaml` (`e1001_c_office`, c_office; registry 18→19), edge-mapper
+reloaded, `home/c_office/e1001_c_office/state` live + accumulating in hot.db (ingest-stamped ts — panel is
+clockless, sends `ts:""`). Quarantine backlog merged (recovered the 04:20:09 reading), quarantine clean,
+stale retained bench topics cleared. **Bug found+fixed en route** (commit `1db37eb`): a blank `ts` collapsed a
+clockless device's quarantine backlog to 1 row via `COALESCE` — normalized blank→NULL (+test), redeployed both
+systems. Original detail below.
+
+### (original plan) ⭐ highest value, additive, dev-only  *(one Hugh decision)*
 The SHT40 is real telemetry being quarantined right now. Enroll it on **ha-2** (production; the enrollment
 README targeted `.210` pre-repoint — the target moved to ha-2 with the air-gap cutover).
 - [ ] **DECISION (Hugh): record or purge the SHT40?** It's redundant with `meter_pro_c_office` (SwitchBot
