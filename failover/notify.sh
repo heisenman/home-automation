@@ -14,6 +14,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && p
 # the same host — e.g. an air-gap failover sharing a box with a dev dictator — restarts ITS OWN units on a
 # VRRP transition and never the other stack's. Set API_UNIT/EDGE_MAPPER_UNIT in that instance's cluster.env.
 : "${API_UNIT:=ha-api}"; : "${EDGE_MAPPER_UNIT:=ha-edge-mapper}"
+# The PEER's controller unit — used by the MASTER fence. Defaults to ours (symmetric clusters); set it
+# explicitly when the two boxes name the unit differently (e.g. ha-2's ha-controller vs the co-resident .210
+# air-gap failover's ha-ag-controller) so a fence never stops the WRONG stack's controller.
+: "${PEER_CONTROLLER_UNIT:=$CONTROLLER_UNIT}"
 : "${VIP:=192.168.0.200}"; : "${BACKUP_GRACE:=4}"   # see BACKUP branch — startup-transient suppression
 LOG=/var/log/ha-failover.log
 STATE="${3:-${1:-}}"
@@ -51,7 +55,7 @@ case "$STATE" in
     # FENCE first: best-effort stop the peer's controller (covers alive-but-not-master / split-brain heal).
     # A failure here means the peer is down/unreachable — which is fine, a dead peer isn't controlling.
     if [ -n "$PEER_HOST" ]; then
-      if peer_ssh "sudo systemctl stop $CONTROLLER_UNIT" 2>/dev/null; then log "fenced peer $PEER_HOST (controller stopped)"; else log "peer fence failed/unreachable (ok if peer is down)"; fi
+      if peer_ssh "sudo systemctl stop $PEER_CONTROLLER_UNIT" 2>/dev/null; then log "fenced peer $PEER_HOST ($PEER_CONTROLLER_UNIT stopped)"; else log "peer fence failed/unreachable (ok if peer is down)"; fi
     fi
     # Never start a controller that can't build its issuer.
     if [ ! -f "$REPO/instance/.master_pass" ]; then log "ABORT: missing instance/.master_pass — NOT starting controller"; exit 1; fi
