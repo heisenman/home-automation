@@ -15,3 +15,12 @@ Pieces (install order):
 Net: bare `sudo <cmd>` works for humans AND automation (password auto-supplied from `.rootpwd`);
 `sudo -S < instance/.rootpwd` still works; `systemctl ha-*` stays NOPASSWD. Security posture: escalation
 requires reading `.rootpwd` (auditable + revocable) rather than a blanket NOPASSWD.
+
+## Automation using `sudo -n` needs NOPASSWD entries (lesson 2026-07-10)
+The askpass wrapper fixes bare `sudo`, but callers that use `sudo -n` (non-interactive, no prompt, no askpass)
+still fail after NOPASSWD:ALL was dropped. Each such command must be NOPASSWD-listed. Known so far:
+- `board-watch.py` delivers prompts into live interactive sessions via `sudo -n python tty-inject.py …`
+  (TIOCSTI) — the REAL "message a registered interactive chat" path. Restored via
+  `tty-inject.sudoers.example` -> `/etc/sudoers.d/tty-inject`. **Broke the coordination-delivery capability
+  for ~2h until found.** Any future `sudo -n` automation must be inventoried + NOPASSWD-listed (or the caller
+  switched to bare sudo so the askpass wrapper covers it).

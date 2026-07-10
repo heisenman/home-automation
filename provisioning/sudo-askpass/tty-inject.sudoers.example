@@ -1,0 +1,4 @@
+# board-watch delivers prompts into live interactive sessions via tty-inject (TIOCSTI). It calls
+# 'sudo -n <python> tty-inject.py ...' — restore that after sudo-hardening (was broken by dropping NOPASSWD:ALL).
+visko ALL=(root) NOPASSWD: /usr/bin/python3 /home/visko/.claude/host/bin/tty-inject.py *
+visko ALL=(root) NOPASSWD: /home/visko/.claude/host/bin/tty-inject.py *
