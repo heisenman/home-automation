@@ -72,7 +72,17 @@ README targeted `.210` pre-repoint — the target moved to ha-2 with the air-gap
 - [ ] *(optional, dev-convenience)* mirror the SHT40 row into the `.210 ~/ha-airgap-standby` devices.yaml so the
       warm standby stays a faithful mirror.
 
-## Phase 2 — 5c broker repoint (failover protection)  *(ESPHome reflash; window advised)*
+## Phase 2 — 5c broker repoint  ✅ **DONE 2026-07-10**
+Executed: `e1001.yaml` broker `.1.210 → VIP .1.200` (commit `24e335f`; bff/ntp kept at `.1.210`,
+`reboot_timeout:0s` preserved). Built via the **esphome docker image** on `.210` (`ghcr.io/esphome/esphome`
+— installed docker box-local; inherently isolated from the shared venv, which stayed paho-v2 intact).
+Confirmed `.200` baked into generated `main.cpp`, OTA'd to `192.168.1.131` (7.5s, "OTA successful"). Verified:
+E1001 reconnected on ha-2's **`.200` VIP listener**, uptime climbed 6→126s past the mark-valid/rollback
+window (the D1001-class rollback did NOT bite), SHT40 kept logging (21 distinct-ts rows). Panel now
+failover-protected. **New capability:** `.210` can now build/OTA the E1001 (docker esphome) — see
+`provisioning/reterminal/e1001/BUILD.md`.
+
+### (original plan) *(ESPHome reflash; window advised)*
 - [ ] Edit `provisioning/reterminal/e1001/e1001.yaml`: `broker:` (~L226) `192.168.1.210 → 192.168.1.200` (VIP).
       **Leave** `bff_base_url` (~L16) + `ntp_server` (~L18) at `.210` — dev is doing **broker-only float**
       fleet-wide (standby doesn't serve BFF/NTP on the VIP yet).
