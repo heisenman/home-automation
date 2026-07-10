@@ -1,0 +1,13 @@
+[Unit]
+Description=ha air-gap default-deny firewall on wlp2s0 (ADR-0033 §5)
+After=network-pre.target nftables.service
+Wants=network-pre.target
+
+[Service]
+Type=oneshot
+RemainAfterExit=yes
+ExecStart=/usr/sbin/nft -f /etc/ha-airgap/airgap.nft
+ExecReload=/usr/sbin/nft -f /etc/ha-airgap/airgap.nft
+
+[Install]
+WantedBy=multi-user.target

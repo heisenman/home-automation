@@ -1,0 +1,40 @@
+#!/usr/sbin/nft -f
+# ADR-0033 §5 — default-deny on the AIR-GAP interface (wlp2s0) of the crown-jewel bridge .210.
+# Scoped to wlp2s0 ONLY: household (enp4s0), loopback, and docker are left fully open. Idempotent
+# (self-deleting table). Rollback = `nft delete table inet airgap`.
+#
+# Allowed inbound on wlp2s0 (everything else — 8123/8124/8443/8095/ssh-from-non-ha2 — is DROPPED):
+#   - established/related, ICMP (health)
+#   - VRRP proto 112 + 224.0.0.18 multicast  -> keepalived air-gap failover (VRID 61) MUST survive
+#   - DHCP client (udp/68)                    -> .210's own wlp2s0 lease
+#   - udp/123 from 192.168.1.0/24             -> NTP serve (ADR-0033 Phase 1a)
+#   - tcp/1884 from 192.168.1.0/24            -> dedicated relay broker (Phase 1b)
+#   - tcp/1883 from 192.168.1.0/24            -> failover/cluster broker
+#   - tcp/22 from 192.168.1.210 (ha-2) ONLY  -> failover fencing + reconcile SSH (see FOLLOWUPS: drop later)
+
+table inet airgap
+delete table inet airgap
+table inet airgap {
+    chain input {
+        type filter hook input priority 0; policy accept;
+
+        # Only filter the air-gap interface; leave every other interface untouched.
+        iifname != "wlp2s0" accept
+
+        ct state established,related accept
+        ct state invalid drop
+
+        iifname "wlp2s0" ip protocol icmp accept
+        iifname "wlp2s0" meta l4proto 112 accept
+        iifname "wlp2s0" ip daddr 224.0.0.18 accept
+        iifname "wlp2s0" udp dport 68 accept
+
+        iifname "wlp2s0" ip saddr 192.168.1.0/24 udp dport 123 accept
+        iifname "wlp2s0" ip saddr 192.168.1.0/24 tcp dport 1884 accept
+        iifname "wlp2s0" ip saddr 192.168.1.0/24 tcp dport 1883 accept
+        iifname "wlp2s0" ip saddr 192.168.1.210  tcp dport 22   accept
+
+        # default-deny for the air-gap interface
+        iifname "wlp2s0" counter drop
+    }
+}
