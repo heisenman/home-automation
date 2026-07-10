@@ -53,6 +53,26 @@ def test_registry_area_map_no_none_clobber(tmp_path):
     assert m["meter_x"] == "kitchen"
 
 
+def test_single_device_plan_rename_relocate_and_noop():
+    """The single-Entity analogue of load_plan (UI admin path): rename-only, relocate-only + mode, no-op."""
+    orig = A.registry_area_map
+    A.registry_area_map = lambda: {"meter_x": "kitchen"}
+    try:
+        # rename only — area unchanged, restamp default True, area_change False
+        assert A.single_device_plan("meter_x", new_id="meter_kitchen") == [
+            {"old_id": "meter_x", "new_id": "meter_kitchen", "old_area": "kitchen", "new_area": "kitchen",
+             "id_change": True, "area_change": False, "restamp": True}]
+        # relocate only, forward mode — carries restamp=False so the sweep/verify check only device_last_seen
+        fwd = A.single_device_plan("meter_x", new_area="h_office", restamp=False)[0]
+        assert fwd["area_change"] and not fwd["id_change"] and fwd["restamp"] is False
+        assert fwd["new_area"] == "h_office"
+        # no-ops -> empty plan (nothing specified, or target == current)
+        assert A.single_device_plan("meter_x") == []
+        assert A.single_device_plan("meter_x", new_area="kitchen") == []
+    finally:
+        A.registry_area_map = orig
+
+
 VALID = {"h_bed", "h_bed_closet", "h_office", "kitchen"}
 
 

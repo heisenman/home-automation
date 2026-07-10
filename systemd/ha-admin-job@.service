@@ -1,0 +1,22 @@
+[Unit]
+Description=Home Automation — admin maintenance job %i (device rename/relocate)
+Documentation=file:///home/visko/home_automation/docs/design/ui-device-admin.md
+After=network.target
+
+[Service]
+Type=oneshot
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+# DuckDB/parquet scratch needs a writable HOME (mirrors ha-api.service).
+Environment=HOME=/home/visko/home_automation/instance
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+# The worker restarts the ingest fleet via `sudo systemctl restart ha-*` (existing NOPASSWD). Do NOT set
+# NoNewPrivileges=yes here — it would block that sudo. Launched by the API as `sudo systemctl start
+# ha-admin-job@<id>` (covered by the `systemctl start ha-*` NOPASSWD rule), so it runs outside ha-api's
+# cgroup and survives the fleet restart the job itself triggers.
+ExecStart=/home/visko/home_automation/venv/bin/python3 -m server.maintenance.admin_job run %i
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-admin-job

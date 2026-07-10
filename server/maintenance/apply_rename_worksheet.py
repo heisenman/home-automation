@@ -106,6 +106,25 @@ def load_plan(worksheet: str = "instance/device-rename.yaml") -> list[dict]:
     return plan
 
 
+def single_device_plan(device_id: str, *, new_id: str | None = None, new_area: str | None = None,
+                       restamp: bool = True) -> list[dict]:
+    """One-device plan for the UI-driven admin path (the single-Entity analogue of ``load_plan``). An
+    unspecified target keeps the current value; ``restamp`` carries the relocate mode (True = history-safe,
+    False = forward-only). Areas resolve from the registries (authoritative), falling back to
+    ``device_last_seen``. Returns ``[]`` for a no-op. Shape matches ``load_plan`` + a ``restamp`` field that
+    ``apply_one``/``stale_counts`` read (worksheet plans omit it → default True)."""
+    areas = registry_area_map()
+    hot_db = REPO_ROOT / "instance" / "db" / "hot.db"
+    old_area = areas.get(device_id) or _last_seen_area(device_id, hot_db)
+    nid = new_id or device_id
+    narea = new_area or old_area
+    id_change, area_change = (nid != device_id), (narea != old_area)
+    if not (id_change or area_change):
+        return []
+    return [{"old_id": device_id, "new_id": nid, "old_area": old_area, "new_area": narea,
+             "id_change": id_change, "area_change": area_change, "restamp": bool(restamp)}]
+
+
 def validate_plan(plan: list[dict], valid_areas: set | None = None) -> list[str]:
     """Fail fast on unresolvable target areas + id collisions (drift-guard the worksheet before mutating)."""
     valid = valid_areas if valid_areas is not None else \
@@ -131,7 +150,8 @@ def apply_one(step: dict, *, dry_run: bool, do_peer: bool = True) -> dict:
         if not dry_run:
             cur_id = step["new_id"]
     if step["area_change"]:
-        rep["relocate"] = R.relocate("device", cur_id, step["new_area"], do_peer=do_peer, dry_run=dry_run)
+        rep["relocate"] = R.relocate("device", cur_id, step["new_area"], do_peer=do_peer, dry_run=dry_run,
+                                     restamp_history=step.get("restamp", True))
     return rep
 
 
@@ -181,7 +201,8 @@ def stale_counts(plan: list[dict]) -> dict:
             if n:
                 stale[f"old_id:{s['old_id']}"] = n
         if s["area_change"]:
-            n = R.count_stale_area(hot, device_id=s["new_id"], new_area=s["new_area"])
+            tables = R.AREA_TABLES if s.get("restamp", True) else ["device_last_seen"]
+            n = R.count_stale_area(hot, device_id=s["new_id"], new_area=s["new_area"], tables=tables)
             if n:
                 stale[f"stale_area:{s['new_id']}"] = n
     return stale
@@ -196,13 +217,20 @@ def verify(plan: list[dict]) -> dict:
             "clean": t.returncode == 0 and not stale}
 
 
-def run(worksheet: str = "instance/device-rename.yaml", *, dry_run: bool = False,
-        do_restart: bool = True, do_peer: bool = True, broker: str = "localhost") -> dict:
-    plan = load_plan(worksheet)
+def run_plan(plan: list[dict], *, dry_run: bool = False, do_restart: bool = True,
+             do_peer: bool = True, broker: str = "localhost") -> dict:
+    """Orchestrate an already-built plan — the shared core of the worksheet CLI (``run``) and the
+    single-device admin path (``single_device_plan``). Validates target areas + id collisions first, then:
+    1. apply  2. restart ingest fleet  3. bounded idempotent sweep  4. clear old retained  5. verify —
+    with peer reconcile paused across the mutation (try/finally). ``dry_run`` does step 1 only (no writes).
+    ``do_restart=False`` = data-only (skip restart + sweep, e.g. ON the peer)."""
     errs = validate_plan(plan)
     if errs:
-        return {"error": "invalid worksheet", "problems": errs}
-    report = {"dry_run": dry_run, "planned": len(plan), "steps": []}
+        return {"error": "invalid plan", "problems": errs}
+    report: dict = {"dry_run": dry_run, "planned": len(plan), "steps": []}
+    if not plan:
+        report["clean"] = True
+        return report
     if dry_run:
         for s in plan:
             report["steps"].append(apply_one(s, dry_run=True, do_peer=do_peer))
@@ -211,26 +239,34 @@ def run(worksheet: str = "instance/device-rename.yaml", *, dry_run: bool = False
     # Pause peer reconcile so it can't re-insert an old device_id mid-rename; always resume (try/finally).
     report["reconcile_paused"] = _systemctl("stop", RECONCILE_SERVICE)
     try:
-        # 1. apply  2. restart ingest fleet  3. sweep (idempotent)  4. clear old retained  5. verify
         for s in plan:
             report["steps"].append(apply_one(s, dry_run=False, do_peer=do_peer))
-        report["restart"] = restart_ingest(False)
-        # Sweep until the tail-race settles: an in-flight reading can land under the old id/area just after
-        # a sweep, so re-sweep with a short settle until no stragglers remain (bounded).
-        report["sweep_passes"] = 0
-        for _ in range(SWEEP_MAX_PASSES):
-            for s in plan:
-                apply_one(s, dry_run=False, do_peer=do_peer)
-            report["sweep_passes"] += 1
-            if not stale_counts(plan):
-                break
-            time.sleep(SWEEP_SETTLE_S)
+        if do_restart:
+            report["restart"] = restart_ingest(False)
+            # Sweep until the tail-race settles: an in-flight reading can land under the old id/area just
+            # after a sweep, so re-sweep with a short settle until no stragglers remain (bounded).
+            report["sweep_passes"] = 0
+            for _ in range(SWEEP_MAX_PASSES):
+                for s in plan:
+                    apply_one(s, dry_run=False, do_peer=do_peer)
+                report["sweep_passes"] += 1
+                if not stale_counts(plan):
+                    break
+                time.sleep(SWEEP_SETTLE_S)
+        else:
+            report["restart"] = "skipped (data-only / --no-restart)"
         report["retained_cleared"] = clear_old_retained(plan, broker=broker, dry_run=False)
         report["verify"] = verify(plan)
         report["clean"] = report["verify"]["clean"]
     finally:
         report["reconcile_resumed"] = _systemctl("start", RECONCILE_SERVICE)
     return report
+
+
+def run(worksheet: str = "instance/device-rename.yaml", *, dry_run: bool = False,
+        do_restart: bool = True, do_peer: bool = True, broker: str = "localhost") -> dict:
+    return run_plan(load_plan(worksheet), dry_run=dry_run, do_restart=do_restart,
+                    do_peer=do_peer, broker=broker)
 
 
 def _main() -> int:

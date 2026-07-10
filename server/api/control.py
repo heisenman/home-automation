@@ -327,30 +327,82 @@ def handle_device_calibration(conn, device_id: str, body: dict[str, Any]) -> tup
     return 200, {"status": "ok", "device_id": device_id, "calibration": store.all_calibration(conn).get(device_id, {})}
 
 
-def handle_device_relocate(device_id: str, body: dict[str, Any]) -> tuple[int, dict]:
-    """Canonically relocate a device to ``new_area`` (the UI-driven replacement for the CLI crosswalk).
-    Body: ``{new_area, mode, dry_run?}``. ``mode`` is REQUIRED and explicit because the two are not
-    interchangeable: ``restamp`` = history-safe — rewrites ``readings.area`` (+ parquet + .245 peer) so the
-    past follows the device (for a device mislabeled from the start); ``forward`` = forward-only — leaves
-    ``readings`` history under the old room, only the registry + current-location pointer move (a genuine
-    physical move). Wraps ``device_relocate.relocate`` (which backs up hot.db + registry first). Admin-gated;
-    runs the real mutation, so the route offloads it to a threadpool."""
-    from server.maintenance import device_relocate as R
+import re as _re
+
+_DEVICE_ID_RE = _re.compile(r"^[a-z0-9_]+$")
+
+
+def _maintain(op: str, device_id: str, body: dict[str, Any]) -> tuple[int, dict]:
+    """Shared handler for the Entity-plane maintenance ops (rename / relocate). Both go through the SAME
+    footgun-free orchestration (``apply_rename_worksheet``: mutate → restart ingest fleet → idempotent sweep
+    → verify, reconcile paused): a ``dry_run`` returns a synchronous, side-effect-free preview; a real run is
+    launched as a DETACHED job (it restarts ha-api itself) and the caller polls ``/api/v1/admin/jobs/<id>``.
+    Backups are written by the underlying tools before any mutation."""
+    from server.maintenance import admin_job
+    from server.maintenance import apply_rename_worksheet as A
     b = body or {}
-    new_area = b.get("new_area")
-    mode = b.get("mode")
     dry_run = b.get("dry_run", False)
-    if not isinstance(new_area, str) or not new_area.strip():
-        return 400, {"status": "bad-request", "reason": "new_area must be a non-empty string"}
-    if mode not in ("restamp", "forward"):
-        return 400, {"status": "bad-request", "reason": "mode must be 'restamp' or 'forward'"}
     if not isinstance(dry_run, bool):
         return 400, {"status": "bad-request", "reason": "dry_run must be a boolean"}
-    report = R.relocate("device", device_id, new_area.strip(),
-                        restamp_history=(mode == "restamp"), dry_run=dry_run)
-    ok = bool(report.get("clean"))
-    return (200 if ok else 500), {"status": "ok" if ok else "verify-failed",
-                                  "device_id": device_id, "report": report}
+    # Guard the SOURCE id at the boundary: it flows into the peer's remote SHELL command (device_id is
+    # embedded in a double-quoted sqlite arg over the full-shell :22 SSH), and validate_plan only checks the
+    # target area — so a crafted id (e.g. containing `"`) could inject on the peer. Real ids are [a-z0-9_].
+    if not _DEVICE_ID_RE.match(device_id or ""):
+        return 400, {"status": "bad-request", "reason": "device_id must match [a-z0-9_]+"}
+    if op == "relocate":
+        new_area, mode = b.get("new_area"), b.get("mode")
+        if not isinstance(new_area, str) or not new_area.strip():
+            return 400, {"status": "bad-request", "reason": "new_area must be a non-empty string"}
+        # mode is explicit — the two are NOT interchangeable: restamp = history-safe (past follows the
+        # device, for a mislabel); forward = forward-only (leave readings history, a genuine physical move).
+        if mode not in ("restamp", "forward"):
+            return 400, {"status": "bad-request", "reason": "mode must be 'restamp' or 'forward'"}
+        new_area = new_area.strip()
+        plan = A.single_device_plan(device_id, new_area=new_area, restamp=(mode == "restamp"))
+        spec = {"op": "relocate", "device_id": device_id, "new_area": new_area,
+                "restamp": mode == "restamp"}
+    elif op == "rename":
+        new_id = b.get("new_id")
+        if not isinstance(new_id, str) or not new_id.strip():
+            return 400, {"status": "bad-request", "reason": "new_id must be a non-empty string"}
+        new_id = new_id.strip()
+        if not _DEVICE_ID_RE.match(new_id):
+            return 400, {"status": "bad-request", "reason": "new_id must match [a-z0-9_]+"}
+        plan = A.single_device_plan(device_id, new_id=new_id)
+        spec = {"op": "rename", "device_id": device_id, "new_id": new_id}
+    else:
+        return 400, {"status": "bad-request", "reason": f"unknown op {op!r}"}
+
+    if not plan:
+        return 400, {"status": "noop", "device_id": device_id,
+                     "reason": "nothing to change (target equals current)"}
+    errs = A.validate_plan(plan)        # canonical target area + no id collision — fail fast before launch
+    if errs:
+        return 400, {"status": "invalid", "device_id": device_id, "problems": errs}
+    if dry_run:
+        # side-effect-free, local-only preview (no peer SSH) — what WOULD change
+        report = A.run_plan(plan, dry_run=True, do_peer=False)
+        return 200, {"status": "preview", "op": op, "device_id": device_id, "report": report}
+    try:
+        job_id = admin_job.launch(spec)
+    except Exception as e:
+        return 500, {"status": "error", "device_id": device_id, "reason": str(e)}
+    return 202, {"status": "launched", "op": op, "device_id": device_id, "job_id": job_id,
+                 "poll": f"/api/v1/admin/jobs/{job_id}",
+                 "note": "runs detached (restarts the ingest fleet); poll for the report"}
+
+
+def handle_device_relocate(device_id: str, body: dict[str, Any]) -> tuple[int, dict]:
+    """Relocate a device to ``new_area`` (Entity-plane area move). Body ``{new_area, mode, dry_run?}``.
+    See ``_maintain`` — orchestrated + detached so it can't leave the mapper re-stamping the old area."""
+    return _maintain("relocate", device_id, body)
+
+
+def handle_device_rename(device_id: str, body: dict[str, Any]) -> tuple[int, dict]:
+    """Rename a device's ``device_id`` everywhere (Entity identity). Body ``{new_id, dry_run?}``.
+    See ``_maintain``; the underlying rename also migrates the .245 peer + pauses reconcile so the old id
+    can't be resurrected."""
+    return _maintain("rename", device_id, body)
 
 
 def handle_device_placement(device_id: str, body: dict[str, Any], placement_path) -> tuple[int, dict]:
@@ -411,6 +463,26 @@ def make_device_meta_router(api_authz, control_db, placement_path=None):
                 "note": "hot.db + registry were backed up to instance/db/backups/ before mutating; "
                         "see docs/runbook-dataset-restore.md"})
         return JSONResponse(status_code=code, content=payload)
+
+    @router.post("/{device_id}/rename", dependencies=[Depends(require_admin)])
+    async def post_rename(device_id: str, body: dict = Body(...)):
+        from starlette.concurrency import run_in_threadpool
+        try:
+            code, payload = await run_in_threadpool(handle_device_rename, device_id, body)
+        except Exception as e:   # mutation is detached; this only covers preview/launch failures
+            return JSONResponse(status_code=500, content={
+                "status": "error", "device_id": device_id, "reason": str(e),
+                "note": "no mutation started; the underlying tools back up before any write — "
+                        "see docs/runbook-dataset-restore.md"})
+        return JSONResponse(status_code=code, content=payload)
+
+    @router.get("/jobs/{job_id}", dependencies=[Depends(require_admin)])
+    async def get_job(job_id: str):
+        from server.maintenance import admin_job
+        rec = admin_job.status(job_id)
+        if rec is None:
+            return JSONResponse(status_code=404, content={"status": "unknown", "job_id": job_id})
+        return JSONResponse(status_code=200, content=rec)
 
     @router.put("/{device_id}/placement", dependencies=[Depends(require_admin)])
     async def put_placement(device_id: str, body: dict = Body(...)):
