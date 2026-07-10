@@ -56,11 +56,16 @@ belongs, extract app-local first; promote to a shared component when a second de
 | `fs_ops` | **`firmware/components/`** ✓ | d1001-panel | generic SD file-ops over MQTT (ls/stat/read/write/rm/mkdir/df); device-agnostic. |
 | `ha_battery` | **`firmware/components/`** ✓ | d1001-panel | gauge (ADC→SoC) + IMU temp + thermal-gated charge + restart watchdog; board wiring is `ha_battery_cfg_t` (`_d1001_cfg()` preset), expander/I2C handles injected by the display BSP. |
 
-**Fully migrated (ADR-0020 Stage 2 complete for the BLE core).** Consumers link the shared components via
+**Fully migrated (ADR-0020 Stages 1–2 complete).** Consumers link the shared components via
 `REQUIRES` + `EXTRA_COMPONENT_DIRS ../../firmware/components` (edge nodes) or `components/<name>` **symlinks**
 (the panel, off-repo dev tree at `~/reterminal-dev/d1001-beachhead`). Each node keeps a 2-line `ble_scan.h`
-shim so `gatt_*`/`ha_ota` includes are untouched. Still forked (future stages): `ha_mqtt` (3×-drifted),
-`app_main`, `gatt_*` (Stage 2 → shared `ha_gatt`), and the platform modules. Extraction order + rationale: [edge/MODULES.md](../edge/MODULES.md).
+shim so `gatt_*`/`ha_ota` includes are untouched. `ha_mqtt` and `ha_gatt`/`ha_gatt_exec` are now real shared
+components `REQUIRE`d by all three edge builds (the 3×-drift is reconciled — the source of truth is the
+generated [edge/MATRIX.md](../edge/MATRIX.md), drift-guarded by `tests/test_module_matrix.py`).
+Intentionally **not** shared: `app_main` (the per-device thin platform shim — secrets/transport/LED/repoint
+glue, by design) and the platform modules (`ha_gas`, `ha_eth`, `ha_led`, and the s3 `ha_wifi` robustness
+divergence). The one open ADR-0020 item is the cosmetic `edge/<device>/` → `firmware/devices/<device>/` tree
+move — deferred as low-priority since the builds are already thin. Extraction order + rationale: [edge/MODULES.md](../edge/MODULES.md).
 
 ## Rules
 

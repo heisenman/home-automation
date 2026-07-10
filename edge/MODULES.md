@@ -1,7 +1,10 @@
 # MODULES.md — edge/panel firmware module catalog
 
 The tree of firmware modules and what each provides. Pairs with [MATRIX.md](MATRIX.md) (which build links
-which). Target = real shared IDF components (ADR-0020); today most are shared by `cp -r` fork.
+which). Target = real shared IDF components (ADR-0020) — **reached**: the cleanly-shareable modules are now
+real shared components under `firmware/components/` and the `cp -r` fork copies are retired fleet-wide. The
+only per-device code left is `app_main` (the platform shim) and genuinely platform-specific modules
+(`ha_gas`/`ha_eth`/`ha_led`, s3 `ha_wifi` divergence). See [MATRIX.md](MATRIX.md) for the live per-build state.
 
 > Status legend — **shared:** byte-identical across forks (safe to extract first). **drifted:** diverged per
 > target (needs reconciliation on extract). **platform:** per-device by nature.

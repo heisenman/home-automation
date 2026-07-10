@@ -81,6 +81,28 @@ split (`ui_tiles.c` 1393→206L behind 8 `ui/` modules,
 [panel-ui-modularization](../design/panel-ui-modularization.md)) is the app-local face of the same
 principle.
 
+### Update 2026-07-10 — refactor functionally complete
+
+The four "remaining stages" are now resolved:
+
+1. **`ha_mqtt`/`app_main` reconcile — DONE.** `ha_mqtt` is a single shared component `REQUIRE`d by all three
+   edge builds (c3/c6/s3); the 3×-drift is gone. `app_main` stays per-device *by design* — it is the thin
+   platform shim this ADR called for (secrets/transport/LED/repoint glue, ~95–207 LOC), not drift.
+2. **Shared `ha_gatt`/`ha_gatt_exec` — DONE.** Both are shared components consumed by all edge builds + the
+   panel; no local forks remain.
+3. **`MATRIX.md` generator + drift-check — DONE.** `tools/gen_module_matrix.py` regenerates
+   [edge/MATRIX.md](../../edge/MATRIX.md) from each build's `main/CMakeLists.txt`; `tests/test_module_matrix.py`
+   fails on drift.
+4. **`firmware/devices/<device>/` thin builds — DEFERRED (low-priority, cosmetic).** The builds under
+   `edge/<device>/` are *already* thin (`main/` holds only `app_main.c` + secrets; `EXTRA_COMPONENT_DIRS`
+   points at `firmware/components/`), so the ADR's real goal — "a new device is a column, not a fork" — is
+   met. The only outstanding piece is the directory *rename* `edge/<device>/` → `firmware/devices/<device>/`,
+   which would churn OTA build scripts, provisioning docs, and node manifests on LIVE nodes for near-zero
+   functional gain. Folded into a future taxonomy/tree uplift rather than done in isolation.
+
+The still-pending *deployment* step (shipping the deduped shared-component firmware to the live fleet via
+gated OTA) is tracked as its own low-priority board task, to ride along with a larger system improvement.
+
 ## Rejected alternatives
 
 - **Keep copy-paste forking:** O(n) maintenance, guaranteed drift (already happening).
