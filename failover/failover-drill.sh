@@ -201,7 +201,11 @@ hdr "3. Induce failover (stop keepalived on $CUR_MASTER)"; run_on "$CUR_MASTER" 
 hdr "4. Observe takeover on $TARGET (timeout ${TIMEOUT}s)"
 t_vip=$(wait_until "vip->target" 'vip_on "$TARGET"') && ok "VIP moved to $TARGET in ${t_vip}s" || no "VIP did NOT reach $TARGET within ${TIMEOUT}s"
 t_ctl=$(wait_until "ctl->target" '[ "$(state_on "$TARGET" "$(cu_of "$TARGET")")" = active ]') && ok "controller ($(cu_of "$TARGET")) active on $TARGET in ${t_ctl}s" || no "controller did NOT start on $TARGET"
-[ "$(state_on "$CUR_MASTER" "$(cu_of "$CUR_MASTER")")" = active ] && no "SPLIT-BRAIN: old master $CUR_MASTER still running its controller" || ok "old master $CUR_MASTER controller stopped (fenced)"
+# the fence is async (publish -> peer listener -> stop); poll up to TIMEOUT for the old master's controller to
+# stop. A genuine split-brain (fence never acts) fails after the timeout; a working fence passes in ~1-2s.
+t_fence=$(wait_until "oldmaster-ctl-stop" '[ "$(state_on "$CUR_MASTER" "$(cu_of "$CUR_MASTER")")" != active ]') \
+  && ok "old master $CUR_MASTER controller stopped (fenced) in ${t_fence}s" \
+  || no "SPLIT-BRAIN: old master $CUR_MASTER still running its controller after ${TIMEOUT}s"
 if [ "$FENCE_BUS" = 1 ]; then bus_fence_seen "$CUR_MASTER" && ok "BUS fence observed in $CUR_MASTER's listener log (fence-over-bus worked)" || wn "no VALID fence in $CUR_MASTER's listener log (it may have self-demoted via keepalived BACKUP before the fence)"; fi
 if [ "$ACTUATE" = 1 ]; then hdr "5. Actuate from $TARGET (gated)"; wn "actuation proof not auto-wired — run tools/device_smoke_test.py against $TARGET's ha-api manually this run"; fi
 hdr "6. Fail back (start keepalived on $CUR_MASTER; it preempts)"; run_on "$CUR_MASTER" systemctl start keepalived

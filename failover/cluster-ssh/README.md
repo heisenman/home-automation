@@ -20,7 +20,15 @@ shrinks it to a single reconcile verb.
 - Failover scripts parameterized: `CLUSTER_SSH_PORT` (default 22 = household pair unchanged; the air-gap pair
   sets `CLUSTER_SSH_PORT=47222` in `~/ha-airgap-standby/failover/cluster.env`).
 
-## STATUS 2026-07-10: SSH-decouple COMPLETE. The air-gap boundary carries NO general SSH.
+## STATUS 2026-07-10: SSH-decouple COMPLETE + drill-validated. The air-gap boundary carries NO general SSH.
+> **Airgap failover drill PASSED (15/0/0)** — `failover-drill.sh --run --airgap`. Fence-over-bus verified in a
+> real ha-2→.210 seizure (old master fenced over the bus in ~0s, clean failback). The drill caught two bugs
+> manual testing missed: (a) the box-local `~/ha-airgap-standby` checkout had no `fence.py` (the air-gap
+> notify.sh calls `$HERE/cluster-ssh/fence.py`); (b) the fence rode the **VIP broker**, which *moves to the new
+> master* during the very failover it handles — so the peer was mid-reconnect and missed the fence. Fix:
+> listeners subscribe to their **LOCAL** broker (`FENCE_BROKER`), `bus_fence` publishes to the **peer's REAL**
+> broker (`FENCE_PEER_BROKER`) — no VIP dependency.
+
 - **Control path** (fence) → cluster bus, LIVE + acting for the air-gap pair (ha-2 ⇄ .210). No SSH.
 - **`tcp/22` on `wlp2s0`** → CLOSED.
 - **Data path** → dedicated `tcp/47222` (from ha-2 only), **ForceCommand-locked to reconcile-only** — not a

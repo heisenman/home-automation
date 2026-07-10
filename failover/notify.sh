@@ -27,6 +27,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && p
 : "${FENCE_MODE:=both}"
 : "${PEER_FENCE_HOST:=}"                          # the peer listener's FENCE_HOST identity (its hostname); empty -> bus fence skipped
 : "${FENCE_KEY_FILE:=$REPO/instance/.fence_key}"; : "${FENCE_BROKER:=127.0.0.1}"; : "${FENCE_PORT:=1883}"
+# The fence must NOT ride the VIP broker — the VIP MOVES to the new master during the very failover the fence
+# handles, so a subscriber on the VIP is mid-reconnect when the fence fires (drill 2026-07-10). Publish to the
+# PEER's REAL broker (stable), and each listener subscribes to its own LOCAL broker. Defaults keep back-compat.
+: "${FENCE_PEER_BROKER:=$FENCE_BROKER}"
 : "${VIP:=192.168.0.200}"; : "${BACKUP_GRACE:=4}"   # see BACKUP branch — startup-transient suppression
 LOG=/var/log/ha-failover.log
 STATE="${3:-${1:-}}"
@@ -63,9 +67,9 @@ reconcile_history(){ # $1=state-label
 bus_fence(){
   [ -f "$FENCE_KEY_FILE" ] || { log "bus-fence skipped: no fence key ($FENCE_KEY_FILE)"; return 0; }
   [ -n "$PEER_FENCE_HOST" ] || { log "bus-fence skipped: PEER_FENCE_HOST unset"; return 0; }
-  if FENCE_KEY_FILE="$FENCE_KEY_FILE" FENCE_BROKER="$FENCE_BROKER" FENCE_PORT="$FENCE_PORT" FENCE_HOST="$(hostname)" \
+  if FENCE_KEY_FILE="$FENCE_KEY_FILE" FENCE_BROKER="$FENCE_PEER_BROKER" FENCE_PORT="$FENCE_PORT" FENCE_HOST="$(hostname)" \
        python3 "$HERE/cluster-ssh/fence.py" publish --target "$PEER_FENCE_HOST" --unit "$PEER_CONTROLLER_UNIT" >/dev/null 2>&1; then
-    log "bus-fence published -> target=$PEER_FENCE_HOST unit=$PEER_CONTROLLER_UNIT"
+    log "bus-fence published -> target=$PEER_FENCE_HOST unit=$PEER_CONTROLLER_UNIT via $FENCE_PEER_BROKER"
   else
     log "bus-fence publish failed (non-fatal)"
   fi
