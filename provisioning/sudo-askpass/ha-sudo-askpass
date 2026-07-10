@@ -1,0 +1,8 @@
+#!/bin/sh
+# sudo SUDO_ASKPASS helper (ADR sudo-hardening). Supplies visko's sudo password from the canonical
+# gitignored file so headless/automated sudo (wake runners, timers, non-tty shells) works after the
+# NOPASSWD:ALL grant was narrowed. Runs as the invoking user; prints the password on stdout.
+# The secret lives ONLY in instance/.rootpwd (0600) — not here.
+f=/home/visko/home_automation/instance/.rootpwd
+[ -r "$f" ] || { echo "ha-sudo-askpass: no $f" >&2; exit 1; }
+cat "$f"

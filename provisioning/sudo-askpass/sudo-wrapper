@@ -1,0 +1,12 @@
+#!/bin/sh
+# /usr/local/bin/sudo — thin wrapper so headless/automated BARE `sudo` uses the askpass helper
+# (sudo-hardening + askpass). Real sudo at /usr/bin/sudo (called by absolute path — no recursion).
+# Injects -A ONLY when the caller isn't already managing auth (-A/-S/-n) or asking for help/version.
+export SUDO_ASKPASS="${SUDO_ASKPASS:-/usr/local/sbin/ha-sudo-askpass}"
+for a in "$@"; do
+  case "$a" in
+    -A|--askpass|-S|--stdin|-n|--non-interactive|-h|--help|-V|--version|-e|--edit) exec /usr/bin/sudo "$@" ;;
+    --) break ;;
+  esac
+done
+exec /usr/bin/sudo -A "$@"
