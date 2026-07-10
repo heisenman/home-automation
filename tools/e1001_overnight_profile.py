@@ -10,6 +10,13 @@ Produces, unattended overnight, everything the panel's battery gauge needs:
      self-managed discharge->rest->charge->rest profiler cycle.
 Morning: fit the LUT, bake in the offsets, push a v2 profile to the panel (no reflash).
 
+LEARNINGS from run 1 (2026-07-10 overnight), baked into the defaults below:
+  * load level 2 was too weak — only fell 100%->35% in 8.3h (never reached floor). Default is now 3 (max).
+  * offsets measured at FULL SoC are meaningless (charger 'done' -> no charge current -> off_charging ~0).
+    Phase A now bails if base V > 4.00; measure offsets at MID-SoC via `--offsets-only` (or after a drain).
+  * for a full-range LUT the discharge must START near full — so run this from a topped-off cell.
+  * max-hours raised to 14 (a full load-3 discharge->charge is ~10-12h; 9 aborted mid-discharge).
+
 WHY THIS IS SAFE TO RUN UNATTENDED (all firmware-side, verified in e1001.yaml):
   * The charger IC has a ~40s hardware watchdog. During a cycle the firmware kicks it every 2s; if the
     firmware hangs / this script dies / the network drops / the host reboots, the charger AUTO-REVERTS to
@@ -154,6 +161,16 @@ def phase_a_offsets(panel: Panel, settle: float, base_settle: float) -> dict:
     panel.switch("charger_hiz", True)
     time.sleep(4)                                     # brief settle, then sample well under the WD window
     v_base = _median_v(panel, base_settle, "base(battery)")
+    # LEARNED 2026-07-10: at high SoC the charger is 'done' so NO charge current flows -> off_charging comes out
+    # ~0 (meaningless). The offset is only real at MID-SoC. Bail here and tell the operator to use --offsets-only
+    # when the cell is mid-range (or let a cycle drain it first).
+    if v_base > 4.00:
+        print(f"  !! base V={v_base:.3f} is near-full — offsets are UNRELIABLE at high SoC (no charge current). "
+              f"Skipping; run `--offsets-only` at mid-SoC instead.")
+        panel.switch("charger_hiz", False)
+        panel.switch("charge_enable", True)
+        return {"off_display_off_mv": 0, "off_usb_mv": None, "off_charging_mv": None,
+                "skipped": "soc_too_high", "_base_v": round(v_base, 4), "measured_at": utc()}
     # usb present, not charging
     panel.switch("charger_hiz", False)
     panel.switch("charge_enable", False)
@@ -223,12 +240,14 @@ def main() -> int:
     ap.add_argument("--hard-floor-v", type=float, default=3.62, help="redundant abort-to-safe floor")
     ap.add_argument("--cycles", type=int, default=1)
     ap.add_argument("--rest-s", type=int, default=120)
-    ap.add_argument("--load", type=int, default=2, choices=[0, 1, 2, 3],
-                    help="discharge load 0..3; 2 = WiFi-PA drain so a full cycle finishes overnight")
+    ap.add_argument("--load", type=int, default=3, choices=[0, 1, 2, 3],
+                    help="discharge load 0..3; LEARNED 2026-07-10: load 2 only fell 100%%->35%% in 8.3h on this "
+                         "e-ink S3 (too slow to complete) -> default 3 (max drain)")
     ap.add_argument("--settle", type=float, default=120, help="usb/charging offset step settle seconds")
     ap.add_argument("--base-settle", type=float, default=30,
                     help="battery-only (HIZ-on) sample seconds — MUST stay < the ~40s IDLE WD auto-clear")
-    ap.add_argument("--max-hours", type=float, default=9.0)
+    ap.add_argument("--max-hours", type=float, default=14.0,
+                    help="LEARNED: a full load-3 discharge->charge cycle needs ~10-12h; 9 aborted mid-discharge")
     ap.add_argument("--out-dir", default=str(Path.home()), help="where to write the capture + offsets")
     ap.add_argument("--skip-offsets", action="store_true")
     ap.add_argument("--offsets-only", action="store_true",
