@@ -61,6 +61,31 @@ A migrated device silently stopped logging on ha-2 for **~23 h**: the config syn
 3. **Sanity sweep** (run once; make periodic): `comm -23 <live LWT/discovery> <registered>` → flag any
    live-but-unregistered device across every ingest registry.
 
+## 🟡 2026-07-10 — Open (ops-domain): E1001 c-office panel SHT40 sits in ha-2 quarantine until proper intake
+
+The quarantine rollout (ADR-0032) immediately caught a **real** live-but-unregistered device on ha-2:
+`edge / E1001-C-OFFICE-SHT40` — the E1001 c-office panel's onboard SHT40 (temperature + humidity). It has
+been publishing to ha-2 (via the edge path) since the panel was repointed to the air-gap net, but is **not in
+ha-2's `instance/devices.yaml`**, so its readings were being **silently dropped**. They are now **quarantined**
+(`ha-2:instance/db/quarantine.db`) — preserved and accumulating, not lost.
+
+**Decision (Hugh, 2026-07-10): LEAVE IT QUARANTINED until E1001 is intaken properly.** Do NOT merge/register
+piecemeal. When E1001 gets its proper intake (**ops-domain** per memory `dev-ops-ownership-line`; ties into the
+ops `e1001-finish-features` task), fold in the SHT40 as part of it:
+
+```
+# on ha-2, once the device identity/area/type are decided as part of E1001 intake:
+tools/quarantine.py inspect edge E1001-C-OFFICE-SHT40
+tools/quarantine.py merge  edge E1001-C-OFFICE-SHT40 \
+    --device-id <chosen_id> --area c_office --device-type sht40 --register
+```
+
+`merge --register` replays the **entire accumulated window** into hot.db (lossless recovery) and registers the
+device so future readings ingest normally. Note c_office already has `meter_pro_c_office` (SwitchBot Meter Pro)
+covering temp/RH, so the panel SHT40 is **redundant** for those metrics — the intake decision includes whether
+to record it at all (redundancy is a design goal, but it's a judgment call) vs `purge`. Until then it keeps
+accumulating harmlessly (never auto-deleted).
+
 ## 🔔 2026-07-10 — Action item: air-gap production notification routing
 
 `ha-ntfy-bridge` runs on the **dev box (.210)** (reading `.210`'s data); ha-2 (production) doesn't run it —
