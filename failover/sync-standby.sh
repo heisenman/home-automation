@@ -10,7 +10,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && p
 LOG=/var/log/ha-failover.log
 log(){ printf '%s sync-standby %s\n' "$(date -Is)" "$*" | tee -a "$LOG" 2>/dev/null || true; }
 RSH(){ ssh -p "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "visko@$PEER_HOST" "$@"; }
-SCP(){ scp -P "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$@"; }
+SCP(){ scp -O -P "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$@"; }
 
 [ "$ROLE" = standby ] || { log "ROLE=$ROLE — not a standby, nothing to sync"; exit 0; }
 if systemctl is-active --quiet "$CONTROLLER_UNIT"; then log "WE are acting dictator — skip (don't overwrite our own live state)"; exit 0; fi

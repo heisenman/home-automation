@@ -39,7 +39,7 @@ case "$HOT_DB" in /*) DB="$HOT_DB";; *) DB="$REPO/$HOT_DB";; esac   # absolute o
 
 log(){ printf '%s reconcile %s\n' "$(date -Is)" "$*" | tee -a "$RLOG" 2>/dev/null || true; }
 RSH(){ ssh -p "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "visko@$PEER_HOST" "$@"; }
-SCP(){ scp -P "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$@"; }
+SCP(){ scp -O -P "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$@"; }
 have_sqlite(){ command -v sqlite3 >/dev/null; }
 
 # the compactor horizon — everything with ts >= this is still in hot.db (matches compactor._cutoff_ts()).

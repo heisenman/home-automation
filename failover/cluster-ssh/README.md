@@ -20,9 +20,11 @@ shrinks it to a single reconcile verb.
 - Failover scripts parameterized: `CLUSTER_SSH_PORT` (default 22 = household pair unchanged; the air-gap pair
   sets `CLUSTER_SSH_PORT=47222` in `~/ha-airgap-standby/failover/cluster.env`).
 
-## STATUS 2026-07-10: control-path SSH is OFF the air-gap boundary — `tcp/22` on `wlp2s0` is CLOSED.
-Fence-over-bus is LIVE and acting for the air-gap pair (ha-2 ⇄ .210). The data path moved to `47222`.
-Remaining: the forced-command lock on `id_cluster` / `47222` (item 2 below) is the last piece.
+## STATUS 2026-07-10: SSH-decouple COMPLETE. The air-gap boundary carries NO general SSH.
+- **Control path** (fence) → cluster bus, LIVE + acting for the air-gap pair (ha-2 ⇄ .210). No SSH.
+- **`tcp/22` on `wlp2s0`** → CLOSED.
+- **Data path** → dedicated `tcp/47222` (from ha-2 only), **ForceCommand-locked to reconcile-only** — not a
+  full shell. Port 22 stays a full-shell management escape hatch.
 
 **Part 2 —**
 1. **Fence → cluster bus — DONE + LIVE 2026-07-10.** Signed fence on `ha/cluster/fence`; the
@@ -36,15 +38,17 @@ Remaining: the forced-command lock on `id_cluster` / `47222` (item 2 below) is t
    - Remaining rollout (drill-gated): deploy the listener on `.245` + ha-2, set `PEER_FENCE_HOST` in each
      box's `cluster.env`, drill-verify a bus fence actually stops the peer, THEN flip `FENCE_DRY_RUN=0` +
      `FENCE_MODE=bus`.
-2. **Forced-command lock on `id_cluster` — SCOPED, drill-gated.** The data path (`reconcile-history.sh`,
-   `reconcile-parquet.sh`, `sync-standby.sh`, `provision-peer.sh`) runs varied remote verbs over `RSH`,
-   including a **dynamic `venv/bin/python3 -c '$pyexpr'`**, `bash failover/reconcile-*.sh --export/--merge/--list`,
-   `sqlite3 … .backup`, `test -f`, `rm -f /tmp/…`, and bidirectional `scp`. A forced-command can't whitelist
-   arbitrary python, so the design is: route **every** reconcile remote op through ONE fixed dispatcher
-   (`cluster-ssh/reconcile-agent.sh <verb> [args]`, verbs = `export|merge|list|backup|rebuild|pull`), replace
-   the inline `pyexpr` with a fixed script, then pin `id_cluster` to
-   `command="…/reconcile-agent.sh",no-pty,no-agent-forwarding,no-port-forwarding`. Touches the LIVE reconcile
-   timer path — do it with a peer to test against + a window (rides `failover-drill`).
+2. **Forced-command lock on port 47222 — DONE 2026-07-10.** `cluster-ssh/reconcile-agent.sh` is a
+   `ForceCommand` wrapper wired via `Match LocalPort 47222` (installed by `provisioning/airgap/reconcile-lock/
+   install-reconcile-lock.sh` on both boxes). It restricts port-47222 SSH to an EXACT-shape allowlist of the
+   reconcile verbs (`reconcile-history --export/--merge`, `reconcile-parquet --list/--merge`, the
+   `rebuild_parquet_manifest.py` rebuild, `sqlite3 … .backup`, `test -f`, `rm -f /tmp/…`) plus their scp
+   transfers; data fields are charset-constrained (no shell metacharacters) and `..` is hard-refused (no
+   traversal/exfil). Everything else → refused. **Mechanism, not authorized_keys `command=`:** port-scoped so
+   `id_cluster` stays usable for management on :22, and the wrapper covers ANY key on 47222. **scp needs `-O`**
+   (OpenSSH 10 defaults to the SFTP subsystem, which `ForceCommand` would break) — the reconcile `SCP()`
+   wrappers pass `-O` for the legacy `scp -t/-f` server command. Verified: full history+parquet reconcile moves
+   data through the lock; `ssh -p47222 <box> id` refused; :22 full-shell intact.
 3. **Firewall cutover — DONE 2026-07-10.** `airgap.nft`: `tcp/22` on `wlp2s0` DROPPED; `tcp/47222 from ha-2`
    allowed (dedicated data/reconcile port). Applied via `apply-airgap-firewall.sh apply` (180s auto-rollback
    dead-man) then `commit`. Verified in-window: ha-2→.210:22 CLOSED, :47222 OPEN, cluster bus + VRRP intact,
@@ -67,3 +71,6 @@ Remaining: the forced-command lock on `id_cluster` / `47222` (item 2 below) is t
   systemctl daemon-reload; systemctl restart ha-ag-fence-listener` → dry-run.
 - **Restore ssh fence:** set `FENCE_MODE=ssh` (or `both`) in the box's `cluster.env` + revert `CLUSTER_SSH_PORT`.
 - **ha-2 notify.sh** pre-bus-fence backup: `/tmp/ha2-notify.sh.pre-busfence.bak` on ha-2.
+- **Unlock port 47222** (if reconcile breaks / need a full shell there): remove the terminal `Match LocalPort
+  47222` block from `/etc/ssh/sshd_config` (a timestamped `sshd_config.bak.*` is written on install),
+  `sudo sshd -t && sudo systemctl reload ssh`. Port 22 is always the full-shell escape hatch regardless.

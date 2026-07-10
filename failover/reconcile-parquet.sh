@@ -46,7 +46,7 @@ log(){ printf '%s reconcile-parquet %s\n' "$(date -Is)" "$*" | tee -a "$RLOG" 2>
 # -n (stdin from /dev/null) is REQUIRED: RSH is called inside the partition while-read loop below, and a
 # bare ssh would consume the loop's stdin and process only the first partition (the 2026-06-25 bug).
 RSH(){ ssh -n -p "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "visko@$PEER_HOST" "$@"; }
-SCP(){ scp -P "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$@"; }
+SCP(){ scp -O -P "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$@"; }
 
 # list local partition files as relpaths under the parquet root (e.g. year=2026/month=03/2026-03.parquet),
 # excluding the stray year=0 partition that a bad compaction can leave behind.
