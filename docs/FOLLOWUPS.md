@@ -7,6 +7,23 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 🔌 2026-07-10 — 5c fallout: 3 offline gas nodes + esphome-in-shared-venv
+
+**Offline air-gap edge nodes (device-health — ops-relevant).** During the 5c VIP repoint, 3 native-C nodes
+were **not connected** so couldn't be repointed (repoint cmd isn't retained):
+- `coffice_c6` — last real publish **2026-07-09 03:38** → `gas_c_office` (SGP40 VOC) has been **stale >24h**.
+- `hoffice_c6` — last data **~2026-07-10 03:45** → `gas_h_office` (BME680) coverage dropped.
+- `standby_c6` — retained LWT `offline`.
+These predate the repoint (verified via retained timestamps — not caused by it). **Action:** (1) investigate
+why they're dark (power / crash / OTA-reject class — [[c6-fleet-ota-reject]]); (2) re-run `repoint_node.py
+--node <n> --broker mqtt://192.168.1.200:1883` once each is back online. The stale gas coverage is itself a
+monitoring gap. Handy: `ssh root@192.168.1.1 cat /tmp/dhcp.leases` = live IP→hostname on the air-gap net.
+
+**esphome in the SHARED venv (latent hazard).** `venv/` currently has `esphome 2026.6.4`. Right now paho is
+still `2.1.0` (services safe), but a reinstall could downgrade it and break every `ha-*` service on restart.
+Move esphome to an isolated venv/pipx (the failover already has its own venv). Coordinate: the E1001 ops
+instance needs esphome too. See `docs/coord/SHARED-VENV-ISOLATION.md` + [[shared-venv-esphome-paho]].
+
 ## 📡 2026-07-10 — Action item (LATER, Hugh): air-gap data-transfer mechanisms (build BOTH)
 
 The air-gap dictator (ha-2) has no external access by design, so external data (weather, time, updates)
