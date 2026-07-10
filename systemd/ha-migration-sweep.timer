@@ -1,0 +1,13 @@
+[Unit]
+Description=Periodic migration silent-drop sweep (live-but-unregistered detector)
+Documentation=file:///home/visko/home_automation/docs/runbook-device-migrate.md
+
+[Timer]
+# hourly is plenty — a silent-drop is a standing condition, not a fast transient; quarantine's first-sighting
+# alert already fires immediately, this is the belt-and-suspenders standing-backlog reminder.
+OnBootSec=10min
+OnUnitActiveSec=1h
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -26,6 +26,30 @@ re-run. Every run backs up `hot.db` + `rungs.db` to `instance/db/backups/` and t
 **rename vs retire:** use `rename` to move a device's history to a new id. Use `retire` to remove it — and
 also when the new id already holds the data (a rename would collide on `UNIQUE(device_id, ts, metric)`).
 
+## Cross-box migration: ACTIVATE on the destination BEFORE the source lets go
+
+When a device moves to a **new home** (e.g. `.210 → ha-2`), the destination must actually **register** it —
+not carry the source's "deregistered here" comment. If it doesn't, the device publishes live to the
+destination broker but its ingest bridge sees UNKNOWN and drops/quarantines every reading — a **silent** loss
+(`airgap_router_pm`+`failover_pm` bled ~23 h this way; [[migrated-device-silent-drop]], ADR-0032). `device_push`
+gates on `confirm_on_ha2`, but a raw **config-sync + repoint** skips that path entirely — so assert it directly.
+
+**Run ON the destination, after the move, BEFORE deregistering the source:**
+```bash
+# authoritative: checks the destination's real registries + hot.db + quarantine
+venv/bin/python tools/migration_activate.py check <device_id>          # exit 0 = ACTIVATED
+```
+A device is **ACTIVATED** only when it is both **registered** (in a tasmota/levoit/ble/control registry,
+uncommented) **and logging** (fresh `device_last_seen`) on its new home. If it's registered but not logging,
+or not registered at all, the report says which — and lists any matching **quarantine** capture (where the
+dropped readings actually went, mergeable losslessly via `tools/quarantine.py merge`). Only once `check`
+passes is it safe to let the source deregister (drop the pending hold / remove the source registry entry).
+
+**Standing safety net (any path):** `tools/migration_activate.py sweep` lists every live-but-unregistered
+device on a box; `systemd/ha-migration-sweep.timer` runs it hourly and alerts `home/_alert/new`
+(`live_but_unregistered_sweep`) so a missed activation can't bleed data unnoticed — even for migrations that
+never touched `device_push`. Report-only; merge/purge stays the human-driven quarantine flow.
+
 ## What it touches (per host)
 
 | Store | Rename | Retire | Why |

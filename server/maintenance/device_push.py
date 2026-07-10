@@ -297,6 +297,8 @@ def push(device_id, *, dry, history_hours, confirm_timeout):
     ok = confirm_on_ha2(device_id, confirm_timeout, dry)
     if not advance("confirmed", ok, "not seen on ha-2" if not ok else ""):
         print("  ✗ NOT confirmed on ha-2 — leaving it live on .210 (not retiring). Investigate/rollback.")
+        print(f"    diagnose WHY on ha-2: tools/migration_activate.py check {device_id}  "
+              "(distinguishes not-registered [silent-drop] vs not-logging vs quarantined)")
         if not dry:
             set_stage(device_id, "failed", cls, "confirm")
         return 1

@@ -1,0 +1,16 @@
+[Unit]
+Description=HA migration silent-drop sweep — flag any live-but-unregistered device (report-only)
+Documentation=file:///home/visko/home_automation/docs/runbook-device-migrate.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/visko/home_automation
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+# FOLLOWUPS #3 made periodic: the ACTIVATE assertion in sweep mode catches the silent-drop class for ANY
+# migration path (incl. a raw config-sync that skips device_push's confirm gate). Report-only — it never
+# registers/merges/drops anything; a hit publishes home/_alert/new (kind: live_but_unregistered_sweep) so a
+# migrated-but-unactivated device can't bleed data unnoticed. Merge/purge stays the human-driven quarantine flow.
+ExecStart=/home/visko/home_automation/venv/bin/python3 tools/migration_activate.py sweep --alert --broker 127.0.0.1
+# 2 = victims found — surface in `systemctl status` without marking the timer job failed-forever
+SuccessExitStatus=0 2

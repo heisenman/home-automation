@@ -143,9 +143,14 @@ A migrated device silently stopped logging on ha-2 for **~23 h**: the config syn
 `airgap_router_pm` + `failover_pm` as **unregistered and DROPPED their telemetry**. Found + fixed 2026-07-10
 (un-commented on ha-2; swept — no other live-but-unregistered victims). Those ~23 h of readings are **lost**
 (only the on-device cumulative `Total` kWh counter survived). Three durable fixes:
-1. **Migration must ACTIVATE on the destination.** `device_migrate`/repoint/sync must register the device in
-   the DESTINATION registry — not carry the SOURCE's deregistration. Add a post-migrate assertion: the device
-   is registered + logging on its new home *before* the source deregisters.
+1. **✅ Migration must ACTIVATE on the destination — DONE 2026-07-10.** `tools/migration_activate.py check
+   <device_id>` is the standalone, path-independent assertion: a migrated device is ACTIVATED only when it is
+   both **registered** (in a tasmota/levoit/ble/control registry, uncommented — a commented "deregistered here"
+   entry doesn't parse ⇒ correctly fails) **and logging** (fresh `device_last_seen`) on its new home; if not
+   logging it also surfaces the matching **quarantine** capture. Run it on the destination BEFORE the source
+   deregisters (`device_push` now points at it when its `confirm_on_ha2` gate fails, and a raw config-sync —
+   the path that caused this incident — can now be asserted directly). Unit-tested (`tests/test_migration_
+   activate.py`, 8/8). Serves [[data-storage-is-primary]] / [[migrated-device-silent-drop]].
 2. **✅ Quarantine unregistered-device data (Hugh's robustness idea) — DONE 2026-07-10, ADR-0032.**
    Instead of silently dropping telemetry from a device that is live-on-broker but unregistered, the ingest
    bridges now append it to a **separate SQLite file** (`instance/db/quarantine.db`, never hot.db) via
@@ -155,8 +160,12 @@ A migrated device silently stopped logging on ha-2 for **~23 h**: the config syn
    removes rows. First-sighting fires a `home/_alert/new` (`kind: live_but_unregistered`) so it never fails
    silent. Additive/safe by default; **enabling on the live ingest fleet is a separate Hugh-gated deploy.**
    Serves [[data-storage-is-primary]].
-3. **Sanity sweep** (run once; make periodic): `comm -23 <live LWT/discovery> <registered>` → flag any
-   live-but-unregistered device across every ingest registry.
+3. **✅ Sanity sweep — DONE + made periodic 2026-07-10.** `tools/migration_activate.py sweep` lists every
+   live-but-unregistered device on a box (quarantine captures + any fresh-but-unregistered `device_last_seen`
+   id). `systemd/ha-migration-sweep.timer` runs it hourly and alerts `home/_alert/new`
+   (`live_but_unregistered_sweep`). Report-only; merge/purge stays the human-driven quarantine flow. Installed
+   box-local on `.210`; **adding to `required-services.yaml` + installing on ha-2 = a Hugh-gated fleet deploy**
+   (would otherwise show a supervisor GAP on ha-2), same posture as the quarantine ingest enable.
 
 ## ✅ 2026-07-10 (RESOLVED) — E1001 c-office panel SHT40 enrolled (was in ha-2 quarantine)
 
