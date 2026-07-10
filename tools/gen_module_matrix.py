@@ -46,7 +46,7 @@ MODULES = [
     ("app_main", {"sources": ["app_main.c", "beachhead_main.c"], "component": None}),
     ("ha_config", {"sources": ["ha_config.c"], "component": "ha_config"}),
     ("ha_wifi", {"sources": ["ha_wifi.c"], "component": "ha_wifi"}),   # ADR-0020: promoted fork -> shared component
-    ("ha_eth", {"sources": ["ha_eth.c"], "component": None}),
+    ("ha_eth", {"sources": ["ha_eth.c"], "component": "ha_eth"}),
     ("ha_sntp", {"sources": ["ha_sntp.c"], "component": "ha_sntp"}),
     ("ha_mqtt", {"sources": ["ha_mqtt.c"], "component": "ha_mqtt"}),
     ("ble_scan", {"sources": ["ble_scan.c"], "component": "ha_ble_scan"}),
@@ -55,7 +55,7 @@ MODULES = [
     ("gatt_history", {"sources": ["gatt_history.c"], "component": "ha_gatt"}),
     ("gatt_exec", {"sources": ["gatt_exec.c"], "component": "ha_gatt_exec"}),
     ("ha_ota", {"sources": ["ha_ota.c"], "component": "ha_ota"}),
-    ("ha_led", {"sources": ["ha_led.c"], "component": None}),
+    ("ha_led", {"sources": ["ha_led.c"], "component": "ha_led"}),
     ("ha_relay", {"sources": ["ha_relay.c"], "component": "ha_relay"}),
     ("display", {"sources": ["bsp_display.c", "ui_tiles.c"], "component": None}),
     ("ha_sdcard", {"sources": [], "component": "ha_sdcard"}),
