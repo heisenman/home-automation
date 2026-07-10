@@ -5,9 +5,11 @@
 # internet — critical once the LAN is air-gapped behind the OpenWRT router. See README.md + the coord
 # task `dictator-ntp-serve`. GATED production write (installs a package) — run with Hugh's OK.
 #
-# Usage:  sudo provisioning/ntp/install-ntp-serve.sh [LAN_CIDR]      # default 192.168.0.0/24
+# Usage:  sudo provisioning/ntp/install-ntp-serve.sh [CIDR ...]
+#   Default serves BOTH the household (192.168.0.0/24) and the air-gap (192.168.1.0/24) nets, so the
+#   dual-homed .210 bridge anchors time for household clients AND the air-gapped ha-2 + edge fleet.
 set -euo pipefail
-CIDR="${1:-192.168.0.0/24}"
+CIDRS=("$@"); [ "${#CIDRS[@]}" -gt 0 ] || CIDRS=(192.168.0.0/24 192.168.1.0/24)
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 CONF=/etc/chrony/conf.d/ha-serve.conf
 
@@ -21,7 +23,9 @@ fi
 systemctl disable --now systemd-timesyncd 2>/dev/null || true
 
 install -m 0644 "$HERE/chrony-ha-serve.conf" "$CONF"
-sed -i "s#^allow .*#allow ${CIDR}#" "$CONF"     # honor a non-default CIDR
+# Regenerate the allow lines from the CIDR list (replaces the shipped defaults).
+sed -i '/^allow /d' "$CONF"
+{ for c in "${CIDRS[@]}"; do echo "allow ${c}"; done; } >> "$CONF"
 
 # Ensure the default chrony.conf actually sources conf.d/ (Debian ships `confdir /etc/chrony/conf.d`).
 if ! grep -qE '^\s*(confdir|sourcedir)\s+/etc/chrony/conf\.d' /etc/chrony/chrony.conf; then
@@ -35,4 +39,4 @@ sleep 1
 echo "== verify: serving on udp:123 =="
 ss -ulpn | grep -q ':123' || { echo "FAIL: nothing listening on udp:123"; exit 1; }
 chronyc -n serverstats 2>/dev/null || true
-echo "OK: $(hostname) is serving NTP to ${CIDR}"
+echo "OK: $(hostname) is serving NTP to ${CIDRS[*]}"

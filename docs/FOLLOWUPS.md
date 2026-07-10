@@ -7,6 +7,25 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 🔐 2026-07-10 — Action item (Hugh): failover comms depend on SSH — switch port or drop the dependency
+
+Surfaced while designing the air-gap relay (**ADR-0033** / `docs/airgap/AIRGAP-RELAY-DESIGN.md`): closing
+`ssh/22` on `.210`'s air-gap interface (`wlp2s0`) — the "mostly port-closed `.210`" goal — **conflicts with the
+failover machinery**, which is entirely **SSH-based across the air-gap link**: `failover/notify.sh` (fencing =
+`ssh peer systemctl stop …`), `reconcile-history.sh` / `reconcile-parquet.sh` (data-plane merge),
+`provision-peer.sh`. A blanket close would break fail-over/fail-back + reconcile.
+
+**Interim (baked into ADR-0033):** "close it" = **allow-list only ha-2's IP** for `22` on `wlp2s0`. **Hugh wants
+to explore going further:** either (a) **move failover comms off the default SSH port** (a dedicated, firewalled
+admin port), or (b) **eliminate SSH as a failover dependency** entirely — carry fencing + reconcile over the
+cluster/relay bus (the mTLS-able MQTT `ha/cluster/#` bridge already exists) or a purpose-built authenticated
+channel, so the air-gap boundary needs no inbound SSH at all. **First step:** map the SSH direction
+(ha-2→`.210` vs `.210`→ha-2) per call site so we know which side must listen. Ties to the break-glass USB
+(ADR-0033 §5.1) and [[control-plane-vip-gated]].
+
+> **Note (2026-07-10):** the relay design is now **ADR-0033 (Accepted)**; **Phase 1a (NTP) is DONE** — ha-2 is
+> time-synced to `.210` (fixed the control-critical clock break). Remaining phases per the ADR.
+
 ## ✅ 2026-07-10 (RESOLVED) — 5c fallout: 3 offline gas nodes + esphome-in-shared-venv
 
 **Offline air-gap edge nodes — RESOLVED 2026-07-10.** Verified live against the air-gap broker (VIP .200);
