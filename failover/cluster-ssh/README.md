@@ -20,8 +20,12 @@ shrinks it to a single reconcile verb.
 - Failover scripts parameterized: `CLUSTER_SSH_PORT` (default 22 = household pair unchanged; the air-gap pair
   sets `CLUSTER_SSH_PORT=47222` in `~/ha-airgap-standby/failover/cluster.env`).
 
+## STATUS 2026-07-10: control-path SSH is OFF the air-gap boundary — `tcp/22` on `wlp2s0` is CLOSED.
+Fence-over-bus is LIVE and acting for the air-gap pair (ha-2 ⇄ .210). The data path moved to `47222`.
+Remaining: the forced-command lock on `id_cluster` / `47222` (item 2 below) is the last piece.
+
 **Part 2 —**
-1. **Fence → cluster bus — DONE + LIVE (dry-run) 2026-07-10.** Signed fence on `ha/cluster/fence`; the
+1. **Fence → cluster bus — DONE + LIVE 2026-07-10.** Signed fence on `ha/cluster/fence`; the
    `ha-fence-listener` unit on each box validates (HMAC + freshness + this-host-target) and stops its OWN
    controller. `fence.py` uses `mosquitto_pub/sub` (NOT paho) so the safety-critical listener never rides the
    shared venv. Wired into `notify.sh` MASTER via `FENCE_MODE` (`bus`|`ssh`|`both`; **default `both`** = the
@@ -41,5 +45,25 @@ shrinks it to a single reconcile verb.
    the inline `pyexpr` with a fixed script, then pin `id_cluster` to
    `command="…/reconcile-agent.sh",no-pty,no-agent-forwarding,no-port-forwarding`. Touches the LIVE reconcile
    timer path — do it with a peer to test against + a window (rides `failover-drill`).
-3. **Firewall cutover — drill-gated (LAST).** `airgap.nft`: drop 22 on `wlp2s0`, allow only 47222 from ha-2.
-   Only after (1) is flipped to `bus` and (2) is locked + verified.
+3. **Firewall cutover — DONE 2026-07-10.** `airgap.nft`: `tcp/22` on `wlp2s0` DROPPED; `tcp/47222 from ha-2`
+   allowed (dedicated data/reconcile port). Applied via `apply-airgap-firewall.sh apply` (180s auto-rollback
+   dead-man) then `commit`. Verified in-window: ha-2→.210:22 CLOSED, :47222 OPEN, cluster bus + VRRP intact,
+   ha-2 bus-fence reaches the .210 acting listener, reconcile still moves data over 47222.
+
+## Air-gap deployment (2026-07-10, box-local — repo stays prod-pure)
+- **.210 air-gap listener:** `ha-ag-fence-listener.service` (box-local unit in `~/ha-airgap-standby/failover/systemd/`),
+  reuses the repo `fence.py`, `FENCE_HOST=210-airgap`, broker `.1.200`, **ACTING** (drop-in
+  `…/ha-ag-fence-listener.service.d/acting.conf` sets `FENCE_DRY_RUN=0`). Stops `ha-ag-controller`.
+- **ha-2 listener:** repo `ha-fence-listener.service` + `fence.py` scp'd (ha-2 is air-gapped — no git),
+  `FENCE_HOST=ha-2`, broker `.1.200`, **dry-run** (flip to acting when 47222 gets the forced-command lock).
+- **notify.sh (both boxes):** `bus_fence` added + `FENCE_MODE` gate. ha-2=`bus`; .210 air-gap=`both`.
+- **cluster.env FENCE vars** on each; **`CLUSTER_SSH_PORT=47222`** set on the .210 air-gap instance and its
+  `RSH/SCP/peer_ssh` wrappers patched to honor it (the deployed checkout predated the parameterization).
+
+## Recovery / rollback (if a fence or the cut misbehaves)
+- **Re-open 22 on wlp2s0:** edit `airgap.nft` line back to `tcp dport 22`, `apply-airgap-firewall.sh apply`
+  then `commit` (or `rollback` to drop the table; the 180s dead-man auto-reverts an un-committed apply).
+- **Disarm a listener (back to observe-only):** `rm /etc/systemd/system/ha-ag-fence-listener.service.d/acting.conf;
+  systemctl daemon-reload; systemctl restart ha-ag-fence-listener` → dry-run.
+- **Restore ssh fence:** set `FENCE_MODE=ssh` (or `both`) in the box's `cluster.env` + revert `CLUSTER_SSH_PORT`.
+- **ha-2 notify.sh** pre-bus-fence backup: `/tmp/ha2-notify.sh.pre-busfence.bak` on ha-2.

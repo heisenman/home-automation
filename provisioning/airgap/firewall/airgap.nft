@@ -10,7 +10,8 @@
 #   - udp/123 from 192.168.1.0/24             -> NTP serve (ADR-0033 Phase 1a)
 #   - tcp/1884 from 192.168.1.0/24            -> dedicated relay broker (Phase 1b)
 #   - tcp/1883 from 192.168.1.0/24            -> failover/cluster broker
-#   - tcp/22 from 192.168.1.210 (ha-2) ONLY  -> failover fencing + reconcile SSH (see FOLLOWUPS: drop later)
+#   - tcp/47222 from 192.168.1.210 (ha-2) ONLY -> dedicated failover data/reconcile SSH (control fence is now
+#       over the cluster bus — ADR-0033 part2; general tcp/22 on wlp2s0 is DROPPED as of 2026-07-10)
 
 table inet airgap
 delete table inet airgap
@@ -32,7 +33,7 @@ table inet airgap {
         iifname "wlp2s0" ip saddr 192.168.1.0/24 udp dport 123 accept
         iifname "wlp2s0" ip saddr 192.168.1.0/24 tcp dport 1884 accept
         iifname "wlp2s0" ip saddr 192.168.1.0/24 tcp dport 1883 accept
-        iifname "wlp2s0" ip saddr 192.168.1.210  tcp dport 22   accept
+        iifname "wlp2s0" ip saddr 192.168.1.210  tcp dport 47222 accept
 
         # default-deny for the air-gap interface
         iifname "wlp2s0" counter drop
