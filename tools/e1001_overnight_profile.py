@@ -140,16 +140,20 @@ def _median_v(panel: Panel, hold_s: float, label: str) -> float:
     return med
 
 
-def phase_a_offsets(panel: Panel, settle: float) -> dict:
+def phase_a_offsets(panel: Panel, settle: float, base_settle: float) -> dict:
     """Step-each-knob offset capture (ADR-0024 §3). HIZ replaces the manual USB unplug.
-       base=battery-only, usb=USB present not charging, charging=charging. e-ink -> display offset 0."""
-    print(f"\n=== PHASE A: offset capture (~{4*settle/60:.0f} min) ===")
-    # base: battery-only (HIZ on, no charge, no external load)
+       base=battery-only, usb=USB present not charging, charging=charging. e-ink -> display offset 0.
+
+       NB: in IDLE (no profiler kick) the charger's ~40-50s hardware watchdog auto-clears HIZ back to USB
+       (verified live) — a safety dead-man. So the HIZ-on 'base' sample must stay UNDER ~40s (base_settle);
+       the USB/charging steps hold HIZ off, so they're unaffected and can settle the full `settle`."""
+    print(f"\n=== PHASE A: offset capture (base<{base_settle:.0f}s, usb/chg {settle:.0f}s each) ===")
+    # base: battery-only (HIZ on, no charge, no external load) — MUST finish before the ~40s WD auto-clear
     panel.num("prof_load_level", 0)
     panel.switch("charge_enable", False)
     panel.switch("charger_hiz", True)
-    time.sleep(8)                                     # let VBUS path settle
-    v_base = _median_v(panel, settle, "base(battery)")
+    time.sleep(4)                                     # brief settle, then sample well under the WD window
+    v_base = _median_v(panel, base_settle, "base(battery)")
     # usb present, not charging
     panel.switch("charger_hiz", False)
     panel.switch("charge_enable", False)
@@ -221,7 +225,9 @@ def main() -> int:
     ap.add_argument("--rest-s", type=int, default=120)
     ap.add_argument("--load", type=int, default=2, choices=[0, 1, 2, 3],
                     help="discharge load 0..3; 2 = WiFi-PA drain so a full cycle finishes overnight")
-    ap.add_argument("--settle", type=float, default=120, help="offset step settle seconds")
+    ap.add_argument("--settle", type=float, default=120, help="usb/charging offset step settle seconds")
+    ap.add_argument("--base-settle", type=float, default=30,
+                    help="battery-only (HIZ-on) sample seconds — MUST stay < the ~40s IDLE WD auto-clear")
     ap.add_argument("--max-hours", type=float, default=9.0)
     ap.add_argument("--out-dir", default=str(Path.home()), help="where to write the capture + offsets")
     ap.add_argument("--skip-offsets", action="store_true")
@@ -250,7 +256,7 @@ def main() -> int:
             return 1
         print(f"panel online: v={panel.voltage()} st={panel.state()}")
         if not args.skip_offsets:
-            result["offsets"] = phase_a_offsets(panel, args.settle)
+            result["offsets"] = phase_a_offsets(panel, args.settle, args.base_settle)
             offj.write_text(json.dumps(result["offsets"], indent=2))
         result["cycle"] = phase_b_cycle(panel, args.floor_v, args.cycles, args.rest_s, args.load,
                                         args.hard_floor_v, args.max_hours)
