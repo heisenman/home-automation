@@ -60,12 +60,13 @@ The ops/dev split development model is **retired** — work happens here directl
 section of the control board was cleared 2026-07-10 (Hugh). Each item was **verified against live/repo reality**
 (Hugh: "for all I know everything is done") before carry — only the genuinely-open ones survive.
 
+**✅ DONE 2026-07-10 (this session):**
+- **sudo-hardening-210** — broad `NOPASSWD: ALL` dropped; `ha-*`/`mosquitto` systemctl stay NOPASSWD, general
+  sudo requires **root's** password (`Defaults:visko rootpw`) from `instance/.rootpwd`. `provisioning/sudo-hardening-210.sudoers.example`.
+- **broker-auth-posture** — `.210` dictator broker flipped anon→auth+ACL (`dictator`=services, `cluster245`=cluster
+  bridges); verified live, no telemetry loss. `provisioning/broker-auth/README.md`.
+
 **Genuinely OPEN (verified 2026-07-10):**
-- **sudo-hardening-210** — VERIFIED `.210` still `visko ALL=(ALL) NOPASSWD: ALL`. Narrow sudoers to
-  `ha-services` + drop the broad bootstrap grant (`stage2-finish.sh --narrow-sudoers`); do LAST. Real security.
-- **broker-auth-posture** — VERIFIED `.210` broker still `allow_anonymous true`. The air gap (the gate
-  condition) now exists → add broker auth+ACL to the dev/failover brokers (the relay broker already has it).
-  `docs/decisions/broker-auth-posture.md`.
 - **vendor-harden-review** — VERIFIED no findings report exists; the gsl3670 stack-smash was patched in-tree,
   but the full review of all vendored ESP drivers (unchecked reads / device-controlled loop bounds) + upstream
   PRs is not done. Real security review.
