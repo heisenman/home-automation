@@ -70,30 +70,36 @@ echo "Mosquitto started"
 # ── Systemd service units ─────────────────────────────────────────────────────
 echo
 echo "--- Installing systemd units ---"
-for unit in ha-scanner.service ha-writer.service ha-api.service \
-            ha-compactor.service ha-compactor.timer \
-            ha-verify-hashes.service ha-verify-hashes.timer \
-            ha-weather.service ha-weather.timer \
-            ha-edge-mapper.service ha-edge-history.service \
-            ha-gap-watcher.service ha-gap-watcher.timer; do
-    # Template the real repo path into each unit so the install isn't tied to a fixed
-    # location. The committed units use /home/visko/home_automation as the default; this
-    # rewrites them to wherever the repo actually lives (no-op at the default path).
-    sudo sed "s#/home/visko/home_automation#${REPO_DIR}#g" "$REPO_DIR/systemd/$unit" \
+# Install ALL committed unit files (not a hardcoded subset). A hardcoded list drifts: ha-levoit-bridge was
+# omitted -> never installed on ha-2 -> the Levoit purifier went unmapped ~14h (see docs/REQUIRED-SERVICES.md).
+# Installing a unit FILE is harmless (nothing runs until enabled); this eliminates the "unit not-found" class.
+# Which units to ENABLE is role-specific (below + the required-services checklist). Air-gap units live in
+# provisioning/airgap/ and are installed by their own scripts.
+for unit_path in "$REPO_DIR"/systemd/*.service "$REPO_DIR"/systemd/*.timer; do
+    unit="$(basename "$unit_path")"
+    # Template the real repo path into each unit so the install isn't tied to a fixed location. The committed
+    # units use /home/visko/home_automation as the default; this rewrites them to wherever the repo lives.
+    sudo sed "s#/home/visko/home_automation#${REPO_DIR}#g" "$unit_path" \
         | sudo tee "$SYSTEMD_DEST/$unit" >/dev/null
 done
 
 sudo systemctl daemon-reload
 
-# Enable and start services
-sudo systemctl enable ha-writer.service ha-api.service
-sudo systemctl enable ha-compactor.timer ha-verify-hashes.timer ha-gap-watcher.timer
-sudo systemctl start ha-writer.service ha-api.service
-sudo systemctl start ha-compactor.timer ha-verify-hashes.timer ha-gap-watcher.timer
-
-# Edge mapper — resolves edge-node BLE readings (home/edge/+/+/adv) to canonical topics
-sudo systemctl enable ha-edge-mapper.service
-sudo systemctl start ha-edge-mapper.service
+# Enable + start this host's required units FROM THE MANIFEST (no hardcoded list — that drift is what left
+# ha-levoit-bridge off ha-2 for ~14h). The set is provisioning/required-services.yaml resolved against this
+# box's instance/host-roles.yaml. Units whose file isn't installed here (e.g. air-gap units, or a role this
+# host doesn't hold) are skipped gracefully. See docs/REQUIRED-SERVICES.md.
+if [ -f "$REPO_DIR/instance/host-roles.yaml" ]; then
+    for u in $("$REPO_DIR/venv/bin/python3" "$REPO_DIR/tools/required_services.py" list --enable 2>/dev/null); do
+        sudo systemctl enable --now "$u" 2>/dev/null && echo "  enabled $u" || echo "  (skip $u — not installed here / gated)"
+    done
+    echo "--- supervisor check (should report GAP=0) ---"
+    "$REPO_DIR/venv/bin/python3" "$REPO_DIR/tools/required_services.py" check --no-alert || true
+else
+    echo "!! no instance/host-roles.yaml — create it (e.g. 'roles: [core, dictator]') then re-run install.sh"
+    echo "   falling back to the minimal core so the box isn't dead:"
+    sudo systemctl enable --now ha-writer.service ha-api.service
+fi
 
 # Edge history ingest — reassembles on-device GATT-pull history (home/edge/+/+/history) into hot.db.
 # Idle (just a subscriber) until a pull runs; always-on so autonomous pulls Just Work.

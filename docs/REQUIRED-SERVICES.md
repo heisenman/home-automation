@@ -93,7 +93,15 @@ default-deny), `ha-break-glass@` (USB recovery, template). Defs live in `provisi
 
 ---
 
-## The services supervisor (design — to build)
+## The services supervisor  ✅ BUILT 2026-07-10
+Implemented as `provisioning/required-services.yaml` (manifest) + `tools/required_services.py` (resolver +
+`check`) + `systemd/ha-supervisor.{service,timer}` (runs `check` every ~5 min). `install.sh` now enables units
+via `required_services.py list --enable` (no hardcoded list). Live on **both** hosts — first run reported
+`.210` GAP=0 (38 units) and ha-2 GAP=0 (23 units), and immediately caught the levoit-class gaps during
+development (ha-cluster-heartbeat/ha-relay-coordinator on ha-2 — resolved as household-cluster-scoped; see
+the manifest's open question about air-gap app-level heartbeat). Design notes below.
+
+### Design
 **Goal:** make "a required service is missing" a *loud* condition, not a silent 14h gap. systemd supervises
 *installed* units; the supervisor supervises the *manifest*.
 

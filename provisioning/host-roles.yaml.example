@@ -1,0 +1,15 @@
+# Copy to instance/host-roles.yaml (gitignored, per-box) and set this box's roles.
+# Resolved against provisioning/required-services.yaml by tools/required_services.py.
+# Roles are additive (union of their required units). Defined roles:
+#   core · dictator · household-cluster · dev-bridge · air-gap-dictator · air-gap-gateway · failover-standby
+#
+# ha-2 (air-gap production dictator):
+#   roles: [core, dictator, air-gap-dictator]
+#
+# .210 (dev + web-bridge + household dictator + air-gap gateway + failover standby — the straddle box):
+#   roles: [core, dictator, dev-bridge, household-cluster, air-gap-gateway, failover-standby]
+#
+# a minimal / fresh HA server (no cluster, no air-gap):
+#   roles: [core]
+
+roles: [core]

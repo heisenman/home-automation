@@ -1,0 +1,98 @@
+# Required-services manifest — the SINGLE SOURCE OF TRUTH for what runs on an HA server.
+#
+# Consumed by:
+#   - install.sh              (install + enable the units for this host's roles)
+#   - tools/required_services.py check   (the services supervisor: flags missing/inactive required units)
+#   - docs/REQUIRED-SERVICES.md          (human explanation; kept in sync with this file)
+#
+# Why declarative: a hardcoded list in install.sh drifted and omitted ha-levoit-bridge -> the Levoit purifier
+# went unmapped on ha-2 for ~14h (registry synced, service never installed). One manifest, many consumers.
+#
+# This file defines ROLES (universal, prod-pure). A host declares which roles it holds in the gitignored
+# per-box `instance/host-roles.yaml` (e.g. `roles: [core, dictator]`), so the box-local air-gap straddle on
+# .210 stays out of the committed repo (airgap-standby-is-dev-convenience).
+#
+# Per-unit fields:
+#   must: active   -> long-running service (or a .timer) that MUST be `systemctl is-active`
+#         gated    -> installed but intentionally DISABLED here (started only by VRRP/failover); absence != gap
+#         oneshot  -> applies-then-exits; `inactive` is normal (installed+enabled is what's checked)
+#   optional: true -> nice-to-have; a supervisor WARN, not a FAIL, if absent
+#   source: airgap -> unit lives in provisioning/airgap/ (its own installer), not systemd/
+
+roles:
+
+  # ── core: every HA server (dictator + failover-standby) ───────────────────────────────
+  core:
+    units:
+      - {unit: ha-writer.service,          must: active}   # home/+/+/state -> hot.db (the sink)
+      - {unit: ha-api.service,             must: active}   # read+control API (control mounts only on VIP holder)
+      - {unit: ha-edge-mapper.service,     must: active}   # edge BLE advert -> canonical
+      - {unit: ha-edge-history.service,    must: active}
+      - {unit: ha-scanner.service,         must: active}   # onboard BLE scan -> canonical
+      - {unit: ha-tasmota-bridge.service,  must: active}   # Tasmota tele/# -> canonical
+      - {unit: ha-levoit-bridge.service,   must: active}   # ESPHome purifier <node>/# -> canonical  (the one that was MISSING)
+      - {unit: ha-controller.service,      must: gated}    # automation loop: ACTIVE on dictator, GATED on standby
+      # maintenance timers (the .timer is what must be active; its .service is oneshot/static)
+      - {unit: ha-compactor.timer,         must: active}   # hot.db -> parquet
+      - {unit: ha-rollup.timer,            must: active}   # rollup ladder (ADR-0022)
+      - {unit: ha-verify-hashes.timer,     must: active}   # parquet hash verify (ADR-0004)
+      - {unit: ha-gap-watcher.timer,       must: active}   # data-gap / stale-device watch
+      - {unit: ha-pending-sweeper.timer,   must: active}   # pending-hold expiry (ADR-0028)
+      - {unit: ha-gas-quality-sampler.timer, must: active} # derived air-quality
+      - {unit: ha-power-sampler.timer,     must: active}
+      - {unit: ha-supervisor.timer,        must: active}   # the supervisor watches itself (must run everywhere)
+
+  # ── dictator: the record-of-record + active control loop (UNIVERSAL — both ha-2 and .210) ──
+  dictator:
+    units:
+      - {unit: ha-controller.service,      must: active}   # overrides core's 'gated' -> MUST be active here
+      - {unit: keepalived.service,         must: active}   # VRRP VIP (both dictators hold one)
+      - {unit: ha-reconcile-history.service, must: active} # bidirectional hot.db reconcile (ADR-0016)
+
+  # ── household-cluster: the .210 <-> .245 household pair's app-level cluster units (base variants) ──
+  # NOT the air-gap pair: ha-2 <-> .210-standby uses keepalived VRRP + notify.sh + ha-ag-relay-coordinator,
+  # so these base units are household-only. (Open question flagged to Hugh: does the air-gap dictator also
+  # want app-level ha-cluster-heartbeat, or is VRRP sufficient? If needed on ha-2, add it to air-gap-dictator.)
+  household-cluster:
+    units:
+      - {unit: ha-cluster-heartbeat.service, must: active} # publishes ha/cluster/# heartbeat
+      - {unit: ha-relay-coordinator.service, must: gated}  # actuator-relay coord, VRRP-gated (base variant)
+
+  # ── dev-bridge: internet-connected dev platform + HTTPS bridge to the air-gap dictator ─
+  dev-bridge:
+    units:
+      - {unit: ha-api-tls.service,         must: active}   # HTTPS :8443 web bridge
+      - {unit: ha-weather.timer,           must: active}   # DIRECT open-meteo (internet host only)
+      - {unit: ha-ntfy-bridge.service,     must: active}   # DIRECT ntfy push (internet host only)
+
+  # ── air-gap-dictator: ha-2's air-gap-side relay CLIENTS (replace direct internet) ──────
+  air-gap-dictator:
+    units:
+      - {unit: ha-relay-weather.timer,     must: active, source: airgap}  # weather via the gateway (NOT direct)
+      - {unit: ha-relay-alert-egress.service, must: active, source: airgap} # ntfy via the gateway
+      - {unit: ha-cert-monitor.timer,      must: active, source: airgap}
+      - {unit: ha-sneakernet-nag.timer,    must: active, source: airgap}
+      - {unit: ha-router-reconcile.timer,  must: active}
+
+  # ── air-gap-gateway: .210's controlled internet pass-through for the air-gapped net ────
+  air-gap-gateway:
+    units:
+      - {unit: ha-relay.service,           must: active, source: airgap}   # request/response relay daemon
+      - {unit: ha-relay-broker.service,    must: active, source: airgap}
+      - {unit: ha-relay-forwarder.service, must: active, source: airgap}
+      - {unit: ha-airgap-bridge.service,   must: active}                   # failover pass-through
+      - {unit: ha-airgap-firewall.service, must: oneshot, source: airgap}  # nftables default-deny
+      - {unit: ha-cert-monitor.timer,      must: active, source: airgap}
+
+  # ── failover-standby: the ha-ag-* warm mirror (box-local straddle on .210) ─────────────
+  failover-standby:
+    units:
+      - {unit: ha-ag-mosquitto.service,       must: active}
+      - {unit: ha-ag-writer.service,          must: active}
+      - {unit: ha-ag-api.service,             must: active}
+      - {unit: ha-ag-edge-mapper.service,     must: active}
+      - {unit: ha-ag-edge-history.service,    must: active}
+      - {unit: ha-ag-tasmota-bridge.service,  must: active}
+      - {unit: ha-ag-reconcile-parquet.timer, must: active}
+      - {unit: ha-ag-controller.service,      must: gated}   # only on VIP seizure
+      - {unit: ha-ag-relay-coordinator.service, must: gated}

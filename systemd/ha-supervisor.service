@@ -1,0 +1,15 @@
+[Unit]
+Description=HA required-services supervisor (manifest-driven unit-completeness check + alert)
+Documentation=file:///home/visko/home_automation/docs/REQUIRED-SERVICES.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/visko/home_automation
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+# Reads provisioning/required-services.yaml + instance/host-roles.yaml; flags any required unit that is
+# NOT-INSTALLED (the silent case) or INACTIVE, and publishes home/_alert/new + a retained supervisor status.
+# Report-only: it never starts/stops units (a "missing" unit may be an intentional role difference).
+ExecStart=/home/visko/home_automation/venv/bin/python3 tools/required_services.py check --broker 127.0.0.1
+# a gap sets exit 1 — surface it in `systemctl status` without marking the timer job failed-forever
+SuccessExitStatus=0 1
