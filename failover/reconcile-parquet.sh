@@ -24,6 +24,10 @@
 #   reconcile-parquet.sh --once            one bidirectional pass over ALL partitions (seed + converge)
 #   reconcile-parquet.sh --loop            VIP-gated periodic deep-reconcile (slow cadence; parquet only
 #                                          diverges when a swap straddles a daily compaction boundary)
+#   reconcile-parquet.sh --pull            ONE-WAY converge: pull the peer's archive into ours, NEVER write
+#                                          the peer. For an asymmetric read-only standby whose peer is the
+#                                          production record-of-record (don't churn prod's parquet/manifest)
+#   reconcile-parquet.sh --pull-loop       periodic --pull (standby-side; not VIP-gated)
 #   reconcile-parquet.sh --list            (remote primitive) list local partition relpaths
 #   reconcile-parquet.sh --merge <rel> <f> (remote primitive) row-merge parquet file <f> into local <rel>
 set -uo pipefail
@@ -125,15 +129,53 @@ reconcile_once(){
     && log "manifest rebuilt (peer $PEER_HOST)" || log "manifest rebuild (peer) skipped/failed — self-corrects next pass"
 }
 
+# --- one-way PULL pass: converge OUR archive FROM the peer's, WITHOUT ever writing the peer -------------
+# For an ASYMMETRIC, read-only standby whose peer is the production record-of-record (e.g. the co-resident
+# air-gap failover: ha-2 is the dictator-of-record, the .210 standby is a warm mirror). A bidirectional
+# --once would rewrite ha-2's parquet + rebuild its manifest every pass — pointless churn on production for
+# a mirror (standby ⊆ dictator). This pulls every peer partition and row-merges it locally; the peer is
+# only READ (--list + scp-FROM). Same DISTINCT-union idempotency as --once, so it self-corrects and an
+# overlapping re-pull is a no-op. Local manifest only (peer's is never touched). NOT VIP-gated: the standby
+# converges from the dictator regardless of who holds the VIP; a dead peer just fails gracefully.
+reconcile_pull(){
+  [ -n "$PEER_HOST" ] || { log "no PEER_HOST — skip"; return 0; }
+  [ -x "$PYBIN" ] || { command -v "$PYBIN" >/dev/null || { log "no python ($PYBIN) — skip"; return 0; }; }
+  "$PYBIN" -c 'import duckdb' 2>/dev/null || { log "duckdb absent in $PYBIN — skip (install in the venv)"; return 0; }
+  mkdir -p "$PQ"
+  local peers rel pf added
+  peers="$(RSH "cd $REMOTE_REPO && bash failover/reconcile-parquet.sh --list" 2>/dev/null || true)"
+  [ -n "$peers" ] || { log "peer $PEER_HOST has no partitions (unreachable?) — nothing to pull"; return 0; }
+  while IFS= read -r rel <&3; do
+    [ -n "$rel" ] || continue
+    pf="/tmp/pq-peer-$$.parquet"
+    if SCP "visko@$PEER_HOST:$REMOTE_REPO/$PARQUET_DIR/$rel" "$pf" >/dev/null 2>&1; then
+      added="$(do_merge "$rel" "$pf")"; rm -f "$pf"
+      log "pull: $rel -> local now $added row(s)"
+    else
+      log "pull: $rel scp failed (ok — self-corrects next pass)"
+    fi
+  done 3<<<"$peers"        # read on FD 3 so the scp in the body can't steal the loop's stdin (2026-06-25 bug)
+  log "parquet PULL pass complete ($(printf '%s\n' "$peers" | grep -c . ) peer partition(s); peer UNTOUCHED)"
+  local REBUILD="tools/rebuild_parquet_manifest.py"
+  if [ -f "$REPO/$REBUILD" ]; then
+    "$PYBIN" "$REPO/$REBUILD" --parquet-dir "$PQ" >/dev/null 2>&1 \
+      && log "manifest rebuilt (local)" || log "manifest rebuild (local) failed — self-corrects next pass"
+  fi
+}
+
 case "${1:---once}" in
   --list)   list_local ;;
   --merge)  do_merge "$2" "${3:-}" ;;
   --once)   reconcile_once ;;
+  --pull)   reconcile_pull ;;
   --loop)
     log "deep-reconcile loop up: interval=${RECONCILE_PARQUET_INTERVAL_S}s (VIP-gated $VIP)"
     while true; do
       if ip -o addr show 2>/dev/null | grep -qw "$VIP"; then reconcile_once; fi
       sleep "$RECONCILE_PARQUET_INTERVAL_S"
     done ;;
-  *) echo "usage: $0 [--once|--loop|--list|--merge <relpath> <peerfile>]" >&2; exit 2 ;;
+  --pull-loop)
+    log "deep-reconcile PULL loop up: interval=${RECONCILE_PARQUET_INTERVAL_S}s (peer=$PEER_HOST, read-only on peer)"
+    while true; do reconcile_pull; sleep "$RECONCILE_PARQUET_INTERVAL_S"; done ;;
+  *) echo "usage: $0 [--once|--loop|--pull|--pull-loop|--list|--merge <relpath> <peerfile>]" >&2; exit 2 ;;
 esac
