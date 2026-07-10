@@ -1,0 +1,12 @@
+[Unit]
+Description=Pull weather via the air-gap relay every ~15min (jittered — stochastic egress, ADR-0033 Q4)
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=15min
+# jitter so the request cadence isn't a predictable heartbeat (traffic-analysis resistance)
+RandomizedDelaySec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target
