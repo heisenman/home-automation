@@ -41,14 +41,21 @@ ntfy egress = **kept but toggleable** (`RELAY_NTFY_EGRESS`, default OFF) · TLS 
 (`--days 3650`) + `notAfter` monitor** (no internal CA) · **front-load the security core** · **fold in** the
 air-gapped-LLM question (design-log §8).
 
-## Rollout (phased, each revertible)
+## Rollout (phased, each revertible) — ✅ ALL PHASES BUILT + LIVE 2026-07-10
 
-1. **Security core (front-loaded):** (a) ✅ **NTP serve on `.210` + air-gap clients** — *DONE 2026-07-10*;
-   (b) dedicated relay broker + daemon scaffold; (c) nftables default-deny on `wlp2s0` (staged, auto-rollback);
-   (d) signed break-glass USB recovery.
-2. Weather request/response relay.
-3. ntfy egress relay (toggle, default OFF).
-4. Sneakernet backup/restore + `.210` mirror (disabled-by-default) + cert rotation/monitor.
+1. **Security core (front-loaded):** (a) ✅ **NTP serve on `.210` + air-gap clients**; (b) ✅ **dedicated relay
+   broker + request/response daemon** (`relayd`, egress allow-list, rate-limit, audit); (c) ✅ **nftables
+   default-deny on `wlp2s0`** (staged, systemd-timed auto-rollback; dev APIs closed, failover/NTP/relay
+   preserved — verified live); (d) ✅ **signed break-glass USB recovery** (EC-signed; tamper/wrong-key rejected).
+2. ✅ **Weather request/response relay** — ha-2 pulls on a jittered timer, stores to its own weather.db.
+3. ✅ **ntfy egress relay** (toggle `RELAY_NTFY_EGRESS`, **default OFF** = on-network-only).
+4. ✅ **Sneakernet backup/restore + nag + cert rotation** (`.210` mirror ships disabled-by-default per Q3);
+   ✅ **cert-expiry monitor** (D1, T-12mo alert).
+
+Each phase committed in `provisioning/airgap/{relay,firewall,break-glass,cert-monitor,sneakernet}/` +
+`provisioning/ntp/`, deployed + verified live on `.210` and ha-2. Remaining manual step: move the break-glass
+recovery **private key offline** (flagged at install). Follow-up (separate): drop/port-switch the failover SSH
+dependency (see `docs/FOLLOWUPS.md`).
 
 ### Phase 1a — NTP (DONE 2026-07-10)
 `.210`'s chrony (internet-disciplined) now **allows the air-gap net** (`192.168.1.0/24`, was household-only →

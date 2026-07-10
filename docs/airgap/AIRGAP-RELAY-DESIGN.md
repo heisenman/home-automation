@@ -1,9 +1,10 @@
 # Air-gap internet-service relay & data-transfer — design log (the full picture)
 
-> **Status: DECISIONS RATIFIED (Hugh 2026-07-10) — ready to promote to an ADR; Phase 1 cleared to start.**
-> The §7 review is settled (all answers folded in below). Hugh's standing preference — *"do the hard work as
-> early as possible"* — so the first slice **front-loads the security core**, not a minimal step. Live network
-> changes still proceed **staged + revertible**, per phase, each committed in code.
+> **Status: ✅ BUILT + LIVE (2026-07-10) — see ADR-0033.** All 7 decisions ratified and all phases
+> implemented, deployed, and verified live on `.210` + ha-2 (Hugh: "plan approved, take it all the way home").
+> The §7 review is settled (answers folded in below). Details of what shipped: ADR-0033 rollout section.
+> Remaining manual step: move the break-glass recovery private key offline. Follow-up: failover SSH dependency
+> (FOLLOWUPS). Original design rationale preserved below.
 >
 > **Ratified decisions (Hugh 2026-07-10):**
 > - **Q1 Relay bus → DEDICATED minimal relay broker** (not scoped topics on the failover broker). Its own
