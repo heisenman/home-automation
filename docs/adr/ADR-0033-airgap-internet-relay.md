@@ -68,8 +68,10 @@ chrony-airgap-client.conf (new)}`. Follow-on: a chrony health/lost-sync monitor 
 
 - **Positive:** the air-gap's one bridge becomes narrow, auditable, and default-deny; ha-2 gets the internet
   it needs without ever touching the internet; time (control-critical) is fixed today.
-- **Costs / risks:** `.210` remains the highest-value target (mitigated by least-privilege + monitoring); the
-  SSH allow-list vs blanket-close tension is deferred to a follow-up (switch port / drop SSH dependency);
+- **Costs / risks:** `.210` remains the highest-value target (mitigated by least-privilege + monitoring); ~~the
+  SSH allow-list vs blanket-close tension is deferred to a follow-up~~ **RESOLVED 2026-07-10 (`failover-ssh-decouple`,
+  commits fa8a060→b82b855): control fence → cluster bus, data path → dedicated port 47222 (ForceCommand
+  reconcile-only), `tcp/22` on `wlp2s0` CLOSED; live airgap failover drill PASSED. See `failover/cluster-ssh/README.md`.**
   cert rotation re-touches client trust stores; the air-gapped-LLM north star is a separate multi-week effort.
 - **Non-goals / deny-list:** vendor clouds (Midea/Levoit/VeSync/SwitchBot), Web Push (FCM/Mozilla), and — post
   cutover — the provisioning hosts are **never** relayed; their appearance signals misconfig or exfil.

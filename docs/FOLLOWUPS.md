@@ -7,26 +7,22 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
-## 🔐 2026-07-10 — Action item (Hugh): failover comms depend on SSH — switch port or drop the dependency
+## ✅ 2026-07-10 (RESOLVED — `failover-ssh-decouple` COMPLETE + drill-validated) — failover comms off SSH
 
-Surfaced while designing the air-gap relay (**ADR-0033** / `docs/airgap/AIRGAP-RELAY-DESIGN.md`): closing
-`ssh/22` on `.210`'s air-gap interface (`wlp2s0`) — the "mostly port-closed `.210`" goal — **conflicts with the
-failover machinery**, which is entirely **SSH-based across the air-gap link**: `failover/notify.sh` (fencing =
-`ssh peer systemctl stop …`), `reconcile-history.sh` / `reconcile-parquet.sh` (data-plane merge),
-`provision-peer.sh`. A blanket close would break fail-over/fail-back + reconcile.
-
-**Interim (baked into ADR-0033):** "close it" = **allow-list only ha-2's IP** for `22` on `wlp2s0`. **Hugh wants
-to explore going further:** either (a) **move failover comms off the default SSH port** (a dedicated, firewalled
-admin port), or (b) **eliminate SSH as a failover dependency** entirely — carry fencing + reconcile over the
-cluster/relay bus (the mTLS-able MQTT `ha/cluster/#` bridge already exists) or a purpose-built authenticated
-channel, so the air-gap boundary needs no inbound SSH at all. **First step:** map the SSH direction
-(ha-2→`.210` vs `.210`→ha-2) per call site so we know which side must listen. Ties to the break-glass USB
-(ADR-0033 §5.1) and [[control-plane-vip-gated]].
+**DONE (commits fa8a060 → c5138c2 → cc8c64c → b82b855).** The air-gap boundary (`.210 wlp2s0`) now carries
+**NO general SSH**. Both options were taken: (a) the control fence went to the **cluster bus** (signed
+fence-over-bus, `failover/cluster-ssh/fence.py` + `bus_fence` in notify.sh + `ha-fence-listener`), and (b) the
+data path moved to a **dedicated port 47222**, now **ForceCommand-locked to reconcile-only**
+(`reconcile-agent.sh`). `tcp/22` on `wlp2s0` is **CLOSED**; `:22` on ha-2 stays a full-shell management escape
+hatch. **Validated by a live `failover-drill.sh --run --airgap`** (real ha-2 seizure) — which caught + fixed two
+integration bugs manual tests missed (air-gap checkout missing fence.py; fence riding the VIP broker that moves
+mid-failover → `FENCE_PEER_BROKER`). Design/recovery: `failover/cluster-ssh/README.md`; drill: `failover-runbook.md`.
+Memory: [[failover-primitives-not-on-vip]], [[airgap-checkout-drift]].
 
 > **Note (2026-07-10):** the relay design is **ADR-0033** and **ALL PHASES ARE BUILT + LIVE** — NTP anchor
 > (ha-2 clock fixed), dedicated relay broker + request/response daemon, nftables default-deny on `.210 wlp2s0`,
 > signed break-glass USB, weather relay, ntfy egress toggle (default OFF), sneakernet backup + cert monitor.
-> Only this failover-SSH item + one manual step remain open from that effort.
+> The failover-SSH item is now RESOLVED (see the ✅ section just above). Only the manual break-glass step remains.
 >
 > **⚙️ Manual step (Hugh, 2026-07-10):** move the **break-glass recovery private key** off `.210`
 > (`/etc/ha-break-glass/recovery.key.MOVE-OFFLINE.pem`, root-only) to offline storage and delete the on-box
@@ -388,8 +384,10 @@ Verified against the live cluster + source this date. Repo `801545f`.
    the new NUC becomes the next dictator (fail over to it, not `.245`), so the reconcile pair becomes 210⇄new-NUC.
    Carry-forward: set `RECONCILE_MODE=active` (opt. `RECONCILE_INTERVAL_S=120`) as a step in the **new-NUC dictator
    bring-up**, validated by the first failover-drill on that pair. Staged, not open.
-2. **Failover DRILL** (dev harness, `failover-drill`) — now meaningful for the data plane; seize→release→
-   confirm zero history hole = the live end-to-end proof. Gated on Hugh OK + window.
+2. ✅ **Failover DRILL** (`failover-drill`) — **DONE 2026-07-10.** Harness `failover/failover-drill.sh` is
+   pair-aware (`--household`/`--airgap`) + reversible with 3 recovery nets (trap/dead-man/`restore`). **RAN
+   LIVE both pairs**: household PASSED; airgap (real ha-2 seizure) PASSED after catching + fixing two fence
+   integration bugs. Commits 0fde447/80a9b82/b82b855; runbook has the procedure + abort matrix.
 3. **OpenWRT cutover** (theme B, router ETA ~2026-07-09, Hugh + window) — prestage READY; clears
    `vip-unreachable-from-wifi` + `broker-auth-posture` + `network-init-tooling`.
 4. **Deferred (post-air-gap):** the R9 role/legacy/PWA-JWT items above; **notify-HA** (ntfy+bridge on the
