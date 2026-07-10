@@ -136,6 +136,17 @@ body {
   border-radius: 8px; padding: 10px; font-size: 15px; margin: 10px 0;
 }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+/* device-admin maintenance (relocate/rename) */
+.field-block { margin: 12px 0; }
+.field-block > label { display: block; color: var(--muted); font-size: 13px; margin-bottom: 6px; }
+.field-block input { width: 100%; box-sizing: border-box; }
+.radio-row { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
+.radio-row .switch { align-items: flex-start; }
+.note.ok { color: var(--ok); }
+pre.mono { font-family: ui-monospace, Menlo, monospace; font-size: 11px; white-space: pre-wrap;
+  word-break: break-word; max-height: 220px; overflow: auto; background: rgba(127,127,127,0.12);
+  padding: 8px; border-radius: 6px; margin: 6px 0; }
+details > summary { cursor: pointer; }
 .empty { color: var(--muted); text-align: center; padding: 40px 0; }
 .age-fresh { color: var(--ok); } .age-stale { color: var(--stale); }
 

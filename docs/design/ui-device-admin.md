@@ -102,3 +102,18 @@ can take ~20–40s (`SWEEP_SETTLE_S`×passes) — too long to hold an HTTP reque
    *after* the automated restart+sweep; `model_project.py` clean.
 4. Ship: PWA cache bump + ES-module validation; commit/push. Prod (ha-2) rollout is a separate **gated**
    follow (air-gap deploy discipline, HA2-DEPLOY-PENDING); Hugh ensures no parallel dev during that window.
+
+## Status
+
+- **Phase 1 (backend) — DONE** @460b5ed. Tested (no new suite failures) + live launch→unit→worker→report
+  smoke on .210 (no-op spec, no fleet bounce).
+- **Phase 2 (UI) — DONE.** Relocate + Rename in `DeviceMetaModal` (`server/web/app.js`), preview→confirm→
+  apply→poll via `MaintResult`; overlay-room vs canonical-area distinction spelled out inline. Both relocate
+  modes offered (Hugh: "good applications for both"); **no default — explicit pick required** (Relocate
+  disabled until restamp|forward chosen), matching the backend's required `mode`. sw cache v37→v38; app.js
+  validates as an ES module; dry-run preview verified in-process against the real registry (relocate +
+  rename plans correct, no-op rejected, no writes). Job-status route/poll path reconciled to
+  `/api/v1/devices/jobs/<id>`.
+- **Phase 3 (live dev tryout) — Hugh-gated.** Needs ha-api + ha-api-tls restarted to load the new endpoints,
+  then a real relocate/rename of a disposable device (restarts the ingest fleet); `model_project.py` clean
+  before/after.

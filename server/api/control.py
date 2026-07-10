@@ -388,7 +388,7 @@ def _maintain(op: str, device_id: str, body: dict[str, Any]) -> tuple[int, dict]
     except Exception as e:
         return 500, {"status": "error", "device_id": device_id, "reason": str(e)}
     return 202, {"status": "launched", "op": op, "device_id": device_id, "job_id": job_id,
-                 "poll": f"/api/v1/admin/jobs/{job_id}",
+                 "poll": f"/api/v1/devices/jobs/{job_id}",
                  "note": "runs detached (restarts the ingest fleet); poll for the report"}
 
 

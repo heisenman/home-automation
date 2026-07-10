@@ -943,6 +943,27 @@ function GraphBuilder({ sensors, weather }) {
 }
 
 // ── device edit (R8 friendly name / room / hide + display calibration) ───────
+// One-line summary + collapsible detail for a maintenance preview/job result.
+function MaintResult({ res }) {
+  if (!res) return null;
+  let line = "", cls = "note";
+  if (res.status === "preview") {
+    const p = (res.report && res.report.plan && res.report.plan[0]) || {};
+    line = `Preview (no changes made): ${p.old_id || ""}${p.new_id && p.new_id !== p.old_id ? " → " + p.new_id : ""}` +
+           `${p.new_area && p.new_area !== p.old_area ? `  ·  ${p.old_area || "?"} → ${p.new_area}` : ""}`;
+  } else if (res.status === "job") {
+    const j = res.job || {};
+    const r = j.report || {};
+    if (j.status === "done") { cls = "note ok"; line = `✓ Applied. ${r.restart || ""}, ${r.sweep_passes ?? 0} sweep(s); verify ${r.clean ? "clean" : "…"}.`; }
+    else if (j.status === "failed") { cls = "err"; line = `Applied but verify FAILED — stragglers remain. See detail + docs/runbook-dataset-restore.md.`; }
+    else if (j.status === "error") { cls = "err"; line = `Error: ${j.error || "unknown"} (no/partial mutation; backups were written first).`; }
+    else { cls = "note"; line = `Still running…`; }
+  }
+  return html`<div class=${cls}>${line}
+    <details><summary class="note">detail</summary>
+      <pre class="mono">${JSON.stringify(res.report || res.job || res, null, 2)}</pre></details></div>`;
+}
+
 function DeviceMetaModal({ device, onClose, onSaved }) {
   const [name, setName] = useState(device.name || "");
   const [room, setRoom] = useState(device.room || (device.area ? prettyArea(device.area) : ""));
@@ -951,6 +972,13 @@ function DeviceMetaModal({ device, onClose, onSaved }) {
   const [offsets, setOffsets] = useState({ ...(device.offsets || {}) });
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  // ── Entity-plane maintenance (canonical area move / id rename) — distinct from the display overlay above.
+  const [relArea, setRelArea] = useState(device.area || "");
+  const [relMode, setRelMode] = useState("");          // "" = force an explicit pick (restamp|forward)
+  const [newId, setNewId] = useState("");
+  const [maBusy, setMaBusy] = useState(false);          // one maintenance op at a time
+  const [maErr, setMaErr] = useState("");
+  const [maRes, setMaRes] = useState(null);
   const metrics = GRAPHABLE.filter((g) => device.metrics && device.metrics[g.key] != null);
   const id = encodeURIComponent(device.device_id);
   const save = async () => {
@@ -966,6 +994,29 @@ function DeviceMetaModal({ device, onClose, onSaved }) {
       onSaved(); onClose();
     } catch (e) { setErr(String(e.message)); setBusy(false); }
   };
+  // Run a maintenance op: dry_run=true → synchronous preview; real → launch detached job then poll.
+  const runMaint = async (path, body, dry) => {
+    setMaBusy(true); setMaErr(""); setMaRes(null);
+    try {
+      const res = await adminSend("POST", path, { ...body, dry_run: dry });
+      if (res.status === "preview") { setMaRes({ status: "preview", report: res.report }); return; }
+      if (res.status === "launched") {
+        let rec = null;
+        for (let i = 0; i < 120; i++) {          // ~3 min ceiling (fleet restart + bounded sweep)
+          await new Promise((r) => setTimeout(r, 1500));
+          try { rec = await adminSend("GET", res.poll); } catch (e) { rec = { status: "running" }; }
+          setMaRes({ status: "job", job: rec });
+          if (rec && rec.status !== "running") break;
+        }
+        if (rec && rec.status === "done") onSaved();   // refresh dashboard after a clean apply
+        return;
+      }
+      setMaRes({ status: "job", job: res });
+    } catch (e) { setMaErr(String(e.message)); }
+    finally { setMaBusy(false); }
+  };
+  const areaChanged = relArea.trim() && relArea.trim() !== (device.area || "");
+  const idChanged = newId.trim() && newId.trim() !== device.device_id;
   return html`
     <div class="modal-bg" onClick=${onClose}>
       <div class="modal" onClick=${(e) => e.stopPropagation()}>
@@ -973,7 +1024,9 @@ function DeviceMetaModal({ device, onClose, onSaved }) {
         <p class="note">${device.device_id}</p>
         <input value=${name} placeholder=${`name (default: ${prettyName(device.device_id)})`}
           onInput=${(e) => setName(e.target.value)} />
-        <input value=${room} placeholder="room" onInput=${(e) => setRoom(e.target.value)} />
+        <input value=${room} placeholder="room (display label only)" onInput=${(e) => setRoom(e.target.value)} />
+        <p class="note">↑ display overlay only — it renames the label, it does <b>not</b> move the device's
+          data. Use “Relocate” below to change the canonical area.</p>
         <label class="switch"><input type="checkbox" checked=${hidden}
           onChange=${(e) => setHidden(e.target.checked)} /> Hide from dashboard (temporary)</label>
         <label class="switch"><input type="checkbox" checked=${retired}
@@ -995,6 +1048,45 @@ function DeviceMetaModal({ device, onClose, onSaved }) {
           <button class="btn ghost" onClick=${onClose}>Cancel</button>
           <button class="btn primary" disabled=${busy} onClick=${save}>${busy ? "Saving…" : "Save"}</button>
         </div>
+
+        <div class="divider"></div>
+        <h3>Maintenance</h3>
+        <p class="note">Canonical Entity ops. They rewrite the registry + history and <b>restart the ingest
+          fleet</b>, so they run as a background job (~20–40s). Preview first; a backup is written before any
+          change.</p>
+
+        <div class="field-block">
+          <label>Relocate — canonical area</label>
+          <input value=${relArea} placeholder="area id (e.g. living_room)"
+            onInput=${(e) => setRelArea(e.target.value)} />
+          <div class="radio-row">
+            <label class="switch"><input type="radio" name="relmode" checked=${relMode === "restamp"}
+              onChange=${() => setRelMode("restamp")} /> Restamp history <span class="note">(fix a mislabel — the past follows the device)</span></label>
+            <label class="switch"><input type="radio" name="relmode" checked=${relMode === "forward"}
+              onChange=${() => setRelMode("forward")} /> Forward only <span class="note">(physical move — leave past history where it was)</span></label>
+          </div>
+          <div class="modal-actions">
+            <button class="btn ghost" disabled=${maBusy || !areaChanged || !relMode}
+              onClick=${() => runMaint(`/api/v1/devices/${id}/relocate`, { new_area: relArea.trim(), mode: relMode }, true)}>Preview</button>
+            <button class="btn primary" disabled=${maBusy || !areaChanged || !relMode}
+              onClick=${() => runMaint(`/api/v1/devices/${id}/relocate`, { new_area: relArea.trim(), mode: relMode }, false)}>${maBusy ? "Working…" : "Relocate"}</button>
+          </div>
+        </div>
+
+        <div class="field-block">
+          <label>Rename — device id <span class="note">(rare; rewrites the id everywhere + the .245 peer)</span></label>
+          <input value=${newId} placeholder=${`new id (a–z, 0–9, _) — current: ${device.device_id}`}
+            onInput=${(e) => setNewId(e.target.value)} />
+          <div class="modal-actions">
+            <button class="btn ghost" disabled=${maBusy || !idChanged}
+              onClick=${() => runMaint(`/api/v1/devices/${id}/rename`, { new_id: newId.trim() }, true)}>Preview</button>
+            <button class="btn primary" disabled=${maBusy || !idChanged}
+              onClick=${() => runMaint(`/api/v1/devices/${id}/rename`, { new_id: newId.trim() }, false)}>${maBusy ? "Working…" : "Rename"}</button>
+          </div>
+        </div>
+
+        ${maErr && html`<div class="err">${maErr}</div>`}
+        <${MaintResult} res=${maRes} />
       </div>
     </div>`;
 }
