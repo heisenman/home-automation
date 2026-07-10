@@ -1,0 +1,10 @@
+[Unit]
+Description=Weekly air-gap backup-overdue check (ADR-0033 Phase 4)
+
+[Timer]
+OnCalendar=weekly
+Persistent=true
+RandomizedDelaySec=2h
+
+[Install]
+WantedBy=timers.target

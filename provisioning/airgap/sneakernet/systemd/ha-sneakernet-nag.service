@@ -1,0 +1,8 @@
+[Unit]
+Description=Nag if the air-gap sneakernet backup is overdue (ADR-0033 Phase 4)
+
+[Service]
+Type=oneshot
+User=visko
+WorkingDirectory=/home/visko/home_automation
+ExecStart=/home/visko/home_automation/provisioning/airgap/sneakernet/backup-nag.sh
