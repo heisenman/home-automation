@@ -17,7 +17,10 @@ set(EXTRA_COMPONENT_DIRS
     "${_shared}/ha_sntp"
     "${_shared}/ha_reach"
     "${_shared}/ha_wifi"
+    "${_shared}/ha_gas"
     "${_shared}/sgp40"
+    "${_shared}/sgp30"
+    "${_shared}/bme680"
     "${_shared}/sensirion_gas_index")
 include($ENV{IDF_PATH}/tools/cmake/project.cmake)
 project(ha-edge-s3-eth)   # was ha-edge-c6 (fork leftover); bin is now build/ha-edge-s3-eth.bin

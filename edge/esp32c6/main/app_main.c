@@ -131,9 +131,16 @@ void app_main(void) {
     };
     ha_reach_start(&reach_cfg);
 
-    // Dual-role add-on: bring up the SGP-40 VOC gas lane alongside the BLE relay. No-op-safe —
-    // if the sensor isn't wired it logs and returns, and the node keeps relaying BLE.
-    ha_gas_start();
+    // Dual-role add-on: bring up the gas lane alongside the BLE relay. No-op-safe — if the sensor isn't
+    // wired it logs and returns, and the node keeps relaying BLE. The soldered sensor is a per-node
+    // compile-select (secrets.h); resolve it to the shared ha_gas component's runtime enum (ADR-0020).
+#if defined(HA_GAS_SGP30)
+    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_SGP30);
+#elif defined(HA_GAS_BME680)
+    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_BME680);
+#else
+    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_SGP40);
+#endif
 
     // If we just booted a freshly-OTA'd image, self-test now and confirm-or-rollback.
     ha_ota_confirm_if_pending();

@@ -62,7 +62,7 @@ MODULES = [
     ("fs_ops", {"sources": ["fs_ops.c"], "component": "fs_ops"}),
     ("bat_profile", {"sources": ["bat_profile.c"], "component": None}),
     ("ha_battery", {"sources": [], "component": "ha_battery"}),
-    ("ha_gas", {"sources": ["ha_gas.c"], "component": None}),
+    ("ha_gas", {"sources": ["ha_gas.c"], "component": "ha_gas"}),   # ADR-0020: promoted fork -> shared component
     ("sgp40", {"sources": [], "component": "sgp40"}),
     ("sensirion_gas_index", {"sources": [], "component": "sensirion_gas_index"}),
     # NOTE: sqlite3 (firmware/components/sqlite3, ADR-0022) is a validated shared component but

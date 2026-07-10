@@ -196,7 +196,7 @@ void app_main(void) {
     ha_reach_start(&reach_cfg);
 
     // SGP-40 VOC gas lane (I2C, independent of the radio) — no-op if the sensor isn't wired.
-    ha_gas_start();
+    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_SGP40);   // S3-ETH always carries the SGP40 (shared ha_gas, ADR-0020)
 
     // If we just booted a freshly-OTA'd image, self-test now and confirm-or-rollback.
     ha_ota_confirm_if_pending();
