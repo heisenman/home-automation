@@ -25,6 +25,14 @@ already exists → what's the thin new glue → prove it → register it.
 > uci set wireless.default_radio1.hidden=0; uci commit wireless; wifi'`. Re-hiding after is optional (≈useless
 > security). See memory `intake-unhide-ssid` and [airgap/AIRGAP-MIGRATION.md](airgap/AIRGAP-MIGRATION.md) §3.
 
+> **⚠️ MQTT-driven ESPHome devices — set `api: reboot_timeout: 0s`.** ESPHome's `api:` component reboots the
+> device if no **native-API client** (Home Assistant / `aioesphomeapi`) connects within `reboot_timeout`
+> (default **15 min**). This system drives devices over **MQTT**, so nothing ever connects to the native API
+> (port 6053) → a bare `api:` block reboots the device **every ~15 min forever** (reset reason
+> `"Reboot request from api"` — not a crash; found on E1001 2026-07-10). Every MQTT-only ESPHome config MUST
+> set `api: reboot_timeout: 0s` (or drop the `api:` block). MQTT + `wifi: reboot_timeout` keep it recoverable.
+> See memory `esphome-api-reboot-timeout`.
+
 ### Stage 0 — Docs-first hardware survey  → *the authoritative docs*
 Before asserting a single pin, register, or part, **read the schematic + vendor BSP/datasheet** (Principle 2).
 Produce the honest hardware surface: MCU(s), radios, sensors, actuators, storage, power, buses. **Note what's

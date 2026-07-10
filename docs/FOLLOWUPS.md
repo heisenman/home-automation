@@ -26,6 +26,19 @@ Together: two disciplined air-gap data paths (bridge = continuous; USB = periodi
 dictator never touching the internet. Design + build later; not assigned. Relates to
 [[prod-self-sufficient-is-the-goal]], ADR-0031.
 
+## 🔁 2026-07-10 — Action item (Hugh): fleet review — ESPHome `api:` no-client reboot
+
+E1001 (`e1001-c-office`) was rebooting every ~15 min. Root cause: its ESPHome **`api:` block had no
+`reboot_timeout`**, so the default **15-min no-native-API-client reboot** fired forever — the system is
+**MQTT-driven**, so nothing ever connects to the ESPHome native API (port 6053). Reset reason:
+`"Reboot request from api"` (not a crash). Fixed on E1001 with `api: reboot_timeout: 0s` + OTA (2026-07-10).
+
+**Review EVERY ESPHome device for the same bug** — any MQTT-only ESPHome node with a bare `api:` block will
+cycle identically. **Prime suspect: the Levoit (`purifier_h_office`).** Grep all ESPHome configs
+(`provisioning/levoit/`, `provisioning/reterminal/e1001/`, any future ESPHome nodes) for an `api:` block
+lacking `reboot_timeout: 0s`; add it. Consider baking `reboot_timeout: 0s` into a shared ESPHome base/include
+for MQTT-driven nodes so new devices can't regress. Relates to [[intake-unhide-ssid]] (ESPHome intake).
+
 ## 🧪 2026-07-08 — Someday (UNASSIGNED): house-wide COMPARABLE air-quality synthesis
 
 Today's `air_quality` (`server/gas_compensation.py` + the `viewmodel` fusion) is a useful **per-sensor** v1

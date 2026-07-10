@@ -151,6 +151,9 @@ logger:
                                      # goes to GPIO19/20 which are repurposed as I2C0 here → silent. Force UART0.
 
 api:                                 # native ESPHome API (wifi logs + optional HA integration)
+  reboot_timeout: 0s                 # MQTT-driven panel: NOTHING connects to the native API, so the default
+                                     # 15-min no-client reboot cycled the panel every ~15 min ("Reboot request
+                                     # from api"). Disable it — MQTT + wifi reboot_timeout keep it recoverable. (2026-07-10)
 
 ota:
   - platform: esphome
