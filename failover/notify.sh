@@ -18,6 +18,15 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && p
 # explicitly when the two boxes name the unit differently (e.g. ha-2's ha-controller vs the co-resident .210
 # air-gap failover's ha-ag-controller) so a fence never stops the WRONG stack's controller.
 : "${PEER_CONTROLLER_UNIT:=$CONTROLLER_UNIT}"
+# ADR-0033 failover-ssh-decouple part 2: the control-path fence can travel two transports during cutover.
+#   FENCE_MODE=bus   -> signed fence over the cluster bus (ha/cluster/fence); NO SSH (the end state, gated on
+#                       the drill proving a bus fence actually stops the peer + closing 22 on wlp2s0).
+#   FENCE_MODE=ssh   -> legacy `ssh peer 'systemctl stop'` only.
+#   FENCE_MODE=both  -> publish the bus fence AND run the SSH fence (DEFAULT — belt+suspenders; never lose
+#                       fencing capability while the bus path is being proven). Flip to `bus` post-drill.
+: "${FENCE_MODE:=both}"
+: "${PEER_FENCE_HOST:=}"                          # the peer listener's FENCE_HOST identity (its hostname); empty -> bus fence skipped
+: "${FENCE_KEY_FILE:=$REPO/instance/.fence_key}"; : "${FENCE_BROKER:=127.0.0.1}"; : "${FENCE_PORT:=1883}"
 : "${VIP:=192.168.0.200}"; : "${BACKUP_GRACE:=4}"   # see BACKUP branch — startup-transient suppression
 LOG=/var/log/ha-failover.log
 STATE="${3:-${1:-}}"
@@ -48,14 +57,32 @@ reconcile_history(){ # $1=state-label
   ( "$REPO/failover/reconcile-history.sh" --once >/dev/null 2>&1 && log "history reconcile fired ($1)" || true ) &
   return 0
 }
+# ADR-0033 part 2: publish a SIGNED fence to the peer over the cluster bus (no SSH). The peer's
+# ha-fence-listener verifies HMAC+freshness+target and stops its OWN controller. Best-effort, non-blocking:
+# a failure just means the bus is unreachable — the SSH fence (FENCE_MODE=both) or a dead peer covers it.
+bus_fence(){
+  [ -f "$FENCE_KEY_FILE" ] || { log "bus-fence skipped: no fence key ($FENCE_KEY_FILE)"; return 0; }
+  [ -n "$PEER_FENCE_HOST" ] || { log "bus-fence skipped: PEER_FENCE_HOST unset"; return 0; }
+  if FENCE_KEY_FILE="$FENCE_KEY_FILE" FENCE_BROKER="$FENCE_BROKER" FENCE_PORT="$FENCE_PORT" FENCE_HOST="$(hostname)" \
+       python3 "$HERE/cluster-ssh/fence.py" publish --target "$PEER_FENCE_HOST" --unit "$PEER_CONTROLLER_UNIT" >/dev/null 2>&1; then
+    log "bus-fence published -> target=$PEER_FENCE_HOST unit=$PEER_CONTROLLER_UNIT"
+  else
+    log "bus-fence publish failed (non-fatal)"
+  fi
+  return 0
+}
 
 case "$STATE" in
   MASTER)
-    log "becoming MASTER -> fence peer, then start controller"
+    log "becoming MASTER -> fence peer (mode=$FENCE_MODE), then start controller"
     # FENCE first: best-effort stop the peer's controller (covers alive-but-not-master / split-brain heal).
     # A failure here means the peer is down/unreachable — which is fine, a dead peer isn't controlling.
-    if [ -n "$PEER_HOST" ]; then
-      if peer_ssh "sudo systemctl stop $PEER_CONTROLLER_UNIT" 2>/dev/null; then log "fenced peer $PEER_HOST ($PEER_CONTROLLER_UNIT stopped)"; else log "peer fence failed/unreachable (ok if peer is down)"; fi
+    # Bus transport (signed, no SSH) runs for FENCE_MODE=bus|both; SSH transport for ssh|both.
+    case "$FENCE_MODE" in
+      bus|both) bus_fence ;;
+    esac
+    if [ "$FENCE_MODE" != bus ] && [ -n "$PEER_HOST" ]; then
+      if peer_ssh "sudo systemctl stop $PEER_CONTROLLER_UNIT" 2>/dev/null; then log "fenced peer $PEER_HOST ($PEER_CONTROLLER_UNIT stopped via ssh)"; else log "peer ssh-fence failed/unreachable (ok if peer is down)"; fi
     fi
     # Never start a controller that can't build its issuer.
     if [ ! -f "$REPO/instance/.master_pass" ]; then log "ABORT: missing instance/.master_pass — NOT starting controller"; exit 1; fi

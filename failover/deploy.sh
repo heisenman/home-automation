@@ -40,6 +40,12 @@ if ! systemctl cat ha-controller >/dev/null 2>&1; then
   sudo systemctl daemon-reload
   echo "    installed ha-controller.service"
 fi
+# ADR-0033 part 2: fence-over-bus listener runs on BOTH roles (either box can be the fence TARGET). Deploys
+# DRY-RUN by default (unit Environment=FENCE_DRY_RUN=1) — observes but never stops until the drill flips it.
+sudo cp "$REPO/failover/systemd/ha-fence-listener.service" /etc/systemd/system/ha-fence-listener.service
+sudo systemctl daemon-reload
+echo "    installed ha-fence-listener.service (dry-run default; enable --now after fence key is present)"
+
 if [ "$ROLE" = standby ]; then
   sudo systemctl disable ha-controller >/dev/null 2>&1 || true
   for u in ha-primary-watch.service ha-standby-sync.service ha-standby-sync.timer; do
@@ -56,3 +62,4 @@ echo "==> deployed (NOTHING started). Supervised go-live (see failover/failover-
 echo "    PRIMARY first, then STANDBY. On this box:"
 echo "    sudo systemctl enable --now keepalived"
 [ "$ROLE" = standby ] && echo "    sudo systemctl enable --now ha-primary-watch.service ha-standby-sync.timer"
+echo "    sudo systemctl enable --now ha-fence-listener.service   # both roles (dry-run until drill flips FENCE_DRY_RUN=0)"

@@ -1,0 +1,23 @@
+[Unit]
+Description=HA failover — fence-over-bus listener (ADR-0033 part 2): act on signed fences targeting THIS host
+Documentation=file:///home/visko/home_automation/failover/cluster-ssh/README.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=visko
+WorkingDirectory=/home/visko/home_automation
+# Per-box overrides (FENCE_HOST/FENCE_BROKER/FENCE_PORT/FENCE_DRY_RUN/FENCE_KEY_FILE) live in instance/cluster.env.
+# A co-resident air-gap instance points FENCE_BROKER at its own broker via ITS cluster.env (deployed box-local).
+EnvironmentFile=-/home/visko/home_automation/instance/cluster.env
+# SAFE DEFAULT: dry-run. The listener observes + logs what it WOULD fence but never stops anything until the
+# drill flips FENCE_DRY_RUN=0 in cluster.env. Only a validly-HMAC-signed, fresh, THIS-host-targeted fence acts.
+Environment=FENCE_DRY_RUN=1
+Environment=FENCE_KEY_FILE=/home/visko/home_automation/instance/.fence_key
+ExecStart=/usr/bin/python3 /home/visko/home_automation/failover/cluster-ssh/fence.py listen
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

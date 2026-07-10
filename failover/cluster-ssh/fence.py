@@ -10,13 +10,14 @@ that it is the target, then stops its own controller unit. The bus is anonymous,
   fence.py publish --target <host> --unit <u>  # MASTER publishes a signed fence
   fence.py selftest                            # verify sign/verify + reject tampered/stale (no side effects)
 
+Transport is `mosquitto_pub`/`mosquitto_sub` (present on both boxes), NOT paho — so this safety-critical
+listener does not ride the shared venv (which esphome/pip churn keeps breaking). JSON + hmac are stdlib only.
+
 Env: FENCE_BROKER (127.0.0.1) FENCE_PORT (1883) FENCE_HOST (hostname) FENCE_KEY_FILE (instance/.fence_key)
      FENCE_MAX_AGE_S (30) FENCE_DRY_RUN (0 -> if 1, log instead of stopping)
 """
 from __future__ import annotations
 import hashlib, hmac, json, os, socket, subprocess, sys, time, uuid, logging
-
-import paho.mqtt.client as mqtt
 
 LOG = logging.getLogger("fence")
 TOPIC = "ha/cluster/fence"
@@ -52,61 +53,68 @@ def verify(msg: dict, max_age: int) -> tuple[bool, str]:
     return True, "ok"
 
 
-def _mk(cid):
-    try:
-        return mqtt.Client(mqtt.CallbackAPIVersion.VERSION2, client_id=cid)
-    except (AttributeError, TypeError):
-        return mqtt.Client(client_id=cid)
-
-
 def _broker():
     return os.environ.get("FENCE_BROKER", "127.0.0.1"), int(os.environ.get("FENCE_PORT", "1883"))
 
 
 def cmd_publish(target: str, unit: str) -> int:
     frm = os.environ.get("FENCE_HOST", socket.gethostname())
-    payload = json.dumps(make_fence(target, unit, frm))
+    payload = json.dumps(make_fence(target, unit, frm), separators=(",", ":"))
     host, port = _broker()
-    c = _mk(f"fence-pub-{uuid.uuid4().hex[:6]}")
-    c.connect(host, port, keepalive=10); c.loop_start()
-    c.publish(TOPIC, payload, qos=1).wait_for_publish(timeout=5)
-    c.loop_stop(); c.disconnect()
+    # qos 1, NOT retained: a fence is a one-shot imperative, not durable state — a late subscriber must never
+    # replay an old stop. The nonce+freshness check is a second backstop against exactly that.
+    subprocess.run(["mosquitto_pub", "-h", host, "-p", str(port), "-t", TOPIC, "-q", "1", "-m", payload],
+                   check=True, timeout=10)
     LOG.info("published fence target=%s unit=%s via %s:%d", target, unit, host, port)
     return 0
+
+
+def _act(line: str, me: str, max_age: int, dry: bool, seen: set) -> None:
+    try:
+        msg = json.loads(line)
+    except Exception:
+        return
+    ok, why = verify(msg, max_age)
+    if not ok:
+        LOG.warning("REJECTED fence: %s (%s)", why, line[:120]); return
+    if msg["nonce"] in seen:  # replay guard within process lifetime
+        return
+    seen.add(msg["nonce"])
+    if msg["target"] != me:
+        LOG.info("fence for %s (not me=%s) — ignoring", msg["target"], me); return
+    unit = msg["unit"]
+    LOG.warning("VALID fence from %s -> stop %s%s", msg["from"], unit, " [DRY-RUN]" if dry else "")
+    if not dry:
+        r = subprocess.run(["sudo", "systemctl", "stop", unit], capture_output=True, text=True)
+        LOG.warning("fenced: systemctl stop %s rc=%d %s", unit, r.returncode, r.stderr.strip())
 
 
 def cmd_listen() -> int:
     me = os.environ.get("FENCE_HOST", socket.gethostname())
     max_age = int(os.environ.get("FENCE_MAX_AGE_S", "30"))
     dry = str(os.environ.get("FENCE_DRY_RUN", "0")).lower() in ("1", "true", "yes")
-    seen: set[str] = set()
-
-    def on_msg(_c, _u, m):
-        try:
-            msg = json.loads(m.payload)
-        except Exception:
-            return
-        ok, why = verify(msg, max_age)
-        if not ok:
-            LOG.warning("REJECTED fence: %s (%s)", why, str(m.payload)[:120]); return
-        if msg["nonce"] in seen:  # replay guard within process lifetime
-            return
-        seen.add(msg["nonce"])
-        if msg["target"] != me:
-            LOG.info("fence for %s (not me=%s) — ignoring", msg["target"], me); return
-        unit = msg["unit"]
-        LOG.warning("VALID fence from %s -> stop %s%s", msg["from"], unit, " [DRY-RUN]" if dry else "")
-        if not dry:
-            r = subprocess.run(["sudo", "systemctl", "stop", unit], capture_output=True, text=True)
-            LOG.warning("fenced: systemctl stop %s rc=%d %s", unit, r.returncode, r.stderr.strip())
-
     host, port = _broker()
-    c = _mk(f"fence-listen-{me}")
-    c.on_connect = lambda cl, *_a: cl.subscribe(TOPIC, qos=1)
-    c.on_message = on_msg
+    seen: set[str] = set()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
     LOG.info("fence-listener up: me=%s broker=%s:%d max_age=%ds dry=%s", me, host, port, max_age, dry)
-    c.connect(host, port, keepalive=30); c.loop_forever()
+    # Internal reconnect loop (belt): a broker blip drops mosquitto_sub, we re-spawn after a short backoff.
+    # systemd Restart=always is the suspenders. Non-retained topic means nothing is missed across a blip that
+    # matters — an in-flight fence would have gone stale anyway (freshness window).
+    while True:
+        p = subprocess.Popen(["mosquitto_sub", "-h", host, "-p", str(port), "-t", TOPIC, "-q", "1"],
+                             stdout=subprocess.PIPE, text=True)
+        try:
+            for line in p.stdout:
+                line = line.strip()
+                if line:
+                    _act(line, me, max_age, dry, seen)
+        except Exception as e:  # pragma: no cover — defensive; keep the daemon alive
+            LOG.warning("listener stream error: %s", e)
+        finally:
+            try: p.terminate()
+            except Exception: pass
+        LOG.warning("mosquitto_sub exited (broker blip?) — reconnecting in 3s")
+        time.sleep(3)
     return 0
 
 
