@@ -140,7 +140,10 @@ body {
 /* device-admin maintenance (relocate/rename) */
 .field-block { margin: 12px 0; }
 .field-block > label { display: block; color: var(--muted); font-size: 13px; margin-bottom: 6px; }
-.field-block input { width: 100%; box-sizing: border-box; }
+.field-block input, .field-block select { width: 100%; box-sizing: border-box; }
+.field-block select { background: var(--bg); border: 1px solid var(--line); color: var(--txt);
+  border-radius: 8px; padding: 10px; font-size: 15px; margin: 4px 0; }
+.field-block select:focus { border-color: var(--accent); outline: none; }
 .radio-row { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .radio-row .switch { align-items: flex-start; }
 .note.ok { color: var(--ok); }

@@ -964,7 +964,7 @@ function MaintResult({ res }) {
       <pre class="mono">${JSON.stringify(res.report || res.job || res, null, 2)}</pre></details></div>`;
 }
 
-function DeviceMetaModal({ device, onClose, onSaved }) {
+function DeviceMetaModal({ device, areas, onClose, onSaved }) {
   const [name, setName] = useState(device.name || "");
   const [room, setRoom] = useState(device.room || (device.area ? prettyArea(device.area) : ""));
   const [hidden, setHidden] = useState(!!device.hidden);
@@ -1057,8 +1057,13 @@ function DeviceMetaModal({ device, onClose, onSaved }) {
 
         <div class="field-block">
           <label>Relocate — canonical area</label>
-          <input value=${relArea} placeholder="area id (e.g. living_room)"
-            onInput=${(e) => setRelArea(e.target.value)} />
+          ${areas && areas.length
+            ? html`<select value=${relArea} onChange=${(e) => setRelArea(e.target.value)}>
+                ${!areas.includes(relArea) && html`<option value=${relArea}>${relArea ? prettyArea(relArea) : "— select area —"}</option>`}
+                ${areas.map((a) => html`<option value=${a}>${prettyArea(a)}${a === device.area ? " (current)" : ""}</option>`)}
+              </select>`
+            : html`<input value=${relArea} placeholder="area id (e.g. living_room)"
+                onInput=${(e) => setRelArea(e.target.value)} />`}
           <div class="radio-row">
             <label class="switch"><input type="radio" name="relmode" checked=${relMode === "restamp"}
               onChange=${() => setRelMode("restamp")} /> Restamp history <span class="note">(fix a mislabel — the past follows the device)</span></label>
@@ -1591,6 +1596,7 @@ function App() {
       ${showAdmin && html`<${AdminModal} onClose=${() => setShowAdmin(false)}
         onUnlock=${() => setIsAdmin(true)} />`}
       ${editDevice && html`<${DeviceMetaModal} device=${editDevice}
+        areas=${(rooms && Array.isArray(rooms.rooms) ? rooms.rooms.map((r) => r.id).sort() : [])}
         onClose=${() => setEditDevice(null)} onSaved=${refresh} />`}
       ${showAdd && html`<${AddDeviceModal} onClose=${() => setShowAdd(false)} onSaved=${refresh} />`}
     </div>
