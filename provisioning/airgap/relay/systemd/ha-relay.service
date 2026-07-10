@@ -1,0 +1,24 @@
+[Unit]
+Description=ha-relay air-gap internet relay daemon (ADR-0033)
+After=ha-relay-broker.service network-online.target
+Wants=ha-relay-broker.service network-online.target
+
+[Service]
+Type=simple
+User=ha-relay
+Group=ha-relay
+# own venv (esphome-proof; shared-venv-esphome-paho) — paho only, stdlib for HTTP
+ExecStart=/opt/ha-relay/venv/bin/python /opt/ha-relay/relayd.py
+EnvironmentFile=-/etc/ha-relay/relay.env
+Restart=always
+RestartSec=3
+# least privilege — the internet-facing edge of the trust boundary (ADR-0033 §3.5)
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadOnlyPaths=/opt/ha-relay
+# egress is further constrained by nftables owner-match on the ha-relay uid (Phase 1c)
+
+[Install]
+WantedBy=multi-user.target

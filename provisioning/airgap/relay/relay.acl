@@ -1,0 +1,11 @@
+# Relay broker ACL (ADR-0033). Two identities, least privilege:
+#   relayd  — the relay daemon on .210: full access to relay/# (it answers requests)
+#   ha2     — the air-gap client (ha-2): may ASK (publish requests) and READ replies, nothing else.
+# Anything outside relay/# is denied to everyone (no default topic access without a user stanza).
+
+user relayd
+topic readwrite relay/#
+
+user ha2
+topic write relay/+/request
+topic read relay/+/response

@@ -1,0 +1,18 @@
+[Unit]
+Description=ha-relay dedicated MQTT broker (air-gap relay bus, ADR-0033)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/sbin/mosquitto -c /etc/mosquitto/relay-broker.conf
+Restart=always
+RestartSec=2
+# hardening — this broker only ever needs a socket
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
