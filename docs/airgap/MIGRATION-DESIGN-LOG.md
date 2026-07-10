@@ -910,3 +910,25 @@ in **ADR-0031**. Key decisions + findings:
 
 **Next:** data-intake inventory (per-class merge/rebuild strategy) → run the safe sensor tier → design the
 non-sensor row-level merges → then Pillar 2.
+
+---
+
+## 2026-07-10 — Pillar 2 LIVE: air-gap failover on .210 (ADR-0031) + intake/self-sufficiency
+
+**Pillar 1 (done):** full data intake dev → ha-2; ha-2 is the complete record-of-record (parquet 10.81M/23
+dev incl 3 recovered gas nodes, rungs rebuilt 798k, control_log/weather/summaries). Sandbox-first, additive,
+verified. See `DATA-INTAKE-{inventory,findings}.md`. Self-sufficiency: installed ha-2's missing maintenance
+timers (root cause rungs were absent) → `provisioning/install-maintenance-timers.sh`.
+
+**Pillar 2 (LIVE):** `.210` now runs BOTH the dev dictator (household cluster w/ `.245`, VIP `.200`) AND a
+warm standby of the ha-2 dictator (air-gap, VIP `.1.200`) — box-local dev-convenience, **repo stays prod-pure**.
+- Full separation: `~/ha-airgap-standby` checkout, own DB (exact mirror), `ha-ag-*` units, own broker.
+- **Broker co-tenancy → INTERFACE-SPLIT** (Hugh's call): dev broker bound household+localhost only; failover
+  `ha-ag-mosquitto` bound air-gap `.1.245` + VIP `.1.200` (`ip_nonlocal_bind`). Both concurrent.
+- **keepalived 2-instance** on `.210` (household VRID 51 MASTER + air-gap VRID 61 BACKUP) + ha-2 (VRID 61 MASTER).
+- `notify.sh` genericized (`API_UNIT`/`EDGE_MAPPER_UNIT` + `PEER_CONTROLLER_UNIT`) so a co-resident asymmetric
+  cluster never restarts/fences the OTHER stack's units (fence targets `ha-ag-controller`, dev stack verified
+  unharmed). Reconcile loop ha-2→standby (VIP-gated; writes the standby store — `REMOTE_REPO` fix).
+- Gotchas: shared-venv paho re-downgraded by esphome (→v2; failover wants its OWN venv); ha-2 air-gapped so
+  `failover/` scripts rsync'd (can't `git pull`).
+- **Remaining:** 5c client-repoint `.1.210`→VIP `.1.200` · failover drill · failover own venv.
