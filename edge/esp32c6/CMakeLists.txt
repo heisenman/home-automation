@@ -16,6 +16,7 @@ set(EXTRA_COMPONENT_DIRS
     "${_shared}/ha_relay"
     "${_shared}/ha_sntp"
     "${_shared}/ha_reach"
+    "${_shared}/ha_wifi"
     "${_shared}/sgp40"
     "${_shared}/sgp30"
     "${_shared}/sensirion_gas_index"

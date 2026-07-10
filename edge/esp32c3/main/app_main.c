@@ -12,7 +12,7 @@
 #include "ha_mqtt.h"
 #include "ha_ota.h"
 #include "ha_relay.h"
-#include "ble_scan.h"
+#include "ha_ble_scan.h"
 
 // ha_config secrets seam (ADR-0020): the shared ha_config component stays secrets-free; app_main reads the
 // board-local secrets.h and passes the compile-time defaults in (NVS then overlays them in production).

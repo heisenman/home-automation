@@ -17,7 +17,7 @@ Which module each **real firmware build** links. Pairs with [MODULES.md](MODULES
 |--------|:-----:|:-----:|:-----:|:-----:|
 | `app_main` | fork | fork | fork | fork |
 | `ha_config` | shared | shared | shared | shared |
-| `ha_wifi` | fork | fork | fork | — |
+| `ha_wifi` | shared | shared | shared | — |
 | `ha_eth` | — | — | fork | — |
 | `ha_sntp` | shared | shared | shared | — |
 | `ha_mqtt` | shared | shared | shared | — |

@@ -45,7 +45,7 @@ BUILDS = [
 MODULES = [
     ("app_main", {"sources": ["app_main.c", "beachhead_main.c"], "component": None}),
     ("ha_config", {"sources": ["ha_config.c"], "component": "ha_config"}),
-    ("ha_wifi", {"sources": ["ha_wifi.c"], "component": None}),
+    ("ha_wifi", {"sources": ["ha_wifi.c"], "component": "ha_wifi"}),   # ADR-0020: promoted fork -> shared component
     ("ha_eth", {"sources": ["ha_eth.c"], "component": None}),
     ("ha_sntp", {"sources": ["ha_sntp.c"], "component": "ha_sntp"}),
     ("ha_mqtt", {"sources": ["ha_mqtt.c"], "component": "ha_mqtt"}),

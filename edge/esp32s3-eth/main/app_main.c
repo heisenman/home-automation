@@ -22,7 +22,7 @@
 #include "ha_relay.h"
 #include "ha_gas.h"
 #include "ha_reach.h"
-#include "ble_scan.h"
+#include "ha_ble_scan.h"
 
 // ha_config secrets seam (ADR-0020): the shared ha_config component stays secrets-free; app_main reads the
 // board-local secrets.h and passes the compile-time defaults in (NVS then overlays them in production).
@@ -60,6 +60,9 @@ static const char *TAG = "ha_edge";
 static void s3_led_ok(void *u)        { (void)u; ha_led_set(HA_LED_OK); }          // relaying normally → LED off
 static void s3_led_mqtt_down(void *u) { (void)u; ha_led_set(HA_LED_MQTT_DOWN); }   // broker unreachable
 static void s3_led_ota_fail(void *u)  { (void)u; ha_led_set(HA_LED_OTA_FAIL); }
+// Wi-Fi link status (ADR-0020): the shared ha_wifi component reports up/down via this optional callback
+// (was baked into the old ha_wifi fork). up → link back, broker pending (BLUE); down → reconnecting (AMBER).
+static void s3_wifi_led(bool up)      { ha_led_set(up ? HA_LED_MQTT_DOWN : HA_LED_WIFI_DOWN); }
 
 // Interrupt-driven transport switch: a reboot cleanly re-picks Ethernet-vs-Wi-Fi. The eth driver is
 // left running even when no cable is present, so its CONNECTED interrupt can tell us one was plugged in.
@@ -135,6 +138,7 @@ void app_main(void) {
 
     // Operability LED up early: OFF when healthy, lights ONLY on a fault (see ha_led.h / FIRMWARE-GUIDE §6).
     ha_led_init();
+    ha_wifi_set_status_cb(s3_wifi_led);   // this board has an LED — drive it from the shared ha_wifi (ADR-0020)
     if (!ha_mqtt_has_cmd_secret())
         ha_led_set(HA_LED_FATAL);    // un-enrolled (no command secret) → can't accept commands/OTA; RED solid
 
