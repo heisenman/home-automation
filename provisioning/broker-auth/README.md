@@ -22,3 +22,20 @@ broker's own cluster bridge was a credless client (fixed).
 **To reproduce on a new dictator:** create passwd (`mosquitto_passwd -b`) with `dictator`=`mqtt.env` pass +
 `cluster245`=(bridge pass), install this ACL, add `password_file`/`acl_file`/`allow_anonymous false` to the
 listener conf, and set `remote_username`/`remote_password` on every bridge stanza pointing at it.
+
+## ⚠️ CORRECTION 2026-07-10 — this cutover was REVERTED; re-scope needed
+
+The cutover above did NOT stay live. Two problems:
+1. **Auto-revert fired.** The staged apply armed a systemd `mqtt-auth-revert` timer; my "commit" step
+   (`systemctl stop <timer>`) did not cancel the already-scheduled run, so at 16:49 it restored the anonymous
+   config + restarted mosquitto. The broker was anonymous again ~2 min after I reported it "DONE."
+2. **The census was incomplete.** Re-applying surfaced additional **credless bridge clients** beyond the
+   `.245` bridge + services — notably the **standby broker (`ha-ag-mosquitto`) cluster bridges** in the
+   air-gap failover stack (box-local `~/ha-airgap-standby`, dev2's `ha/cluster/#` coordination). Cred'ing
+   those is fiddly and risks breaking failover heartbeats if done wrong.
+
+**State: reverted to pristine anon (known-good, verified 0 denials + telemetry healthy).** Broker-auth must be
+re-done as a properly-scoped task: a FULL inventory of *every* broker + bridge in the cluster (dev broker,
+failover/standby `ha-ag-mosquitto`, ha-2's broker, all cluster bridges) with creds staged on ALL of them
+*before* flipping, coordinated with dev2 (cluster coordination). Do NOT use a self-arming auto-revert whose
+cancel is racy — use an explicit, verified revert path.
