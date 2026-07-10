@@ -7,6 +7,25 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 📡 2026-07-10 — Action item (LATER, Hugh): air-gap data-transfer mechanisms (build BOTH)
+
+The air-gap dictator (ha-2) has no external access by design, so external data (weather, time, updates)
+can't reach it and its backups can't leave *via the dictator*. Hugh wants **both** mechanisms built
+(2026-07-10; explicitly "for later"):
+
+1. **Failover-bridge pass-through.** Air-gapped networks should **never** make the dictator the bridge. The
+   dual-homed **failover instance** (`.210`, ADR-0031 Pillar 2) acts as a real, controlled **pass-through**
+   for information important to the air-gap network — bringing external data IN and serving air-gap data OUT
+   — so the dictator itself never reaches the outside.
+2. **USB sneakernet backup + optional online populate.** The system should actively **nag the user** to run
+   periodic (e.g. weekly) backups of system data to a USB flash drive (or other medium). The transfer can
+   OPTIONALLY run a separate **online component** that populates the *same* flash drive with external data to
+   **intake** — so one USB round-trip both pulls backup data OUT and carries fetched data IN.
+
+Together: two disciplined air-gap data paths (bridge = continuous; USB = periodic/fully-offline) with the
+dictator never touching the internet. Design + build later; not assigned. Relates to
+[[prod-self-sufficient-is-the-goal]], ADR-0031.
+
 ## 🧪 2026-07-08 — Someday (UNASSIGNED): house-wide COMPARABLE air-quality synthesis
 
 Today's `air_quality` (`server/gas_compensation.py` + the `viewmodel` fusion) is a useful **per-sensor** v1
