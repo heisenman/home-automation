@@ -129,7 +129,8 @@ body {
   display: flex; align-items: center; justify-content: center; padding: 16px;
 }
 .modal { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
-  padding: 18px; width: 100%; max-width: 380px; }
+  padding: 18px; width: 100%; max-width: 380px;
+  max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; }
 .modal h3 { margin: 0 0 4px; }
 .modal input {
   width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--txt);
