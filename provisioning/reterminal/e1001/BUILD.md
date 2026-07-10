@@ -23,3 +23,18 @@ docker run --rm --network host -v "$PWD":/config ghcr.io/esphome/esphome:latest 
 - Profile/offset re-push is a **data** change (`battery_profile_v1.json`) delivered over MQTT — **no reflash**.
 - Everything (config, `components/`, fonts, secrets, cache) lives here on the bench; nothing is sourced
   from the `//192.168.0.245` share (that's just a checkout copy of the same git-tracked source).
+
+## Also buildable from `.210` (dev box) — 2026-07-10
+`.210` now has docker + the esphome image, so the E1001 can be built/OTA'd from the dev box (it straddles the
+air-gap net and reaches the panel at `192.168.1.131`). Same recipe, absolute-path mount + `sudo docker`:
+```sh
+sudo docker run --rm --network host -v /home/visko/home_automation/provisioning/reterminal/e1001:/config \
+    ghcr.io/esphome/esphome:latest compile e1001.yaml
+sudo docker run --rm --network host -v /home/visko/home_automation/provisioning/reterminal/e1001:/config \
+    ghcr.io/esphome/esphome:latest upload  e1001.yaml --device 192.168.1.131
+```
+- **Isolation:** docker keeps esphome's `paho-mqtt<2` pin out of the shared `venv/` — safe ([[shared-venv-esphome-paho]]).
+- ⚠️ `upload` does NOT compile — always `compile` after editing the yaml (stale-bin trap).
+- ⚠️ `sudo docker` writes root-owned files into `.esphome/` (gitignored build cache) — harmless; `sudo chown -R visko .esphome` if a later host build needs them.
+- OTA-rollback watch (D1001-class): after upload, confirm the panel lands on the `.200` VIP listener on ha-2
+  (`sudo ss -tnH '( sport = :1883 )' | grep 192.168.1.131`) and uptime climbs past the mark-valid window; re-OTA if it rolled back.
