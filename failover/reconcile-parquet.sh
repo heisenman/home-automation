@@ -34,7 +34,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && pwd)"
 [ -f "$REPO/instance/cluster.env" ] && . "$REPO/instance/cluster.env"
 [ -f "$REPO/instance/reconcile-tuning.env" ] && . "$REPO/instance/reconcile-tuning.env"
-: "${PEER_HOST:=}"; : "${CLUSTER_KEY:=$HOME/.ssh/id_cluster}"; : "${REMOTE_REPO:=/home/visko/home_automation}"
+: "${PEER_HOST:=}"; : "${CLUSTER_KEY:=$HOME/.ssh/id_cluster}"; : "${CLUSTER_SSH_PORT:=22}"; : "${REMOTE_REPO:=/home/visko/home_automation}"
 : "${VIP:=192.168.0.200}"; : "${PARQUET_DIR:=instance/db/parquet}"
 : "${PYBIN:=$REPO/venv/bin/python}"; [ -x "$PYBIN" ] || PYBIN="$(command -v python3 || echo python3)"
 : "${RECONCILE_PARQUET_INTERVAL_S:=21600}"   # 6 h — parquet changes ~daily (compaction); no need to thrash
@@ -45,8 +45,8 @@ case "$PARQUET_DIR" in /*) PQ="$PARQUET_DIR";; *) PQ="$REPO/$PARQUET_DIR";; esac
 log(){ printf '%s reconcile-parquet %s\n' "$(date -Is)" "$*" | tee -a "$RLOG" 2>/dev/null || true; }
 # -n (stdin from /dev/null) is REQUIRED: RSH is called inside the partition while-read loop below, and a
 # bare ssh would consume the loop's stdin and process only the first partition (the 2026-06-25 bug).
-RSH(){ ssh -n -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "visko@$PEER_HOST" "$@"; }
-SCP(){ scp -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$@"; }
+RSH(){ ssh -n -p "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "visko@$PEER_HOST" "$@"; }
+SCP(){ scp -P "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$@"; }
 
 # list local partition files as relpaths under the parquet root (e.g. year=2026/month=03/2026-03.parquet),
 # excluding the stray year=0 partition that a bad compaction can leave behind.

@@ -5,12 +5,12 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && pwd)"
 [ -f "$REPO/instance/cluster.env" ] && . "$REPO/instance/cluster.env"
-: "${ROLE:=standby}"; : "${PEER_HOST:=}"; : "${CLUSTER_KEY:=$HOME/.ssh/id_cluster}"
+: "${ROLE:=standby}"; : "${PEER_HOST:=}"; : "${CLUSTER_KEY:=$HOME/.ssh/id_cluster}"; : "${CLUSTER_SSH_PORT:=22}"
 : "${REMOTE_REPO:=/home/visko/home_automation}"; : "${CONTROLLER_UNIT:=ha-controller}"
 LOG=/var/log/ha-failover.log
 log(){ printf '%s sync-standby %s\n' "$(date -Is)" "$*" | tee -a "$LOG" 2>/dev/null || true; }
-RSH(){ ssh -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "visko@$PEER_HOST" "$@"; }
-SCP(){ scp -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$@"; }
+RSH(){ ssh -p "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "visko@$PEER_HOST" "$@"; }
+SCP(){ scp -P "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$@"; }
 
 [ "$ROLE" = standby ] || { log "ROLE=$ROLE — not a standby, nothing to sync"; exit 0; }
 if systemctl is-active --quiet "$CONTROLLER_UNIT"; then log "WE are acting dictator — skip (don't overwrite our own live state)"; exit 0; fi

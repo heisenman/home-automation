@@ -28,7 +28,7 @@
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && pwd)"
 [ -f "$REPO/instance/cluster.env" ] && . "$REPO/instance/cluster.env"
-: "${CLUSTER_KEY:=$HOME/.ssh/id_cluster}"; : "${REMOTE_REPO:=/home/visko/home_automation}"
+: "${CLUSTER_KEY:=$HOME/.ssh/id_cluster}"; : "${CLUSTER_SSH_PORT:=22}"; : "${REMOTE_REPO:=/home/visko/home_automation}"
 : "${PARQUET_DIR:=instance/db/parquet}"; : "${PYBIN:=$REPO/venv/bin/python}"
 [ -x "$PYBIN" ] || PYBIN="$(command -v python3 || echo python3)"
 
@@ -42,7 +42,7 @@ while [ $# -gt 0 ]; do case "$1" in
 esac; done
 [ -n "$FROM" ] || { echo "usage: $0 --from <host> [--data-only] [--no-push] [--yes]" >&2; exit 2; }
 export PEER_HOST="$FROM" CLUSTER_KEY REMOTE_REPO PARQUET_DIR PYBIN
-RSH(){ ssh -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "visko@$FROM" "$@"; }
+RSH(){ ssh -p "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "visko@$FROM" "$@"; }
 
 say(){ printf '\n\033[1m== %s ==\033[0m\n' "$*"; }
 ok(){ printf '  \033[32m[OK]\033[0m %s\n' "$*"; }

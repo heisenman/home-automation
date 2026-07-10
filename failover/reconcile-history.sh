@@ -21,7 +21,7 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && pwd)"
 [ -f "$REPO/instance/cluster.env" ] && . "$REPO/instance/cluster.env"
 [ -f "$REPO/instance/reconcile-tuning.env" ] && . "$REPO/instance/reconcile-tuning.env"
-: "${PEER_HOST:=}"; : "${CLUSTER_KEY:=$HOME/.ssh/id_cluster}"; : "${REMOTE_REPO:=/home/visko/home_automation}"
+: "${PEER_HOST:=}"; : "${CLUSTER_KEY:=$HOME/.ssh/id_cluster}"; : "${CLUSTER_SSH_PORT:=22}"; : "${REMOTE_REPO:=/home/visko/home_automation}"
 : "${VIP:=192.168.0.200}"; : "${HOT_DB:=instance/db/hot.db}"
 # Tuned-state (SEEDED). Shadow tuner LOGS `proposed` only; the ACTIVE cadence stays RECONCILE_INTERVAL_S
 # until RECONCILE_MODE=active is flipped after the week-long shadow review.
@@ -38,8 +38,8 @@ RLOG="$RECONCILE_LOG"; SHADOWLOG="$RECONCILE_SHADOW_LOG"
 case "$HOT_DB" in /*) DB="$HOT_DB";; *) DB="$REPO/$HOT_DB";; esac   # absolute or repo-relative
 
 log(){ printf '%s reconcile %s\n' "$(date -Is)" "$*" | tee -a "$RLOG" 2>/dev/null || true; }
-RSH(){ ssh -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "visko@$PEER_HOST" "$@"; }
-SCP(){ scp -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$@"; }
+RSH(){ ssh -p "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "visko@$PEER_HOST" "$@"; }
+SCP(){ scp -P "${CLUSTER_SSH_PORT:-22}" -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=8 -o StrictHostKeyChecking=accept-new "$@"; }
 have_sqlite(){ command -v sqlite3 >/dev/null; }
 
 # the compactor horizon — everything with ts >= this is still in hot.db (matches compactor._cutoff_ts()).
