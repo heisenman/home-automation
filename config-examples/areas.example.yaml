@@ -24,6 +24,7 @@ areas:
   suite_a_bath:   { name: Bath A,        level: main_floor, zone: suite_a,     type: bathroom }
   suite_b_bed:    { name: Bedroom B,     level: main_floor, zone: suite_b,     type: bedroom }
   mech_closet:    { name: Mechanical,    level: main_floor, zone: utility,     type: mechanical }
+  staging:         { name: Staging,           level: none,       zone: utility,     type: none }
   porch:          { name: Porch,         level: main_floor, zone: exterior,    type: porch }
   attic:          { name: Attic,         level: attic,      zone: none,        type: monolithic }
   crawlspace:     { name: Crawlspace,    level: crawlspace, zone: none,        type: monolithic }

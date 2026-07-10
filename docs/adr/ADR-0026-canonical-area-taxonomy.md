@@ -1,7 +1,7 @@
 # ADR-0026 — Canonical area taxonomy: one room registry, drift-guarded, history-safe renames
 
 **Date:** 2026-07-04
-**Status:** Proposed — dev-authored starter, out for ops review + Hugh's taxonomy input.
+**Status:** **Accepted** — canonical room set blessed by Hugh 2026-07-10; drift-guard GREEN; reconcile complete (added `staging` bucket for parked devices).
 **Builds on:** the code-backed-doc + drift-guard pattern (ADR-0025 / `test_agents_nav`, ADR-0020 / `test_module_matrix`).
 **Related:** ADR-0001 (dictator owns the registry), ADR-0014 R4 (area rollups / control-source), the
 device-migrate maintenance primitive (`server/maintenance/device_migrate.py`).
