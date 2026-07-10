@@ -54,6 +54,33 @@ sudo-less. Verified: E1001 + Levoit configs both validate through the wrapper. S
 `docs/coord/SHARED-VENV-ISOLATION.md` + [[shared-venv-esphome-paho]]. *(Minor: `numpy==2.4.6` is pinned in
 `requirements.txt` but not installed in the shared venv — harmless, 0 usages in server/tools; left as-is.)*
 
+## 🗂️ 2026-07-10 — Retired ops board CLEARED (dev owns everything; trust-but-verified)
+
+The ops/dev split development model is **retired** — work happens here directly, on the live system. The ops
+section of the control board was cleared 2026-07-10 (Hugh). Each item was **verified against live/repo reality**
+(Hugh: "for all I know everything is done") before carry — only the genuinely-open ones survive.
+
+**Genuinely OPEN (verified 2026-07-10):**
+- **sudo-hardening-210** — VERIFIED `.210` still `visko ALL=(ALL) NOPASSWD: ALL`. Narrow sudoers to
+  `ha-services` + drop the broad bootstrap grant (`stage2-finish.sh --narrow-sudoers`); do LAST. Real security.
+- **broker-auth-posture** — VERIFIED `.210` broker still `allow_anonymous true`. The air gap (the gate
+  condition) now exists → add broker auth+ACL to the dev/failover brokers (the relay broker already has it).
+  `docs/decisions/broker-auth-posture.md`.
+- **vendor-harden-review** — VERIFIED no findings report exists; the gsl3670 stack-smash was patched in-tree,
+  but the full review of all vendored ESP drivers (unchecked reads / device-controlled loop bounds) + upstream
+  PRs is not done. Real security review.
+- **secure-boot-210** — Secure-Boot + flash-encryption on `.210` (Phase 8); deferred/medium-term, not started.
+
+**Verified DONE (dropped):** D1001 **bad-boot recovery** (ADR-0030 button-held bootloader recovery + immutable
+golden partition, accepted+implemented 2026-07-08; safe_mode `8b1b4d7`; boot-count self-heal PROVEN `de99205`)
+· **ota-verify-window-rollback** (recovery solved via golden partition; only a self-recovering first-OTA-retry
+annoyance remains — not worth tracking) · **tls-r9-auth** (TLS+auth live on `:8443`; token rotation/refresh
+present in `auth_tokens.py`) · **e1001-finish-features** (firmware/deploy complete; ≤2 low-pri bench residuals,
+offset likely covered by the battery-profile run — `docs/design/e1001-gap-register.md`).
+
+**Dropped (obsolete/speculative):** `ops-board-doc-reconcile` (this reconcile is it) · `network-init-tooling`
+(nice-to-have, not started) · `e1001-sd-backup-explore` (speculative, when an SD card is in hand).
+
 ## ✅ 2026-07-10 (RESOLVED — ADR-0033) — air-gap data-transfer mechanisms (build BOTH)
 
 **BOTH built + live 2026-07-10 (ADR-0033).** (1) Failover-bridge pass-through = the continuous relay: dedicated
