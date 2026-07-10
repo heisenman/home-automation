@@ -48,6 +48,8 @@ roles:
       - {unit: ha-controller.service,      must: active}   # overrides core's 'gated' -> MUST be active here
       - {unit: keepalived.service,         must: active}   # VRRP VIP (both dictators hold one)
       - {unit: ha-reconcile-history.service, must: active} # bidirectional hot.db reconcile (ADR-0016)
+      - {unit: ha-cluster-heartbeat.service, must: active} # publish this node's liveness on ha/cluster/<node>/heartbeat
+      - {unit: ha-cluster-watch.service,   must: active}   # NOTICE node failures: alert when a peer heartbeat goes stale
 
   # ── household-cluster: the .210 <-> .245 household pair's app-level cluster units (base variants) ──
   # NOT the air-gap pair: ha-2 <-> .210-standby uses keepalived VRRP + notify.sh + ha-ag-relay-coordinator,
@@ -55,7 +57,6 @@ roles:
   # want app-level ha-cluster-heartbeat, or is VRRP sufficient? If needed on ha-2, add it to air-gap-dictator.)
   household-cluster:
     units:
-      - {unit: ha-cluster-heartbeat.service, must: active} # publishes ha/cluster/# heartbeat
       - {unit: ha-relay-coordinator.service, must: gated}  # actuator-relay coord, VRRP-gated (base variant)
 
   # ── dev-bridge: internet-connected dev platform + HTTPS bridge to the air-gap dictator ─

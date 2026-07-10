@@ -1,0 +1,17 @@
+[Unit]
+Description=HA cluster node-failure watcher (alerts on a stale peer heartbeat — the "notice node failures" layer)
+Documentation=file:///home/visko/home_automation/docs/REQUIRED-SERVICES.md
+After=network-online.target
+
+[Service]
+WorkingDirectory=/home/visko/home_automation
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+EnvironmentFile=-/home/visko/home_automation/instance/cluster.env
+# HA_BROKER selects which broker's ha/cluster/# it watches (default localhost). Point a standby's watcher at
+# the dictator's broker (VIP) if the two aren't bridged, so it can see the dictator's heartbeat go stale.
+ExecStart=/home/visko/home_automation/venv/bin/python3 -m server.cluster.node_watch
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target
