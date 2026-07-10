@@ -39,6 +39,9 @@ logger:
   level: INFO                     # final flash — bump back to DEBUG only when diagnosing MCU comms
 
 api:
+  reboot_timeout: 0s               # MQTT-driven node: nothing connects to the native API, so the default
+                                   # 15-min no-client reboot fires forever. Disable it. (ESPHome fleet fix;
+                                   # same class as E1001 — see [[esphome-api-reboot-timeout]] / commit 6e29d94)
 
 ota:
   - platform: esphome
@@ -71,7 +74,7 @@ web_server:
   port: 80
 
 mqtt:
-  broker: 192.168.1.210          # ha-2 air-gap dictator (born air-gap; broker is anonymous-on-LAN, no creds)
+  broker: 192.168.1.200          # 5c: VIP (was .1.210 host) so a failover keeps the node connected; broker anonymous-on-LAN, no creds
   port: 1883
 
 uart:
