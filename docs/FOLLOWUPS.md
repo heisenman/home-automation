@@ -7,22 +7,27 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
-## 🔌 2026-07-10 — 5c fallout: 3 offline gas nodes + esphome-in-shared-venv
+## ✅ 2026-07-10 (RESOLVED) — 5c fallout: 3 offline gas nodes + esphome-in-shared-venv
 
-**Offline air-gap edge nodes (device-health — ops-relevant).** During the 5c VIP repoint, 3 native-C nodes
-were **not connected** so couldn't be repointed (repoint cmd isn't retained):
-- `coffice_c6` — last real publish **2026-07-09 03:38** → `gas_c_office` (SGP40 VOC) has been **stale >24h**.
-- `hoffice_c6` — last data **~2026-07-10 03:45** → `gas_h_office` (BME680) coverage dropped.
-- `standby_c6` — retained LWT `offline`.
-These predate the repoint (verified via retained timestamps — not caused by it). **Action:** (1) investigate
-why they're dark (power / crash / OTA-reject class — [[c6-fleet-ota-reject]]); (2) re-run `repoint_node.py
---node <n> --broker mqtt://192.168.1.200:1883` once each is back online. The stale gas coverage is itself a
-monitoring gap. Handy: `ssh root@192.168.1.1 cat /tmp/dhcp.leases` = live IP→hostname on the air-gap net.
+**Offline air-gap edge nodes — RESOLVED 2026-07-10.** Verified live against the air-gap broker (VIP .200);
+the "3 offline" list turned out better than the note above:
+- `hoffice_c6` — **self-recovered** before intervention; live on .200, fresh telemetry, relaying BLE meters +
+  `gas_h_office`. No action needed.
+- `coffice_c6` — was a **~24h hung radio** (not mis-pointed). Hugh power-cycled it; it rejoined **already on
+  .200** (no repoint needed), storing to ha-2 `hot.db`, and `gas_c_office` VOC index recovered after SGP40
+  re-conditioning. Healthy.
+- `standby_c6` — **intentionally unplugged** (a spare, "standby" = not deployed). Correct as-is.
+Net: the whole native-C gas fleet is accounted for; **no node needed cable-flash / bring-back to 210** (the
+OTA-reject class [[c6-fleet-ota-reject]] appears resolved — cbed/hbed/hoffice all took their repoint OTA fine).
 
-**esphome in the SHARED venv (latent hazard).** `venv/` currently has `esphome 2026.6.4`. Right now paho is
-still `2.1.0` (services safe), but a reinstall could downgrade it and break every `ha-*` service on restart.
-Move esphome to an isolated venv/pipx (the failover already has its own venv). Coordinate: the E1001 ops
-instance needs esphome too. See `docs/coord/SHARED-VENV-ISOLATION.md` + [[shared-venv-esphome-paho]].
+**esphome removed from the SHARED venv — RESOLVED 2026-07-10.** `venv/pip uninstall esphome` (it was the
+`paho-mqtt<2` landmine; `pip check` had already flagged it broken vs the installed paho 2.1.0). `pip check`
+now clean, paho stays 2.1.0, ha-* service modules still import fine (no restart needed — they never imported
+esphome). The **canonical esphome path is now docker** via the new `tools/esphome` wrapper
+(`ghcr.io/esphome/esphome:latest`, image already on .210); `visko` added to the `docker` group so it runs
+sudo-less. Verified: E1001 + Levoit configs both validate through the wrapper. See
+`docs/coord/SHARED-VENV-ISOLATION.md` + [[shared-venv-esphome-paho]]. *(Minor: `numpy==2.4.6` is pinned in
+`requirements.txt` but not installed in the shared venv — harmless, 0 usages in server/tools; left as-is.)*
 
 ## 📡 2026-07-10 — Action item (LATER, Hugh): air-gap data-transfer mechanisms (build BOTH)
 

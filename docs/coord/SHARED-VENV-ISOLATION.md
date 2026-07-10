@@ -78,9 +78,27 @@ systemctl list-units 'ha-ag-*' --state=failed --no-legend || echo "(none failed)
 also check the service actually did its job — e.g. the writer logs `MQTT connected` (no `AttributeError`), and
 the API answers a real route (`curl -s -o /dev/null -w '%{http_code}' localhost:8124/api/v1/rooms` → `200`).
 
+## esphome: use the docker wrapper (canonical)
+
+esphome runs via **docker only** — `tools/esphome` wraps `ghcr.io/esphome/esphome:latest` so its
+`paho-mqtt<2` pin never touches the shared `venv/`. `visko` is in the `docker` group (sudo-less). Run it from
+the config directory:
+
+```bash
+cd provisioning/reterminal/e1001
+../../../tools/esphome config  e1001.yaml                       # validate
+../../../tools/esphome compile e1001.yaml                       # build
+../../../tools/esphome upload  e1001.yaml --device 192.168.1.131  # OTA
+HA_ESPHOME_DEVICE=/dev/ttyUSB0 ../../../tools/esphome run e1001.yaml  # cable flash
+```
+
+esphome was removed from the shared `venv/` on 2026-07-10 (`pip uninstall esphome`; `pip check` clean, paho
+stays 2.1.0, no ha-* restart needed — services never imported it). **Do not `pip install esphome` back into
+`venv/`.**
+
 ## Standing rule for co-resident instances
 
-- **esphome does not belong in the shared `venv/`.** Install it in its **own** venv or via `pipx`. It pins
+- **esphome does not belong in the shared `venv/`.** Use `tools/esphome` (docker). It pins
   `paho-mqtt<2` and will poison every `ha-*` service the moment one restarts.
 - If a Python tool suddenly `AttributeError`s on a stdlib-looking import, **suspect a co-resident `pip install`**
   changed the shared venv. Check `venv/bin/pip freeze | grep paho` first.

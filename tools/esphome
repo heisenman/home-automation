@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# Canonical esphome entrypoint for this repo.
+#
+# esphome MUST NOT live in the shared venv/ — it pins paho-mqtt<2, which silently
+# downgrades paho and breaks every ha-* service on its next restart (twice-burned;
+# see docs/coord/SHARED-VENV-ISOLATION.md + memory shared-venv-esphome-paho). So we
+# run the pinned upstream docker image instead — full isolation, zero venv contact.
+#
+# Usage (run from the config directory, e.g. provisioning/reterminal/e1001):
+#   ../../../tools/esphome config   e1001.yaml           # validate
+#   ../../../tools/esphome compile  e1001.yaml           # build
+#   ../../../tools/esphome upload   e1001.yaml --device 192.168.1.131   # OTA
+#   ../../../tools/esphome logs     e1001.yaml --device 192.168.1.131
+#   HA_ESPHOME_DEVICE=/dev/ttyUSB0 ../../../tools/esphome run e1001.yaml # cable flash
+#
+# --network host: OTA/mDNS/logs reach the device on the LAN.
+# $PWD -> /config: esphome reads the yaml + writes its .esphome/ build cache here.
+set -euo pipefail
+
+IMAGE="${HA_ESPHOME_IMAGE:-ghcr.io/esphome/esphome:latest}"
+
+# Prefer sudo-less docker (visko is in the docker group). Fall back to sudo if the
+# daemon socket isn't reachable — but note: sudo docker writes root-owned files into
+# ./.esphome (chown back with: sudo chown -R "$USER" .esphome).
+DOCKER="docker"
+if ! docker info >/dev/null 2>&1; then
+  DOCKER="sudo docker"
+fi
+
+# Pass a serial device through only for cable flashing (opt-in via env).
+DEV_ARGS=()
+if [[ -n "${HA_ESPHOME_DEVICE:-}" && -e "${HA_ESPHOME_DEVICE}" ]]; then
+  DEV_ARGS=(--device "${HA_ESPHOME_DEVICE}")
+fi
+
+# -t only when attached to a TTY (keeps it usable in scripts/CI).
+TTY_ARGS=()
+[[ -t 0 && -t 1 ]] && TTY_ARGS=(-it)
+
+exec $DOCKER run --rm "${TTY_ARGS[@]}" --network host \
+  -v "$PWD":/config \
+  "${DEV_ARGS[@]}" \
+  "$IMAGE" "$@"
