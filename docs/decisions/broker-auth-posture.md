@@ -41,3 +41,28 @@ air-gap make anon an acceptable, documented risk in the meantime.
 Couple this to **`openwrt-router-onboard` → `network-init-tooling`**, not a standalone task. No change to 210
 today; revisit at air-gap. (If you disagree and want it now, it's a ~1-session cutover but touches every
 client — say the word and I'll sequence it so nothing drops.)
+
+---
+
+## RESOLUTION 2026-07-10 (Hugh) — DECIDED: stay anon on both dev (.210) and air-gapped PROD (ha-2)
+
+The air-gap landed, so this got re-scoped (`broker-auth-rescope`) under the revised posture
+(`auth-posture-by-network-context`: internet=REQUIRED, dev=OPTIONAL, air-gapped-PROD=ENABLED). The interactive
+session did the missing **ha-2-side client census** (`provisioning/broker-auth/HA2-BROKER-CENSUS.md`, @677aa6b)
+and it changed the calculus:
+
+- **ha-2 is anon** (`allow_anonymous true`). Authing it is **not** a server-env change — it's a **fleet-wide
+  credential campaign**: ~11 air-gap edge devices across **3 cred mechanisms** (native-enroll / ESPHome-compiled
+  / Tasmota-console) + ~13 services + the `.245` straddle, **all-or-nothing**, deployed to air-gapped ha-2 via
+  scp (deploy-drift hazard).
+- **Marginal gain = telemetry-injection protection ONLY** — actuation is already HMAC-gated per-device
+  (ADR-0010), so control is safe regardless of broker auth.
+- **Decision (Hugh):** improvement marginal, effort high, and the system already carries heavy deferred
+  fleet-touching risk (device-admin UI, ADR-0034 taxonomy not yet deployed to prod, module-refactor OTA that
+  itself must hit nearly every device). **Do not add another such campaign.** The air-gap network boundary
+  (ADR-0031 "trusted air-gap LAN") is taken to satisfy the posture's "air-gapped PROD = ENABLED" intent.
+- **`.210` dev broker** stays anon too (OPTIONAL per posture; it's the target whose auth flip kept
+  auto-reverting and breaking the coord bus).
+- **Task `broker-auth-rescope` = CANCELLED.** Census retained as reference if the posture is ever revisited
+  (e.g. an untrusted device joins the air-gap net, or a device-touch OTA window makes per-node creds ~free to
+  fold in).

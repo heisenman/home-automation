@@ -1,5 +1,13 @@
 # ha-2 PROD broker — client census (for broker-auth-rescope, air-gap side)
 
+> **DECISION 2026-07-10 (Hugh): NOT proceeding. `broker-auth-rescope` KILLED. ha-2 stays anon.**
+> Marginal gain (telemetry-injection only; actuation already HMAC-gated) vs. a high-effort, all-or-nothing,
+> fleet-wide cred campaign — and the system already carries enough deferred fleet-touching risk (device-admin
+> UI, ADR-0034 taxonomy not yet on prod, module-refactor OTA). Air-gap isolation (ADR-0031 "trusted air-gap
+> LAN") is taken to satisfy the "air-gapped PROD = ENABLED" intent. This census is retained as reference in
+> case the posture is revisited. See `docs/decisions/broker-auth-posture.md`.
+
+
 Compiled **2026-07-10 by the interactive session (seat dev4)** directly from ha-2 (`192.168.1.210`) over the
 air-gap leg — the census the `.210`-side `CLUSTER-BROKER-INVENTORY.md` explicitly *could not* do
 ("dev-reported; not inspected from .210"). Read-only: `ssh` + `ss` + mosquitto-log grep. **No writes to prod.**
