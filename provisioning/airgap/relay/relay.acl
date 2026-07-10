@@ -9,3 +9,4 @@ topic readwrite relay/#
 user ha2
 topic write relay/+/request
 topic read relay/+/response
+topic write relay/alert/out

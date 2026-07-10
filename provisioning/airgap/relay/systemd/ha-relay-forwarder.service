@@ -1,0 +1,19 @@
+[Unit]
+Description=ha-relay alert forwarder — off-network ntfy egress toggle (ADR-0033 Phase 3, default OFF)
+After=ha-relay-broker.service
+Wants=ha-relay-broker.service
+
+[Service]
+Type=simple
+User=ha-relay
+Group=ha-relay
+ExecStart=/opt/ha-relay/venv/bin/python /opt/ha-relay/relay-alert-forwarder.py
+EnvironmentFile=-/etc/ha-relay/relay.env
+Restart=always
+RestartSec=3
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

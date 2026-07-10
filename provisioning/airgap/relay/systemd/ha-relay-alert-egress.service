@@ -1,0 +1,16 @@
+[Unit]
+Description=ha-2 alert egress bridge -> relay bus (ADR-0033 Phase 3)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=visko
+WorkingDirectory=/home/visko/home_automation
+EnvironmentFile=/home/visko/home_automation/instance/relay.env
+ExecStart=/home/visko/home_automation/venv/bin/python provisioning/airgap/relay/relay-alert-egress.py
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
