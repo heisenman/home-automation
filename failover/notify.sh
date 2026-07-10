@@ -10,6 +10,10 @@ set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && pwd)"
 [ -f "$REPO/instance/cluster.env" ] && . "$REPO/instance/cluster.env"
 : "${CONTROLLER_UNIT:=ha-controller}"; : "${RELAY_COORD_UNIT:=ha-relay-coordinator}"; : "${PEER_HOST:=}"; : "${CLUSTER_KEY:=$HOME/.ssh/id_cluster}"
+# Unit names are parameterized (defaults = the household set) so a SECOND, co-resident cluster instance on
+# the same host — e.g. an air-gap failover sharing a box with a dev dictator — restarts ITS OWN units on a
+# VRRP transition and never the other stack's. Set API_UNIT/EDGE_MAPPER_UNIT in that instance's cluster.env.
+: "${API_UNIT:=ha-api}"; : "${EDGE_MAPPER_UNIT:=ha-edge-mapper}"
 : "${VIP:=192.168.0.200}"; : "${BACKUP_GRACE:=4}"   # see BACKUP branch — startup-transient suppression
 LOG=/var/log/ha-failover.log
 STATE="${3:-${1:-}}"
@@ -18,7 +22,7 @@ log(){ printf '%s notify[%s] %s\n' "$(date -Is)" "$STATE" "$*" | tee -a "$LOG" 2
 peer_ssh(){ ssh -i "$CLUSTER_KEY" -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new "visko@$PEER_HOST" "$@"; }
 # ADR-0015 #9: restart ha-api so its control plane re-evaluates the VIP gate (mounts on the dictator,
 # stays read-only on the standby). Best-effort, active-only, never blocks the VRRP transition.
-api_remount(){ systemctl is-active --quiet ha-api && { sudo systemctl restart ha-api 2>/dev/null && log "ha-api restarted ($1) — control plane re-evaluates VIP gate" || log "ha-api restart skipped/failed (non-fatal)"; }; return 0; }
+api_remount(){ systemctl is-active --quiet "$API_UNIT" && { sudo systemctl restart "$API_UNIT" 2>/dev/null && log "$API_UNIT restarted ($1) — control plane re-evaluates VIP gate" || log "$API_UNIT restart skipped/failed (non-fatal)"; }; return 0; }
 # ADR-0015 Phase B: bind ha-relay-coordinator to VRRP role so ONLY the dictator signs+publishes relay
 # allowlists (one-writer invariant, like the controller). MASTER (re)starts it AFTER the edge-mapper recompute
 # so it re-evaluates coverage from THIS box's reach; demotion/fault stops it. Best-effort, non-blocking; clean
@@ -55,8 +59,8 @@ case "$STATE" in
     # ADR-0015 §3: recompute relay coverage from THIS box's own reach (the new dictator hears a different
     # set). Replicate-to-seed (sync-standby brought mesh.db); recompute-to-be-correct (restart the mapper).
     # Best-effort, active-only, never blocks the takeover.
-    if systemctl is-active --quiet ha-edge-mapper; then
-      sudo systemctl restart ha-edge-mapper 2>/dev/null && log "edge-mapper restarted — recomputing coverage from local reach" || log "edge-mapper restart skipped/failed (non-fatal)"
+    if systemctl is-active --quiet "$EDGE_MAPPER_UNIT"; then
+      sudo systemctl restart "$EDGE_MAPPER_UNIT" 2>/dev/null && log "$EDGE_MAPPER_UNIT restarted — recomputing coverage from local reach" || log "$EDGE_MAPPER_UNIT restart skipped/failed (non-fatal)"
     fi
     relay_coord start MASTER   # this box now signs+publishes relay allowlists (re-eval after coverage recompute)
     api_remount MASTER   # mount the control plane now that this node holds the VIP
