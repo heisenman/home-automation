@@ -5,6 +5,7 @@
 #
 #   env: PRIMARY_HOST(=210) STANDBY_HOST(=245) VIP(=.200) BROKER(=VIP) CLUSTER_KEY(ssh key, optional)
 #        HEARTBEAT_FRESH(=12s)
+#        ASYMMETRIC pairs: STANDBY_REPO / STANDBY_CTRL_UNIT (and PRIMARY_* if it differs) — see below.
 # Synthesis #1 (docs/retro/dev-retro-synthesis.md): "invariant-first, verify state on the bus."
 set -uo pipefail
 PRIMARY="${PRIMARY_HOST:-192.168.0.210}"
@@ -14,6 +15,15 @@ BROKER="${BROKER:-$VIP}"
 HEARTBEAT_FRESH="${HEARTBEAT_FRESH:-12}"
 KEY="${CLUSTER_KEY:-$HOME/.ssh/id_cluster}"   # default to the cluster key like the other failover scripts (else SSH-to-peer false-fails)
 REPO_REMOTE="${REPO_REMOTE:-/home/visko/home_automation}"
+# Per-host overrides for an ASYMMETRIC pair (e.g. the co-resident air-gap failover: ha-2 runs from
+# ~/home_automation with unit ha-controller, while the .210 standby runs from ~/ha-airgap-standby with
+# unit ha-ag-controller). Default to the symmetric values so the household pair is unchanged. Set
+# STANDBY_REPO / STANDBY_CTRL_UNIT (and PRIMARY_* if it also differs) when the two boxes diverge — else
+# the DB/parquet/controller probes read the WRONG store/unit on the standby and false-FAIL.
+PRIMARY_REPO="${PRIMARY_REPO:-$REPO_REMOTE}";  STANDBY_REPO="${STANDBY_REPO:-$REPO_REMOTE}"
+PRIMARY_CTRL_UNIT="${PRIMARY_CTRL_UNIT:-ha-controller}";  STANDBY_CTRL_UNIT="${STANDBY_CTRL_UNIT:-ha-controller}"
+repo_of(){ [ "$1" = "$STANDBY" ] && echo "$STANDBY_REPO" || echo "$PRIMARY_REPO"; }
+ctrl_of(){ [ "$1" = "$STANDBY" ] && echo "$STANDBY_CTRL_UNIT" || echo "$PRIMARY_CTRL_UNIT"; }
 SSH(){ ssh ${KEY:+-i "$KEY"} -o BatchMode=yes -o ConnectTimeout=6 -o StrictHostKeyChecking=accept-new "$@"; }
 SELF_IPS=" $(hostname -I 2>/dev/null) "
 is_self(){ [[ "$SELF_IPS" == *" $1 "* ]]; }
@@ -34,7 +44,7 @@ echo "cluster-doctor $(date -Is)  primary=$PRIMARY standby=$STANDBY vip=$VIP"
 declare -A CTRL VIPH KA SQL REACH
 for h in "$PRIMARY" "$STANDBY"; do
   if ! out=$(on "$h" "echo REACH=yes;
-      echo CTRL=\$(systemctl is-active ha-controller 2>/dev/null);
+      echo CTRL=\$(systemctl is-active $(ctrl_of "$h") 2>/dev/null);
       ip -o addr show 2>/dev/null | grep -qw $VIP && echo VIPH=yes || echo VIPH=no;
       echo KA=\$(systemctl is-active keepalived 2>/dev/null);
       command -v sqlite3 >/dev/null && echo SQL=yes || echo SQL=no"); then
@@ -111,7 +121,7 @@ else
   for h in "$PRIMARY" "$STANDBY"; do
     [ "${REACH[$h]}" = yes ] || { wn "$h unreachable — can't audit dictator config"; continue; }
     miss=""
-    for f in "${crit_files[@]}"; do on "$h" "test -s $REPO_REMOTE/$f" || miss="$miss $f"; done
+    for f in "${crit_files[@]}"; do on "$h" "test -s $(repo_of "$h")/$f" || miss="$miss $f"; done
     if [ -z "$miss" ]; then ok "$h has all ${#crit_files[@]} critical dictator files"
     else no "$h MISSING critical dictator file(s):$miss — a promote/takeover here can't actuate (unknown-device)"; fi
   done
@@ -131,7 +141,7 @@ for h in "$PRIMARY" "$STANDBY"; do [ "${VIPH[$h]}" = no ] && standby_node="$h"; 
 if [ -z "$standby_node" ]; then
   wn "no clear non-VIP box (unreachable or split) — skipping divergence-gap check"
 else
-  maxts=$(on "$standby_node" "sqlite3 ~/home_automation/instance/db/hot.db 'SELECT MAX(ts) FROM readings;'")
+  maxts=$(on "$standby_node" "sqlite3 $(repo_of "$standby_node")/instance/db/hot.db 'SELECT MAX(ts) FROM readings;'")
   if [ -z "$maxts" ]; then
     wn "standby $standby_node: no readings in hot.db to gauge the divergence gap (fresh box?) — skipping"
   else
@@ -160,8 +170,8 @@ rc_settled=$(date -u -d "1 hour ago" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null || date -u 
 if [ -z "$rc_cut" ] || [ -z "$rc_settled" ]; then
   wn "couldn't compute reconcile window bounds (date) — skipping convergence check"
 else
-  cA=$(on "$PRIMARY" "sqlite3 ~/home_automation/instance/db/hot.db \"SELECT COUNT(*) FROM readings WHERE ts>='$rc_cut' AND ts<'$rc_settled';\"")
-  cB=$(on "$STANDBY" "sqlite3 ~/home_automation/instance/db/hot.db \"SELECT COUNT(*) FROM readings WHERE ts>='$rc_cut' AND ts<'$rc_settled';\"")
+  cA=$(on "$PRIMARY" "sqlite3 $(repo_of "$PRIMARY")/instance/db/hot.db \"SELECT COUNT(*) FROM readings WHERE ts>='$rc_cut' AND ts<'$rc_settled';\"")
+  cB=$(on "$STANDBY" "sqlite3 $(repo_of "$STANDBY")/instance/db/hot.db \"SELECT COUNT(*) FROM readings WHERE ts>='$rc_cut' AND ts<'$rc_settled';\"")
   if ! [[ "$cA" =~ ^[0-9]+$ && "$cB" =~ ^[0-9]+$ ]]; then
     wn "couldn't read settled-window counts on both boxes (unreachable?) — skipping convergence check"
   else
@@ -185,7 +195,7 @@ arch_stats(){ # $1=host -> "rows|earliest" from that box's parquet archive (via 
   local pyexpr='import glob,duckdb,sys
 f=[x for x in glob.glob(sys.argv[1]+"/**/*.parquet",recursive=True) if "/year=0/" not in x]
 print(("0|") if not f else "{}|{}".format(*duckdb.connect().execute(f"SELECT COUNT(*),MIN(ts) FROM read_parquet({f!r},union_by_name=true)").fetchone()).replace("None",""))'
-  on "$1" "$REPO_REMOTE/venv/bin/python3 -c '$pyexpr' '$REPO_REMOTE/instance/db/parquet'"
+  local r; r=$(repo_of "$1"); on "$1" "$r/venv/bin/python3 -c '$pyexpr' '$r/instance/db/parquet'"
 }
 if [ "${REACH[$PRIMARY]}" = yes ] && [ "${REACH[$STANDBY]}" = yes ]; then
   pStat=$(arch_stats "$PRIMARY"); sStat=$(arch_stats "$STANDBY")
@@ -216,7 +226,7 @@ fi
 hdr "Archive manifest integrity (ADR-0004)"
 for h in "$PRIMARY" "$STANDBY"; do
   [ "${REACH[$h]}" = yes ] || { wn "$h unreachable — skipping manifest check"; continue; }
-  mout=$(on "$h" "$REPO_REMOTE/venv/bin/python3 $REPO_REMOTE/tools/verify_hashes.py --parquet-dir $REPO_REMOTE/instance/db/parquet"); mrc=$?
+  rh=$(repo_of "$h"); mout=$(on "$h" "$rh/venv/bin/python3 $rh/tools/verify_hashes.py --parquet-dir $rh/instance/db/parquet"); mrc=$?
   msum=$(printf '%s\n' "$mout" | sed -n 's/.*Result: //p' | head -1)
   case "$mrc" in
     0) ok "$h parquet manifest consistent (${msum:-ok})" ;;
