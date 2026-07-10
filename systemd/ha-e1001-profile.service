@@ -1,0 +1,18 @@
+[Unit]
+Description=E1001 battery profile — full arc (capture -> fit LUT -> bake offsets -> push -> verify), code-driven
+Documentation=file:///home/visko/home_automation/docs/design/e1001-overnight-profile-runbook.md
+After=network-online.target
+# Manually/chain triggered (ha-e1001-charge.service starts it once the cell is charged); NOT enabled at boot.
+
+[Service]
+Type=oneshot
+# a full load-3 discharge->charge cycle runs ~10-14h; let the profiler manage its own time cap
+TimeoutStartSec=0
+WorkingDirectory=/home/visko/home_automation
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+# Owns the whole lifecycle: capture to instance/db/e1001-profile/, fit the V->SoC LUT, bake the salvaged
+# charging offset, push as data (no reflash), verify the retained profile flipped off "default", then
+# publish e1001-c-office/profile/status=done. Survives any session/tool that started it (own cgroup).
+ExecStart=/home/visko/home_automation/venv/bin/python3 tools/e1001_profile_run.py --run --broker 127.0.0.1
+# 5 = pushed-but-unverified (still a real push); don't mark the unit hard-failed for that
+SuccessExitStatus=0 5

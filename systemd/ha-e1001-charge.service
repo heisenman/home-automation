@@ -1,0 +1,16 @@
+[Unit]
+Description=E1001 charge-up — assert charging, verify the cell climbs, then chain the profiler
+Documentation=file:///home/visko/home_automation/docs/design/e1001-overnight-profile-runbook.md
+After=network-online.target
+# Start this to run the whole unattended arc: charge to threshold, then auto-start ha-e1001-profile.service.
+
+[Service]
+Type=oneshot
+# charge-from-empty can take a couple hours; charge tool has its own --timeout-min
+TimeoutStartSec=0
+WorkingDirectory=/home/visko/home_automation
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+# Puts the panel into a known charging state, confirms with telemetry that it's actually rising, and on
+# reaching --until-mv starts ha-e1001-profile.service (a SEPARATE unit => own cgroup => the profile run is
+# independent of this oneshot's lifecycle). --no-block inside the tool so this returns immediately after.
+ExecStart=/home/visko/home_automation/venv/bin/python3 tools/e1001_charge.py --broker 127.0.0.1 --until-mv 4100 --then-profile
