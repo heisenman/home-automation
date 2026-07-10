@@ -932,3 +932,29 @@ warm standby of the ha-2 dictator (air-gap, VIP `.1.200`) — box-local dev-conv
 - Gotchas: shared-venv paho re-downgraded by esphome (→v2; failover wants its OWN venv); ha-2 air-gapped so
   `failover/` scripts rsync'd (can't `git pull`).
 - **Remaining:** 5c client-repoint `.1.210`→VIP `.1.200` · failover drill · failover own venv.
+
+---
+
+## 2026-07-10 — Unregistered-device data quarantine (ADR-0032)
+
+**Robustness net for the migrated-device silent data-drop** (`airgap_router_pm`/`failover_pm` lost ~23h on
+ha-2: their registry entries arrived commented, so `tasmota_bridge` logged `UNKNOWN` once and dropped every
+message — memory `migrated-device-silent-drop`). Hugh's fix: never drop unregistered telemetry, quarantine
+it to a **separate file** for merge-or-delete, and **never auto-delete** it.
+
+- **`server/ingest/quarantine.py`** — `QuarantineSink` (bridge write side) appends dropped messages to
+  `instance/db/quarantine.db` (NOT hot.db): raw payload verbatim + best-effort registry-independent canonical
+  metrics + a per-device rollup; first sighting fires `home/_alert/new` (`live_but_unregistered`) so it never
+  fails silent. Never raises into the bridge (quarantine failure ⇒ log once + drop as before).
+  `QuarantineStore` (read/merge/purge, report-dict API).
+- **Hooked** at each bridge's existing `UNKNOWN` branch: `tasmota_bridge` (the incident path), `edge_mapper`
+  (unknown BLE MAC), `levoit_bridge` (defense-in-depth — it subscribes per-registered-name so its real risk
+  is *non-subscription*, noted in the ADR).
+- **`tools/quarantine.py`** — `list`/`inspect`/`merge`/`purge`. `merge` replays captured readings into hot.db
+  through the writer's own `_insert_readings` (lossless), marks rows merged (does NOT delete), and with
+  `--register` appends the device to its source registry (the ACTIVATE-on-destination fix). `purge` is
+  user-directed only (`--yes`).
+- **Retention:** no cap, no eviction — only merge or explicit purge removes rows (`data-storage-is-primary`).
+- **Rollout:** purely additive (only captures what was already dropped; happy path unchanged), on by default
+  via `--quarantine-db`/`HA_QUARANTINE_DB`. **Enabling on the live fleet (ha-2 + dev) is a separate Hugh-gated
+  deploy** — this pass lands the code + 6 tests (`tests/test_quarantine.py`), repo stays prod-pure.

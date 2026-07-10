@@ -75,10 +75,12 @@ def _utc_now() -> str:
 
 
 class EdgeMapper:
-    def __init__(self, registry: dict[str, dict], client: mqtt.Client, relay_dedup: bool = False):
+    def __init__(self, registry: dict[str, dict], client: mqtt.Client, relay_dedup: bool = False,
+                 quarantine=None):
         self._registry_get = lambda: registry     # swapped for a live source by attach_reloader()
         self._mqtt = client
         self._unknown_seen: set[str] = set()
+        self._quarantine = quarantine             # QuarantineSink | None (ADR-0032)
         # ADR-0015 Phase A: when on, republish a meter only from its single preferred source (drops the
         # rest); local readings flow in as node "local" via home/edge/local/<mac>/adv. Default OFF =
         # today's behaviour (every source republishes; the writer's UNIQUE(...) dedups at the DB).
@@ -184,6 +186,15 @@ class EdgeMapper:
                 self._unknown_seen.add(mac)
                 log.warning("edge reading from UNKNOWN mac=%s (node=%s) — add it to the registry",
                             mac, payload.get("node"))
+            # ADR-0032: quarantine the unregistered device's reading instead of dropping it silently.
+            if self._quarantine is not None and payload.get("metrics"):
+                parts = msg.topic.split("/")
+                node = payload.get("node") or (parts[2] if len(parts) > 3 else "unknown")
+                self._quarantine.capture(
+                    source="edge", identity=mac, topic=msg.topic, payload=payload,
+                    metrics=payload.get("metrics"), reading_ts=payload.get("ts"),
+                    transport=payload.get("transport", "ble-adv"),
+                    device_type_hint=payload.get("device_type"), recv_ts=_utc_now())
             return
 
         device_id = reg["device_id"]
@@ -236,6 +247,8 @@ def main() -> None:
     p.add_argument("--relay-dedup", action="store_true",
                    default=os.environ.get("HA_RELAY_DEDUP", "").lower() in ("1", "true", "yes"),
                    help="ADR-0015 Phase A: republish each meter only from its preferred source (default OFF)")
+    p.add_argument("--quarantine-db", default=os.environ.get("HA_QUARANTINE_DB", "instance/db/quarantine.db"),
+                   help="separate SQLite file for unregistered-device data (ADR-0032); '' disables")
     args = p.parse_args()
 
     logging.basicConfig(level=getattr(logging, args.log_level),
@@ -246,7 +259,12 @@ def main() -> None:
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     apply_credentials(client)
-    mapper = EdgeMapper(registry, client, relay_dedup=args.relay_dedup)
+    quarantine = None
+    if args.quarantine_db:
+        from server.ingest.quarantine import QuarantineSink
+        quarantine = QuarantineSink(args.quarantine_db,
+                                    alert_publish=lambda t, m: client.publish(t, m, qos=1))
+    mapper = EdgeMapper(registry, client, relay_dedup=args.relay_dedup, quarantine=quarantine)
     mapper.attach_reloader(RegistryReloader(args.registry, load_registry, logger=log))
     client.on_connect = mapper.on_connect
     client.on_message = mapper.on_message

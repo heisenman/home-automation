@@ -108,10 +108,11 @@ def state_metrics(state: dict) -> dict:
 
 
 class TasmotaBridge:
-    def __init__(self, registry: dict[str, dict], client: mqtt.Client):
+    def __init__(self, registry: dict[str, dict], client: mqtt.Client, quarantine=None):
         self._registry_get = lambda: registry     # swapped for a live source by attach_reloader()
         self._mqtt = client
         self._unknown: set[str] = set()
+        self._quarantine = quarantine             # QuarantineSink | None (ADR-0032)
 
     def attach_reloader(self, reloader) -> "TasmotaBridge":
         """Swap the static registry for a live mtime-reloading source so a device relocate
@@ -137,11 +138,6 @@ class TasmotaBridge:
             return
         tname, kind = parts[1], parts[2]
         reg = self._registry.get(tname)
-        if not reg:
-            if tname not in self._unknown:
-                self._unknown.add(tname)
-                log.warning("telemetry from UNKNOWN Tasmota topic %r — add it to the registry", tname)
-            return
         try:
             payload = json.loads(msg.payload.decode())
         except (ValueError, UnicodeDecodeError) as exc:
@@ -153,6 +149,19 @@ class TasmotaBridge:
         elif kind == "STATE":
             metrics = state_metrics(payload)
         else:
+            return
+
+        # ADR-0032: an UNKNOWN (unregistered) Tasmota device is live on the broker but has no identity to
+        # map to — instead of silently dropping its telemetry (the 2026-07-10 airgap_router_pm/failover_pm
+        # ~23h data loss), quarantine the raw message + best-effort metrics for later merge-or-purge.
+        if not reg:
+            if tname not in self._unknown:
+                self._unknown.add(tname)
+                log.warning("telemetry from UNKNOWN Tasmota topic %r — add it to the registry", tname)
+            if self._quarantine is not None and metrics:
+                self._quarantine.capture(source="tasmota", identity=tname, topic=msg.topic,
+                                         payload=payload, metrics=metrics, transport="wifi-mqtt",
+                                         device_type_hint="energy_meter", recv_ts=_utc_now())
             return
         if not metrics:
             return
@@ -177,6 +186,8 @@ def main() -> None:
     p.add_argument("--registry", default="instance/tasmota-devices.yaml", type=Path)
     p.add_argument("--broker", default=BROKER_HOST)
     p.add_argument("--broker-port", default=BROKER_PORT, type=int)
+    p.add_argument("--quarantine-db", default=os.environ.get("HA_QUARANTINE_DB", "instance/db/quarantine.db"),
+                   help="separate SQLite file for unregistered-device data (ADR-0032); '' disables")
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = p.parse_args()
 
@@ -188,7 +199,12 @@ def main() -> None:
 
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     apply_credentials(client)
-    bridge = TasmotaBridge(registry, client)
+    quarantine = None
+    if args.quarantine_db:
+        from server.ingest.quarantine import QuarantineSink
+        quarantine = QuarantineSink(args.quarantine_db,
+                                    alert_publish=lambda t, m: client.publish(t, m, qos=1))
+    bridge = TasmotaBridge(registry, client, quarantine=quarantine)
     bridge.attach_reloader(RegistryReloader(args.registry, load_registry, logger=log))
     client.on_connect = bridge.on_connect
     client.on_message = bridge.on_message

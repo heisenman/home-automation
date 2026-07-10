@@ -49,10 +49,15 @@ A migrated device silently stopped logging on ha-2 for **~23 h**: the config syn
 1. **Migration must ACTIVATE on the destination.** `device_migrate`/repoint/sync must register the device in
    the DESTINATION registry — not carry the SOURCE's deregistration. Add a post-migrate assertion: the device
    is registered + logging on its new home *before* the source deregisters.
-2. **Quarantine unregistered-device data (Hugh's robustness idea).** Instead of silently dropping telemetry
-   from a device that is live-on-broker but unregistered, write it to a **separate quarantine DB/table** for
-   later **merge-or-delete** (register → merge; junk → purge). Never fail silent; ideally ALERT on
-   "known-live-but-unregistered." Directly serves [[data-storage-is-primary]].
+2. **✅ Quarantine unregistered-device data (Hugh's robustness idea) — DONE 2026-07-10, ADR-0032.**
+   Instead of silently dropping telemetry from a device that is live-on-broker but unregistered, the ingest
+   bridges now append it to a **separate SQLite file** (`instance/db/quarantine.db`, never hot.db) via
+   `server/ingest/quarantine.py`. `tools/quarantine.py` is the merge-or-purge workflow: `merge` registers +
+   **replays the captured readings into hot.db** (lossless window recovery); `purge` is user-directed only.
+   Per Hugh, **nothing is ever auto-deleted** (no retention cap) — only a successful merge or explicit purge
+   removes rows. First-sighting fires a `home/_alert/new` (`kind: live_but_unregistered`) so it never fails
+   silent. Additive/safe by default; **enabling on the live ingest fleet is a separate Hugh-gated deploy.**
+   Serves [[data-storage-is-primary]].
 3. **Sanity sweep** (run once; make periodic): `comm -23 <live LWT/discovery> <registered>` → flag any
    live-but-unregistered device across every ingest registry.
 

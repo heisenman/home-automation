@@ -124,7 +124,32 @@ class LevoitBridge:
         self._unknown: set[str] = set()
         self._area_warned: set[str] = set()             # ADR-0027: warn once per device on area drift/fallback
         self._control_get = lambda: {}                  # control.yaml registry (device_id -> DeviceCtl)
+        self._quarantine = None                         # QuarantineSink | None (ADR-0032)
         self._lock = threading.Lock()
+
+    def attach_quarantine(self, sink) -> "LevoitBridge":
+        self._quarantine = sink
+        return self
+
+    def _quarantine_unknown(self, name: str, msg: mqtt.MQTTMessage) -> None:
+        """Capture a metric from an unregistered ESPHome node (ADR-0032). Best-effort; never raises."""
+        if self._quarantine is None:
+            return
+        _, _, suffix = msg.topic.partition("/")
+        mapped = _METRIC_MAP.get(suffix)
+        if not mapped:                                  # only real telemetry is worth keeping
+            return
+        try:
+            raw = msg.payload.decode().strip()
+        except UnicodeDecodeError:
+            return
+        metric, conv = mapped
+        value = conv(raw)
+        if value is None:
+            return
+        self._quarantine.capture(source="levoit", identity=name, topic=msg.topic, payload=raw,
+                                 metrics={metric: value}, transport="wifi-mqtt",
+                                 device_type_hint="air_purifier", recv_ts=_utc_now())
 
     def attach_reloader(self, reloader) -> "LevoitBridge":
         """Swap the static registry for a live mtime-reloading source so a device relocate
@@ -179,6 +204,10 @@ class LevoitBridge:
             if name not in self._unknown:
                 self._unknown.add(name)
                 log.warning("telemetry from UNKNOWN ESPHome node %r — add it to the registry", name)
+            # ADR-0032: quarantine an unregistered node's metric instead of dropping. NB: this bridge
+            # subscribes per-registered-name, so an unknown node is normally never received at all — the
+            # primary levoit risk is NON-subscription, not this drop; the hook is defense-in-depth.
+            self._quarantine_unknown(name, msg)
             return
         try:
             raw = msg.payload.decode().strip()
@@ -247,6 +276,8 @@ def main() -> None:
                    default=float(os.environ.get("HA_LEVOIT_HEARTBEAT_S", "300")),
                    help="re-emit each device snapshot every N seconds so its freshness signal never goes "
                         "stale (must stay well under the 1800s 'unreachable' alert; 0 disables)")
+    p.add_argument("--quarantine-db", default=os.environ.get("HA_QUARANTINE_DB", "instance/db/quarantine.db"),
+                   help="separate SQLite file for unregistered-device data (ADR-0032); '' disables")
     p.add_argument("--log-level", default="INFO", choices=["DEBUG", "INFO", "WARNING", "ERROR"])
     args = p.parse_args()
 
@@ -259,6 +290,10 @@ def main() -> None:
     client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
     apply_credentials(client)
     bridge = LevoitBridge(registry, client, heartbeat_s=args.heartbeat_s)
+    if args.quarantine_db:
+        from server.ingest.quarantine import QuarantineSink
+        bridge.attach_quarantine(QuarantineSink(args.quarantine_db,
+                                                alert_publish=lambda t, m: client.publish(t, m, qos=1)))
     bridge.attach_reloader(RegistryReloader(args.registry, load_registry, logger=log))
     # ADR-0027: area comes from control.yaml (single source), reload-aware, not levoit-devices.yaml.
     control_registry = args.registry.parent / "control.yaml"
