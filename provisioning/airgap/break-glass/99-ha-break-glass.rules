@@ -1,0 +1,4 @@
+# udev: when a volume labelled HA-RECOVER is inserted, fire the break-glass recovery service (ADR-0033 §5.1).
+# The service verifies the bundle's signature before doing anything — an unlabelled or unsigned USB does
+# nothing.
+ACTION=="add", SUBSYSTEM=="block", ENV{ID_FS_LABEL}=="HA-RECOVER", RUN+="/usr/bin/systemctl start ha-break-glass@%k.service"

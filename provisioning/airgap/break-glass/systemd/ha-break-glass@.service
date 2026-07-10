@@ -1,0 +1,7 @@
+[Unit]
+Description=ha break-glass recovery from /dev/%I (ADR-0033 §5.1)
+# oneshot: verify the signed bundle on the inserted volume, then self-repair.
+
+[Service]
+Type=oneshot
+ExecStart=/usr/local/sbin/breakglass-recover.sh /dev/%I
