@@ -28,24 +28,55 @@ sudo apt install -y keepalived            # needs the box's sudo password
    Confirm 245 stays BACKUP (no VIP) and its `ha-controller` stays **inactive** while 210 is healthy.
 3. Verify exactly one controller (210) — `tail -f /var/log/ha-failover.log` on both.
 
-## Controlled failover TEST (do once, supervised)
-Simulate primary death and confirm clean takeover + auto-demote:
-```bash
-# on 210: simulate failure
-sudo systemctl stop keepalived          # (or: stop ha-api / pull the cable)
-# within ~3-5s, on 245:  VIP appears, notify MASTER fences 210 + starts 245's controller
-ip addr show | grep 192.168.0.200       # now on 245
-journalctl -u ha-controller -n 5        # 245 making Midea decisions
-# >>> verify EXACTLY ONE controller active (245); 210's is stopped (fenced) <<<
+## Controlled failover DRILL — use `failover/failover-drill.sh` (ROADMAP A3)
+The drill scripts the whole test: preflight → induce → observe/assert → fail back → verify, capturing the
+measured RTO. **Default is `--dry-run` (READ-ONLY, safe anytime).** A live `--run` is gated on `HA_DRILL_CONFIRM`.
 
-# failback (primary supremacy, automatic):
-# on 210: recover
-sudo systemctl start keepalived         # 210 reclaims VIP after preempt_delay (30s)
-# 245 auto-demotes: keepalived BACKUP notify stops its controller, AND primary-watch enforces it.
-# verify: VIP back on 210, 210 controller active, 245 controller inactive.
+Two independent failover domains — pick with a flag:
+| Pair | Boxes | VIP | Controller units | Fence |
+|---|---|---|---|---|
+| `--household` (default) | .210 ⇄ .245 | .0.200 | `ha-controller` both | ssh |
+| `--airgap` | ha-2 ⇄ .210 | .1.200 | `ha-controller`(ha-2) / `ha-ag-controller`(.210) | **cluster bus** (ADR-0033) |
+
+```bash
+# 1. PREFLIGHT (no changes; run anytime, incl. on the live dictator):
+failover/failover-drill.sh --dry-run --airgap      # or --household
+#    -> PREFLIGHT GREEN means ready for a gated live run.
+
+# 2. CHECKPOINT the current baseline (snapshot to instance/drill-checkpoints/baseline-<pair>.txt):
+failover/failover-drill.sh checkpoint --airgap
+
+# 3. LIVE DRILL (GATED — Hugh OK + a window; briefly makes the STANDBY the controller):
+HA_DRILL_CONFIRM=I-UNDERSTAND failover/failover-drill.sh --run --airgap
+#    airgap --run seizes PRODUCTION ha-2's role onto .210 transiently — highest stakes.
+#    household --run makes .245 (fileserver) the controller transiently.
+#    add --actuate to also prove the new dictator can actuate (most gated).
 ```
-Expected: **never two active controllers** at the same instant (the stop-before-start fence + the
-zero-gap-is-OK invariant). If you ever see both active, STOP and disable keepalived on 245.
+It asserts **never two active controllers**, and on `--airgap` also that a **VALID fence appears in the old
+master's fence-listener log** (fence-over-bus worked). Reports the failover RTO vs the budget (`RTO_BUDGET_S`, 600s).
+
+### Recovery — THREE nets on a live run (nothing leaves the cluster headless)
+1. **EXIT trap** — restarts keepalived on both boxes on any exit (incl. Ctrl-C / a FAIL).
+2. **Dead-man** — a transient timer auto-runs `restore` after `DRILL_DEADMAN_S` (300s) even if the process is
+   **KILLED** (terminal death). Cancel on a clean run automatically; manual cancel: `systemctl stop drill-deadman-<pair>.timer`.
+3. **Standalone restore** — run by hand anytime:
+   ```bash
+   failover/failover-drill.sh restore --airgap    # force keepalived up both, wait primary reclaims VIP, assert single controller, cluster-doctor
+   ```
+A half-run drill still leaves a **WORKING** cluster (the standby serves) — `restore` just fails it back.
+
+### Abort matrix (if a live run misbehaves)
+| Symptom | Action |
+|---|---|
+| VIP doesn't move to target | low harm (old master still holds it) — `restore`, investigate keepalived/VRRP |
+| controller won't start on target | control GAP — `restore` immediately (brings the old master back) |
+| **SPLIT-BRAIN** (both controllers active) | STOP — `systemctl stop <controller>` on the NON-VIP box, verify fence, then `restore` |
+| failback: master won't reclaim VIP | manual `systemctl restart keepalived` on the primary; worst case assign VIP + start its controller by hand |
+| standby won't auto-demote | primary-watch should force it; else `systemctl stop <standby controller>` on the standby |
+
+> Note: `restore`/trap best-effort-start keepalived on the peer over SSH-sudo; on **.245** that start may WARN
+> (its sudo isn't NOPASSWD for keepalived) — cosmetic, keepalived is already up there and the drill only ever
+> stops/starts the **local** box's keepalived. The local recovery always works.
 
 ## Promote 245 PERMANENTLY (210 dead & being replaced) — user-permissioned ONLY
 Auto-failover never makes 245 permanent; to deliberately re-designate:
