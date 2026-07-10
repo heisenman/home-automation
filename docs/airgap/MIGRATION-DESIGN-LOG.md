@@ -881,3 +881,32 @@ Levoit Vital 200S (`levoit-office`, ESP32-C3). Reflashed once via the on-PCB UAR
 
 **Remaining migration: ONLY the panels** — D1001 → dev (pending ops handoff ack), E1001 → ops. Every other
 edge + actuator device is on ha-2, verified.
+
+---
+
+## 2026-07-09 — Cleanup framing: post-migration convergence + a box-local dev failover (ADR-0031)
+
+Hugh directed making `.210` the air-gap failover, then sharpened the scope across the discussion. Anchored
+in **ADR-0031**. Key decisions + findings:
+
+- **NORTH STAR (goal, not this action):** ha-2 must eventually run itself with **no AI oversight**
+  (hands-off/hardened). The fast migration did **not** achieve that; this is **step one**. Don't over-claim.
+- **Real house data is stranded on `.210`.** ha-2 is NOT a superset — verified gaps: rungs tier + weather
+  history **entirely absent on ha-2**; summaries 808→80; device_meta 17→4; control_log diverged both ways
+  (51,234 vs 45,266); readings diverged (120,265 vs 204,408). ⇒ **bidirectional union into ha-2** as
+  record-of-record. Existing reconcile only covers the **sensor tier**; rungs/weather/summaries/meta/
+  control_log need **row-level merge (not snapshot-overwrite)** or rebuild — no silent history loss.
+- **The `.210` 12G is dev cruft** (`instance/db/backups/` = 1,328 pre-mutation snapshots, mostly 2026-07-04
+  tooling runs), NOT house data (~120M real). **Production takes only real data + real dependent code/config;
+  dev cruft stays on `.210`** (Claude's to maintain). Do not pollute prod.
+- **`.210` failover = box-local dev convenience, NOT production.** Full separation (own checkout
+  `~/ha-airgap-standby/`, own DB, `ha-ag-*` units, own broker, VRID 61 / VIP `.1.200`). **Carve-out:** the
+  repo must NOT require/expect a bridge box or a two-system box; the straddle is gitignored/box-local; repo
+  edits stay generic. keepalived = one daemon, two `vrrp_instance` blocks. `notify.sh` to be parameterized
+  (API/edge-mapper unit names) so an air-gap transition never restarts the dev stack.
+- **Order:** Pillar 1 (converge → ha-2 complete) FIRST; then seed the standby from complete ha-2; then the
+  ongoing `ha-2⇄.210`-standby reconcile (standby-store only — dev never leaks to prod). Client repoint to
+  VIP `.1.200` is phased until the box is properly configured + the standby is proven.
+
+**Next:** data-intake inventory (per-class merge/rebuild strategy) → run the safe sensor tier → design the
+non-sensor row-level merges → then Pillar 2.
