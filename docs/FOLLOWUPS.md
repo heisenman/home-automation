@@ -7,6 +7,24 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 2026-07-10 — ADR-0034 device object model (Node/Ability/Entity) + `model_project.py`
+
+**Landed:** ADR-0034 (`99f22ce`) names the object-model spine — **Node** (physical unit / transport plane) *hosts*
+**Abilities** (the `CONFORMANCE.md` catalog A–K, reused) which *compose* **Entities** (device_id + area / semantic
+plane); category lives on the Ability, never the Node. Explainer `docs/DEVICE-MODEL.md` + AGENTS wiring (`5c99a54`).
+Verified against live registries by **`tools/model_project.py`** — the descriptive acceptance test — which
+projects every device onto the model: **`MODEL_LEAKS: 0`** on both this checkout and a drifted standby (the model
+holds; stale/orphan data lands in named buckets, not failures).
+
+- **Phase 2 (next, code-touching):** re-frame `device_push.classify()` into the Node-class enum
+  (`mqtt-broker`/`edge-signed`/`ble-passive`/`local-driver`); the missing `local-driver` row **absorbs
+  `device-push-actuator-class`**. Gated — do with tests + a failover-rebuild correctness check.
+- **Hygiene finding (from the projection):** `gas_c_office` surfaces on **two nodes** — `coffice_c6` (current) +
+  `c6-bench-gas` (legacy forward-compat alias in `devices.yaml`). Benign per the model (many-to-many), but the
+  legacy alias is stale-forever; **retire the `c6-bench-gas` entry** once no build references it.
+- **Phase 3 (deferred per Hugh):** registry/vocabulary convergence (fold into the CONFORMANCE ability-declaration
+  follow-on).
+
 ## ✅ 2026-07-10 (RESOLVED — `failover-ssh-decouple` COMPLETE + drill-validated) — failover comms off SSH
 
 **DONE (commits fa8a060 → c5138c2 → cc8c64c → b82b855).** The air-gap boundary (`.210 wlp2s0`) now carries

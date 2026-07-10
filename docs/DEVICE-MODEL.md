@@ -72,6 +72,11 @@ we name the three things separately.
   owns none of them. This is why an Entity's binding to a Node is many-to-many and time-varying — a meter is
   served by whichever relay heard it this window (the ADR-0015 preferred-source pick).
 
+**Liveness is an attribute of the *sense* ability, not the Entity.** An entity reads "fresh" or "stale" only
+through its originating sense ability's telemetry. A **pure-actuator** entity (traits only — e.g. `host_210`)
+produces no readings and is therefore *never* "stale": absence of telemetry is correct, not a fault. The
+projection tool enforces exactly this distinction.
+
 ## Reading the model — which question reads which primitive
 
 | You're asking… | Read the… | Because it's a… |
@@ -132,6 +137,21 @@ of every path is one shape — `home/<area>/<device_id>/state` — which is why 
 
 See [`docs/DEVICE-INTAKE.md`](DEVICE-INTAKE.md) for the full intake flow; this section is the object-model lens
 on it.
+
+## Validating the model against reality
+
+[`tools/model_project.py`](../tools/model_project.py) is the **descriptive acceptance test**: it reads the live
+registries + `hot.db` and forces every device through `Node → Ability → Entity`, then reports the fit.
+
+```
+tools/model_project.py           # human table + verdict   (exit 0 = holds, 2 = leak)
+tools/model_project.py --json     # machine-readable report
+```
+
+A **MODEL LEAK** (exit 2) is a device whose Node-class or Ability can't be named — an *unmodeled* thing, the
+only real failure. Everything else (**stale** registered entities, **orphan** live-but-unregistered data,
+**aliases** = one entity on multiple nodes) lands in a **named bucket** the model expects — those are hygiene
+signals, not model failures. Verified against both this checkout and a drifted standby: `MODEL_LEAKS: 0` on both.
 
 ## See also
 
