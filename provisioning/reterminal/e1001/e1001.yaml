@@ -223,7 +223,9 @@ external_components:
 
 mqtt:
   id: mqtt_client                    # referenced by the edge-node event publisher (home/edge/<node>/event)
-  broker: 192.168.1.210              # ha-2 air-gap dictator (anon-on-LAN; was household 192.168.0.210)
+  broker: 192.168.1.200              # air-gap VIP (keepalived-floated; 5c repoint 2026-07-10 — was host .1.210).
+                                     # broker-only float: bff_base_url + ntp_server stay at .1.210 (standby
+                                     # doesn't serve BFF/NTP on the VIP yet — fleet-consistent, see E1001-5C-REPOINT-HANDOFF).
   port: 1883
   on_connect:                        # re-assert the retained active-profile status on every (re)connect. The
     - delay: 5s                      # 5s settle: publishing INSIDE the connect callback races the client setup
