@@ -122,8 +122,10 @@ do_restore(){ FORCE_RUN=1
   [ "$(state_on "$PRIMARY" "$PRIMARY_CU")" = active ] && ok "primary $PRIMARY controller active" || wn "primary $PRIMARY controller not active yet"
   "$HERE/cluster-doctor.sh" >/dev/null 2>&1 && ok "cluster-doctor HEALTHY" || wn "cluster-doctor not green — investigate"; }
 
-arm_deadman(){ sudo systemd-run --unit="drill-deadman-$PAIR" --on-active="$DEADMAN_S" \
-    /usr/bin/runuser -u "$(id -un)" -- /bin/bash "$0" restore "--$PAIR" >/dev/null 2>&1 \
+arm_deadman(){ # transient timer runs `restore` as root if this process dies (root can read the key for the peer
+                # SSH; local sudo is a no-op). Cancelled on a clean run by disarm_deadman.
+  sudo systemd-run --unit="drill-deadman-$PAIR" --on-active="$DEADMAN_S" \
+    /bin/bash "$0" restore "--$PAIR" >/dev/null 2>&1 \
     && echo "  dead-man armed: auto-restore in ${DEADMAN_S}s if this process dies (cancel: systemctl stop drill-deadman-$PAIR.timer)" \
     || wn "could not arm dead-man (trap + manual restore still cover you)"; }
 disarm_deadman(){ sudo systemctl stop "drill-deadman-$PAIR.timer" 2>/dev/null; sudo systemctl reset-failed "drill-deadman-$PAIR.service" 2>/dev/null || true; }
