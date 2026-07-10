@@ -13,6 +13,6 @@ EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
 # Owns the whole lifecycle: capture to instance/db/e1001-profile/, fit the V->SoC LUT, bake the salvaged
 # charging offset, push as data (no reflash), verify the retained profile flipped off "default", then
 # publish e1001-c-office/profile/status=done. Survives any session/tool that started it (own cgroup).
-ExecStart=/home/visko/home_automation/venv/bin/python3 tools/e1001_profile_run.py --run --broker 127.0.0.1
+ExecStart=/home/visko/home_automation/venv/bin/python3 tools/e1001_profile_run.py --run --broker 192.168.1.200
 # 5 = pushed-but-unverified (still a real push); don't mark the unit hard-failed for that
 SuccessExitStatus=0 5

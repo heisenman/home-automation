@@ -67,7 +67,8 @@ def launch_profiler(unit: str) -> bool:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="E1001 charge-up + optional profiler chain")
-    ap.add_argument("--broker", default="127.0.0.1")
+    # air-gap VIP — the E1001's canonical broker since the 5c repoint (e1001.yaml: broker 192.168.1.200)
+    ap.add_argument("--broker", default="192.168.1.200")
     ap.add_argument("--port", type=int, default=1883)
     ap.add_argument("--until-mv", type=int, default=4100,
                     help="reasonable charged threshold to consider the cell ready for a profile run "

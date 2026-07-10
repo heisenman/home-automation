@@ -13,4 +13,4 @@ EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
 # Puts the panel into a known charging state, confirms with telemetry that it's actually rising, and on
 # reaching --until-mv starts ha-e1001-profile.service (a SEPARATE unit => own cgroup => the profile run is
 # independent of this oneshot's lifecycle). --no-block inside the tool so this returns immediately after.
-ExecStart=/home/visko/home_automation/venv/bin/python3 tools/e1001_charge.py --broker 127.0.0.1 --until-mv 4100 --then-profile
+ExecStart=/home/visko/home_automation/venv/bin/python3 tools/e1001_charge.py --broker 192.168.1.200 --until-mv 4100 --then-profile

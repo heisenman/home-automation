@@ -65,7 +65,8 @@ def run(cmd: list[str], **kw) -> subprocess.CompletedProcess:
 
 def main() -> int:
     ap = argparse.ArgumentParser(description="E1001 end-to-end battery profile (capture->fit->push->verify)")
-    ap.add_argument("--broker", default="127.0.0.1")
+    # air-gap VIP — the E1001's canonical broker since the 5c repoint (e1001.yaml: broker 192.168.1.200)
+    ap.add_argument("--broker", default="192.168.1.200")
     ap.add_argument("--port", type=int, default=1883)
     ap.add_argument("--load", type=int, default=3, choices=[0, 1, 2, 3])
     ap.add_argument("--max-hours", type=float, default=14.0)
