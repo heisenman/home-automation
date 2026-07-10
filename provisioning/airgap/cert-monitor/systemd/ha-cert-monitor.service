@@ -1,0 +1,8 @@
+[Unit]
+Description=TLS cert-expiry monitor (ADR-0033 D1)
+
+[Service]
+Type=oneshot
+User=visko
+WorkingDirectory=/home/visko/home_automation
+ExecStart=/home/visko/home_automation/provisioning/airgap/cert-monitor/check-cert-expiry.sh

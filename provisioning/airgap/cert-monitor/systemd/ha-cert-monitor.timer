@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily TLS cert-expiry check (ADR-0033 D1)
+
+[Timer]
+OnCalendar=daily
+Persistent=true
+RandomizedDelaySec=1h
+
+[Install]
+WantedBy=timers.target
