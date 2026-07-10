@@ -86,19 +86,30 @@ python3 tools/agents/coord.py agents      # liveness/what's-the-other-doing
 ```
 Broker override: `--broker` or `$HA_COORD_BROKER`. Identity: `--as` or `$HA_AGENT_ID`.
 
-## Interrupt-driven wake (optional autonomy layer)
-Agents only run when invoked, so the bus is a dead-drop by default. The wake layer turns it event-driven
-*without idle token burn*: a free `mosquitto_sub` watcher waits, and invokes a headless `claude -p` runner
-**only** when a real wake lands.
-- **Summon the peer:** `coord.py wake <ops|dev> --reason "…"` → publishes a NON-retained `ha/agents/wake/<target>`
-  (non-retained so it never replays on reconnect).
-- **Watcher:** `tools/agents/wake/watch.sh` (debounce + cooldown anti-storm), run as `ha-agent-wake@<id>` systemd.
-- **Runner scope:** the woken agent obeys `tools/agents/wake/POLICY.md` (a conservative whitelist; everything
-  else → leave a note + escalate to Hugh). Fresh context — works from memory + board + git, not chat history.
-- **Hard constraint:** a watcher only works on a box with the `claude` CLI — **today only 210**. The desktop
-  (ops) is a VS Code extension with no CLI, and `.245` has none; neither can host a runner without installing
-  the CLI + node + auth. **This interactive session can never be externally woken** — any wake spawns a
-  separate headless agent. Kill switch: `systemctl stop ha-agent-wake@<id>` (idle cost is zero regardless).
+## Reaching a peer — TWO delivery paths (use `summon`)
+There are two ways to deliver to a peer, and picking the wrong one hides the message. **Prefer `summon`,**
+which chooses correctly — **visible-first** (Hugh 2026-07-10 prefers *seeing* coordination, not background):
+```
+tools/agents/summon.py <target> "<msg>" [--task ID] [--headless] [--dry-run]
+```
+1. **VISIBLE — inject into a live interactive session (DEFAULT).** If the target has a registered LIVE
+   interactive session (pid alive + a `/dev/pts` tty in the coord-local roster), `summon` (and the
+   `board-watch` cron on a task assignment) uses **`tty-inject.py`** (TIOCSTI, auto-submit) to type the message
+   into that session's terminal — the peer's chat **gets a new turn, no keypress**. Requires `sudo` NOPASSWD
+   for `tty-inject.py` (`/etc/sudoers.d/tty-inject`; sudo-hardening broke this once — 2026-07-10).
+2. **HEADLESS fallback — `coord.py wake`.** With `--headless`, on inject failure, or when the target has **no
+   live interactive session**, `summon` falls back to a NON-retained `ha/agents/wake/<target>`; the
+   `ha-agent-wake@<id>` watcher (`tools/agents/wake/watch.sh`, debounce+cooldown) invokes a **headless one-shot
+   `claude -p` runner** (POLICY.md-scoped, fresh context — memory+board+git, not chat history).
+
+**Correction (2026-07-10):** an earlier version of this doc said *"this interactive session can never be
+externally woken."* That is only true of the **wake path** (2, spawns a *separate* headless agent). The
+**tty-inject path (1) DOES reach a live interactive session** — the real "message a registered chat" mechanism,
+and what `board-watch` uses to deliver work-orders. PID **and tty** registration is the delivery address —
+keep registration current.
+
+- **Hard constraint (headless path):** a wake watcher only runs on a box with the `claude` CLI — **today only
+  210**. Kill switch: `systemctl stop ha-agent-wake@<id>` (idle cost is zero regardless).
 
 ## dev: how to accept / amend
 Adopt as-is by claiming + completing `coord-protocol-ack` (seeded on the board). To amend, edit this file
