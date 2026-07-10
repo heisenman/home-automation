@@ -67,7 +67,7 @@ section of the control board was cleared 2026-07-10 (Hugh). Each item was **veri
   revert-timer cancel) and re-applying surfaced credless cluster-bridge clients in the standby stack the
   census missed. Reverted to known-good anon. **Needs re-scope:** full inventory of every broker+bridge
   (dev/failover-standby/ha-2 + all bridges) cred'd BEFORE the flip, coordinated with dev2 (cluster
-  coordination), and an explicit (non-racy) revert path. `provisioning/broker-auth/README.md` (CORRECTION).
+  coordination), and an explicit (non-racy) revert path. `provisioning/broker-auth/README.md` (CORRECTION). **POSTURE (Hugh 2026-07-10):** auth by network context — internet=required, dev=optional, air-gapped-prod=ENABLED (supersedes 'air-gap=own security'); so ha-2 prod broker gets auth (own census first), .210 dev broker optional. Memory auth-posture-by-network-context.
 
 **Genuinely OPEN (verified 2026-07-10):**
 - **vendor-harden-review** — VERIFIED no findings report exists; the gsl3670 stack-smash was patched in-tree,
