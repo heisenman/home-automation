@@ -231,6 +231,8 @@ def main() -> int:
     ap.add_argument("--max-hours", type=float, default=9.0)
     ap.add_argument("--out-dir", default=str(Path.home()), help="where to write the capture + offsets")
     ap.add_argument("--skip-offsets", action="store_true")
+    ap.add_argument("--offsets-only", action="store_true",
+                    help="measure offsets at the CURRENT SoC and exit (do at mid-SoC — charging draws real current)")
     ap.add_argument("--run", action="store_true", help="required: actually drive the battery")
     args = ap.parse_args()
     if not args.run:
@@ -258,6 +260,9 @@ def main() -> int:
         if not args.skip_offsets:
             result["offsets"] = phase_a_offsets(panel, args.settle, args.base_settle)
             offj.write_text(json.dumps(result["offsets"], indent=2))
+        if args.offsets_only:
+            print("\n=== offsets-only: done (panel left safe) ===")
+            return 0
         result["cycle"] = phase_b_cycle(panel, args.floor_v, args.cycles, args.rest_s, args.load,
                                         args.hard_floor_v, args.max_hours)
         print(f"\n=== RESULT: {result['cycle']} ===")
