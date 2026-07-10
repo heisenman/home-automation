@@ -214,7 +214,10 @@ sudo rm -f /etc/sudoers.d/90-visko-bootstrap    # remove the broad bootstrap gra
 **f. Enable + start services:**
 ```bash
 sudo systemctl enable --now ha-writer ha-scanner ha-api
-sudo systemctl enable --now ha-compactor.timer ha-verify-hashes.timer ha-weather.timer
+# Maintenance/derived timers — install the COMPLETE self-sufficient set (idempotent). Omitting these is how
+# ha-2 came up with NO ha-rollup (rungs never built, derived tier stale) — see docs/airgap/DATA-INTAKE-findings.md.
+bash provisioning/install-maintenance-timers.sh
+sudo systemctl enable --now ha-weather.timer   # ONLINE dictators ONLY (air-gap dictators leave this OFF)
 ```
 
 **Verify:** `systemctl is-active ha-writer ha-scanner ha-api mosquitto bluetooth` all `active`;
