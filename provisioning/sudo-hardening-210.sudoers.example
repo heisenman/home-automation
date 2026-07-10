@@ -1,0 +1,11 @@
+# .210 sudo hardening (ADR/FOLLOWUPS sudo-hardening-210) — applied 2026-07-10.
+# visko: NOPASSWD only for ha-*/mosquitto systemctl; general sudo requires ROOT's password
+# (Defaults:visko rootpw; password in instance/.rootpwd, gitignored).
+# /etc/sudoers.d/rootpw:
+Defaults:visko rootpw
+
+# /etc/sudoers.d/ha-services:
+visko ALL=(ALL) NOPASSWD: /usr/bin/systemctl start ha-*, /usr/bin/systemctl stop ha-*, \
+ /usr/bin/systemctl restart ha-*, /usr/bin/systemctl enable ha-*, /usr/bin/systemctl disable ha-*, \
+ /usr/bin/systemctl daemon-reload, /usr/bin/systemctl start mosquitto, \
+ /usr/bin/systemctl stop mosquitto, /usr/bin/systemctl restart mosquitto
