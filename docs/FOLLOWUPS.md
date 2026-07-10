@@ -23,8 +23,14 @@ channel, so the air-gap boundary needs no inbound SSH at all. **First step:** ma
 (ha-2→`.210` vs `.210`→ha-2) per call site so we know which side must listen. Ties to the break-glass USB
 (ADR-0033 §5.1) and [[control-plane-vip-gated]].
 
-> **Note (2026-07-10):** the relay design is now **ADR-0033 (Accepted)**; **Phase 1a (NTP) is DONE** — ha-2 is
-> time-synced to `.210` (fixed the control-critical clock break). Remaining phases per the ADR.
+> **Note (2026-07-10):** the relay design is **ADR-0033** and **ALL PHASES ARE BUILT + LIVE** — NTP anchor
+> (ha-2 clock fixed), dedicated relay broker + request/response daemon, nftables default-deny on `.210 wlp2s0`,
+> signed break-glass USB, weather relay, ntfy egress toggle (default OFF), sneakernet backup + cert monitor.
+> Only this failover-SSH item + one manual step remain open from that effort.
+>
+> **⚙️ Manual step (Hugh, 2026-07-10):** move the **break-glass recovery private key** off `.210`
+> (`/etc/ha-break-glass/recovery.key.MOVE-OFFLINE.pem`, root-only) to offline storage and delete the on-box
+> copy — it's the authority to recover any box (ADR-0033 §5.1).
 
 ## ✅ 2026-07-10 (RESOLVED) — 5c fallout: 3 offline gas nodes + esphome-in-shared-venv
 
@@ -48,7 +54,17 @@ sudo-less. Verified: E1001 + Levoit configs both validate through the wrapper. S
 `docs/coord/SHARED-VENV-ISOLATION.md` + [[shared-venv-esphome-paho]]. *(Minor: `numpy==2.4.6` is pinned in
 `requirements.txt` but not installed in the shared venv — harmless, 0 usages in server/tools; left as-is.)*
 
-## 📡 2026-07-10 — Action item (LATER, Hugh): air-gap data-transfer mechanisms (build BOTH)
+## ✅ 2026-07-10 (RESOLVED — ADR-0033) — air-gap data-transfer mechanisms (build BOTH)
+
+**BOTH built + live 2026-07-10 (ADR-0033).** (1) Failover-bridge pass-through = the continuous relay: dedicated
+relay broker + request/response daemon on `.210` (weather in, ntfy out), egress-allow-listed, never IP-routing.
+(2) USB sneakernet = `provisioning/airgap/sneakernet/` (backup OUT with sha256 manifest + verify/restore +
+weekly overdue nag; updates IN via signed USB is the default, `.210` mirror ships disabled per Q3). Original
+requirement below, kept for context.
+
+---
+_original item:_
+## 📡 2026-07-10 — (superseded, see above) air-gap data-transfer mechanisms (build BOTH)
 
 The air-gap dictator (ha-2) has no external access by design, so external data (weather, time, updates)
 can't reach it and its backups can't leave *via the dictator*. Hugh wants **both** mechanisms built
@@ -67,7 +83,16 @@ Together: two disciplined air-gap data paths (bridge = continuous; USB = periodi
 dictator never touching the internet. Design + build later; not assigned. Relates to
 [[prod-self-sufficient-is-the-goal]], ADR-0031.
 
-## 🔁 2026-07-10 — Action item (Hugh): fleet review — ESPHome `api:` no-client reboot
+## ✅ 2026-07-10 (RESOLVED) — fleet review — ESPHome `api:` no-client reboot
+
+**Swept 2026-07-10: both MQTT-driven ESPHome nodes carry `reboot_timeout: 0s`** — `e1001.yaml:154` and
+`levoit-vital200s-c3.yaml:42` (verified). No other first-party ESPHome configs exist (the many `.esphome/…`
+hits are vendored upstream templates, not our devices). Optional nicety remaining: bake `reboot_timeout: 0s`
+into a shared MQTT-node base so future nodes can't regress. Original item below.
+
+---
+_original item:_
+## 🔁 2026-07-10 — (resolved, see above) fleet review — ESPHome `api:` no-client reboot
 
 E1001 (`e1001-c-office`) was rebooting every ~15 min. Root cause: its ESPHome **`api:` block had no
 `reboot_timeout`**, so the default **15-min no-native-API-client reboot** fired forever — the system is
@@ -102,7 +127,14 @@ A migrated device silently stopped logging on ha-2 for **~23 h**: the config syn
 3. **Sanity sweep** (run once; make periodic): `comm -23 <live LWT/discovery> <registered>` → flag any
    live-but-unregistered device across every ingest registry.
 
-## 🟡 2026-07-10 — Open (ops-domain): E1001 c-office panel SHT40 sits in ha-2 quarantine until proper intake
+## ✅ 2026-07-10 (RESOLVED) — E1001 c-office panel SHT40 enrolled (was in ha-2 quarantine)
+
+**Done: `edge/E1001-C-OFFICE-SHT40` is enrolled as `e1001_c_office` (c_office) and logging fresh on ha-2**
+(verified in `instance/devices.yaml` + `hot.db`); the quarantine backlog was merged. Original item below.
+
+---
+_original item:_
+## 🟡 2026-07-10 — (resolved, see above) E1001 c-office panel SHT40 quarantine
 
 The quarantine rollout (ADR-0032) immediately caught a **real** live-but-unregistered device on ha-2:
 `edge / E1001-C-OFFICE-SHT40` — the E1001 c-office panel's onboard SHT40 (temperature + humidity). It has
@@ -127,7 +159,16 @@ covering temp/RH, so the panel SHT40 is **redundant** for those metrics — the 
 to record it at all (redundancy is a design goal, but it's a judgment call) vs `purge`. Until then it keeps
 accumulating harmlessly (never auto-deleted).
 
-## 🔔 2026-07-10 — Action item: air-gap production notification routing
+## ✅ 2026-07-10 (RESOLVED — ADR-0033 Phase 3) — air-gap production notification routing
+
+**Built: ha-2 → `.210` → ntfy egress path is live** (`relay-alert-egress` on ha-2 → `relay/alert/out` →
+`.210` `relay-alert-forwarder` → local `home/_alert/new` → `ha-ntfy-bridge` → phone). Gated by
+`RELAY_NTFY_EGRESS`, **default OFF** (on-network-only, Hugh's preference); flip on for off-network push.
+Original item below.
+
+---
+_original item:_
+## 🔔 2026-07-10 — (resolved, see above) air-gap production notification routing
 
 `ha-ntfy-bridge` runs on the **dev box (.210)** (reading `.210`'s data); ha-2 (production) doesn't run it —
 and ha-2 is **air-gapped, so it can't reach an external ntfy server** anyway. Production alerts must therefore
