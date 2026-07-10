@@ -5,9 +5,14 @@
 > open questions** (Hugh 2026-07-10: "design review first, no code yet — then we scope PR1"). This is the
 > proposal to review.
 >
-> **Decisions so far (Hugh 2026-07-10):** §7-Q5 cert = **long-dated self-signed (`--days 3650`) + a `notAfter`
-> monitor alerting ~T-12mo** (not an internal CA). Trade-off accepted: each rotation re-touches every client
-> trust store, but the mechanism stays dead-simple.
+> **Decisions so far (Hugh 2026-07-10):**
+> - §7-Q5 cert = **long-dated self-signed (`--days 3650`) + a `notAfter` monitor alerting ~T-12mo** (not an
+>   internal CA). Trade-off accepted: each rotation re-touches every client trust store, but the mechanism
+>   stays dead-simple.
+> - **B1 ntfy egress = KEEP, but TOGGLEABLE.** Off-network push is most valuable exactly when away, so the
+>   relay stays — but it's gated by a runtime switch (`RELAY_NTFY_EGRESS`, **default OFF** = on-network-only,
+>   matching Hugh's "only on-network devices get the annoying messages" preference). Flip on for off-network
+>   push. Toggle is hot (no air-gap/firewall change to flip it).
 >
 > Scope note (Hugh, 2026-07-10): the *service count* is small, but the *lift is not* — the relay is the single
 > most security-sensitive component in the system (the one box straddling the trust boundary), so "doing it
@@ -54,7 +59,7 @@ must be handled — **not** by a naive "reaches https://" filter (that only find
 ### B. Live outbound — needs a continuous relay OUT
 | Dep | Criticality | Path | State |
 |-----|-------------|------|-------|
-| **B1 · Notifications (push off-LAN)** | MEDIUM | ha-2 alert → `.210` ntfy-bridge → ntfy → phone | ntfy + `ha-ntfy-bridge` run on **`.210`**; ha-2's `home/_alert/new` never reaches them. On-LAN the phone can poll ntfy; off-LAN needs `.210`'s internet leg. |
+| **B1 · Notifications (push off-LAN)** | MEDIUM | ha-2 alert → `.210` ntfy-bridge → ntfy → phone | ntfy + `ha-ntfy-bridge` run on **`.210`**; ha-2's `home/_alert/new` never reaches them. On-LAN the phone can poll ntfy; off-LAN needs `.210`'s internet leg. **Toggleable** (`RELAY_NTFY_EGRESS`, default OFF = on-network-only). |
 | **B2 · Backups off-box / off-site** | MED | reconcile (built) + USB | ha-2 data must be able to *leave*. Reconcile already pulls ha-2 → `.210` standby store; off-site = sneakernet. No cloud backup target exists (good). |
 
 ### C. Periodic / maintenance — sneakernet, NOT a live relay
@@ -125,9 +130,12 @@ must be handled — **not** by a naive "reaches https://" filter (that only find
 - **A2 Weather.** Keep the open-meteo fetch on `.210`; publish canonical weather to `relay/weather/state` on
   the scoped bus; ha-2 ingests; `ha-weather.timer` stays disabled on ha-2. One-way-in, no open-meteo
   reachability from the air-gap.
-- **B1 Notifications.** ha-2 `home/_alert/new` → scoped `relay/alert/out` → `.210` `ha-ntfy-bridge` → ntfy →
-  phone. `8095` stays **closed** to the air-gap net (ha-2 never touches it directly). Realizes the FOLLOWUPS
-  "ha-2 → `.210` → ntfy" item.
+- **B1 Notifications (toggleable — DECIDED).** ha-2 `home/_alert/new` → scoped `relay/alert/out` → `.210`
+  `ha-ntfy-bridge` → ntfy → phone. `8095` stays **closed** to the air-gap net (ha-2 never touches it
+  directly). Realizes the FOLLOWUPS "ha-2 → `.210` → ntfy" item. **Gated by `RELAY_NTFY_EGRESS` (default
+  OFF = on-network-only).** The switch lives on `.210`'s ntfy-bridge (the egress point), so flipping it is a
+  hot config change — no firewall/air-gap edit. When OFF, ha-2 alerts still surface on-LAN (BFF banner + the
+  `home/_alerts` retained topic any on-network device can read); only the *outbound phone push* is suppressed.
 - **B2 Backups + C1 Updates — sneakernet primary.** The `provisioning/03-sneakernet-updates.md` bundle:
   periodic, offline, auditable USB round-trip carries ha-2 backups OUT and vetted `.deb`/wheel/`tzdata`/CA
   bundles IN. Optional `.210` apt/pip mirror for routine patching in an explicit maintenance window. **No
