@@ -64,3 +64,24 @@ point before the write:
 6. `rollup.py` full rebuild → regenerate `rungs` + `summaries` from the now-complete archive.
 7. **Skip** device_meta; **purge** `ui_smoke_dev` from ha-2.
 8. Re-verify: per-device coverage, span Jan 7→now, rungs non-empty, `cluster-doctor.sh`.
+
+## EXECUTED — copy-back to the ha-2 dictator (2026-07-10)
+
+Ran, verified against the sandbox at each step. ha-2 is now the complete record-of-record:
+
+| Tier | ha-2 post-intake | notes |
+|---|---|---|
+| parquet | 10,811,676 rows · 23 devices · Jan 7→Jul 8 | +187,695; matched sandbox exactly |
+| rungs | 798,089 · 1min/1hour/1day/1week | full rebuild via `rollup.py --parquet` (155s); panel-replica history |
+| hot readings | +117,438 | additive |
+| control_log | +7,008 → 52,376 | full-row union |
+| summaries | 80 → 808 (15 dates) | additive |
+| weather.db | 22,524 (Jan–Jul) | transferred (ha-2 had none) |
+| device_meta | skipped; `ui_smoke_dev` purged | no real data lost |
+
+- **Rollback point:** `ha-2:~/intake-rollback-20260710T002748Z` (68M — parquet + hot/control `.backup`). Remove once satisfied.
+- **⚠ Self-sufficiency follow-up:** ha-2 had **no `rungs` and no scheduled `ha-rollup`** — the rebuild was manual.
+  For "runs itself without AI oversight" (memory `prod-self-sufficient-is-the-goal`), ha-2 must run `ha-rollup`
+  (and confirm `ha-compactor`) on a timer so the derived tier stays fresh. Flagged, not yet done.
+- The dev system keeps its copy as the reference archive (per Hugh). No ongoing dev→ha-2 sync; the ongoing
+  reconcile is ha-2-dictator ⇄ ha-2-failover (Pillar 2).
