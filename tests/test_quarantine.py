@@ -71,6 +71,19 @@ def test_edge_unknown_mac_is_quarantined(tmp_path):
     sink.close()
 
 
+def test_empty_ts_does_not_collapse_distinct_readings(tmp_path):
+    # A clockless node (E1001 SHT40) sends ts="". Distinct readings must NOT dedup onto "" — each capture
+    # at a different recv_ts is its own row (else the backlog silently collapses to 1 row).
+    db = tmp_path / "q.db"
+    sink = QuarantineSink(db)
+    for i, temp in enumerate([21.0, 21.5, 22.0]):
+        sink.capture(source="edge", identity="CLOCKLESS", topic="home/edge/n/CLOCKLESS/adv",
+                     payload={"ts": ""}, metrics={"temperature_c": temp}, reading_ts="",
+                     recv_ts=f"2026-07-10T00:0{i}:00Z")
+    assert len(QuarantineStore(db).readings("edge", "CLOCKLESS")) == 3
+    sink.close()
+
+
 def test_duplicate_capture_is_idempotent(tmp_path):
     db = tmp_path / "q.db"
     sink = QuarantineSink(db)

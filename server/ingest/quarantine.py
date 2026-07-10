@@ -124,6 +124,11 @@ class QuarantineSink:
         if self._broken or self._conn is None:
             return
         recv_ts = recv_ts or _utc_now()
+        # A clockless edge node stamps an EMPTY ts (e.g. the E1001 panel's SHT40 sends "ts":""). Stored as-is
+        # it is non-NULL, so the (…, COALESCE(reading_ts, recv_ts)) unique key collapses every distinct reading
+        # onto "" — the whole backlog dedups to ONE row (silent loss inside the safety net). Normalize blank →
+        # NULL so COALESCE falls back to the per-capture recv_ts and distinct readings are preserved.
+        reading_ts = (reading_ts or "").strip() or None
         if not isinstance(payload, str):
             try:
                 payload = json.dumps(payload)
