@@ -1025,11 +1025,17 @@ function DeviceMetaModal({ device, areas, onClose, onSaved }) {
       <div class="modal" onClick=${(e) => e.stopPropagation()}>
         <h3>Edit device</h3>
         <p class="note">${device.device_id}</p>
-        <input value=${name} placeholder=${`name (default: ${prettyName(device.device_id)})`}
-          onInput=${(e) => setName(e.target.value)} />
-        <input value=${room} placeholder="room (display label only)" onInput=${(e) => setRoom(e.target.value)} />
-        <p class="note">↑ display overlay only — it renames the label, it does <b>not</b> move the device's
-          data. Use “Relocate” below to change the canonical area.</p>
+        <p class="note">Display labels only — cosmetic, they don't move the device's data. To change the
+          canonical id or area, use <b>Rename</b> / <b>Relocate</b> in Maintenance below.</p>
+        <div class="field-block">
+          <label>Display name</label>
+          <input value=${name} placeholder=${`default: ${prettyName(device.device_id)}`}
+            onInput=${(e) => setName(e.target.value)} />
+        </div>
+        <div class="field-block">
+          <label>Room label</label>
+          <input value=${room} placeholder="e.g. Living Room" onInput=${(e) => setRoom(e.target.value)} />
+        </div>
         <label class="switch"><input type="checkbox" checked=${hidden}
           onChange=${(e) => setHidden(e.target.checked)} /> Hide from dashboard (temporary)</label>
         <label class="switch"><input type="checkbox" checked=${retired}
