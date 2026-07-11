@@ -114,6 +114,12 @@ can take ~20–40s (`SWEEP_SETTLE_S`×passes) — too long to hold an HTTP reque
   validates as an ES module; dry-run preview verified in-process against the real registry (relocate +
   rename plans correct, no-op rejected, no writes). Job-status route/poll path reconciled to
   `/api/v1/devices/jobs/<id>`.
-- **Phase 3 (live dev tryout) — Hugh-gated.** Needs ha-api + ha-api-tls restarted to load the new endpoints,
-  then a real relocate/rename of a disposable device (restarts the ingest fleet); `model_project.py` clean
-  before/after.
+- **Phase 2 UI review refinements — DONE** (Hugh's live review, commits `82c475f`..`a253a6d`): modal
+  max-height/scroll; sensor-tile ✎ (parity with actuator cards); relocate area = canonical **dropdown** from
+  `/api/v1/rooms`; modal z-index; visible field labels; **scope refactor** — two tiers ("Display · this
+  device" vs "Location & identity · canonical"), Rename behind an Advanced/danger disclosure, per-device
+  room-label overlay removed as vestigial.
+- **Phase 3 (live dev tryout) — Hugh-gated, carried into the production cutover effort.** Sequence + all
+  ancillary + the taxonomy dependence are staged in
+  [docs/coord/PROD-CUTOVER-STAGING.md](../coord/PROD-CUTOVER-STAGING.md). The build task `ui-device-admin`
+  is retired (feature complete + dev-validated); the live tryout + ha-2 rollout live under the migration job.
