@@ -228,12 +228,16 @@ def stale_counts(plan: list[dict]) -> dict:
 
 
 def verify(plan: list[dict]) -> dict:
-    """test_areas green + no stale old-id/old-area rows in hot.db."""
+    """Op success = **no stale** (old-id / old-area) rows remain for the moved entity. ``test_areas`` is a
+    WHOLE-SYSTEM area-hygiene check kept as an ADVISORY signal only — it must NOT flip a clean op to failed:
+    a relocate can't introduce area drift (``validate_plan`` gates the target to a canonical ``areas.yaml``
+    area) and a rename doesn't touch areas, so a ``test_areas`` failure is always PRE-EXISTING/unrelated
+    drift on the box (surfaced by the ha-2 cutover: a device parked in a non-canonical ``standby`` area made
+    every op report "failed"). ``clean`` therefore reflects the op, not the box's pre-existing hygiene."""
     stale = stale_counts(plan)
     t = subprocess.run([sys.executable, "-m", "tests.test_areas"], cwd=str(REPO_ROOT),
                        capture_output=True, text=True)
-    return {"test_areas_green": t.returncode == 0, "stale": stale,
-            "clean": t.returncode == 0 and not stale}
+    return {"test_areas_green": t.returncode == 0, "stale": stale, "clean": not stale}
 
 
 def run_plan(plan: list[dict], *, dry_run: bool = False, do_restart: bool = True,
