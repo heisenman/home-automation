@@ -145,6 +145,12 @@ Phase 3 must precede device-admin re-validation).
 **safest AND most efficient** order — one deploy window, minimal restarts, each step verified-on-ha-2 before
 the next.
 
+> **DELIVERED:** [PROD-CUTOVER-RUNBOOK.md](PROD-CUTOVER-RUNBOOK.md) — the ordered, per-phase procedure
+> (Phase 0 pre-flight/rehearsal → 1 stage+verify → 2 ha-2 `ha-api` cutover → 3 prove device-admin live →
+> 4 firmware OTA → 5 ledger reconcile), with exact commands, per-step verify/rollback, and the
+> failover/migration **landmines baked in as guardrails** (provenance table). Awaiting Hugh's review, then
+> gated execution.
+
 **Constraints / inputs to honor:**
 - Air-gap deploy discipline: **scp not git**, **verify the DEPLOYED file on ha-2** (don't trust the commit),
   drive off [HA2-DEPLOY-PENDING.md](../airgap/HA2-DEPLOY-PENDING.md) + [AIRGAP-MIGRATION.md](../airgap/AIRGAP-MIGRATION.md).
