@@ -62,11 +62,18 @@ def launch(spec: dict) -> str:
     new_id?, new_area?, restamp?}. Raises on a failed launch (caller maps to HTTP 500)."""
     job_id = uuid.uuid4().hex[:12]
     _write(job_id, {"job_id": job_id, "status": "running", "spec": spec, "started": _now()})
-    r = subprocess.run(["sudo", "systemctl", "start", _UNIT.format(job_id)],
-                       capture_output=True, text=True, timeout=30)
-    if r.returncode != 0:
+    # `systemctl start` on a Type=oneshot BLOCKS until the job finishes, and the job runs ~20-40s AND restarts
+    # ha-api itself — so we must NOT block the caller (the API request / the whole detached rationale). Fire
+    # it in its own session and return immediately; the unit runs in its own cgroup (survives the ha-api
+    # restart it triggers) and reports through the durable JSON the caller polls. (Can't use --no-block: the
+    # NOPASSWD rule matches exactly `systemctl start ha-*`, no extra flag.)
+    try:
+        subprocess.Popen(["sudo", "systemctl", "start", _UNIT.format(job_id)],
+                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+                         stderr=subprocess.DEVNULL, start_new_session=True)
+    except OSError as e:
         rec = {"job_id": job_id, "status": "error", "spec": spec, "started": _now(),
-               "error": f"launch failed: {(r.stderr or r.stdout).strip()[:300]}"}
+               "error": f"launch failed: {e}"}
         _write(job_id, rec)
         raise RuntimeError(rec["error"])
     return job_id
