@@ -15,6 +15,15 @@ serialized, [[device-migration-single-owner]]). **Companion:** [PROD-CUTOVER-STA
 >   gas fleet is healthy and reporting; OTA'ing it hits the known dangling-node_id reject → **cable-flash at
 >   the bench** (physical, can't automate) on **live safety sensors**, and it's **low-priority**. Needs a GO
 >   + a maintenance window with bench access. Recon in the task note.
+> - **Post-cutover live fix (`6480c83`):** the UI relocate HUNG — `ha-api` runs `NoNewPrivileges` (blocks
+>   sudo), so the old `launch()`'s `sudo systemctl start` silently failed (rehearsals missed it: in-process,
+>   not through the sandboxed service). Rebuilt launch as **privilege-free** (writes a queue marker) + a
+>   `ha-admin-job.path`→`ha-admin-job.service` dispatcher (un-sandboxed) that runs the job; retired the `@`
+>   unit. Deployed to ha-2 + .210. Then a **restamp** relocate `e1001_c_office→h_office` ran clean on prod:
+>   442 hot + 2276 parquet rows restamped, VIP held. **FOLLOW-UP** (`device-admin-ha2-peer-followup`):
+>   restamp's `do_peer` SSH can't reach the peer over the airgap `:22` (closed) + a `HOME=instance` override
+>   breaks the key path → peer step errors (non-fatal; ha-2 record-of-record is correct). Relocate on ha-2
+>   should run `do_peer=False`.
 > - **Pre-existing hygiene finding (not a bug):** `standby_c6` is intentionally parked in a non-canonical
 >   `standby` area → `test_areas` reports drift (now advisory, non-gating). Hugh may add `standby` to
 >   `areas.yaml` or assign the node — his call.
