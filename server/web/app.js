@@ -652,8 +652,10 @@ const GRAPHABLE = [
   { key: "energy_today_kwh", unit: "kWh", color: "#eab308", label: "Energy today" },
 ];
 
-// Unified air-quality band → color (ADR-0035), shared by the map badge + sensor cards. 5 Good → 1 Very Poor.
-const AQ_BAND_COLOR = { 5: "#34d399", 4: "#4aa3ff", 3: "#fbbf24", 2: "#f87171", 1: "#b91c1c" };
+// Unified air-quality band → color (ADR-0035), shared by the map badge + sensor cards + legend. Keyed by the
+// stable band int (5 Excellent → 1 Very Poor). Palette = the familiar EPA-AQI language (green→yellow→orange→
+// red→purple) so the colors read at a glance; labels come from the server legend (band_legend()).
+const AQ_BAND_COLOR = { 5: "#00e400", 4: "#ffff00", 3: "#ff7e00", 2: "#ff0000", 1: "#8f3f97" };
 
 // shared value row (temp respects the °F/°C pref). `aq` = the node's air_quality_report (gas nodes), if any.
 function SensorVals({ m, unit, aq }) {
@@ -1527,6 +1529,13 @@ function HouseMap({ data, selected, onSelect }) {
       ${mono.length > 0 && html`<div class="mono-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
         ${mono.map((r) => html`<button class=${"btn sm" + (selected === r.id ? "" : " ghost")}
           onClick=${() => onSelect(r.id, r.name)}>${r.name}${roomGlance(r.devices) ? ` · ${roomGlance(r.devices)}` : ""}</button>`)}
+      </div>`}
+      ${Array.isArray(data.air_quality_legend) && html`<div class="aq-legend"
+        style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:10px;font-size:12px;color:#9fb0c3">
+        <span style="opacity:.7">Air quality:</span>
+        ${data.air_quality_legend.map((L) => html`<span title=${L.meaning} style="display:inline-flex;align-items:center;gap:4px">
+          <span style=${`width:10px;height:10px;border-radius:2px;background:${AQ_BAND_COLOR[L.band] || "#94a3b8"};display:inline-block`}></span>${L.label}</span>`)}
+        <span style="opacity:.55">· "~" = relative to the room's own baseline</span>
       </div>`}
     </div>`;
 }

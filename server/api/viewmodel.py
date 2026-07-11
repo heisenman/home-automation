@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 
-from server.gas_compensation import air_quality_for, clean_air_baseline
+from server.gas_compensation import air_quality_for, band_legend, clean_air_baseline
 
 
 def dewpoint_c(temp_c, rh_pct):
@@ -534,7 +534,8 @@ def build_rooms(sensors: list[dict], areas: dict | None = None, geometry: dict |
             zones.append(zn)
 
     return {"schema_version": 1, "levels": levels, "zones": zones,
-            "rooms": rooms, "unlocated": unlocated}
+            "rooms": rooms, "unlocated": unlocated,
+            "air_quality_legend": band_legend()}      # ADR-0035 5-band lookup table for the map key
 
 
 # control INPUT metric per strategy (the value the loop drives on). Default = RH (hysteresis/setpoint).

@@ -49,15 +49,23 @@ A unified reading carries four fields:
 | `air_quality_basis` | `absolute` \| `relative` | **the honesty flag** — is this comparable room-to-room (absolute) or only vs this room's own recent baseline (relative)? |
 | `air_quality_conf` | `ok` \| `warmup` \| `burn_in` \| `stale` \| `no_ref` | confidence / quality gate (drives greying-out + the explanation) |
 
-Bands map to numeric ranges monotonically:
+Bands map to numeric ranges monotonically. **Labels (revised 2026-07-11, Hugh):** the first draft used
+Good/Fair/**Moderate**/… — but "Fair" and "Moderate" are adjacent near-synonyms with no obvious order, so
+the scale reads ambiguously. Final labels are unambiguously ranked, with the **EPA-AQI colour language**
+(green→yellow→orange→red→purple) so the colour reads at a glance:
 
-| Band | Label | `air_quality` range |
-|---|---|---|
-| 5 | Good | 80–100 |
-| 4 | Fair | 60–80 |
-| 3 | Moderate | 40–60 |
-| 2 | Poor | 20–40 |
-| 1 | Very Poor | 0–20 |
+| Band | Label | `air_quality` range | Colour (AQI) |
+|---|---|---|---|
+| 5 | Excellent | 80–100 | green `#00e400` |
+| 4 | Good | 60–80 | yellow `#ffff00` |
+| 3 | Fair | 40–60 | orange `#ff7e00` |
+| 2 | Poor | 20–40 | red `#ff0000` |
+| 1 | Very Poor | 0–20 | purple `#8f3f97` |
+
+**Lookup table (single source of truth):** `gas_compensation.band_legend()` returns this table
+(band, label, score range, meaning); `build_rooms` ships it as `air_quality_legend`; the PWA renders it as a
+**map legend key** (colour swatch + label, `~` = relative) so the scale is always visible, never inferred.
+Colours key off the stable `band` int, so relabeling never touches them.
 
 > Bands are the primary artifact (what the map shows, what gets explained); the 0–100 is
 > the fine-grained position within/under the bands (what graphs plot). Two rooms may both

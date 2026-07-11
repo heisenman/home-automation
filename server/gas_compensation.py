@@ -73,7 +73,13 @@ def clean_air_baseline(gas_ohm_series, percentile: float = 0.95):
 # the UBA TVOC bands) or `relative` (only vs this room's own recent baseline — SGP40, BME680). Thresholds are
 # the shadow-tuned ADR-0035 values. See docs/adr/ADR-0035 + docs/air-quality/SENSOR-METHODOLOGY.md.
 
-_BANDS = ((80.0, 5, "Good"), (60.0, 4, "Fair"), (40.0, 3, "Moderate"), (20.0, 2, "Poor"), (0.0, 1, "Very Poor"))
+# The 5-band scale (ADR-0035), cleanest→worst. Labels chosen so the ORDER is unambiguous (no two adjacent
+# near-synonyms like the old Fair/Moderate). `band` int is the stable join key (client colors key off it, so
+# relabeling never touches colors). band_legend() is the single source of truth — the UI renders its key from it.
+_BANDS = ((80.0, 5, "Excellent"), (60.0, 4, "Good"), (40.0, 3, "Fair"), (20.0, 2, "Poor"), (0.0, 1, "Very Poor"))
+_BAND_MEANING = {5: "clean air", 4: "good air", 3: "some pollutants — consider ventilating",
+                 2: "poor — ventilate", 1: "very poor — ventilate now"}
+_BAND_RANGE = {5: (80, 100), 4: (60, 80), 3: (40, 60), 2: (20, 40), 1: (0, 20)}
 
 
 def band_for_score(score: float):
@@ -82,6 +88,13 @@ def band_for_score(score: float):
         if score >= lo:
             return b, label
     return 1, "Very Poor"
+
+
+def band_legend() -> list[dict]:
+    """The band lookup table (single source of truth), cleanest→worst: each entry is
+    {band, label, score_min, score_max, meaning}. The map renders its key from this so labels never drift."""
+    return [{"band": b, "label": label, "score_min": _BAND_RANGE[b][0], "score_max": _BAND_RANGE[b][1],
+             "meaning": _BAND_MEANING[b]} for _, b, label in _BANDS]
 
 
 def _interp(x, xs, ys):
