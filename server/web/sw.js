@@ -1,6 +1,6 @@
 // Service worker — caches the app SHELL only (so the UI loads offline), never the API.
 // Live device state always goes to the network; if the box is unreachable the app shows last-known.
-const CACHE = "ha-shell-v43";   // v43: visible labels on the name/room overlay fields (placeholder-only was ambiguous)
+const CACHE = "ha-shell-v44";   // v44: edit modal regrouped by scope (Display vs Location&identity); drop per-device room label; Rename behind Advanced
 const SHELL = [
   "/app/", "/app/index.html", "/app/app.js", "/app/push.js", "/app/styles.css",
   "/app/vendor/preact-htm.standalone.module.js", "/app/manifest.webmanifest", "/app/icon.svg",

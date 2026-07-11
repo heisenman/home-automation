@@ -969,7 +969,6 @@ function MaintResult({ res }) {
 
 function DeviceMetaModal({ device, areas, onClose, onSaved }) {
   const [name, setName] = useState(device.name || "");
-  const [room, setRoom] = useState(device.room || (device.area ? prettyArea(device.area) : ""));
   const [hidden, setHidden] = useState(!!device.hidden);
   const [retired, setRetired] = useState(!!device.retired);
   const [offsets, setOffsets] = useState({ ...(device.offsets || {}) });
@@ -987,7 +986,7 @@ function DeviceMetaModal({ device, areas, onClose, onSaved }) {
   const save = async () => {
     setBusy(true); setErr("");
     try {
-      await adminSend("PUT", `/api/v1/devices/${id}/meta`, { name, room, hidden, retired });
+      await adminSend("PUT", `/api/v1/devices/${id}/meta`, { name, hidden, retired });
       for (const g of metrics) {               // PUT only the offsets that changed
         const v = Number(offsets[g.key] || 0);
         if (v !== Number((device.offsets || {})[g.key] || 0)) {
@@ -1024,17 +1023,14 @@ function DeviceMetaModal({ device, areas, onClose, onSaved }) {
     <div class="modal-bg" onClick=${onClose}>
       <div class="modal" onClick=${(e) => e.stopPropagation()}>
         <h3>Edit device</h3>
-        <p class="note">${device.device_id}</p>
-        <p class="note">Display labels only — cosmetic, they don't move the device's data. To change the
-          canonical id or area, use <b>Rename</b> / <b>Relocate</b> in Maintenance below.</p>
+        <p class="note mono-id">${device.device_id} · ${prettyArea(device.area)}</p>
+
+        <h4 class="scope-hd">Display <span class="scope-sub">· this device only, cosmetic</span></h4>
+        <p class="note">Changes only what's shown on the dashboard — no stored data is touched.</p>
         <div class="field-block">
           <label>Display name</label>
           <input value=${name} placeholder=${`default: ${prettyName(device.device_id)}`}
             onInput=${(e) => setName(e.target.value)} />
-        </div>
-        <div class="field-block">
-          <label>Room label</label>
-          <input value=${room} placeholder="e.g. Living Room" onInput=${(e) => setRoom(e.target.value)} />
         </div>
         <label class="switch"><input type="checkbox" checked=${hidden}
           onChange=${(e) => setHidden(e.target.checked)} /> Hide from dashboard (temporary)</label>
@@ -1044,7 +1040,6 @@ function DeviceMetaModal({ device, areas, onClose, onSaved }) {
           it's removed from the dashboard, and it's not expected to report again. Restore it later from the
           "retired" list.</p>`}
         ${metrics.length > 0 && html`
-          <div class="divider"></div>
           <p class="note">Display calibration — added to shown values + graphs (control uses raw):</p>
           ${metrics.map((g) => html`
             <div class="field"><label>${g.label} offset</label>
@@ -1059,13 +1054,12 @@ function DeviceMetaModal({ device, areas, onClose, onSaved }) {
         </div>
 
         <div class="divider"></div>
-        <h3>Maintenance</h3>
-        <p class="note">Canonical Entity ops. They rewrite the registry + history and <b>restart the ingest
-          fleet</b>, so they run as a background job (~20–40s). Preview first; a backup is written before any
-          change.</p>
+        <h4 class="scope-hd">Location &amp; identity <span class="scope-sub">· canonical — changes stored data</span></h4>
+        <p class="note">These rewrite the registry + history and <b>restart the ingest fleet</b>, so they run
+          as a background job (~20–40s). Preview first; a backup is written before any change.</p>
 
         <div class="field-block">
-          <label>Relocate — canonical area</label>
+          <label>Relocate — move to room</label>
           ${areas && areas.length
             ? html`<select value=${relArea} onChange=${(e) => setRelArea(e.target.value)}>
                 ${!areas.includes(relArea) && html`<option value=${relArea}>${relArea ? prettyArea(relArea) : "— select area —"}</option>`}
@@ -1087,17 +1081,23 @@ function DeviceMetaModal({ device, areas, onClose, onSaved }) {
           </div>
         </div>
 
-        <div class="field-block">
-          <label>Rename — device id <span class="note">(rare; rewrites the id everywhere + the .245 peer)</span></label>
-          <input value=${newId} placeholder=${`new id (a–z, 0–9, _) — current: ${device.device_id}`}
-            onInput=${(e) => setNewId(e.target.value)} />
-          <div class="modal-actions">
-            <button class="btn ghost" disabled=${maBusy || !idChanged}
-              onClick=${() => runMaint(`/api/v1/devices/${id}/rename`, { new_id: newId.trim() }, true)}>Preview</button>
-            <button class="btn primary" disabled=${maBusy || !idChanged}
-              onClick=${() => runMaint(`/api/v1/devices/${id}/rename`, { new_id: newId.trim() }, false)}>${maBusy ? "Working…" : "Rename"}</button>
+        <details class="advanced">
+          <summary>Advanced — rename internal id</summary>
+          <div class="field-block danger">
+            <label>Rename — device id</label>
+            <p class="note">The device's permanent database identity. Rewrites it <b>everywhere</b> —
+              history, rollups, registry, control policy + secret, and the .245 peer. Rarely needed; changing
+              the display name above is usually what you want.</p>
+            <input value=${newId} placeholder=${`new id (a–z, 0–9, _) — current: ${device.device_id}`}
+              onInput=${(e) => setNewId(e.target.value)} />
+            <div class="modal-actions">
+              <button class="btn ghost" disabled=${maBusy || !idChanged}
+                onClick=${() => runMaint(`/api/v1/devices/${id}/rename`, { new_id: newId.trim() }, true)}>Preview</button>
+              <button class="btn danger" disabled=${maBusy || !idChanged}
+                onClick=${() => runMaint(`/api/v1/devices/${id}/rename`, { new_id: newId.trim() }, false)}>${maBusy ? "Working…" : "Rename"}</button>
+            </div>
           </div>
-        </div>
+        </details>
 
         ${maErr && html`<div class="err">${maErr}</div>`}
         <${MaintResult} res=${maRes} />

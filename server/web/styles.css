@@ -147,6 +147,15 @@ body {
 .radio-row { display: flex; flex-direction: column; gap: 6px; margin: 8px 0; }
 .radio-row .switch { align-items: flex-start; }
 .note.ok { color: var(--ok); }
+.scope-hd { margin: 14px 0 2px; font-size: 12px; text-transform: uppercase; letter-spacing: .05em;
+  color: var(--txt); }
+.scope-sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--muted); font-size: 12px; }
+.mono-id { font-family: ui-monospace, Menlo, monospace; }
+details.advanced { margin-top: 10px; }
+details.advanced > summary { color: var(--muted); font-size: 13px; padding: 4px 0; }
+.field-block.danger { border-left: 2px solid var(--bad); padding-left: 10px; margin-top: 8px; }
+.btn.danger { background: var(--bad); border-color: var(--bad); color: #1a0606; font-weight: 600; }
+.btn.danger:disabled { opacity: .5; }
 pre.mono { font-family: ui-monospace, Menlo, monospace; font-size: 11px; white-space: pre-wrap;
   word-break: break-word; max-height: 220px; overflow: auto; background: rgba(127,127,127,0.12);
   padding: 8px; border-radius: 6px; margin: 6px 0; }
