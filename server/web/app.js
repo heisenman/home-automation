@@ -647,12 +647,16 @@ const GRAPHABLE = [
   { key: "voc_raw", unit: "", color: "#6ee7b7", label: "VOC (raw)" },
   { key: "eco2", unit: "ppm", color: "#f59e0b", label: "eCO₂" },
   { key: "tvoc", unit: "ppb", color: "#a3e635", label: "TVOC" },
+  { key: "gas_ohm", unit: "Ω", color: "#2dd4bf", label: "Gas resistance" },
   { key: "power_w", unit: "W", color: "#f59e0b", label: "Power" },
   { key: "energy_today_kwh", unit: "kWh", color: "#eab308", label: "Energy today" },
 ];
 
-// shared value row (temp respects the °F/°C pref)
-function SensorVals({ m, unit }) {
+// Unified air-quality band → color (ADR-0035), shared by the map badge + sensor cards. 5 Good → 1 Very Poor.
+const AQ_BAND_COLOR = { 5: "#34d399", 4: "#4aa3ff", 3: "#fbbf24", 2: "#f87171", 1: "#b91c1c" };
+
+// shared value row (temp respects the °F/°C pref). `aq` = the node's air_quality_report (gas nodes), if any.
+function SensorVals({ m, unit, aq }) {
   return html`<div class="sensor-vals">
     ${m.temperature_c != null && html`<span class="sv"><b>${round1(convT(m.temperature_c, unit))}°</b>${unit}</span>`}
     ${m.humidity_pct != null && html`<span class="sv"><b>${round1(m.humidity_pct)}</b>%RH</span>`}
@@ -662,7 +666,9 @@ function SensorVals({ m, unit }) {
     ${m.pressure_hpa != null && html`<span class="sv"><b>${Math.round(m.pressure_hpa)}</b>hPa</span>`}
     ${m.pm25_ugm3 != null && html`<span class="sv"><b>${Math.round(m.pm25_ugm3)}</b>µg/m³</span>`}
     ${m.aqi != null && html`<span class="sv"><b>${m.aqi}</b>AQI</span>`}
-    ${m.air_quality != null && html`<span class="sv"><b>${Math.round(m.air_quality)}</b> AQ</span>`}
+    ${(aq && aq.air_quality_band) ? html`<span class="sv" title=${aq.explanation || ""}>
+        <b style=${`color:${AQ_BAND_COLOR[aq.air_quality_band] || "#94a3b8"}`}>${aq.air_quality_band_label}</b>${aq.air_quality_basis === "relative" ? " ~" : ""} AQ</span>`
+      : (m.air_quality != null && html`<span class="sv"><b>${Math.round(m.air_quality)}</b> AQ</span>`)}
     ${m.voc_index != null && html`<span class="sv"><b>${m.voc_index}</b> VOC</span>`}
     ${m.power_w != null && html`<span class="sv"><b>${Math.round(m.power_w)}</b>W</span>`}
     ${m.energy_today_kwh != null && html`<span class="sv"><b>${round1(m.energy_today_kwh)}</b>kWh today</span>`}
@@ -683,7 +689,7 @@ function SensorChip({ s, onOpen, onEdit }) {
         onClick=${(e) => { e.stopPropagation(); onEdit(s); }}>✎</button>`}
       <div class="sensor-name">${dispName(s)} <span class="chev">▸</span></div>
       <div class="sensor-area">${dispRoom(s)}</div>
-      <${SensorVals} m=${m} unit=${unit} />
+      <${SensorVals} m=${m} unit=${unit} aq=${s.air_quality_report} />
       <div class="sensor-meta">
         <span class=${stale ? "age-stale" : "age-fresh"}>${fmtAge(s.age_s)}</span>
         ${m.battery_pct != null && html` · 🔋 ${Math.round(m.battery_pct)}%`}
@@ -719,7 +725,9 @@ function ExpandedSensor({ s, range, isAdmin, onEdit, onClose }) {
         <span class="sensor-area">${dispRoom(s)}</span>
         <button class="btn sm ghost edit-btn" onClick=${() => onEdit(s)}>✎</button>
       </div>
-      <${SensorVals} m=${m} unit=${unit} />
+      <${SensorVals} m=${m} unit=${unit} aq=${s.air_quality_report} />
+      ${s.air_quality_report && s.air_quality_report.explanation && html`<div class="aq-explain"
+        style="font-size:12px;color:#9fb0c3;margin:2px 2px 8px;line-height:1.4">${s.air_quality_report.explanation}</div>`}
       <div class="charts">
         ${err && html`<div class="err">${err}</div>`}
         ${series == null && !err && html`<div class="note">loading…</div>`}
@@ -1457,6 +1465,12 @@ function HouseMap({ data, selected, onSelect }) {
     return act ? "#b4823c" : "#3d6e93";
   };
   const roomGlance = (devs) => { for (const d of devs || []) { const g = devGlance(d); if (g) return g; } return ""; };
+  const aqBadge = (aq) => {                 // room.air_quality summary → {label,color,title} or null (AQ_BAND_COLOR is module-level)
+    if (!aq || !aq.air_quality_band) return null;
+    const rel = aq.air_quality_basis === "relative";   // "~" hints a relative measure (not comparable room-to-room)
+    return { label: `● ${aq.air_quality_band_label}${rel ? " ~" : ""}`,
+             color: AQ_BAND_COLOR[aq.air_quality_band] || "#94a3b8", title: aq.explanation || "" };
+  };
   const hasPlace = (d) => d.placement && typeof d.placement.x === "number" && typeof d.placement.y === "number";
   // Placements are normalized to the POLYGON bbox (matching RoomPlacementEditor's toNorm) — not the
   // label-inclusive bbox — so a device lands exactly where it was dropped in the editor.
@@ -1489,11 +1503,15 @@ function HouseMap({ data, selected, onSelect }) {
                            : (act ? "rgba(180,130,60,0.14)" : "rgba(47,126,122,0.12)");
           const stroke = act ? "#b4823c" : "#2f7e7a";
           const unplacedGl = unplaced.map(devGlance).filter(Boolean).join("   ");
+          const aq = aqBadge(r.air_quality);
           return html`<g class="room" style="cursor:pointer" onClick=${() => onSelect(r.id, r.name)}>
             ${rings.map((ring) => html`<polygon points=${ring.map((p) => p.join(",")).join(" ")}
               fill=${fill} stroke=${stroke} stroke-width=${sel ? 6 : 4} stroke-linejoin="round" />`)}
             <text x=${lx} y=${ly - 2} text-anchor="middle" font-size="26" font-weight="600"
               fill="currentColor">${r.name}</text>
+            ${aq && html`<text x=${lx} y=${ly + 20} text-anchor="middle" font-size="18" font-weight="700"
+              fill=${aq.color} paint-order="stroke" stroke="rgba(9,12,22,0.72)" stroke-width="3.5">
+              <title>${aq.title}</title>${aq.label}</text>`}
             ${placedDevs.map((d) => {
               const t = devGlance(d); if (!t) return null;
               const cx = box.x0 + d.placement.x * box.W, cy = box.y0 + d.placement.y * box.H;
@@ -1501,7 +1519,7 @@ function HouseMap({ data, selected, onSelect }) {
                 font-size="19" font-weight="600" fill=${devColor(d, act)} style="pointer-events:none"
                 paint-order="stroke" stroke="rgba(9,12,22,0.72)" stroke-width="3.5">${t}</text>`;
             })}
-            ${unplacedGl && html`<text x=${lx} y=${ly + 22} text-anchor="middle" font-size="19"
+            ${unplacedGl && html`<text x=${lx} y=${ly + (aq ? 40 : 22)} text-anchor="middle" font-size="19"
               fill=${act ? "#b4823c" : "#3d6e93"} style="pointer-events:none">${unplacedGl}</text>`}
           </g>`;
         })}

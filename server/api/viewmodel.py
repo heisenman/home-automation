@@ -69,6 +69,7 @@ METRIC_CATALOG: dict[str, dict] = {
     "voc_raw":       {"label": "VOC (raw)",   "unit": "",      "color": "#6ee7b7", "precision": 0, "graph": True},
     "eco2":          {"label": "eCO₂",        "unit": "ppm",   "color": "#f59e0b", "precision": 0, "graph": True},
     "tvoc":          {"label": "TVOC",        "unit": "ppb",   "color": "#a3e635", "precision": 0, "graph": True},
+    "gas_ohm":       {"label": "Gas resistance", "unit": "Ω",  "color": "#2dd4bf", "precision": 0, "graph": True},
     "power_w":       {"label": "Power",       "unit": "W",     "color": "#f59e0b", "precision": 0, "graph": True},
     "energy_today_kwh": {"label": "Energy today", "unit": "kWh", "color": "#eab308", "precision": 2, "graph": True},
 }
@@ -402,6 +403,24 @@ def resolve_room_climate(room_sensors: list[dict]) -> dict | None:
             "source_device_id": None}
 
 
+def resolve_room_air_quality(room_sensors: list[dict]) -> dict | None:
+    """Per-room unified air-quality summary (ADR-0035). Picks the WORST (most conservative) band among the
+    room's gas nodes — an average across dissimilar sensors would be meaningless — preferring an
+    `absolute`-basis reading to break ties. Returns the winning node's band/basis/score/explanation plus its
+    `source_device_id`, or None if the room has no gas node with a usable band (warmup/stale/no_ref → None,
+    so the map simply omits the badge rather than showing a fabricated one)."""
+    reports = [(s["device_id"], s["air_quality_report"]) for s in room_sensors
+               if (s.get("air_quality_report") or {}).get("air_quality_band") is not None]
+    if not reports:
+        return None
+    # band 1 (Very Poor) is worst → sort ascending; tie-break prefers absolute basis, then device_id (stable).
+    did, r = min(reports, key=lambda t: (t[1]["air_quality_band"],
+                                         0 if t[1].get("air_quality_basis") == "absolute" else 1, t[0]))
+    return {"air_quality": r.get("air_quality"), "air_quality_band": r["air_quality_band"],
+            "air_quality_band_label": r["air_quality_band_label"], "air_quality_basis": r["air_quality_basis"],
+            "explanation": r.get("explanation"), "source_device_id": did, "multi": len(reports) > 1}
+
+
 def actuator_map_state(display_vm: dict) -> dict:
     """`{running, status}` for an actuator on the spatial house map (docs/design/map-room-fill.md Arc 2),
     derived from a `build_display` view-model — so the map, room-zoom, and PWA agree (control registry is the
@@ -467,6 +486,7 @@ def build_rooms(sensors: list[dict], areas: dict | None = None, geometry: dict |
                 "out_of_range": out_of_range_map(s.get("metrics")),   # sparse {metric: True} -> panel reds
                 "state": s.get("state"),                              # actuators: {running, status}; else null
                 "age_s": s.get("age_s"),
+                "air_quality_report": s.get("air_quality_report"),    # gas nodes: unified band+basis+explain (ADR-0035)
                 "placement": placement.get(s["device_id"]) or {"x": None, "y": None, "anchor": "auto"},
             }
 
@@ -496,6 +516,7 @@ def build_rooms(sensors: list[dict], areas: dict | None = None, geometry: dict |
             "order": order,
             "geometry": geo_rooms.get(aid),                     # null for rooms without a polygon (yet)
             "climate": resolve_room_climate(climate_inputs.get(aid, [])),   # {value,confidence,source} or null
+            "air_quality": resolve_room_air_quality(climate_inputs.get(aid, [])),  # {band,label,basis,...} or null (ADR-0035)
             "devices": devs,
             # "edge" bucket stays 0 until a node-census source exists (edge nodes aren't in the sensor roster)
             "counts": {"sensors": sum(d["role"] == "sensor" for d in devs),

@@ -65,6 +65,32 @@ def test_bme680_is_relative_declamped_ratio():
     assert bme680_air_quality(50_000, 40.0, base, gas_valid=0)["air_quality_conf"] == "stale"
 
 
+def test_resolve_room_air_quality_worst_band_wins():
+    from server.api.viewmodel import resolve_room_air_quality
+    sensors = [
+        {"device_id": "gas_a", "air_quality_report": {"air_quality_band": 5, "air_quality_band_label": "Good",
+                                                       "air_quality_basis": "relative", "air_quality": 90}},
+        {"device_id": "gas_b", "air_quality_report": {"air_quality_band": 3, "air_quality_band_label": "Moderate",
+                                                       "air_quality_basis": "relative", "air_quality": 50}},
+        {"device_id": "meter", "air_quality_report": None},          # non-gas → ignored
+    ]
+    r = resolve_room_air_quality(sensors)
+    assert r["air_quality_band_label"] == "Moderate" and r["source_device_id"] == "gas_b"   # worst wins
+    assert r["multi"] is True
+    # tie on band → absolute basis wins
+    tie = resolve_room_air_quality([
+        {"device_id": "rel", "air_quality_report": {"air_quality_band": 4, "air_quality_band_label": "Fair",
+                                                    "air_quality_basis": "relative", "air_quality": 70}},
+        {"device_id": "abs", "air_quality_report": {"air_quality_band": 4, "air_quality_band_label": "Fair",
+                                                    "air_quality_basis": "absolute", "air_quality": 70}},
+    ])
+    assert tie["source_device_id"] == "abs"
+    # no usable band (warmup/stale) → None, map omits the badge
+    assert resolve_room_air_quality([{"device_id": "g", "air_quality_report":
+                                      {"air_quality_band": None, "air_quality_conf": "warmup"}}]) is None
+    assert resolve_room_air_quality([]) is None
+
+
 def test_dispatch_by_device_type():
     assert air_quality_for("sgp30_gas", {"tvoc": 30})["family"] == "SGP30"
     assert air_quality_for("sgp40_gas", {"voc_index": 120})["family"] == "SGP40"

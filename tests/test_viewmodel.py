@@ -271,7 +271,7 @@ def test_ui_metric_catalog_matches_pwa_graphable_contract():
     assert [c["key"] for c in cat] == [
         "temperature_c", "humidity_pct", "dewpoint_c", "air_quality", "co2_ppm",
         "radon_bqm3", "pressure_hpa", "pm25_ugm3", "aqi", "voc_index", "voc_raw",
-        "eco2", "tvoc", "power_w", "energy_today_kwh"]
+        "eco2", "tvoc", "gas_ohm", "power_w", "energy_today_kwh"]
     for c in cat:
         assert {"key", "label", "unit", "color", "precision", "graph"} <= set(c)
         assert c["graph"] is True
