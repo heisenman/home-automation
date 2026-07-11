@@ -22,7 +22,16 @@ from pathlib import Path
 REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 from server.api.viewmodel import build_sensor_list          # noqa: E402  (reuses the fusion + auto-reference)
-from server.gas_compensation import air_quality_index, clean_air_baseline  # noqa: E402
+from server.gas_compensation import (air_quality_for, sgp30_air_quality, sgp40_air_quality,  # noqa: E402
+                                     bme680_air_quality, clean_air_baseline)
+
+# family (from device_type substring) → the RAW signal that drives its air-quality + freshness gate
+FAMILY_RAW = {"sgp30": "tvoc", "sgp40": "voc_index", "bme680": "gas_ohm"}
+
+
+def _family(device_type: str):
+    dt = (device_type or "").lower()
+    return next((fam for fam in FAMILY_RAW if fam in dt), None)
 
 HOT = REPO / "instance/db/hot.db"
 JOIN_TOLERANCE_S = 900       # a gas point without a reference-humidity sample within 15 min is skipped
@@ -37,80 +46,110 @@ def _epoch(ts: str) -> float:
     return time.mktime(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
 
 
-def _write(conn, device_id, area, ts, value):
+def _write(conn, device_id, device_type, area, ts, value):
     conn.execute(
         "INSERT OR IGNORE INTO readings (ts, device_id, device_type, area, transport, metric, value, unit, "
         "schema_v, authoritative) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (ts, device_id, "bme680_gas", area or "unknown", "derived", "air_quality", float(value), "", 1, 1))
+        (ts, device_id, device_type or "gas", area or "unknown", "derived", "air_quality",
+         float(value), "", 1, 1))
 
 
-def _gas_ohm_age_s(conn, device_id, now_ep) -> float | None:
-    """Seconds since this node's most recent raw gas_ohm sample (None if it has none)."""
+def _raw_age_s(conn, device_id, metric, now_ep) -> float | None:
+    """Seconds since this node's most recent raw driver sample (None if it has none)."""
     row = conn.execute(
-        "SELECT max(ts) FROM readings WHERE device_id=? AND metric='gas_ohm' AND authoritative=1",
-        (device_id,)).fetchone()
+        "SELECT max(ts) FROM readings WHERE device_id=? AND metric=? AND authoritative=1",
+        (device_id, metric)).fetchone()
     if not row or not row[0]:
         return None
     return now_ep - _epoch(row[0])
 
 
 def sample_once(conn) -> int:
-    """One forward point per gas node, at 'now', reusing the live-view fusion.
-
-    Freshness-gated: a node is skipped unless its raw gas_ohm was seen within FRESHNESS_S, so a
-    now-stamped derived point is never fabricated from a frozen raw input (see FRESHNESS_S).
-    """
+    """One forward air_quality point per gas node (SGP30/SGP40/BME680), at 'now', reusing the live-view
+    fusion (ADR-0035). Freshness-gated per family: a node is skipped unless its RAW driver signal
+    (tvoc / voc_index / gas_ohm) was seen within FRESHNESS_S, so a now-stamped derived point is never
+    fabricated from a frozen raw input."""
     now_ep = time.time()
     iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_ep))
     n = 0
     for d in build_sensor_list(conn, now_ep):
-        if d.get("device_type") == "bme680_gas" and d["metrics"].get("air_quality") is not None:
-            age = _gas_ohm_age_s(conn, d["device_id"], now_ep)
-            if age is None or age > FRESHNESS_S:
-                print(f"  {d['device_id']}: raw gas_ohm stale ({'none' if age is None else f'{age:.0f}s'} "
-                      f"> {FRESHNESS_S}s) — skipping (not fabricating a fresh air_quality)")
-                continue
-            _write(conn, d["device_id"], d.get("area"), iso, d["metrics"]["air_quality"])
-            n += 1
+        fam = _family(d.get("device_type"))
+        if fam is None or d["metrics"].get("air_quality") is None:
+            continue
+        raw = FAMILY_RAW[fam]
+        age = _raw_age_s(conn, d["device_id"], raw, now_ep)
+        if age is None or age > FRESHNESS_S:
+            print(f"  {d['device_id']}: raw {raw} stale ({'none' if age is None else f'{age:.0f}s'} "
+                  f"> {FRESHNESS_S}s) — skipping (not fabricating a fresh air_quality)")
+            continue
+        _write(conn, d["device_id"], d.get("device_type"), d.get("area"), iso, d["metrics"]["air_quality"])
+        n += 1
     conn.commit()
     return n
 
 
+def _backfill_bme680(conn, gid, dtype, ref, area) -> int:
+    """BME680: reconstruct air_quality over gas_ohm history, joining the reference sensor's ambient RH."""
+    if not ref:
+        print(f"  {gid}: no reference sensor resolved — skipping backfill")
+        return 0
+    gas = conn.execute("SELECT ts, value FROM readings WHERE device_id=? AND metric='gas_ohm' "
+                       "AND authoritative=1 ORDER BY ts", (gid,)).fetchall()
+    hum = conn.execute("SELECT ts, value FROM readings WHERE device_id=? AND metric='humidity_pct' "
+                       "AND authoritative=1 ORDER BY ts", (ref,)).fetchall()
+    if not gas or not hum:
+        print(f"  {gid}: no gas/humidity history — skipping")
+        return 0
+    baseline = clean_air_baseline([v for _, v in gas]) or 1.0
+    h_ep = [_epoch(t) for t, _ in hum]
+    h_val = [v for _, v in hum]
+    n = 0
+    for ts, g in gas:
+        ge = _epoch(ts)
+        i = bisect.bisect_left(h_ep, ge)
+        cand = [j for j in (i - 1, i) if 0 <= j < len(h_ep)]
+        if not cand:
+            continue
+        j = min(cand, key=lambda k: abs(h_ep[k] - ge))
+        if abs(h_ep[j] - ge) > JOIN_TOLERANCE_S:
+            continue                                         # no fresh ambient humidity near this point
+        aq = bme680_air_quality(g, h_val[j], baseline)["air_quality"]
+        if aq is not None:
+            _write(conn, gid, dtype, area, ts, aq)
+            n += 1
+    print(f"  {gid}: backfilled {n}/{len(gas)} air_quality points (ref={ref}, baseline={baseline:.0f}Ω)")
+    return n
+
+
+def _backfill_simple(conn, gid, dtype, area, raw_metric, fn) -> int:
+    """SGP30/SGP40: each raw reading maps straight through its transfer function (no reference join)."""
+    rows = conn.execute("SELECT ts, value FROM readings WHERE device_id=? AND metric=? AND authoritative=1 "
+                        "ORDER BY ts", (gid, raw_metric)).fetchall()
+    n = 0
+    for ts, v in rows:
+        aq = fn(v)["air_quality"]
+        if aq is not None:
+            _write(conn, gid, dtype, area, ts, aq)
+            n += 1
+    print(f"  {gid}: backfilled {n}/{len(rows)} air_quality points ({raw_metric})")
+    return n
+
+
 def backfill(conn) -> int:
-    """Reconstruct air_quality for the full stored gas_ohm history of each gas node."""
+    """Reconstruct air_quality over the full stored history of every gas node (all 3 families)."""
     total = 0
     for d in build_sensor_list(conn, time.time()):
-        if d.get("device_type") != "bme680_gas":
+        fam = _family(d.get("device_type"))
+        if fam is None:
             continue
-        gid, ref, area = d["device_id"], d.get("ambient_ref"), d.get("area")
-        if not ref:
-            print(f"  {gid}: no reference sensor resolved — skipping backfill")
-            continue
-        gas = conn.execute("SELECT ts, value FROM readings WHERE device_id=? AND metric='gas_ohm' "
-                           "AND authoritative=1 ORDER BY ts", (gid,)).fetchall()
-        hum = conn.execute("SELECT ts, value FROM readings WHERE device_id=? AND metric='humidity_pct' "
-                           "AND authoritative=1 ORDER BY ts", (ref,)).fetchall()
-        if not gas or not hum:
-            print(f"  {gid}: no gas/humidity history — skipping")
-            continue
-        baseline = clean_air_baseline([v for _, v in gas]) or 1.0
-        h_ep = [_epoch(t) for t, _ in hum]
-        h_val = [v for _, v in hum]
-        n = 0
-        for ts, g in gas:
-            ge = _epoch(ts)
-            i = bisect.bisect_left(h_ep, ge)
-            cand = [j for j in (i - 1, i) if 0 <= j < len(h_ep)]
-            if not cand:
-                continue
-            j = min(cand, key=lambda k: abs(h_ep[k] - ge))
-            if abs(h_ep[j] - ge) > JOIN_TOLERANCE_S:
-                continue                                     # no fresh ambient humidity near this point
-            _write(conn, gid, area, ts, air_quality_index(g, h_val[j], baseline)["air_quality"])
-            n += 1
+        gid, dtype, area = d["device_id"], d.get("device_type"), d.get("area")
+        if fam == "bme680":
+            total += _backfill_bme680(conn, gid, dtype, d.get("ambient_ref"), area)
+        elif fam == "sgp30":
+            total += _backfill_simple(conn, gid, dtype, area, "tvoc", lambda v: sgp30_air_quality(v))
+        elif fam == "sgp40":
+            total += _backfill_simple(conn, gid, dtype, area, "voc_index", lambda v: sgp40_air_quality(v))
         conn.commit()
-        print(f"  {gid}: backfilled {n}/{len(gas)} air_quality points (ref={ref}, baseline={baseline:.0f}Ω)")
-        total += n
     return total
 
 

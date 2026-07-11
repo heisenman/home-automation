@@ -12,7 +12,7 @@ from __future__ import annotations
 import math
 from datetime import datetime, timezone
 
-from server.gas_compensation import air_quality_index, clean_air_baseline
+from server.gas_compensation import air_quality_for, clean_air_baseline
 
 
 def dewpoint_c(temp_c, rh_pct):
@@ -59,12 +59,12 @@ METRIC_CATALOG: dict[str, dict] = {
     "temperature_c": {"label": "Temperature", "unit": "°C",    "color": "#f87171", "precision": 1, "graph": True},
     "humidity_pct":  {"label": "Humidity",    "unit": "%RH",   "color": "#4aa3ff", "precision": 1, "graph": True},
     "dewpoint_c":    {"label": "Dew point",   "unit": "°C",    "color": "#22d3ee", "precision": 1, "graph": True},
+    "air_quality":   {"label": "Air Quality", "unit": "AQ",    "color": "#4ade80", "precision": 0, "graph": True},
     "co2_ppm":       {"label": "CO₂",         "unit": "ppm",   "color": "#fbbf24", "precision": 0, "graph": True},
     "radon_bqm3":    {"label": "Radon",       "unit": "Bq",    "color": "#a78bfa", "precision": 0, "graph": True},
     "pressure_hpa":  {"label": "Pressure",    "unit": "hPa",   "color": "#34d399", "precision": 0, "graph": True},
     "pm25_ugm3":     {"label": "PM2.5",       "unit": "µg/m³", "color": "#fb7185", "precision": 0, "graph": True},
     "aqi":           {"label": "AQI",         "unit": "",      "color": "#fbbf24", "precision": 0, "graph": True},
-    "air_quality":   {"label": "Air Quality", "unit": "AQ",    "color": "#4ade80", "precision": 0, "graph": True},
     "voc_index":     {"label": "VOC Index",   "unit": "VOC",   "color": "#34d399", "precision": 0, "graph": True},
     "voc_raw":       {"label": "VOC (raw)",   "unit": "",      "color": "#6ee7b7", "precision": 0, "graph": True},
     "eco2":          {"label": "eCO₂",        "unit": "ppm",   "color": "#f59e0b", "precision": 0, "graph": True},
@@ -203,24 +203,37 @@ def _gas_baseline(hot_conn, device_id: str):
     return clean_air_baseline([r[0] for r in rows])
 
 
-def _compensate_gas_nodes(devices: list[dict], hot_conn) -> None:
-    """BME680 gas nodes self-heat, so their own temp/RH aren't valid ambient — HIDE them, and derive a
-    humidity-compensated `air_quality` (0..100, higher = cleaner) from the auto-picked reference sensor's
-    TRUE humidity. No per-node config: the reference is resolved from live data. If no reference/gas data
-    is available we still hide the bad T/RH so the UI never shows a misleading self-heated number."""
+def _is_gas_node(device_type: str) -> bool:
+    dt = (device_type or "").lower()
+    return any(fam in dt for fam in ("sgp30", "sgp40", "bme680"))
+
+
+def _unify_gas_nodes(devices: list[dict], hot_conn) -> None:
+    """Attach the unified air-quality report (ADR-0035) to every gas node — SGP30/SGP40/BME680 — on one
+    banded 0..100 scale with an absolute/relative basis flag. Each node gets `air_quality_report` (band,
+    basis, conf, explanation, raw signal) + a numeric `metrics['air_quality']` for graphing. BME680 also
+    needs the auto-picked reference sensor's TRUE ambient humidity (its own T/RH are self-heated) and a
+    rolling clean-air baseline; its self-heated T/RH are then hidden so the UI never shows a bad number."""
     for gas in devices:
-        if (gas.get("device_type") or "") != "bme680_gas":
+        if not _is_gas_node(gas.get("device_type")):
             continue
         gm = gas["metrics"]
-        gas_ohm = gm.get("gas_ohm")
-        ref = _resolve_ambient_ref(gas, devices)
-        rh = (ref.get("metrics") or {}).get("humidity_pct") if ref else None
-        if gas_ohm is not None and rh is not None:
-            base = _gas_baseline(hot_conn, gas["device_id"]) or gas_ohm
-            gm["air_quality"] = air_quality_index(gas_ohm, rh, base)["air_quality"]
-            gas["ambient_ref"] = ref["device_id"]             # surfaced for transparency
-        for bad in ("temperature_c", "humidity_pct", "dewpoint_c"):
-            gm.pop(bad, None)                                 # self-heated / derived-from-self-heated → drop
+        dt = (gas.get("device_type") or "").lower()
+        rh = base = None
+        if "bme680" in dt:
+            ref = _resolve_ambient_ref(gas, devices)
+            if ref:
+                rh = (ref.get("metrics") or {}).get("humidity_pct")
+                gas["ambient_ref"] = ref["device_id"]         # surfaced for transparency
+            base = _gas_baseline(hot_conn, gas["device_id"])
+        report = air_quality_for(dt, gm, ambient_rh_pct=rh, gas_baseline_ohm=base)
+        if report is not None:
+            gas["air_quality_report"] = report
+            if report.get("air_quality") is not None:
+                gm["air_quality"] = report["air_quality"]     # numeric, graphable
+        if "bme680" in dt:
+            for bad in ("temperature_c", "humidity_pct", "dewpoint_c"):
+                gm.pop(bad, None)                             # self-heated / derived-from-self-heated → drop
         gas["graphs"] = sensor_graphs(gm)                     # rebuild after mutating metrics
 
 
@@ -271,7 +284,7 @@ def build_sensor_list(hot_conn, now: float, meta: dict | None = None,
         e["climate_role"] = m.get("climate_role")   # primary|secondary|None -> room climate resolver
         e["age_s"] = _age_s(e["ts"], now)
         e["graphs"] = sensor_graphs(e["metrics"])    # shared UI spec: which metrics graph, +unit/color/label
-    _compensate_gas_nodes(out, hot_conn)             # BME680: hide self-heated T/RH, derive air_quality (fusion)
+    _unify_gas_nodes(out, hot_conn)                  # SGP30/SGP40/BME680: unified banded air_quality (ADR-0035)
     out.sort(key=lambda e: (e["room"], e["device_id"]))
     return out
 
@@ -333,6 +346,7 @@ NORMAL_RANGES: dict[str, tuple[float, float]] = {
     "voc_index":     (0.0, 250.0),
     "radon_bqm3":    (0.0, 150.0),
     "aqi":           (0.0, 100.0),
+    "air_quality":   (40.0, 100.0),     # unified band score (higher=cleaner); <40 = Poor/Very Poor → flag
 }
 CLIMATE_STALE_S = 1800          # a configured primary/secondary climate sensor older than this falls through
 CLIMATE_DIVERGE_C = 2.0         # room temperature spread above this -> averaged_divergent (an avg hides a spread)

@@ -46,7 +46,7 @@ def test_compensation_hides_selfheat_and_derives_air_quality():
         {"device_id": "meter_pro_h_bed", "device_type": "switchbot_meter_pro", "area": "h_bed",
          "metrics": {"temperature_c": 24.1, "humidity_pct": 41.0}, "ts": "t1"},
     ]
-    V._compensate_gas_nodes(devices, hot)
+    V._unify_gas_nodes(devices, hot)
     gm = devices[0]["metrics"]
     assert "temperature_c" not in gm and "humidity_pct" not in gm and "dewpoint_c" not in gm  # self-heat hidden
     assert "pressure_hpa" in gm and "gas_ohm" in gm                    # kept
@@ -58,7 +58,7 @@ def test_compensation_still_hides_bad_th_without_a_reference():
     hot = _hot_with_gas_history([9000])
     devices = [{"device_id": "gas_hbed", "device_type": "bme680_gas", "area": "nowhere",
                 "metrics": {"temperature_c": 36.0, "humidity_pct": 25.0, "gas_ohm": 9000}, "graphs": []}]
-    V._compensate_gas_nodes(devices, hot)
+    V._unify_gas_nodes(devices, hot)
     gm = devices[0]["metrics"]
     assert "temperature_c" not in gm and "humidity_pct" not in gm     # never show a self-heated number
     assert "air_quality" not in gm                                    # no reference → no fabricated index

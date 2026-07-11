@@ -64,3 +64,136 @@ def clean_air_baseline(gas_ohm_series, percentile: float = 0.95):
         return None
     idx = min(len(vals) - 1, max(0, int(round(percentile * (len(vals) - 1)))))
     return vals[idx]
+
+
+# ── Unified air-quality index (ADR-0035) ─────────────────────────────────────────────
+# One banded scale across three sensor families that do NOT measure the same thing. Each family maps its
+# native signal onto a common 0..100 cleanliness score (higher = cleaner) whose band boundaries fall exactly
+# at 80/60/40/20 → the 5 bands, and declares a `basis`: `absolute` (comparable room-to-room — only SGP30, via
+# the UBA TVOC bands) or `relative` (only vs this room's own recent baseline — SGP40, BME680). Thresholds are
+# the shadow-tuned ADR-0035 values. See docs/adr/ADR-0035 + docs/air-quality/SENSOR-METHODOLOGY.md.
+
+_BANDS = ((80.0, 5, "Good"), (60.0, 4, "Fair"), (40.0, 3, "Moderate"), (20.0, 2, "Poor"), (0.0, 1, "Very Poor"))
+
+
+def band_for_score(score: float):
+    """0..100 cleanliness score → (band_int 1..5, label). Boundaries at 80/60/40/20."""
+    for lo, b, label in _BANDS:
+        if score >= lo:
+            return b, label
+    return 1, "Very Poor"
+
+
+def _interp(x, xs, ys):
+    """Piecewise-linear interpolation of x over knots xs (strictly increasing) → ys. Clamped at the ends."""
+    if x <= xs[0]:
+        return ys[0]
+    if x >= xs[-1]:
+        return ys[-1]
+    for i in range(1, len(xs)):
+        if x <= xs[i]:
+            f = (x - xs[i - 1]) / (xs[i] - xs[i - 1])
+            return ys[i - 1] + f * (ys[i] - ys[i - 1])
+    return ys[-1]
+
+
+# family → score knots (raw signal → cleanliness score). Boundaries land on band edges so score-band == raw-band.
+import math as _math  # noqa: E402
+
+# SGP30: UBA five-level TVOC bands (ppb), interpolated in LOG space (UBA is a log scale). basis=absolute.
+_SGP30_LOGX = [_math.log(v) for v in (1.0, 65.0, 220.0, 660.0, 2200.0, 6000.0)]
+_SGP30_Y = [100.0, 80.0, 60.0, 40.0, 20.0, 0.0]
+# SGP40: Sensirion VOC Index native scale (100 = the sensor's own 24 h baseline). basis=relative.
+_SGP40_X = [0.0, 100.0, 200.0, 300.0, 400.0, 500.0]
+_SGP40_Y = [100.0, 80.0, 60.0, 40.0, 20.0, 0.0]
+# BME680: gas-resistance ratio r = gas_ohm / clean-air baseline (pollution drops R). basis=relative.
+_BME_X = [0.10, 0.30, 0.50, 0.70, 0.90, 1.00]
+_BME_Y = [0.0, 20.0, 40.0, 60.0, 80.0, 100.0]
+
+
+def _report(score, basis, family, raw_signal, raw_value, explanation, conf="ok", **extra):
+    b, label = band_for_score(score)
+    return {"air_quality": round(score, 1), "air_quality_band": b, "air_quality_band_label": label,
+            "air_quality_basis": basis, "air_quality_conf": conf, "family": family,
+            "raw_signal": raw_signal, "raw_value": raw_value, "explanation": explanation, **extra}
+
+
+def _stale_report(family, raw_signal, conf, note):
+    return {"air_quality": None, "air_quality_band": None, "air_quality_band_label": None,
+            "air_quality_basis": None, "air_quality_conf": conf, "family": family,
+            "raw_signal": raw_signal, "raw_value": None, "explanation": note}
+
+
+def sgp30_air_quality(tvoc_ppb, eco2_ppm=None) -> dict:
+    """SGP30 → ABSOLUTE band via UBA TVOC levels. eCO2 is a proxy-of-a-proxy → not banded (display only)."""
+    if tvoc_ppb is None:
+        return _stale_report("SGP30", "TVOC", "stale", "No TVOC reading.")
+    if tvoc_ppb <= 0 and (eco2_ppm is None or eco2_ppm <= 400):
+        return _stale_report("SGP30", "TVOC", "warmup", "SGP30 warming up (baseline not settled).")
+    score = _interp(_math.log(max(tvoc_ppb, 1.0)), _SGP30_LOGX, _SGP30_Y)
+    b, label = band_for_score(score)
+    lvl = 6 - b   # UBA level 1 (best) .. 5 (worst)
+    expl = (f"{label}. TVOC {tvoc_ppb:.0f} ppb (UBA level {lvl}) — an absolute, ethanol-referenced estimate, "
+            f"comparable across rooms. Note: the SGP30's baseline drifts over days, so treat the absolute "
+            f"level as approximate.")
+    return _report(score, "absolute", "SGP30", "TVOC", round(tvoc_ppb, 0), expl, uba_level=lvl)
+
+
+def sgp40_air_quality(voc_index) -> dict:
+    """SGP40 → RELATIVE band on Sensirion's native VOC Index (100 = the sensor's own recent 24 h baseline)."""
+    if voc_index is None:
+        return _stale_report("SGP40", "VOC Index", "stale", "No VOC Index reading.")
+    if voc_index <= 0:
+        return _stale_report("SGP40", "VOC Index", "warmup", "SGP40 warming up (VOC Index not yet valid).")
+    score = _interp(float(voc_index), _SGP40_X, _SGP40_Y)
+    b, label = band_for_score(score)
+    rel = ("at" if abs(voc_index - 100) < 5 else
+           f"{voc_index - 100:.0f} above" if voc_index > 100 else f"{100 - voc_index:.0f} below")
+    expl = (f"{label}. VOC Index {voc_index:.0f} — {rel} this room's recent (24 h) baseline of 100; "
+            f"a relative measure, not comparable to other rooms.")
+    return _report(score, "relative", "SGP40", "VOC Index", round(float(voc_index), 0), expl)
+
+
+def bme680_air_quality(gas_ohm, ambient_rh_pct, gas_baseline_ohm, gas_valid=1, baseline_ready=True) -> dict:
+    """BME680 → RELATIVE band on the resistance ratio r = gas_ohm / clean-air baseline (de-clamped; the old
+    0..100 index pinned ~22 % of samples at 100). Humidity-compensates gas_ohm with the reference sensor's
+    TRUE ambient RH before the ratio, so the band reflects VOC load, not humidity artifacts."""
+    if gas_ohm is None:
+        return _stale_report("BME680", "gas resistance", "stale", "No gas-resistance reading.")
+    if not gas_valid:
+        return _stale_report("BME680", "gas resistance", "stale", "BME680 gas reading not valid (heater unstable).")
+    if not gas_baseline_ohm or gas_baseline_ohm <= 0:
+        return _stale_report("BME680", "gas resistance", "burn_in", "BME680 clean-air baseline still forming.")
+    if not baseline_ready:
+        return _stale_report("BME680", "gas resistance", "burn_in", "BME680 clean-air baseline still forming.")
+    if ambient_rh_pct is None:
+        # no co-located reference sensor → we can't remove the humidity artifact; don't fabricate an index.
+        return _stale_report("BME680", "gas resistance", "no_ref",
+                             "No co-located reference humidity sensor — can't compensate the reading.")
+    # humidity correction: normalize gas_ohm toward the HUM_REF_PCT reference (MOX R rises with dryness);
+    # scale by the humidity_score fraction so very dry/humid air doesn't masquerade as a VOC change.
+    hs = humidity_score(ambient_rh_pct) / (HUM_WEIGHT * 100.0)       # 0..1, full marks near 40 %RH
+    g_eff = gas_ohm * (0.85 + 0.15 * hs)                             # gentle correction (±15 %)
+    r = g_eff / gas_baseline_ohm
+    score = _interp(r, _BME_X, _BME_Y)
+    b, label = band_for_score(score)
+    expl = (f"{label}. Gas resistance {gas_ohm / 1000:.0f} kΩ at {min(r, 1.0) * 100:.0f}% of this room's "
+            f"recent clean-air baseline; a relative measure, not comparable to other rooms.")
+    return _report(score, "relative", "BME680", "gas resistance", round(gas_ohm, 0), expl,
+                   gas_baseline_ohm=round(gas_baseline_ohm, 0), ratio=round(r, 3))
+
+
+def air_quality_for(device_type, metrics, *, ambient_rh_pct=None, gas_baseline_ohm=None,
+                    baseline_ready=True) -> dict | None:
+    """Dispatch a gas node to its family's unified air-quality report (ADR-0035). Returns None if the
+    device_type isn't a known gas family. `metrics` is the node's latest {metric: value}."""
+    dt = (device_type or "").lower()
+    m = metrics or {}
+    if "sgp30" in dt:
+        return sgp30_air_quality(m.get("tvoc"), m.get("eco2"))
+    if "sgp40" in dt:
+        return sgp40_air_quality(m.get("voc_index"))
+    if "bme680" in dt:
+        return bme680_air_quality(m.get("gas_ohm"), ambient_rh_pct, gas_baseline_ohm,
+                                  m.get("gas_valid", 1), baseline_ready)
+    return None
