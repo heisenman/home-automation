@@ -27,22 +27,13 @@ deployed it to ha-2" should look like.
 
 | id | path(s) | marker | committed | trigger — when this MUST deploy | verify on ha-2 | remedy |
 |----|---------|--------|-----------|--------------------------------|----------------|--------|
-| `adr0034-classify` | `server/maintenance/device_push.py` | `HA2-DEPLOY-DRIFT:adr0034-classify` | `10235b8` | a **device migration or failover-rebuild run *from ha-2*** re-pushes devices — a LAN actuator (`node: server`: Midea/Levoit/host) would hit the **old** `classify()`, return `unknown`, and **abort** (the bug ADR-0034 Phase 2 already fixed). | `python -c "from server.maintenance import device_push as D; print(D.classify('dehumidifier_living_room'))"` → must print `local-driver` | scp `device_push.py` to ha-2; re-run verify |
+| _(none)_ | | | | | | |
 
-### Detail — `adr0034-classify`
+**No items pending.** `adr0034-classify` was **deployed to ha-2 on 2026-07-11** (device-admin + taxonomy prod
+cutover — [../coord/PROD-CUTOVER-RUNBOOK.md](../coord/PROD-CUTOVER-RUNBOOK.md)); verified on ha-2:
+`classify('dehumidifier_living_room')` → `local-driver`. Marker + row retired together per the protocol above.
 
-ADR-0034 Phase 2 (commit `10235b8`) re-framed `device_push.classify()` from the flat
-`{tasmota,esp32,ble,unknown}` enum into the Node/transport-plane enum
-`{mqtt-broker,edge-signed,ble-passive,local-driver}` and added the **`local-driver`** class so LAN actuators
-migrate (skip repoint → confirm → pending-hold) instead of aborting at `unknown`.
-
-- **Why deferral is safe today:** `classify()` is reached **only** through the manual `device_push <id>`
-  migration entrypoint. No running service executes it (`pending_sweeper` imports `device_push` but calls only
-  `drop_cleanup`, which is unchanged; ingest/control/storage/BFF don't import it). So ha-2 behaves identically
-  whether or not it has this commit — until someone *runs a migration on ha-2*.
-- **The one scenario that forces deployment:** a failover-rebuild (or any device migration) executed **from
-  ha-2's checkout**. Then the stale `classify()` re-appears and LAN actuators abort. If you see that: it is
-  **already fixed** — deploy `device_push.py`, don't re-solve `device-push-actuator-class`.
-
-*Related:* [ADR-0034](../adr/ADR-0034-device-object-model-node-ability-entity.md) · [FOLLOWUPS](../FOLLOWUPS.md)
-· failover-rebuild is the trigger scenario — see [failover-drill.md](../failover-drill.md).
+The cutover also deployed device-admin (`control.py`, `apply_rename_worksheet.py`, `admin_job.py`,
+`ha-admin-job@.service`), the failover maintenance-inhibit (`failover/healthcheck.sh`), `model_project.py` +
+`DEVICE-MODEL.md`, and the PWA — all verified by deployed-file checksum on ha-2, so none needs a tripwire row.
+Deployed manifest recorded on ha-2 at `instance/cutover-deployed.txt`.

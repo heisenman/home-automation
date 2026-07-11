@@ -95,12 +95,6 @@ def resolve_node_id(device_id, *, edge_dir=None, devices_path=None):
     return None
 
 
-# ⚠️ HA2-DEPLOY-DRIFT:adr0034-classify — this classify() re-frame (ADR-0034 Phase 2, adds the `local-driver`
-#   class so LAN actuators migrate instead of aborting) is committed to git but may NOT be deployed on ha-2
-#   (air-gap; git-committed ≠ deployed there — see [[airgap-checkout-drift]]). If a device migration or
-#   failover-rebuild *on ha-2* aborts a LAN actuator (`node: server`) at `unknown`, it is **ALREADY FIXED
-#   HERE** — DEPLOY device_push.py, do NOT re-implement device-push-actuator-class. Full item + verify +
-#   remedy: docs/airgap/HA2-DEPLOY-PENDING.md  (tracked by tests/test_ha2_deploy_pending.py).
 def classify(device_id, *, edge_dir=None):
     """Node/transport-plane class (ADR-0034) = the repoint/migration procedure this physical unit needs.
     Returns a NODE_CLASSES value or "unknown" (in no registry):
