@@ -279,7 +279,8 @@ def peer_hot_relocate(*, old_area: str | None = None, device_id: str | None = No
     peer_host = peer_host or _read_env(REPO_ROOT / "instance" / "cluster.env", "PEER_HOST")
     if not peer_host:
         return {"status": "skipped", "reason": "no PEER_HOST"}
-    key = key or str(Path.home() / ".ssh" / "id_cluster")
+    key = key or str(Path("~visko/.ssh/id_cluster").expanduser())   # ~visko via pwd — immune to the
+    #                                          ha-admin-job.service HOME=instance override that broke Path.home()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     na = new_area.replace("'", "''")
     if old_area is not None:
@@ -302,8 +303,15 @@ def peer_hot_relocate(*, old_area: str | None = None, device_id: str | None = No
     try:
         r = subprocess.run(ssh, capture_output=True, text=True, timeout=60)
     except (subprocess.SubprocessError, OSError) as e:
-        return {"status": "error", "host": peer_host, "error": str(e)}
-    if r.returncode != 0:
+        # Peer sync is BEST-EFFORT: the airgap standby is a dev-convenience whose :22 is fenced on the
+        # airgap link, and the reconcile loop re-seeds it anyway. An unreachable peer must NOT dirty an
+        # ha-2 relocate — ha-2 is the record-of-record and correct regardless. So a transport failure is
+        # a non-fatal "skipped", never an "error" (which would flip the admin job to failed).
+        return {"status": "skipped", "reason": f"peer unreachable: {e}", "host": peer_host}
+    if r.returncode == 255:                       # ssh transport failure — fenced :22 / no route / bad key
+        return {"status": "skipped", "reason": (r.stderr or "ssh transport failure").strip()[:400],
+                "host": peer_host}
+    if r.returncode != 0:                          # reached the peer but the remote command failed — real error
         return {"status": "error", "host": peer_host, "error": (r.stderr or r.stdout).strip()[:400]}
     return {"status": "dry-run" if dry_run else "ok", "host": peer_host, "result": r.stdout.strip()}
 
