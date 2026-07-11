@@ -1,6 +1,6 @@
 # Power / Idle Optimization — plan, campaign, and box-productization procedure
 
-**Date:** 2026-06-25 · **Author:** dev (210) · **Status:** DRAFT for review by **ops** + **Hugh**
+**Date:** 2026-06-25 (concluded 2026-07-11) · **Author:** dev (210) · **Status:** ✅ **CONCLUDED** — active-optimization phase complete. Box characterized at the platform floor (3.74 W min / ~5 W mean / ~98% C2 over a 16.5-day window); no software lever left on this hardware (BIOS levers unavailable, recompile ruled out). Productization script/image **dropped** as low-value (nothing to tune) per Hugh 2026-07-11 — see §5/§6.
 **Scope:** maximize time spent in deep idle (C2/package-idle) on the dictator box under home-automation
 constraints, **and** turn the findings into a repeatable procedure — a tuned install image, a set of
 bring-up directives, and a living results ledger — for the next boxes (likely the **same** AMD Ryzen
@@ -213,12 +213,15 @@ capability-gated). This is the artifact the next bring-up reads.
 
 **Phase 0 ✅ DONE (2026-06-25):** Layer-1 sampler live (no installs, root timer); the 7–15 day window is
 **collecting now**. First live read: package ~11.8 W under active load, ~74–96% C2. *(dev)*
-**Phase 1 (campaign, days 0–15):** Layer-2 transient capture **LIVE (2026-06-25, `acct`)** + Layer-3 tools
-installed (powertop/sysstat on-demand). Remaining: threshold-triggered burst sampling (sampler tweak) +
-A/B the 🟡 levers (most need the Hugh BIOS window). Collecting. *(dev)*
-**Phase 2 (Hugh window):** the 🔴 BIOS items (CPPC, idle-control) at a console; re-measure. *(Hugh + dev)*
-**Phase 3:** write `power-tune.sh` + fold winners into provisioning + draft the image. *(dev, ops review)*
-**Phase 4:** capture the reference image; ledger reflects gains. *(dev + ops)*
+**Phase 1 ✅ DONE (concluded 2026-07-11):** 16.5-day campaign, 3355 samples; idle characterized at the
+platform floor (3.74 W min / ~5 W mean / 97.6% C2, **0 emergent spikes** over the window). Sampler relaxed
+5→15 min and kept on as passive regression-watch. Day-9 readout: [reviews/2026-07-04-power-optimization-day9.md](reviews/2026-07-04-power-optimization-day9.md). *(dev)*
+**Phase 2 ⛔ N/A (hardware):** the 🔴 BIOS levers are **unavailable on this G11** — no CPPC (`amd_pstate`
+n/a), ASPM not OS-settable ([ha-dev-bios-no-cppc], 2026-07-02). No console toggle can move idle here. *(closed)*
+**Phase 3 ⏹ DROPPED (Hugh 2026-07-11):** `power-tune.sh` not written — the campaign found **no software
+lever left to bake** (BIOS n/a, recompile ruled out §2.7; only real levers were masked apt/man-db timers +
+minor governor/iGPU). Marginal value; any future next-box tuning folds into a separate productization effort.
+**Phase 4 ⏹ DROPPED (Hugh 2026-07-11):** reference image belongs to next-box bring-up (separate effort), not power-opt.
 
 **Decisions needed from Hugh:**
 - [ ] OK to **start the Layer-1 sampler now** (zero installs, one root systemd timer, CSV under `instance/profiling/`)?
@@ -242,4 +245,5 @@ A/B the 🟡 levers (most need the Hugh BIOS window). Collecting. *(dev)*
 | 2026-06-27 | Idle residency already near-ceiling → little idle headroom left | 98.6% C2 at idle; box is **idle-bound, not compute-bound** | remaining lever is *active-tail* P-states, not idle % | the classic "idle more" lever is ~spent; biggest gains now physical (BIOS, PSU) | — | — | all (same silicon) |
 | 2026-06-27 | Source-recompile (`-march`) **confirmed no-go** (§2.7) | total real compute ≈ 5 cpu-seconds across 2.6 days (acct); top HA consumer = midea-beautiful @ 2.82 cp | do **not** rebuild toolchain; revisit only if a future compute-bound workload appears | zero expected Δ; closes §2.7 | — | — | all |
 | 2026-06-27 | **Biggest unknown is the PSU, not the CPU** | pkg watts ≠ wall watts; small PSU at ~8 W load can be <70% efficient | **Kill-A-Watt wall calibration = highest-value next measurement** (Hugh purchasing); then re-derive cost + PSU efficiency | could dwarf any remaining silicon lever | — | — | this box + divergent |
-| _(campaign findings land here)_ | | | | | | | |
+| 2026-07-04 | **Day-9 readout** (2705 samples; [review](reviews/2026-07-04-power-optimization-day9.md)) | RAPL pkg + C-state | n/a (measurement) | idle **mean 4.82 W · median 4.60 · min 3.74 · p95 6.51 · max 8.87**; **98.0% C2**; 0 emergent spikes/9.7d. +0.8 W mean drift attributed to added workload; floor unchanged | — | — | this box |
+| 2026-07-11 | **✅ CONCLUDED — full-window baseline** (3355 samples, 16.5 days) | RAPL pkg + C-state; sampler relaxed 5→15 min | conclude active phase; keep passive regression-watch | idle **min 3.74 W · mean ~5.2 · 97.6% C2**, 0 emergent spikes over 16.5 d — still at floor a week past day-9. BIOS levers unavailable (no CPPC/ASPM — [ha-dev-bios-no-cppc]); recompile ruled out (§2.7); **no software lever left**. Productization (power-tune.sh/image) **dropped — nothing to tune** | sampler `systemctl disable` | units only | this box (findings capability-gated) |
