@@ -41,6 +41,14 @@ household HTTPS front (`:443` nginx) reverse-proxying to **ha-2's plain `ha-api:
 
 ## PHASE 0 — Pre-flight (dev/.210 + ha-2 read-only; SAFE) — GO to proceed to Phase 1
 
+> **PHASE 0 DEV TRYOUT — DONE & GREEN (2026-07-11).** Forward relocate round-trip of `meter_pro_h_bed`
+> (`h_office`↔`h_bed`) on .210 via the endpoint→detached-job→orchestration chain. **The maintenance-inhibit
+> held the household VIP through a ~9s `ha-api` outage** (past the fall-2×5s failover threshold) — `.210`
+> never lost the VIP; flag set-during / cleared-after; job `done`, `verify clean`; **silent-drop check
+> passed** (new readings logged on the destination, `last_ts` advanced); `model_project.py` clean
+> before+after; round-trip restored the original state. Two bugs caught + fixed on the fail-ground:
+> failover-inhibit gap (`0933d0b`) + blocking oneshot launch (`d5e0e1d`).
+
 **On .210:**
 - [ ] `coord.py agents` + `coord-local.py roster` → confirm no live parallel dev; announce the window.
 - [ ] **Verify-after-push:** `git fetch && [ "$(git rev-parse HEAD)" = "$(git rev-parse origin/main)" ]`
