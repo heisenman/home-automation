@@ -4,6 +4,21 @@
 serialized, [[device-migration-single-owner]]). **Companion:** [PROD-CUTOVER-STAGING.md](PROD-CUTOVER-STAGING.md)
 (the why + the taxonomy dependence). **Nothing here runs without Hugh's GO per phase.**
 
+> ## CUTOVER STATUS — 2026-07-11
+> - **Phases 0–3 + 5 (software: device-admin + taxonomy) — DONE & VERIFIED LIVE ON ha-2.** Code scp'd +
+>   checksum-verified, job unit installed, `ha-api` cut over under the inhibit (airgap VIP held throughout),
+>   endpoints live (401), `classify→local-driver`, `model_project` clean, a real relocate round-trip on
+>   `meter_pro_h_bed` reported `done/clean` with the VIP held. `adr0034-classify` tripwire retired; deployed
+>   manifest at `ha-2:instance/cutover-deployed.txt`. Two bugs caught+fixed on the way (failover-inhibit
+>   `0933d0b`, blocking launch `d5e0e1d`) + a prod-only verify-semantics fix (`f083b56`).
+> - **Phase 4 (firmware OTA, `adr20-ota-propagate`) — STOPPED for Hugh (physical + decision).** The live C6
+>   gas fleet is healthy and reporting; OTA'ing it hits the known dangling-node_id reject → **cable-flash at
+>   the bench** (physical, can't automate) on **live safety sensors**, and it's **low-priority**. Needs a GO
+>   + a maintenance window with bench access. Recon in the task note.
+> - **Pre-existing hygiene finding (not a bug):** `standby_c6` is intentionally parked in a non-canonical
+>   `standby` area → `test_areas` reports drift (now advisory, non-gating). Hugh may add `standby` to
+>   `areas.yaml` or assign the node — his call.
+
 Moves three committed-not-deployed lifts into **ha-2** (air-gap prod) in one ordered, reversible sequence:
 - **B — taxonomy:** `device_push.classify()` + `tools/model_project.py` + `docs/DEVICE-MODEL.md`
 - **A — device-admin:** backend (`control.py`, `apply_rename_worksheet.py`, `admin_job.py`,
