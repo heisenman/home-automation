@@ -26,6 +26,11 @@ from server.gas_compensation import air_quality_index, clean_air_baseline  # noq
 
 HOT = REPO / "instance/db/hot.db"
 JOIN_TOLERANCE_S = 900       # a gas point without a reference-humidity sample within 15 min is skipped
+FRESHNESS_S = 600            # forward sampler: skip a node whose raw gas_ohm is older than this (10 min).
+                            # Guards against fabricating a "fresh" derived point from a FROZEN raw input —
+                            # e.g. when a node's raw feed dies (migration/outage) the derived series must go
+                            # stale too, not keep writing now-stamped values off the last-known gas_ohm.
+                            # (raw cadence is ~10s; 10 min tolerates a few missed samples before gating.)
 
 
 def _epoch(ts: str) -> float:
@@ -39,12 +44,32 @@ def _write(conn, device_id, area, ts, value):
         (ts, device_id, "bme680_gas", area or "unknown", "derived", "air_quality", float(value), "", 1, 1))
 
 
+def _gas_ohm_age_s(conn, device_id, now_ep) -> float | None:
+    """Seconds since this node's most recent raw gas_ohm sample (None if it has none)."""
+    row = conn.execute(
+        "SELECT max(ts) FROM readings WHERE device_id=? AND metric='gas_ohm' AND authoritative=1",
+        (device_id,)).fetchone()
+    if not row or not row[0]:
+        return None
+    return now_ep - _epoch(row[0])
+
+
 def sample_once(conn) -> int:
-    """One forward point per gas node, at 'now', reusing the live-view fusion."""
-    iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+    """One forward point per gas node, at 'now', reusing the live-view fusion.
+
+    Freshness-gated: a node is skipped unless its raw gas_ohm was seen within FRESHNESS_S, so a
+    now-stamped derived point is never fabricated from a frozen raw input (see FRESHNESS_S).
+    """
+    now_ep = time.time()
+    iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_ep))
     n = 0
-    for d in build_sensor_list(conn, time.time()):
+    for d in build_sensor_list(conn, now_ep):
         if d.get("device_type") == "bme680_gas" and d["metrics"].get("air_quality") is not None:
+            age = _gas_ohm_age_s(conn, d["device_id"], now_ep)
+            if age is None or age > FRESHNESS_S:
+                print(f"  {d['device_id']}: raw gas_ohm stale ({'none' if age is None else f'{age:.0f}s'} "
+                      f"> {FRESHNESS_S}s) — skipping (not fabricating a fresh air_quality)")
+                continue
             _write(conn, d["device_id"], d.get("area"), iso, d["metrics"]["air_quality"])
             n += 1
     conn.commit()
