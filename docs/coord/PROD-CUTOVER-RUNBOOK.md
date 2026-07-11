@@ -83,6 +83,9 @@ running old code until Phase 2). The one exception is the PWA (served from disk 
   - A-backend: `server/api/control.py`, `server/maintenance/apply_rename_worksheet.py`,
     `server/maintenance/admin_job.py`
   - A-unit: `systemd/ha-admin-job@.service`
+  - **Safety infra:** `failover/healthcheck.sh` (the maintenance-inhibit) — **must land on ha-2's checkout
+    AND `~/ha-airgap-standby/failover/healthcheck.sh`** (the air-gap `chk_dictator_airgap` execs the standby
+    checkout, not the repo — classic [[airgap-checkout-drift]]; verify BOTH deployed copies).
 - [ ] **VERIFY DEPLOYED FILES on ha-2 — checksum/diff, NOT the commit** ([[airgap-checkout-drift]]):
       `for f in <paths>; do ssh ha-2 "sha256sum ~/home_automation/$f"; sha256sum $f; done` → must match.
   - Behavioral proof for classify(): `ssh ha-2 'cd ~/home_automation && python -c "from server.maintenance
@@ -109,11 +112,14 @@ per-invocation job unit — **no service restart loads them**. The **only** serv
 ship together (shared failover-rebuild trigger — staging doc §dependence).
 
 - [ ] **GO gate (Hugh).**
-- [ ] **Pause failover** ([[control-plane-vip-gated]], survey §2): on ha-2 `sudo systemctl stop keepalived`
-      (ha-2 keeps the VIP; the standby only takes over on missed advertisements — this prevents a spurious
-      failover mid-restart). **Arm the dead-man:** transient timer to `systemctl start keepalived` in N min.
+- [ ] **Hold the healthcheck FIT across the restart** — the CORRECT mechanism (the maintenance-inhibit built
+      + proven on the .210 rehearsal; **NOT** `stop keepalived`, which would *yield* the VIP): on ha-2
+      `touch instance/.maintenance-fit`. `failover/healthcheck.sh` then reports fit while the flag is fresh,
+      so the `ha-api` restart can't drop priority → no spurious failover. **Dead-man:** the `MAINT_FIT_MAX_AGE`
+      (300s) staleness bound auto-re-arms the healthcheck even if the flag is forgotten. (A device-admin *op*
+      sets/clears this itself in `run_plan`; Phase 2 is a manual restart, so set it by hand.)
 - [ ] `sudo systemctl restart ha-api` on ha-2. Wait for ready (`curl -sf localhost:8123/api/v1/sensors`).
-- [ ] **Resume failover:** `sudo systemctl start keepalived`; disarm the dead-man; confirm VIP still on ha-2.
+- [ ] **Re-arm:** `rm instance/.maintenance-fit`; confirm VIP still on ha-2 (`vip_held`).
 - [ ] **VERIFY on ha-2:**
   - Control plane mounted (VIP + master present); admin endpoints respond — **dry-run preview** of a
     rename/relocate returns `200 preview` (read-only, no mutation).

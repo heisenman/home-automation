@@ -7,6 +7,19 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && p
 [ -f "$REPO/instance/cluster.env" ] && . "$REPO/instance/cluster.env"
 : "${API:=http://localhost:8123}"
 
+# 0. Maintenance inhibit. While a FRESH flag exists, report FIT so a DELIBERATE ha-api restart (the
+# device-admin orchestration's fleet-restart, or a cutover restart) can't drop priority -> spurious
+# failover (the failover-primitives lesson: don't let an op flap the VIP it runs under). Staleness-bounded
+# so a leftover flag (crashed op) can't blind failover past MAINT_FIT_MAX_AGE. Set/cleared by
+# apply_rename_worksheet.run_plan around the restart; a manual restart can `touch instance/.maintenance-fit`
+# then remove it. Inert when absent — normal health logic below is unchanged.
+: "${MAINT_FIT_MAX_AGE:=300}"
+FIT_FLAG="$REPO/instance/.maintenance-fit"
+if [ -f "$FIT_FLAG" ]; then
+  _age=$(( $(date +%s) - $(stat -c %Y "$FIT_FLAG" 2>/dev/null || echo 0) ))
+  [ "$_age" -ge 0 ] && [ "$_age" -le "$MAINT_FIT_MAX_AGE" ] && exit 0
+fi
+
 # 1. local ha-api up (proves the stack is alive)
 curl -fsS --max-time 4 "$API/api/v1/sensors" >/dev/null 2>&1 || exit 1
 

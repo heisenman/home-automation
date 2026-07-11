@@ -42,6 +42,25 @@ INGEST_SERVICES = ["ha-scanner", "ha-writer", "ha-edge-mapper", "ha-edge-history
 SWEEP_MAX_PASSES = 4      # bound the tail-race sweep loop
 SWEEP_SETTLE_S = 6        # let in-flight readings land between sweeps (BLE meters report ~60s)
 
+# Maintenance-inhibit flag: while fresh, the keepalived healthcheck reports FIT so this op's fleet restart
+# (which bounces ha-api) can't trip a spurious failover — the op must not flap the VIP it runs under
+# (failover-primitives lesson). Bounded by MAINT_FIT_MAX_AGE in failover/healthcheck.sh; cleared in finally.
+FIT_FLAG = REPO_ROOT / "instance" / ".maintenance-fit"
+
+
+def _set_maintenance_fit() -> None:
+    try:
+        FIT_FLAG.write_text("maintenance")
+    except OSError:                       # non-clustered box / read-only instance — nothing reads the flag
+        pass
+
+
+def _clear_maintenance_fit() -> None:
+    try:
+        FIT_FLAG.unlink()
+    except OSError:                       # includes not-present
+        pass
+
 
 def registry_area_map(inst: Path | None = None) -> dict:
     """device_id -> current area, read from every registry (the pre-migration source of truth).
@@ -242,6 +261,7 @@ def run_plan(plan: list[dict], *, dry_run: bool = False, do_restart: bool = True
         for s in plan:
             report["steps"].append(apply_one(s, dry_run=False, do_peer=do_peer))
         if do_restart:
+            _set_maintenance_fit()        # hold keepalived FIT across the fleet restart (no spurious failover)
             report["restart"] = restart_ingest(False)
             # Sweep until the tail-race settles: an in-flight reading can land under the old id/area just
             # after a sweep, so re-sweep with a short settle until no stragglers remain (bounded).
@@ -259,6 +279,7 @@ def run_plan(plan: list[dict], *, dry_run: bool = False, do_restart: bool = True
         report["verify"] = verify(plan)
         report["clean"] = report["verify"]["clean"]
     finally:
+        _clear_maintenance_fit()          # re-arm the healthcheck the instant the op ends (or aborts)
         report["reconcile_resumed"] = _systemctl("start", RECONCILE_SERVICE)
     return report
 

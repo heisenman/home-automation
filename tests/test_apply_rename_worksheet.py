@@ -73,6 +73,21 @@ def test_single_device_plan_rename_relocate_and_noop():
         A.registry_area_map = orig
 
 
+def test_maintenance_fit_flag_set_and_clear(tmp_path):
+    """The keepalived-inhibit flag set around the fleet restart: set creates it, clear removes it, and clear
+    is idempotent (no error when absent) — so the finally in run_plan can't blow up."""
+    orig = A.FIT_FLAG
+    A.FIT_FLAG = tmp_path / ".maintenance-fit"
+    try:
+        A._set_maintenance_fit()
+        assert A.FIT_FLAG.exists()
+        A._clear_maintenance_fit()
+        assert not A.FIT_FLAG.exists()
+        A._clear_maintenance_fit()          # idempotent
+    finally:
+        A.FIT_FLAG = orig
+
+
 VALID = {"h_bed", "h_bed_closet", "h_office", "kitchen"}
 
 
