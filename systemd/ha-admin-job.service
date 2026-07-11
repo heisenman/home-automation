@@ -1,0 +1,22 @@
+[Unit]
+Description=Home Automation — dispatch queued admin-job(s) (device rename/relocate)
+Documentation=file:///home/visko/home_automation/docs/coord/PROD-CUTOVER-RUNBOOK.md
+After=network.target
+
+[Service]
+Type=oneshot
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+# DuckDB/parquet scratch needs a writable HOME (mirrors ha-api.service).
+Environment=HOME=/home/visko/home_automation/instance
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+# Deliberately NOT NoNewPrivileges: the orchestration restarts the ingest fleet via `sudo systemctl restart
+# ha-*` (existing NOPASSWD). This runs OUTSIDE ha-api's cgroup, so it survives the ha-api restart it
+# triggers. Triggered by ha-admin-job.path when ha-api (sandboxed, cannot sudo) drops a queue marker — that
+# indirection is the whole point: the network-facing API stays sandboxed and only writes a file.
+ExecStart=/home/visko/home_automation/venv/bin/python3 -m server.maintenance.admin_job dispatch
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-admin-job

@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import json
 import re
-import subprocess
 import sys
 import uuid
 from datetime import datetime, timezone
@@ -24,8 +23,8 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 JOB_DIR = REPO_ROOT / "instance" / "db" / "admin-jobs"
-JOB_ID_RE = re.compile(r"^[0-9a-f]{12}$")            # our own ids; also the guard on the systemctl arg
-_UNIT = "ha-admin-job@{}.service"
+QUEUE_DIR = JOB_DIR / "queue"                        # a marker here triggers ha-admin-job.path -> dispatch
+JOB_ID_RE = re.compile(r"^[0-9a-f]{12}$")            # our own ids; also the guard on any id used as a path
 
 
 def _now() -> str:
@@ -58,25 +57,36 @@ def status(job_id: str) -> dict | None:
 
 
 def launch(spec: dict) -> str:
-    """Record a 'running' job and start its detached unit. ``spec`` = {op: rename|relocate, device_id,
-    new_id?, new_area?, restamp?}. Raises on a failed launch (caller maps to HTTP 500)."""
+    """Enqueue a maintenance job and return its id — with NO privilege. The API (``ha-api``) runs under a
+    ``NoNewPrivileges`` sandbox and therefore CANNOT ``sudo``, so it must not start the unit itself (that was
+    the silent-hang bug: the record was written but ``sudo systemctl start`` was blocked by the sandbox).
+    Instead it just writes the job record + a queue marker (both under ``instance/``, in the API's
+    ReadWritePaths). A system ``ha-admin-job.path`` unit watches the queue and runs ``dispatch`` in an
+    un-sandboxed service that CAN restart the fleet. ``spec`` = {op: rename|relocate, device_id, new_id?,
+    new_area?, restamp?}."""
     job_id = uuid.uuid4().hex[:12]
     _write(job_id, {"job_id": job_id, "status": "running", "spec": spec, "started": _now()})
-    # `systemctl start` on a Type=oneshot BLOCKS until the job finishes, and the job runs ~20-40s AND restarts
-    # ha-api itself — so we must NOT block the caller (the API request / the whole detached rationale). Fire
-    # it in its own session and return immediately; the unit runs in its own cgroup (survives the ha-api
-    # restart it triggers) and reports through the durable JSON the caller polls. (Can't use --no-block: the
-    # NOPASSWD rule matches exactly `systemctl start ha-*`, no extra flag.)
-    try:
-        subprocess.Popen(["sudo", "systemctl", "start", _UNIT.format(job_id)],
-                         stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
-                         stderr=subprocess.DEVNULL, start_new_session=True)
-    except OSError as e:
-        rec = {"job_id": job_id, "status": "error", "spec": spec, "started": _now(),
-               "error": f"launch failed: {e}"}
-        _write(job_id, rec)
-        raise RuntimeError(rec["error"])
+    QUEUE_DIR.mkdir(parents=True, exist_ok=True)
+    (QUEUE_DIR / job_id).write_text("")              # presence triggers ha-admin-job.path -> dispatch
     return job_id
+
+
+def dispatch() -> int:
+    """Run by the ha-admin-job.path-triggered service (un-sandboxed → run_plan can ``sudo`` the fleet
+    restart; own cgroup → survives the ha-api restart it triggers). Process every queued job to a terminal
+    state; remove each marker only AFTER its worker finishes, so a crash leaves the marker for a re-trigger."""
+    if not QUEUE_DIR.exists():
+        return 0
+    rc = 0
+    for marker in sorted(QUEUE_DIR.iterdir()):
+        if not JOB_ID_RE.match(marker.name):
+            try: marker.unlink()                     # ignore junk in the queue dir
+            except OSError: pass
+            continue
+        rc = _worker(marker.name) or rc
+        try: marker.unlink()
+        except OSError: pass
+    return rc
 
 
 def _worker(job_id: str) -> int:
@@ -112,11 +122,14 @@ def _main() -> int:
     import argparse
     p = argparse.ArgumentParser(description="admin maintenance job worker/status")
     sub = p.add_subparsers(dest="cmd", required=True)
-    r = sub.add_parser("run", help="run a recorded job (invoked by the systemd unit)")
+    sub.add_parser("dispatch", help="run all queued jobs (invoked by ha-admin-job.path)")
+    r = sub.add_parser("run", help="run one recorded job by id")
     r.add_argument("job_id")
     s = sub.add_parser("status", help="print a job record")
     s.add_argument("job_id")
     a = p.parse_args()
+    if a.cmd == "dispatch":
+        return dispatch()
     if a.cmd == "run":
         if not JOB_ID_RE.match(a.job_id):
             print(f"bad job id {a.job_id!r}", file=sys.stderr)

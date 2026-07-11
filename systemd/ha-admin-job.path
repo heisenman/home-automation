@@ -1,0 +1,13 @@
+[Unit]
+Description=Home Automation — watch the admin-job queue, dispatch device rename/relocate jobs
+Documentation=file:///home/visko/home_automation/docs/coord/PROD-CUTOVER-RUNBOOK.md
+
+[Path]
+# ha-api (NoNewPrivileges sandbox — can't sudo) enqueues a job by dropping a marker file here. This path
+# unit (system-level) then triggers ha-admin-job.service, which CAN restart the fleet. Re-arms after the
+# service drains the queue.
+PathExistsGlob=/home/visko/home_automation/instance/db/admin-jobs/queue/*
+Unit=ha-admin-job.service
+
+[Install]
+WantedBy=multi-user.target
