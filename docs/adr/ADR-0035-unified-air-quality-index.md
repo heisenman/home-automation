@@ -1,7 +1,10 @@
 # ADR-0035 — Unified air-quality index across heterogeneous gas sensors
 
-**Status:** Proposed (2026-07-11) — DRAFT for Hugh's review. Design only; not yet implemented.
-Supersedes the BME680-only `air_quality` metric (generalizes it; see §7).
+**Status:** Accepted (2026-07-11, Hugh — "I accept, continue all of it"). The 5 open
+questions are resolved to their proposed answers (Q1 native SGP40 banding, Q2 shadow-tune
+before implement, Q3 defer SGP30 drift-correction, Q4 backfill BME680 history, Q5
+generalize `air_quality`). Thresholds below are the pre-tuning proposal; the **Shadow-tune**
+section records the data-driven adjustments. Supersedes the BME680-only `air_quality` metric.
 
 **Directive origin:** Hugh, 2026-07-11. "We have SGP30, SGP40, and BME680 gas sensors …
 they all report different data. Come up with a unified air-quality report, displayed on
@@ -168,6 +171,35 @@ Example: *"Fair (68/100). From SGP40 VOC Index 140 — 40% above this room's rec
 a relative measure, not comparable to other rooms."*
 
 ---
+
+## Shadow-tune results (Q2 — 2026-07-11, on ~1.5 d of live ha-2 data, ~1.6k samples/node)
+
+Proposed thresholds applied to real values; where each room actually lands:
+
+| Node | Family | Observed | Band distribution | Verdict |
+|---|---|---|---|---|
+| `gas_c_office` | SGP40 | VOC med 92 / p95 187 | Good 58% · Fair 42% | ✅ keep native bands |
+| `gas_kitchen` | SGP40 | VOC med 155 / p95 190 | Fair 100% | ✅ keep (kitchen persistently above its own baseline — plausible) |
+| `gas_hbed` | BME680 | r med 0.93 / p05 0.88 | Good 91% · Fair 9% | ✅ keep proposed cuts |
+| `gas_h_office` | BME680 | r med 0.94 / p05 0.88 | Good 88% · Fair 12% | ✅ keep proposed cuts |
+| `gas_c_bed` | SGP30 | TVOC med 332 / p95 404 ppb | **Moderate 100%** | ⚠ see below |
+
+**Kept as proposed** — SGP40 native bands and BME680 ratio cuts (0.90/0.70/0.50/0.30) both
+validated. Candidate "looser" BME680 cuts (0.75/…) were **worse**: they collapsed everything
+to Good and lost the ability to show mild degradation. The p95 rolling baseline self-normalizes,
+so clean air → Good/Fair by construction and the lower bands are correctly reserved for genuine
+resistance drops (no pollution event fell in this clean window, so Moderate/Poor/Very-Poor stay
+empirically unexercised — expected).
+
+**One finding that changes priorities — SGP30 drift is material.** `gas_c_bed` sits 100 %
+Moderate (median 332 ppb). Given Phase-1 §4.1 showed its daily-mean TVOC swinging 43→292 ppb,
+this is substantially **baseline drift**, not a persistently dirty bedroom. Consequences:
+- The **drift caveat in the SGP30 explanation is mandatory, not optional** — a persistently
+  "Moderate" absolute band that's really drift would mislead if shown bare.
+- **Q3 (SGP30 slow drift-correction) is re-prioritized** from "deferred / someday" to "next
+  follow-up after v1 ships." Tracked; v1 still bands on raw ppb + the mandatory caveat.
+
+No threshold values changed from the §Decision proposal.
 
 ## Consequences
 
