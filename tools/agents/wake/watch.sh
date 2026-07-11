@@ -33,6 +33,14 @@ mosquitto_sub -h "$BROKER" -p "$PORT" -t "$TOPIC" 2>/dev/null | while IFS= read 
     log "wake during cooldown (${COOLDOWN}s) — coalesced: $msg"; continue
   fi
   log "WAKE: $msg"
+  # Interactive/review-tagged wakes are handled by a LIVE session, not a headless runner — skip WITHOUT
+  # spending a `claude -p` invocation. Deterministic belt-and-suspenders on the POLICY behavioral backstop
+  # (@e13f4ba): the runner-prompt already declines these, but this avoids even launching it.
+  case "$msg" in
+    *'[interactive]'*|*'[review]'*|*review-only*|*'REVIEW REQUEST'*)
+      log "interactive/review-tagged wake -> routed to interactive session; skipping headless runner"
+      continue ;;
+  esac
   sleep "$DEBOUNCE"
   last=$(date +%s)
   if [ "$DRY_RUN" = 1 ]; then log "DRY_RUN -> would invoke runner now"; continue; fi
