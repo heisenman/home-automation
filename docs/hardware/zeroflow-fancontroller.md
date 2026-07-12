@@ -49,8 +49,10 @@ Script-driven MQTT duty-sweep (publish duty → capture tach → record) on `fan
 curve, while ON; the curve resumes the instant it's turned OFF (no reflash). The 10 s interval re-asserts 100 % while
 the override is on, so it holds through a WiFi drop. **Default is OFF → the temperature curve is always the boot
 default** (a power cycle reverts to the curve). Toggle over MQTT: `fancontroller-2/switch/force_full_speed/command`
-`ON|OFF` (or the web UI / HA discovery entity "Force Full Speed"). Shipped in the shared `fancontroller.yaml`, so
-board 1 picks it up on its next OTA (board 1 was offline at write time, still on the pre-switch image).
+`ON|OFF` (or the web UI / HA discovery entity "Force Full Speed"). Shipped in the shared `fancontroller.yaml`.
+**Both boards now flashed with it:** fc-2 via OTA, **fc-1 via USB-cable flash 2026-07-12** (`config_hash 0xc639ab2b`,
+switch present, curve default running) — firmware in sync across the pair. fc-1 had no 12 V/fans attached at flash
+time (USB power only, all tachs 0), so its override is moot until fans land.
   - **Board 2 config:** [`fancontroller-2.yaml`](../../provisioning/fancontroller/fancontroller-2.yaml) — thin: `packages: !include
   fancontroller.yaml` + overrides `device_name`/`friendly`/`wifi_ap_ssid` to `fancontroller-2` (main-file substitutions win
   over the package's), so curve/hardware/networking stay single-source in `fancontroller.yaml`. Shares `secrets.yaml` (same WiFi + OTA key).
