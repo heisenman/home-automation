@@ -43,7 +43,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v17-sgp30base"
+#define HA_FW_VERSION "v18-sbbatt"
 #endif
 
 static const char *TAG = "ha_edge";

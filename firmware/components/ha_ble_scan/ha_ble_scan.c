@@ -77,6 +77,7 @@ typedef struct {
     int64_t last_ms;
     float t; int h; int b;
     int rn;                   // last radon (Aranet path only); unused for SwitchBot slots
+    int batt_cache;           // last GOOD battery% for this MAC (-1 = none yet); backfills packets lacking it
 } dedup_t;
 static dedup_t s_seen[DEDUP_SLOTS];
 
@@ -88,6 +89,18 @@ static dedup_t *find_or_alloc(const uint8_t mac[6]) {
     }
     if (!free_slot) free_slot = &s_seen[0];
     return free_slot;
+}
+
+// SwitchBot meters carry battery only in the fd3d service-data packet, which arrives SEPARATELY from
+// the 0x0969 manufacturer-data (temp/hum) packet. NimBLE surfaces each adv packet on its own — unlike
+// BlueZ (the dev scanner), which merges a device's fields across packets — so a temp/hum reading here
+// usually lands with battery_pct == -1 and the publisher drops battery. Cache the last GOOD battery per
+// MAC and backfill readings that lack it, so every published reading carries battery (matches dev). This
+// keeps the passive-observer design (ADR-0020) — no active scan needed.
+static void backfill_battery(dedup_t *slot, const uint8_t mac[6], sb_reading_t *r) {
+    if (!slot->used || memcmp(slot->mac, mac, 6) != 0) slot->batt_cache = -1;  // fresh/evicted slot: forget prior device
+    if (r->battery_pct >= 0) slot->batt_cache = r->battery_pct;                // remember a good reading
+    else if (slot->batt_cache >= 0) r->battery_pct = slot->batt_cache;         // backfill from cache
 }
 
 static bool should_publish(dedup_t *slot, const uint8_t mac[6], const sb_reading_t *r) {
@@ -235,6 +248,7 @@ static void handle_adv(const uint8_t *d, int len, int rssi, const ble_addr_t *ad
 
     dedup_t *slot = find_or_alloc(mac);
     slot->addr = *addr;                // cache full address (type + val) for GATT connect
+    backfill_battery(slot, mac, &r);   // merge battery across the fd3d/0x0969 split-packet pair
     if (!should_publish(slot, mac, &r)) return;
 
     snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
