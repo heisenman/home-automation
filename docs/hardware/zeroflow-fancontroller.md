@@ -25,6 +25,32 @@ reach, so the curve runs 100% on-device).
 - **DEFERRED follow-ups:** (1) register on the system (`devices.yaml`/`control.yaml` + trace whether ESPHome-MQTT
   telemetry auto-ingests to storage or needs a Levoit-style bridge); (2) characterize CT200 min-spin `FLOOR` +
   confirm its 500–900 RPM tach range (`multiply: 0.5` = 2 ppr carries over) — both via OTA when the CT200s land.
+
+## Live per-port characterization — board 2, 4 fans populated (2026-07-12)
+Script-driven MQTT duty-sweep (publish duty → capture tach → record) on `fancontroller-2`:
+
+| Port (PWM GPIO / tach GPIO) | Fan type | Measured tach | PWM response |
+|---|---|---|---|
+| **fan_3** (GPIO14 / 18) | **4-pin PWM** | ~480 (0–20%) → **~900 RPM (100%)** | tracks duty ✅ |
+| **fan_4** (GPIO15 / 21) | **4-pin PWM** | ~480 (0–20%) → **~885 RPM (100%)** | tracks duty ✅ |
+| fan_1 (GPIO12 / 16) | 3-pin | fixed **~855 RPM** | ignores PWM |
+| fan_2 (GPIO13 / 17) | 3-pin | fixed **~870 RPM** | ignores PWM |
+
+- **The 2 PWM (speed-controllable) fans are ports 3 & 4.** Ports 1 & 2 are 3-pin — they run at a fixed ~865 RPM
+  *always* and cannot be curbed by the board (only an upstream 12 V cut stops them, per the "how off works" section).
+- All 4 appear to be the **same fan model** — the PWM pair reaches ~885–900 RPM at 100%, matching the 3-pin pair's
+  ~865, so being PWM costs no top-end airflow.
+- **These fans do NOT hard-stop at 0 % duty** — they idle at ~480 RPM even when the curve commands "off" (the
+  documented fan-dependent behavior). So the curve's effective PWM-fan range is ~480 RPM (≤30 % duty) → ~900 (100 %),
+  a clean ramp across the 80→100 °F band. The existing `FLOOR=30` curve is a good default for these fans as-is.
+
+## Manual override — "Force Full Speed" switch (2026-07-12)
+`switch.force_full_speed` (template, `restore_mode: RESTORE_DEFAULT_OFF`) forces **all fans to 100 %**, bypassing the
+curve, while ON; the curve resumes the instant it's turned OFF (no reflash). The 10 s interval re-asserts 100 % while
+the override is on, so it holds through a WiFi drop. **Default is OFF → the temperature curve is always the boot
+default** (a power cycle reverts to the curve). Toggle over MQTT: `fancontroller-2/switch/force_full_speed/command`
+`ON|OFF` (or the web UI / HA discovery entity "Force Full Speed"). Shipped in the shared `fancontroller.yaml`, so
+board 1 picks it up on its next OTA (board 1 was offline at write time, still on the pre-switch image).
   - **Board 2 config:** [`fancontroller-2.yaml`](../../provisioning/fancontroller/fancontroller-2.yaml) — thin: `packages: !include
   fancontroller.yaml` + overrides `device_name`/`friendly`/`wifi_ap_ssid` to `fancontroller-2` (main-file substitutions win
   over the package's), so curve/hardware/networking stay single-source in `fancontroller.yaml`. Shares `secrets.yaml` (same WiFi + OTA key).

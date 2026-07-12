@@ -116,6 +116,23 @@ fan:
     speed_count: 100
     restore_mode: RESTORE_DEFAULT_ON
 
+# --- Manual override: force all fans to 100%, bypassing the curve ---
+# Default OFF, restore OFF on boot → the temperature curve is always the DEFAULT.
+# Turn ON (over MQTT/web) when the fans are needed at full for a different job; the
+# curve resumes the moment it's turned back OFF (no reflash). While ON, the 10s
+# interval below re-asserts 100% so it holds even if something else pokes a fan.
+switch:
+  - platform: template
+    name: "Force Full Speed"
+    id: force_full
+    optimistic: true
+    restore_mode: RESTORE_DEFAULT_OFF
+    turn_on_action:
+      - lambda: |-
+          esphome::fan::Fan* fans[4] = { id(fan1), id(fan2), id(fan3), id(fan4) };
+          for (auto* f : fans) { auto c = f->turn_on(); c.set_speed(100); c.perform(); }
+    # turn_off needs no action — the curve interval reclaims control within 10s.
+
 sensor:
   # Attic air temp/humidity — the board lives IN the airflow it controls, so this IS
   # the target sensor. Native °C (system-consistent); curve below documents °F.
@@ -171,6 +188,13 @@ interval:
   - interval: 10s
     then:
       - lambda: |-
+          // Manual override wins: force every fan to 100%, skip the curve entirely.
+          if (id(force_full).state) {
+            esphome::fan::Fan* fans_ff[4] = { id(fan1), id(fan2), id(fan3), id(fan4) };
+            for (auto* f : fans_ff) { auto c = f->turn_on(); c.set_speed(100); c.perform(); }
+            ESP_LOGI("fancurve", "FORCE FULL (override on) -> all fans 100%%");
+            return;
+          }
           const float T_ON  = 26.7;   // 80 °F  — start
           const float T_OFF = 25.0;   // 77 °F  — hysteresis release
           const float T_MAX = 37.8;   // 100 °F — full
