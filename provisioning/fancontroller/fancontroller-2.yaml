@@ -1,0 +1,11 @@
+# Attic fan controller — BOARD 2. Identical logic to board 1; only the identity differs.
+# Includes board 1's config as a package and overrides just the identity substitutions
+# (ESPHome: main-file substitutions override a package's), so the curve/hardware/networking
+# stay single-source in fancontroller.yaml. Shares secrets.yaml (same WiFi + OTA key).
+substitutions:
+  device_name: fancontroller-2
+  friendly: "Attic Fan Controller 2"
+  wifi_ap_ssid: "fancontroller-2-fallback"
+
+packages:
+  base: !include fancontroller.yaml

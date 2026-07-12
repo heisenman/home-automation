@@ -2,9 +2,10 @@
 
 **Device:** Elecrow **PIA10400P** = ZeroFlow / Arthofer Engineering *WiFi Fan Controller* (open ESPHome design).
 **Qty on hand:** 2 (bench). Goal: research + bench-test, then intake onto the WiFi fleet.
-**Status (2026-07-12):** **board 1 FLASHED with our config + bench-verified LIVE** (curve/telemetry/tach/PWM all
-green — see below). Board 2 pending (swap in once board 1's placed). Deferred: system registration (storage
-ingest) + CT200 `FLOOR` tuning. Deployment target: 2 controllers × 4× Thermaltake CT200 (4-pin PWM) each,
+**Status (2026-07-12):** **BOTH boards FLASHED with our config.** Board 1 bench-verified LIVE (curve/telemetry/
+tach/PWM all green — see below); board 2 flashed + verified booting/curve/telemetry as `fancontroller-2` (distinct
+identity via package-include; 12V/fans not attached so tach/PWM inherit board 1's proof). Deferred: system
+registration (storage ingest) + CT200 `FLOOR` tuning. Deployment target: 2 controllers × 4× Thermaltake CT200 (4-pin PWM) each,
 push-pull at opposite gable ends — house attic (test, WiFi reaches) → garage attic (permanent, WiFi does NOT
 reach, so the curve runs 100% on-device).
 
@@ -23,8 +24,10 @@ reach, so the curve runs 100% on-device).
   duty walked down) ✅ · LEDs off ✅. Note: bench WiFi flapped (marginal signal) — control ran straight through it.
 - **DEFERRED follow-ups:** (1) register on the system (`devices.yaml`/`control.yaml` + trace whether ESPHome-MQTT
   telemetry auto-ingests to storage or needs a Levoit-style bridge); (2) characterize CT200 min-spin `FLOOR` +
-  confirm its 500–900 RPM tach range (`multiply: 0.5` = 2 ppr carries over) — both via OTA when the CT200s land;
-  (3) flash board 2.
+  confirm its 500–900 RPM tach range (`multiply: 0.5` = 2 ppr carries over) — both via OTA when the CT200s land.
+  - **Board 2 config:** [`fancontroller-2.yaml`](../../provisioning/fancontroller/fancontroller-2.yaml) — thin: `packages: !include
+  fancontroller.yaml` + overrides `device_name`/`friendly`/`wifi_ap_ssid` to `fancontroller-2` (main-file substitutions win
+  over the package's), so curve/hardware/networking stay single-source in `fancontroller.yaml`. Shares `secrets.yaml` (same WiFi + OTA key).
 - **Bench tooling note:** the sandbox blocks foreground `sleep`, so paced MQTT command tests fail; verify PWM either
   by watching the fan or with a throwaway on-device duty-sweep firmware (logs duty→RPM over serial).
 
