@@ -1,0 +1,219 @@
+# Attic push-pull fan controller — ZeroFlow/Elecrow PIA10400P (ESP32-S2), OUR config.
+#
+# Hardware map lifted from ZeroFlow hardware-rev-3.1.yaml (I2C GPIO33/34, LEDC fans
+# GPIO12-15 @25kHz, tach GPIO16/17/18/21, HDC1080 @0x40). Self-contained on purpose:
+# no github:// package include (air-gap-clean, everything committed here), and the
+# RGB LED strip is intentionally DROPPED — it's the esp32_rmt_led_strip that threw
+# "no free tx channels" at boot on the stock image, and an attic node needs no LEDs.
+# See docs/hardware/zeroflow-fancontroller.md.
+#
+# DEPLOYMENT: 2 controllers, 4x Thermaltake CT200 (4-pin PWM, 0.16A/1.92W ea) each,
+# push-pull at opposite gable ends. Test in the house attic (WiFi reaches), then the
+# permanent home is the garage attic where WiFi likely does NOT reach — so the fan
+# curve runs 100% ON-DEVICE, network-independent ("boot up and go"). MQTT is
+# best-effort telemetry/override only, never the control path.
+#
+# Bench/dev broker = .210. Switch mqtt.broker to the VIP .200 for production.
+
+substitutions:
+  device_name: fancontroller-1
+  friendly: "Attic Fan Controller 1"
+  wifi_ap_ssid: "fancontroller-1-fallback"
+
+esphome:
+  name: ${device_name}
+  friendly_name: ${friendly}
+
+esp32:
+  board: esp32-s2-saola-1
+  framework:
+    type: esp-idf
+
+logger:
+  level: INFO          # curve prints an ESP_LOGI line each tick; bump to DEBUG only for deep diag
+
+# MQTT-driven node: nothing connects to the native API, so its default 15-min no-client
+# reboot would fire forever. Disable it. (fleet fix — memory esphome-api-reboot-timeout)
+api:
+  reboot_timeout: 0s
+
+ota:
+  - platform: esphome
+    password: !secret ota_password
+
+wifi:
+  # autohome_airgap MUST be un-hidden for ESPHome to join (memory intake-unhide-ssid).
+  networks:
+    - ssid: !secret wifi_ssid           # autohome_airgap (preferred; kept un-hidden)
+      password: !secret wifi_password
+      priority: 10
+    - ssid: !secret wifi_ssid_2          # household fallback so OTA still works during house-attic tuning
+      password: !secret wifi_password_2
+      priority: 0
+  power_save_mode: none
+  ap:
+    ssid: "${wifi_ap_ssid}"
+    password: !secret fallback_ap_password
+
+captive_portal:
+safe_mode:
+web_server:
+  port: 80
+
+mqtt:
+  broker: 192.168.1.210    # BENCH/dev broker. Production = VIP 192.168.1.200. Anonymous-on-LAN.
+  port: 1883
+
+i2c:
+  sda: GPIO33
+  scl: GPIO34
+  scan: true
+  id: bus_a
+
+globals:
+  # hysteresis latch: true once temp crosses the ON point, false again below the OFF point.
+  - id: fans_running
+    type: bool
+    restore_value: no
+    initial_value: 'false'
+
+# --- Fan PWM outputs (drive the 4-pin fan's signal wire @ 25 kHz) ---
+output:
+  - { platform: ledc, pin: GPIO12, id: pwm_fan1, frequency: "25000 Hz" }
+  - { platform: ledc, pin: GPIO13, id: pwm_fan2, frequency: "25000 Hz" }
+  - { platform: ledc, pin: GPIO14, id: pwm_fan3, frequency: "25000 Hz" }
+  - { platform: ledc, pin: GPIO15, id: pwm_fan4, frequency: "25000 Hz" }
+  # NO LEDs by design. The WS2812 status strip's software is dropped entirely (also clears
+  # the stock "no free tx channels" RMT error); this pins its data line (GPIO01) actively
+  # LOW so a floating/noisy line can never latch the LEDs on. Any hardwired power LED is
+  # not software-killable (tape it — cf. memory rtl8125-nic-leds-hw-driven).
+  - { platform: gpio, pin: GPIO01, id: led_strip_data_low }
+
+fan:
+  # RESTORE_DEFAULT_ON = fans come up ON at boot (safe default) until the curve takes over.
+  - platform: speed
+    output: pwm_fan1
+    name: "Fan 1"
+    id: fan1
+    speed_count: 100
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: speed
+    output: pwm_fan2
+    name: "Fan 2"
+    id: fan2
+    speed_count: 100
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: speed
+    output: pwm_fan3
+    name: "Fan 3"
+    id: fan3
+    speed_count: 100
+    restore_mode: RESTORE_DEFAULT_ON
+  - platform: speed
+    output: pwm_fan4
+    name: "Fan 4"
+    id: fan4
+    speed_count: 100
+    restore_mode: RESTORE_DEFAULT_ON
+
+sensor:
+  # Attic air temp/humidity — the board lives IN the airflow it controls, so this IS
+  # the target sensor. Native °C (system-consistent); curve below documents °F.
+  - platform: hdc1080
+    id: temperature_sensor
+    temperature:
+      name: "Temperature"
+      id: fancontroller_temperature
+    humidity:
+      name: "Humidity"
+      id: fancontroller_humidity
+    update_interval: 10s
+
+  - platform: pulse_counter
+    pin: { number: GPIO16, mode: INPUT_PULLUP }
+    unit_of_measurement: 'RPM'
+    id: fan1_speed
+    name: "Fan 1 Speed"
+    accuracy_decimals: 0
+    filters: [ { multiply: 0.5 } ]
+    update_interval: 2s
+  - platform: pulse_counter
+    pin: { number: GPIO17, mode: INPUT_PULLUP }
+    unit_of_measurement: 'RPM'
+    id: fan2_speed
+    name: "Fan 2 Speed"
+    accuracy_decimals: 0
+    filters: [ { multiply: 0.5 } ]
+    update_interval: 2s
+  - platform: pulse_counter
+    pin: { number: GPIO18, mode: INPUT_PULLUP }
+    unit_of_measurement: 'RPM'
+    id: fan3_speed
+    name: "Fan 3 Speed"
+    accuracy_decimals: 0
+    filters: [ { multiply: 0.5 } ]
+    update_interval: 2s
+  - platform: pulse_counter
+    pin: { number: GPIO21, mode: INPUT_PULLUP }
+    unit_of_measurement: 'RPM'
+    id: fan4_speed
+    name: "Fan 4 Speed"
+    accuracy_decimals: 0
+    filters: [ { multiply: 0.5 } ]
+    update_interval: 2s
+
+# --- ON-DEVICE FAN CURVE (network-independent) ---
+# Linear 80°F->100°F, floored at min-spin duty, hysteretic on/off, fail-safe to FULL.
+#   below 77°F (OFF point): fans off        | 80°F (ON point): fans start at FLOOR duty
+#   80->100°F: ramp FLOOR->100%             | above 100°F: 100%
+#   HDC1080 read faults (NaN): fans -> 100% (in an attic, lost-sensor must mean COOL)
+interval:
+  - interval: 10s
+    then:
+      - lambda: |-
+          const float T_ON  = 26.7;   // 80 °F  — start
+          const float T_OFF = 25.0;   // 77 °F  — hysteresis release
+          const float T_MAX = 37.8;   // 100 °F — full
+          const int   FLOOR = 30;     // min duty a 4-pin fan reliably spins at (%)
+          float t = id(fancontroller_temperature).state;
+          int duty;
+          if (std::isnan(t)) {
+            duty = 100;                                   // fail-safe: sensor fault -> full
+          } else {
+            if (!id(fans_running) && t >= T_ON)  id(fans_running) = true;
+            if ( id(fans_running) && t <  T_OFF) id(fans_running) = false;
+            if (id(fans_running)) {
+              float frac = (t - T_ON) / (T_MAX - T_ON);
+              if (frac < 0.0f) frac = 0.0f;
+              if (frac > 1.0f) frac = 1.0f;
+              duty = FLOOR + (int)(frac * (100 - FLOOR));
+            } else {
+              duty = 0;
+            }
+          }
+          ESP_LOGI("fancurve", "t=%.1fC (%.0fF) running=%d duty=%d",
+                   t, std::isnan(t) ? NAN : (t * 9.0f / 5.0f + 32.0f), id(fans_running), duty);
+          esphome::fan::Fan* fans[4] = { id(fan1), id(fan2), id(fan3), id(fan4) };
+          for (auto* f : fans) {
+            if (duty <= 0) {
+              f->turn_off().perform();
+            } else {
+              auto c = f->turn_on();
+              c.set_speed(duty);
+              c.perform();
+            }
+          }
+
+# --- Dead-fan alarm (remote install: we can't see them spin) ---
+# Fault if the curve is commanding motion but a tach reads 0 RPM for 20s+.
+binary_sensor:
+  - platform: template
+    name: "Fan Fault"
+    id: fan_fault
+    device_class: problem
+    lambda: |-
+      if (!id(fans_running)) return false;
+      return (id(fan1_speed).state == 0) || (id(fan2_speed).state == 0)
+          || (id(fan3_speed).state == 0) || (id(fan4_speed).state == 0);
+    filters:
+      - delayed_on: 20s

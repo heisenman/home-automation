@@ -1,8 +1,32 @@
 # ZeroFlow / Elecrow WiFi Fan Controller (ESP32-S2) — design, capabilities, intake
 
 **Device:** Elecrow **PIA10400P** = ZeroFlow / Arthofer Engineering *WiFi Fan Controller* (open ESPHome design).
-**Qty on hand:** 2 (bench, 2026-07-11). Goal: research + bench-test, then intake onto the WiFi fleet.
-**Status:** bench research done; **not yet flashed / not yet on the network.** Bench-only for now (Hugh's call).
+**Qty on hand:** 2 (bench). Goal: research + bench-test, then intake onto the WiFi fleet.
+**Status (2026-07-12):** **board 1 FLASHED with our config + bench-verified LIVE** (curve/telemetry/tach/PWM all
+green — see below). Board 2 pending (swap in once board 1's placed). Deferred: system registration (storage
+ingest) + CT200 `FLOOR` tuning. Deployment target: 2 controllers × 4× Thermaltake CT200 (4-pin PWM) each,
+push-pull at opposite gable ends — house attic (test, WiFi reaches) → garage attic (permanent, WiFi does NOT
+reach, so the curve runs 100% on-device).
+
+## Our config + bench verification (board 1, 2026-07-12)
+- **Config:** [`provisioning/fancontroller/fancontroller.yaml`](../../provisioning/fancontroller/fancontroller.yaml)
+  — self-contained (no `github://` include; air-gap-clean), Levoit networking skeleton (`api: reboot_timeout: 0s`,
+  un-hidden `autohome_airgap` + household fallback, `safe_mode`, MQTT→**.210 bench** / flip to VIP **.200** for prod),
+  fresh per-device OTA/AP keys. First flash = USB-C cable; thereafter OTA.
+- **On-device fan curve** (network-independent): linear **80°F→100°F** (26.7→37.8 °C), floored at **30%** min-spin,
+  hysteresis (on 80°F / release 77°F), **fail-safe → 100% on HDC1080 NaN**. All 4 fans track together.
+- **Dropped the RGB LED strip** (clears the stock `esp32_rmt_led_strip` "no free tx channels" boot error) + **pinned
+  its data line GPIO01 LOW** so nothing lights (Hugh: no LEDs). Any hardwired power LED is not SW-killable (tape).
+- **Dead-fan alarm:** `fan_fault` (problem) trips if the curve commands motion but a tach reads 0 RPM 20s+.
+- **Bench-verified LIVE:** boot ✅ · HDC1080 temp+hum ✅ · curve math incl. NaN→full ✅ · all-4 drive ✅ · tach RPM ✅ ·
+  **4-pin PWM speed control ✅** (visually confirmed) · MQTT telemetry→.210 ✅ · closed loop (airflow cooled board →
+  duty walked down) ✅ · LEDs off ✅. Note: bench WiFi flapped (marginal signal) — control ran straight through it.
+- **DEFERRED follow-ups:** (1) register on the system (`devices.yaml`/`control.yaml` + trace whether ESPHome-MQTT
+  telemetry auto-ingests to storage or needs a Levoit-style bridge); (2) characterize CT200 min-spin `FLOOR` +
+  confirm its 500–900 RPM tach range (`multiply: 0.5` = 2 ppr carries over) — both via OTA when the CT200s land;
+  (3) flash board 2.
+- **Bench tooling note:** the sandbox blocks foreground `sleep`, so paced MQTT command tests fail; verify PWM either
+  by watching the fan or with a throwaway on-device duty-sweep firmware (logs duty→RPM over serial).
 
 This is a **WiFi ESP32-S2 ESPHome** device → it belongs to the **WiFi intake fleet** (like the Levoit V201S and the
 E1001 panel), **not** the signed native-C edge fleet (the C6 gas nodes). See [docs/DEVICE-INTAKE.md](../DEVICE-INTAKE.md)
