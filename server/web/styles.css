@@ -14,11 +14,17 @@ body {
 .wrap { max-width: 760px; margin: 0 auto; padding: 16px 14px 64px; }
 
 /* ── top bar ─────────────────────────────────────────────── */
-.topbar { display: flex; align-items: center; gap: 10px; margin-bottom: 14px; }
+.topbar { display: flex; flex-direction: column; align-items: stretch; gap: 6px; margin-bottom: 14px; }
+.topbar-row { display: flex; align-items: center; gap: 10px; }
+.topbar-row-2 { justify-content: flex-end; }   /* °F toggle + everything right of it, right-aligned */
 .topbar h1 { font-size: 18px; margin: 0; font-weight: 650; letter-spacing: .2px; }
 .topbar .spacer { flex: 1; }
 .build { font-size: 11px; color: var(--muted); opacity: .7; }
+.clock { font-size: 15px; font-weight: 600; letter-spacing: .3px; font-variant-numeric: tabular-nums; color: var(--txt); }
+.clock-ampm { font-size: 10px; font-weight: 600; color: var(--muted); margin-left: 3px; vertical-align: 1px; }
 .edit-btn { padding: 2px 8px; font-size: 13px; line-height: 1.2; }
+.close-btn { padding: 2px 8px; font-size: 13px; line-height: 1.2; }
+/* edit + close cluster to the right of the head; edit gets the auto margin, close follows it */
 .card-head .edit-btn, .sensor-head .edit-btn { margin-left: auto; }
 .hidden-ctl { margin-top: 10px; display: flex; flex-direction: column; gap: 6px; }
 .mgmt-row { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }

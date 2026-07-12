@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v43 SGP voc_index badged VOC on the map (every gas number now identified)";
+const BUILD = "v46 topbar split into two rows (row2 = °F toggle + notify + admin)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -560,7 +560,7 @@ function RangedSettings({ vm, isAdmin, onChange, onNeedAdmin }) {
     </div>`;
 }
 
-function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit }) {
+function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit, onClose }) {
   const running = vm.running;
   const s = vm.sensor, o = vm.onboard, d = vm.last_decision, act = vm.actuator || {};
   const ageStale = vm.health === "stale";   // the BFF already derives staleness; mirror it on the age
@@ -572,10 +572,11 @@ function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit }) {
   return html`
     <div class="card health-${vm.health}">
       <div class="card-head">
-        <h2>${dispName(vm)}</h2>
+        <h2 style=${onClose ? "cursor:pointer" : ""} onClick=${onClose || undefined}>${dispName(vm)}${onClose ? html` <span class="chev">▾</span>` : ""}</h2>
         ${vm.room && html`<span class="sensor-area">${vm.room}</span>`}
         <span class="badge health-${vm.health}">${vm.health}</span>
         <button class="btn sm ghost edit-btn" onClick=${() => onEdit(vm)}>✎</button>
+        ${onClose && html`<button class="btn sm ghost close-btn" title="collapse" onClick=${onClose}>✕</button>`}
       </div>
       <div class="state-row">
         <span class="pill ${running ? "on" : "off"}">${running == null ? "?" : running ? "RUNNING" : "IDLE"}</span>
@@ -623,6 +624,52 @@ function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit }) {
         : html`<${SettingsPanel} vm=${vm} sensors=${sensors} isAdmin=${isAdmin}
             onChange=${onChange} onNeedAdmin=${onNeedAdmin} />`}
     </div>`;
+}
+
+// minimized actuator — one compact grid cell mirroring SensorChip. Click to expand into the full
+// DeviceCard (controls + history + settings). Shows name/room, run state, and the control reading.
+function ActuatorChip({ vm, onOpen, onEdit }) {
+  const running = vm.running;
+  const cm = vm.control.metric || "humidity_pct";
+  const CM = CTRL_METRIC[cm] || { unit: "", label: cm, round: 1 };
+  const s = vm.sensor;
+  const cval = s ? (s[cm] != null ? s[cm] : s.value) : null;
+  const fmtC = (v) => (v == null ? "—" : (CM.round ? round1(v) : Math.round(v)) + CM.unit);
+  return html`
+    <div class="sensor actuator-chip" onClick=${onOpen}>
+      ${onEdit && html`<button class="btn sm ghost edit-btn"
+        onClick=${(e) => { e.stopPropagation(); onEdit(vm); }}>✎</button>`}
+      <div class="sensor-name">${dispName(vm)} <span class="chev">▸</span></div>
+      <div class="sensor-area">${vm.room || dispRoom(vm)}</div>
+      <div class="sensor-vals">
+        <span class="pill ${running ? "on" : "off"}">${running == null ? "?" : running ? "RUNNING" : "IDLE"}</span>
+        ${cval != null && html`<span class="sv"><b>${fmtC(cval)}</b> ${CM.label}</span>`}
+      </div>
+      <div class="sensor-meta">
+        <span class="badge health-${vm.health}">${vm.health}</span>
+        ${vm.control.enabled === false && html` · <span class="note">auto off</span>`}
+      </div>
+    </div>`;
+}
+
+// Automations section: actuators render as compact tiles by default, expanding to the full DeviceCard
+// on click (mirrors the Sensors chip→expanded pattern). Renders nothing when there are no actuators.
+function Actuators({ devices, sensors, isAdmin, onEdit, onChange, onNeedAdmin }) {
+  const [expanded, setExpanded] = useState(new Set());
+  if (!devices || devices.length === 0) return null;
+  const open = (id) => setExpanded((p) => new Set(p).add(id));
+  const close = (id) => setExpanded((p) => { const n = new Set(p); n.delete(id); return n; });
+  const mins = devices.filter((v) => !expanded.has(v.device_id));
+  const exps = devices.filter((v) => expanded.has(v.device_id));
+  return html`
+    <h2 class="section">Automations</h2>
+    ${mins.length > 0 && html`<div class="sensor-grid">
+      ${mins.map((vm) => html`<${ActuatorChip} key=${vm.device_id} vm=${vm}
+        onOpen=${() => open(vm.device_id)} onEdit=${onEdit} />`)}
+    </div>`}
+    ${exps.map((vm) => html`<${DeviceCard} key=${vm.device_id} vm=${vm} sensors=${sensors}
+      isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} onEdit=${onEdit}
+      onClose=${() => close(vm.device_id)} />`)}`;
 }
 
 // ── sensors (read-only) ──────────────────────────────────────────────────────
@@ -726,6 +773,7 @@ function ExpandedSensor({ s, range, isAdmin, onEdit, onClose }) {
         <span class="sensor-name" onClick=${onClose}>${dispName(s)} <span class="chev">▾</span></span>
         <span class="sensor-area">${dispRoom(s)}</span>
         <button class="btn sm ghost edit-btn" onClick=${() => onEdit(s)}>✎</button>
+        <button class="btn sm ghost close-btn" title="collapse" onClick=${onClose}>✕</button>
       </div>
       <${SensorVals} m=${m} unit=${unit} aq=${s.air_quality_report} />
       ${s.air_quality_report && s.air_quality_report.explanation && html`<div class="aq-explain"
@@ -1419,6 +1467,26 @@ function RoomPlacementEditor({ room, isAdmin, onNeedAdmin, onSaved }) {
 }
 
 // ── app shell ────────────────────────────────────────────────────────────────
+// Fit a room name inside its polygon (SVG <text> has no native wrap): greedy word-wrap into lines
+// that each fit maxW, and as a last resort squeeze an over-wide line with textLength. Returns
+// [{ text, tl }] top-to-bottom — tl set only when that line still overflows and must be squeezed.
+const LABEL_CHAR_W = 0.55;                       // rough glyph advance per char at 1em
+function wrapLabel(name, maxW, fontSize) {
+  const wordW = (s) => s.length * fontSize * LABEL_CHAR_W;
+  const words = String(name).split(/\s+/).filter(Boolean);
+  if (words.length <= 1 || wordW(name) <= maxW)  // single word, or already fits on one line
+    return [{ text: name, tl: wordW(name) > maxW ? maxW : undefined }];
+  const lines = [];
+  let cur = words[0];
+  for (let i = 1; i < words.length; i++) {
+    const cand = cur + " " + words[i];
+    if (wordW(cand) <= maxW) cur = cand;         // word still fits on the current line
+    else { lines.push(cur); cur = words[i]; }    // overflow → start a new line
+  }
+  lines.push(cur);
+  return lines.map((t) => ({ text: t, tl: wordW(t) > maxW ? maxW : undefined }));
+}
+
 // House map — the /api/v1/rooms room graph as an SVG floor plan (parity with the D1001 panel).
 // Rooms with a polygon draw as walls + a live glance; monolithic rooms (attic/crawlspace) as chips.
 // Clicking a room selects it (filters the Sensors list below). PWA renders real SVG, so this is cheap.
@@ -1498,6 +1566,10 @@ function HouseMap({ data, selected, onSelect }) {
           const rings = g.polys || [g.poly];
           const [lx, ly] = g.label || [(mnx + mxx) / 2, (mny + mxy) / 2];
           const box = polyBox(g);
+          // Keep the room name inside the room: if the label (est. at ~0.55em/char, size 26) would
+          // overrun the polygon bbox, squeeze it with textLength so it stays within the geometry.
+          const nameLines = wrapLabel(r.name, box.W * 0.92, 26);   // word-wrap + per-line squeeze
+          const labelDrop = (nameLines.length - 1) * 25;           // px the wrapped lines add below the anchor
           const devs = r.devices || [];
           const placedDevs = devs.filter(hasPlace);
           const unplaced = devs.filter((d) => !hasPlace(d));
@@ -1510,8 +1582,9 @@ function HouseMap({ data, selected, onSelect }) {
             ${rings.map((ring) => html`<polygon points=${ring.map((p) => p.join(",")).join(" ")}
               fill=${fill} stroke=${stroke} stroke-width=${sel ? 6 : 4} stroke-linejoin="round" />`)}
             <text x=${lx} y=${ly - 2} text-anchor="middle" font-size="26" font-weight="600"
-              fill="currentColor">${r.name}</text>
-            ${aq && html`<text x=${lx} y=${ly + 20} text-anchor="middle" font-size="18" font-weight="700"
+              fill="currentColor">${nameLines.map((ln, i) => html`<tspan x=${lx} dy=${i === 0 ? 0 : 25}
+                textLength=${ln.tl} lengthAdjust=${ln.tl ? "spacingAndGlyphs" : undefined}>${ln.text}</tspan>`)}</text>
+            ${aq && html`<text x=${lx} y=${ly + 20 + labelDrop} text-anchor="middle" font-size="18" font-weight="700"
               fill=${aq.color} paint-order="stroke" stroke="rgba(9,12,22,0.72)" stroke-width="3.5">
               <title>${aq.title}</title>${aq.label}</text>`}
             ${placedDevs.map((d) => {
@@ -1521,7 +1594,7 @@ function HouseMap({ data, selected, onSelect }) {
                 font-size="19" font-weight="600" fill=${devColor(d, act)} style="pointer-events:none"
                 paint-order="stroke" stroke="rgba(9,12,22,0.72)" stroke-width="3.5">${t}</text>`;
             })}
-            ${unplacedGl && html`<text x=${lx} y=${ly + (aq ? 40 : 22)} text-anchor="middle" font-size="19"
+            ${unplacedGl && html`<text x=${lx} y=${ly + (aq ? 40 : 22) + labelDrop} text-anchor="middle" font-size="19"
               fill=${act ? "#b4823c" : "#3d6e93"} style="pointer-events:none">${unplacedGl}</text>`}
           </g>`;
         })}
@@ -1538,6 +1611,18 @@ function HouseMap({ data, selected, onSelect }) {
         <span style="opacity:.55">· "~" = relative to the room's own baseline</span>
       </div>`}
     </div>`;
+}
+
+// live wall-clock for the top icon bar. Reflects the viewing device's local time; ticks each second.
+function Clock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const t = setInterval(() => setNow(new Date()), 1000);
+    return () => clearInterval(t);
+  }, []);
+  const hh = now.getHours(), mm = String(now.getMinutes()).padStart(2, "0");
+  const ampm = hh >= 12 ? "PM" : "AM", h12 = ((hh + 11) % 12) + 1;
+  return html`<span class="clock" title=${now.toLocaleString()}>${h12}:${mm}<span class="clock-ampm">${ampm}</span></span>`;
 }
 
 function App() {
@@ -1591,19 +1676,22 @@ function App() {
     <${UnitsCtx.Provider} value=${tempUnit}>
     <div class="wrap">
       <div class="topbar">
-        <div class="dot ${status === "live" ? "live" : status === "down" ? "down" : ""}"></div>
-        <h1>Home Automation</h1>
-        <span class="build">${BUILD}</span>
-        <div class="spacer"></div>
-        <${SceneSelector} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} onChange=${refresh} />
-        <${NightMode} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} />
-        <button class="btn sm ghost" onClick=${toggleUnit} title="temperature unit">°${tempUnit}</button>
-        <${NotifyToggle} />
-        ${isAdmin
-          ? html`<span class="admin-on" title="Admin unlocked">🔓 Admin</span>
-                 <button class="btn sm ghost" onClick=${() => setShowAdd(true)}>+ Device</button>
-                 <button class="btn sm ghost" onClick=${lock}>Lock</button>`
-          : html`<button class="btn sm" onClick=${() => setShowAdmin(true)}>🔒 Admin</button>`}
+        <div class="topbar-row">
+          <div class="dot ${status === "live" ? "live" : status === "down" ? "down" : ""}" title=${"build " + BUILD}></div>
+          <div class="spacer"></div>
+          <${Clock} />
+          <${SceneSelector} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} onChange=${refresh} />
+          <${NightMode} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} />
+        </div>
+        <div class="topbar-row topbar-row-2">
+          <button class="btn sm ghost" onClick=${toggleUnit} title="temperature unit">°${tempUnit}</button>
+          <${NotifyToggle} />
+          ${isAdmin
+            ? html`<span class="admin-on" title="Admin unlocked">🔓 Admin</span>
+                   <button class="btn sm ghost" onClick=${() => setShowAdd(true)}>+ Device</button>
+                   <button class="btn sm ghost" onClick=${lock}>Lock</button>`
+            : html`<button class="btn sm" onClick=${() => setShowAdmin(true)}>🔒 Admin</button>`}
+        </div>
       </div>
 
       <${AlertsBanner} alerts=${alerts} />
@@ -1618,10 +1706,8 @@ function App() {
       })()}
 
       ${devices == null && html`<div class="empty">Loading…</div>`}
-      ${devices && devices.length > 0 && html`<h2 class="section">Automations</h2>`}
-      ${devices && devices.map((vm) => html`
-        <${DeviceCard} key=${vm.device_id} vm=${vm} sensors=${sensors} isAdmin=${isAdmin}
-          onChange=${refresh} onNeedAdmin=${() => setShowAdmin(true)} onEdit=${onEdit} />`)}
+      <${Actuators} devices=${devices} sensors=${sensors} isAdmin=${isAdmin}
+        onChange=${refresh} onNeedAdmin=${() => setShowAdmin(true)} onEdit=${onEdit} />
 
       <${Sensors} sensors=${sensors} isAdmin=${isAdmin} onEdit=${onEdit} onChange=${refresh}
         roomFilter=${selRoom} onClearRoom=${() => setSelRoom(null)} />
