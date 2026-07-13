@@ -67,6 +67,20 @@ void ui_grid_add_card(cJSON *e, lv_obj_t *parent)
     int age = cJSON_IsNumber(jage) ? (int)jage->valuedouble : -1;
     bool stale = (age < 0 || age > 600);   // >10 min = stale
 
+    // Unified air-quality band (ADR-0035, gas nodes): render as a colored badge instead of a plain number.
+    cJSON *aqr = cJSON_GetObjectItem(e, "air_quality_report");
+    int aq_band = 0; const char *aq_label = NULL; bool aq_rel = false;
+    if (cJSON_IsObject(aqr)) {
+        const cJSON *jb  = cJSON_GetObjectItem(aqr, "air_quality_band");
+        const cJSON *jl  = cJSON_GetObjectItem(aqr, "air_quality_band_label");
+        const cJSON *jbz = cJSON_GetObjectItem(aqr, "air_quality_basis");
+        if (cJSON_IsNumber(jb) && cJSON_IsString(jl)) {
+            aq_band  = (int)jb->valuedouble;
+            aq_label = jl->valuestring;
+            aq_rel   = cJSON_IsString(jbz) && strcmp(jbz->valuestring, "relative") == 0;
+        }
+    }
+
     lv_obj_t *card = lv_obj_create(parent);
     lv_obj_set_size(card, 236, 158);
     lv_obj_set_style_bg_color(card, lv_color_hex(stale ? 0x161a24 : 0x16204a), 0);
@@ -151,10 +165,21 @@ void ui_grid_add_card(cJSON *e, lv_obj_t *parent)
         }
     }
 
+    // unified air-quality band badge (ADR-0035) — colored, between the headline and the metric row
+    if (aq_band) {
+        char folded[24]; ascii_fold(aq_label, folded, sizeof(folded));
+        lv_obj_t *aqb = lv_label_create(card);
+        lv_label_set_text_fmt(aqb, "%s%s AQ", folded, aq_rel ? " ~" : "");
+        lv_obj_set_style_text_font(aqb, &lv_font_montserrat_20, 0);
+        lv_obj_set_style_text_color(aqb, lv_color_hex(aq_band_color(aq_band)), 0);
+        lv_obj_set_style_pad_top(aqb, 4, 0);
+    }
+
     // remaining present metrics as a compact multiline
     char rest[192] = ""; size_t off = 0;
     for (int i = 0; i < ncat; i++) {
         if (i == headline) continue;
+        if (aq_band && strcmp(cat[i].key, "air_quality") == 0) continue;  // shown as the colored band badge above
         bool p; double v = metric_of(metrics, cat[i].key, &p);
         if (!p) continue;
         off += snprintf(rest + off, sizeof(rest) - off, "%s%s %.*f%s",

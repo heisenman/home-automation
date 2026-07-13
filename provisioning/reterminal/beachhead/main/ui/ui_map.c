@@ -368,6 +368,20 @@ static void room_screen_bbox(cJSON *geo, int *bw, int *bh)
 }
 
 // --- room label: adaptive tier fill, sized to fit `bw`x`bh` (the room). clickable = tap target ---
+// Room-name AQ tint (ADR-0035): color the room name by its worst-band air-quality rollup
+// (/api/v1/rooms `air_quality`, resolve_room_air_quality), so the whole map reads as an AQ
+// heat-map at a glance. Rooms with no gas node (air_quality null / all-warmup) keep the
+// caller's neutral default color.
+static uint32_t room_name_color(cJSON *room, uint32_t fallback)
+{
+    cJSON *aq = cJSON_GetObjectItem(room, "air_quality");
+    if (cJSON_IsObject(aq)) {
+        cJSON *b = cJSON_GetObjectItem(aq, "air_quality_band");
+        if (cJSON_IsNumber(b)) return aq_band_color((int)b->valuedouble);
+    }
+    return fallback;
+}
+
 static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int cy, bool act, bool strip,
                        int bw, int bh, int cbx0, int cby0, int cbx1, int cby1)
 {
@@ -500,7 +514,7 @@ static void make_label(lv_obj_t *parent, cJSON *room, int reg_idx, int cx, int c
     lv_obj_t *t = lv_label_create(box);
     lv_label_set_text(t, folded);
     lv_obj_set_style_text_font(t, font, 0);
-    lv_obj_set_style_text_color(t, lv_color_hex(0xffffff), 0);
+    lv_obj_set_style_text_color(t, lv_color_hex(room_name_color(room, 0xffffff)), 0);   // AQ band tint (ADR-0035)
     lv_label_set_long_mode(t, LV_LABEL_LONG_WRAP);          // multi-line names (e.g. "Dining Nook")
     lv_obj_set_style_text_align(t, LV_TEXT_ALIGN_CENTER, 0);
     lv_obj_set_width(t, lv_pct(100));
@@ -578,7 +592,7 @@ static bool house_room_spatial(lv_obj_t *parent, cJSON *room, cJSON *geo, int re
     if (room_label(geo, &lx, &ly)) { nx = scr_x(lx); ny = scr_y(ly); }
     else { nx = (x0 + x1) / 2; ny = y0 + 12; }
     char folded[40]; ascii_fold(name, folded, sizeof folded);
-    house_chip(parent, folded, 0xcfe0ff, true, nx, ny, reg_idx, x0, y0, x1, y1);
+    house_chip(parent, folded, room_name_color(room, 0xcfe0ff), true, nx, ny, reg_idx, x0, y0, x1, y1);  // AQ band tint (ADR-0035)
 
     // Placed devices at their spots.
     for (int i = 0; i < nc; i++) {

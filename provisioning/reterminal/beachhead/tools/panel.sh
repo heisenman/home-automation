@@ -14,7 +14,9 @@
 #   port             print the resolved by-id serial device
 set -euo pipefail
 
-PROJ="/home/visko/ha-coord/provisioning/reterminal/beachhead"
+# Self-locating: the beachhead project is this script's grandparent dir (…/beachhead/tools/panel.sh).
+# Keeps the helper working on ANY checkout (bench or dev box) instead of a hardcoded absolute path.
+PROJ="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 IDF="${IDF_PATH:-$HOME/esp/esp-idf}"
 BROKER_DEFAULT="192.168.0.210"
 NODE="d1001-beachhead"

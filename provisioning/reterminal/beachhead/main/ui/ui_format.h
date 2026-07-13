@@ -27,6 +27,10 @@ void ascii_fold(const char *src, char *dst, size_t cap);
 // "#rrggbb" -> 0xrrggbb (server graph color). Falls back to a neutral slate on any parse miss.
 uint32_t parse_hex_color(const char *s);
 
+// Unified air-quality band (5 Excellent .. 1 Very Poor, ADR-0035) -> 0xrrggbb, mirroring the PWA's
+// AQ_BAND_COLOR (EPA green→yellow→orange→red→purple). Unknown/absent band -> neutral slate.
+uint32_t aq_band_color(int band);
+
 // Read a numeric metric from a cJSON metrics object; *present set to whether it was a number.
 double metric_of(cJSON *metrics, const char *key, bool *present);
 

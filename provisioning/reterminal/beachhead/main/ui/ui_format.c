@@ -76,3 +76,15 @@ uint32_t parse_hex_color(const char *s)
     }
     return 0x8fb4ff;
 }
+
+uint32_t aq_band_color(int band)
+{
+    switch (band) {
+        case 5: return 0x00e400;   // Excellent
+        case 4: return 0xffff00;   // Good
+        case 3: return 0xff7e00;   // Moderate
+        case 2: return 0xff0000;   // Unhealthy
+        case 1: return 0x8f3f97;   // Very Poor
+        default: return 0x94a3b8;  // unknown / no band -> slate
+    }
+}
