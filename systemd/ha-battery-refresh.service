@@ -1,0 +1,24 @@
+[Unit]
+Description=Home Automation — Nightly SwitchBot battery refresh (one-shot mesh sweep)
+Documentation=file:///home/visko/home_automation/server/mesh/battery_refresh.py
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+# Master decrypts the per-node command-secret LUT so the sweep can sign each batt_refresh.
+Environment=HA_MASTER_PASS_FILE=/home/visko/home_automation/instance/.master_pass
+# Local broker = the VIP holder on prod (the fleet's broker); staggered so no two nodes scan actively at once.
+ExecStart=/home/visko/home_automation/venv/bin/python3 tools/battery_refresh.py \
+    --broker 127.0.0.1 --window 20 --stagger 10
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+PrivateTmp=yes
+
+[Install]
+WantedBy=multi-user.target

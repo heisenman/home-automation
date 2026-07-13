@@ -426,6 +426,42 @@ def handle_device_placement(device_id: str, body: dict[str, Any], placement_path
                  "placement": {"x": x, "y": y, "anchor": anchor}}
 
 
+def make_battery_router(master, node_secrets_lut, broker="localhost", port=1883):
+    """On-demand SwitchBot battery refresh — POST /control/battery/refresh {device_id?}. Opens a brief
+    MESH-WIDE active-scan window (same primitive as the nightly ha-battery-refresh sweep) so the tapped
+    device's battery% updates within ~20s. Un-gated (LAN read-tier): it only triggers a scan window — no
+    actuation, no config change. `device_id` is informational (any node that hears the meter may source it)."""
+    from fastapi import APIRouter, Body
+    from fastapi.responses import JSONResponse
+
+    import paho.mqtt.client as mqtt
+
+    from server.control.secret_store import load_lut
+    from server.mesh import battery_refresh as br
+
+    lut = load_lut(node_secrets_lut, master)
+    client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    try:
+        client.connect(broker, port, 30)
+        client.loop_start()
+    except OSError:
+        client = None   # broker unreachable at mount — endpoint 503s; app hides the button on error
+
+    router = APIRouter(prefix="/control/battery", tags=["battery"])
+
+    @router.post("/refresh")
+    async def refresh(body: dict = Body(default={})):
+        if client is None or not lut:
+            return JSONResponse(status_code=503, content={
+                "ok": False, "error": "battery refresh unavailable (no broker or node secret LUT)"})
+        device_id = (body or {}).get("device_id")
+        sent = br.sweep(lambda t, pl: client.publish(t, pl, qos=1), lut, window_s=20, stagger_s=0)
+        return {"ok": True, "device_id": device_id, "nodes": sent, "window_s": 20,
+                "note": "battery updates within ~20s as nodes finish their active-scan window"}
+
+    return router
+
+
 def make_device_meta_router(api_authz, control_db, placement_path=None):
     """Admin-gated device overlay editor (prefix /api/v1/devices). Works for any device (sensors too)."""
     import sqlite3

@@ -1,0 +1,15 @@
+[Unit]
+Description=Home Automation — Nightly battery refresh (fires once in the quiet 1–5am window)
+
+[Timer]
+# Boxes run UTC; 08:00–12:00 UTC = 01:00–05:00 America/Los_Angeles (PDT; PST ≈ 00:00–04:00 — still night).
+# RandomizedDelaySec spreads the single nightly run across the 4h window so it lands at an arbitrary quiet
+# minute (and the per-node --stagger inside the sweep keeps individual nodes from overlapping their windows).
+# Adjust OnCalendar if the house is not on US/Pacific.
+OnCalendar=*-*-* 08:00:00 UTC
+RandomizedDelaySec=14400
+Persistent=true
+Unit=ha-battery-refresh.service
+
+[Install]
+WantedBy=timers.target

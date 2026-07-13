@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v46 topbar split into two rows (row2 = °F toggle + notify + admin)";
+const BUILD = "v47 per-device battery refresh button (mesh active-scan on demand)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -746,6 +746,28 @@ function SensorChip({ s, onOpen, onEdit }) {
     </div>`;
 }
 
+// On-demand battery refresh (v20-battfix): asks the server to open a brief mesh-wide active-scan window
+// so this meter's battery% updates within ~20s. The reading itself refreshes via the normal 5s poll.
+function BatteryRefresh({ deviceId }) {
+  const [st, setSt] = useState("");           // "" | busy | ok | err
+  const go = async (e) => {
+    e.stopPropagation();
+    setSt("busy");
+    try {
+      const r = await fetch("/control/battery/refresh", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_id: deviceId }),
+      });
+      setSt(r.ok ? "ok" : "err");
+    } catch { setSt("err"); }
+    setTimeout(() => setSt(""), 9000);
+  };
+  const label = st === "busy" ? "🔋 refreshing…" : st === "ok" ? "🔋 refreshing ✓"
+              : st === "err" ? "🔋 unavailable" : "🔋 refresh";
+  return html`<button class="btn sm ghost batt-refresh" disabled=${st === "busy"} onClick=${go}
+    title="Refresh battery levels now (brief mesh scan, ~20s)">${label}</button>`;
+}
+
 // expanded — full width, below the grid, charts over the shared range. Click the header to collapse.
 function ExpandedSensor({ s, range, isAdmin, onEdit, onClose }) {
   const m = s.metrics || {};
@@ -776,6 +798,8 @@ function ExpandedSensor({ s, range, isAdmin, onEdit, onClose }) {
         <button class="btn sm ghost close-btn" title="collapse" onClick=${onClose}>✕</button>
       </div>
       <${SensorVals} m=${m} unit=${unit} aq=${s.air_quality_report} />
+      ${(m.battery_pct != null || /meter|switchbot|aranet/i.test(s.device_type || "")) && html`
+        <div class="batt-row" style="margin:2px 2px 8px"><${BatteryRefresh} deviceId=${s.device_id} /></div>`}
       ${s.air_quality_report && s.air_quality_report.explanation && html`<div class="aq-explain"
         style="font-size:12px;color:#9fb0c3;margin:2px 2px 8px;line-height:1.4">${s.air_quality_report.explanation}</div>`}
       <div class="charts">

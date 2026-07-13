@@ -256,8 +256,8 @@ def _mount_control(app: FastAPI) -> None:
         import yaml
         from server.control.bootstrap import build_issuer
         from server.control.registry import check_secrets_present
-        from server.api.control import (make_device_meta_router, make_override_router,
-                                         make_registry_router, make_router)
+        from server.api.control import (make_battery_router, make_device_meta_router,
+                                         make_override_router, make_registry_router, make_router)
 
         broker = os.environ.get("HA_BROKER", "localhost")
         port = int(os.environ.get("HA_BROKER_PORT", "1883"))
@@ -291,6 +291,7 @@ def _mount_control(app: FastAPI) -> None:
         app.include_router(make_device_meta_router(api_authz, CONTROL_DB, placement_path=DEVICE_PLACEMENT))   # R8 friendly-name/room/hide + placement
         app.include_router(make_registry_router(api_authz, DEVICES_REGISTRY, CONTROL_REGISTRY,
                                                  NODE_SECRETS_LUT, master))  # add-device: sensor / actuator / node-enroll
+        app.include_router(make_battery_router(master, NODE_SECRETS_LUT, broker=broker, port=port))  # on-demand SwitchBot battery refresh
         app.state.control_registry = registry      # device_id -> DeviceCtl (traits for manual-control UI)
         # live-reload control.yaml so an actuator RELOCATE (area edit) is reflected in /rooms + /displays
         # without an ha-api restart (the read-side sibling of the controller + ingest reloads). Only the
