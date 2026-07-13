@@ -100,10 +100,19 @@ static dedup_t *find_or_alloc(const uint8_t mac[6]) {
 // usually lands with battery_pct == -1 and the publisher drops battery. Cache the last GOOD battery per
 // MAC and backfill readings that lack it, so every published reading carries battery (matches dev). This
 // keeps the passive-observer design (ADR-0020) — no active scan needed.
-static void backfill_battery(dedup_t *slot, const uint8_t mac[6], sb_reading_t *r) {
-    if (!slot->used || memcmp(slot->mac, mac, 6) != 0) slot->batt_cache = -1;  // fresh/evicted slot: forget prior device
-    if (r->battery_pct >= 0) slot->batt_cache = r->battery_pct;                // remember a good reading
-    else if (slot->batt_cache >= 0) r->battery_pct = slot->batt_cache;         // backfill from cache
+// CRITICAL: call this for EVERY switchbot packet BEFORE the reading-validity gate. Battery arrives in a
+// separate fd3d packet from the 0x0969 temp/hum packet, and that fd3d packet often has only a 3-byte
+// service data (Pro/Outdoor) → sb_decode sets battery_pct but then FAILS temp/hum and returns false. If we
+// only cached from *valid* readings, that battery would be dropped and never seen. So we claim the slot and
+// cache battery here regardless of reading validity; a later temp/hum packet is then backfilled from it.
+// (NimBLE reports each packet raw; BlueZ — the dev scanner — merges a device's fields across packets.)
+static void batt_cache_apply(dedup_t *slot, const uint8_t mac[6], sb_reading_t *r) {
+    if (!slot->used || memcmp(slot->mac, mac, 6) != 0) {   // claim a fresh/evicted slot for this MAC
+        memcpy(slot->mac, mac, 6); slot->used = true;
+        slot->last_ms = 0; slot->t = -1000.0f; slot->h = -1; slot->b = -1; slot->rn = -1; slot->batt_cache = -1;
+    }
+    if (r->battery_pct >= 0) slot->batt_cache = r->battery_pct;                // a packet carrying battery
+    else if (slot->batt_cache >= 0) r->battery_pct = slot->batt_cache;         // backfill one that lacks it
 }
 
 static bool should_publish(dedup_t *slot, const uint8_t mac[6], const sb_reading_t *r) {
@@ -272,11 +281,12 @@ static void handle_adv(const uint8_t *d, int len, int rssi, const ble_addr_t *ad
     if (s_cfg.on_sighting) s_cfg.on_sighting(mac, rssi, s_cfg.user);
 
     sb_reading_t r;
-    if (!sb_decode(svc, svc_len, mfr, mfr_len, &r) || !r.valid) return;
+    bool ok = sb_decode(svc, svc_len, mfr, mfr_len, &r);
 
     dedup_t *slot = find_or_alloc(mac);
     slot->addr = *addr;                // cache full address (type + val) for GATT connect
-    backfill_battery(slot, mac, &r);   // merge battery across the fd3d/0x0969 split-packet pair
+    batt_cache_apply(slot, mac, &r);   // capture/backfill battery — BEFORE the validity gate (see note)
+    if (!ok || !r.valid) return;       // no temp/hum to publish from THIS packet (battery is now cached)
     if (!should_publish(slot, mac, &r)) return;
 
     snprintf(mac_str, sizeof(mac_str), "%02X:%02X:%02X:%02X:%02X:%02X",
