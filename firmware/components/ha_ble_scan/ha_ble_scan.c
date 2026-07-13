@@ -12,6 +12,7 @@
 #include "nimble/nimble_port_freertos.h"
 #include "host/ble_hs.h"
 #include "host/util/util.h"
+#include "esp_timer.h"
 
 static const char *TAG = "ha_ble_scan";
 
@@ -40,6 +41,8 @@ static ha_ble_scan_cfg_t s_cfg;
 static uint8_t  own_addr_type;
 static volatile bool s_paused;
 static volatile bool s_running;
+static volatile bool s_active_scan;          // true during a battery-refresh window; else passive (default)
+static esp_timer_handle_t s_active_timer;    // one-shot: reverts active→passive at window end
 
 // Transport-aware scan duty cycle (reconciled from the s3-eth fork, ADR-0020 Stage 2). Continuous
 // (window==itvl) unless the radio is shared with WiFi, in which case yield ~60% so the link survives.
@@ -157,18 +160,43 @@ static void start_scan(void) {
 #if CONFIG_BT_NIMBLE_EXT_ADV
     // Extended scanning (BLE5): required to receive Aranet's EXTENDED advertisements. It also delivers
     // legacy advs (SwitchBot) as BLE_GAP_EVENT_EXT_DISC, so this single scan covers both device families.
-    struct ble_gap_ext_disc_params up = { .itvl = s_scan_itvl, .window = s_scan_window, .passive = 1 };
+    struct ble_gap_ext_disc_params up = { .itvl = s_scan_itvl, .window = s_scan_window, .passive = s_active_scan ? 0 : 1 };
     int rc = ble_gap_ext_disc(own_addr_type, 0, 0, 0, 0, 0, &up, NULL, gap_event, NULL);
     if (rc != 0) { s_running = false; ESP_LOGE(TAG, "ble_gap_ext_disc failed rc=%d", rc); }
-    else         { s_running = true;  ESP_LOGI(TAG, "EXTENDED passive scan started (own_addr_type=%d)", own_addr_type); }
+    else         { s_running = true;  ESP_LOGI(TAG, "EXTENDED %s scan started (own_addr_type=%d)", s_active_scan ? "ACTIVE" : "passive", own_addr_type); }
 #else
     struct ble_gap_disc_params dp = {0};
-    dp.passive = 1; dp.filter_duplicates = 0;
+    dp.passive = s_active_scan ? 0 : 1; dp.filter_duplicates = 0;
     dp.itvl = s_scan_itvl; dp.window = s_scan_window;
     int rc = ble_gap_disc(own_addr_type, BLE_HS_FOREVER, &dp, gap_event, NULL);
     if (rc != 0) { s_running = false; ESP_LOGE(TAG, "ble_gap_disc failed rc=%d", rc); }
-    else         { s_running = true;  ESP_LOGI(TAG, "passive scan started (own_addr_type=%d)", own_addr_type); }
+    else         { s_running = true;  ESP_LOGI(TAG, "%s scan started (own_addr_type=%d)", s_active_scan ? "ACTIVE" : "passive", own_addr_type); }
 #endif
+}
+
+// Restart the scan under the current s_active_scan mode (unless a GATT pull holds the radio — it will
+// pick up the mode when ha_ble_scan_resume() restarts scanning on disconnect).
+static void rescan_current_mode(void) { if (!s_paused) { ble_gap_disc_cancel(); start_scan(); } }
+
+static void active_window_end(void *arg) {
+    (void)arg;
+    s_active_scan = false;
+    rescan_current_mode();
+    ESP_LOGI(TAG, "active-scan window ended — back to passive");
+}
+
+void ha_ble_scan_active_window(int seconds) {
+    if (seconds <= 0) seconds = 8;
+    if (seconds > 60) seconds = 60;              // clamp: keep the active-RF footprint bounded
+    if (!s_active_timer) {
+        const esp_timer_create_args_t a = { .callback = active_window_end, .name = "ble_active" };
+        if (esp_timer_create(&a, &s_active_timer) != ESP_OK) { ESP_LOGE(TAG, "active-window timer create failed"); return; }
+    }
+    esp_timer_stop(s_active_timer);              // extend the window if one is already open
+    s_active_scan = true;
+    rescan_current_mode();                       // restart the scan in active mode now
+    esp_timer_start_once(s_active_timer, (int64_t)seconds * 1000000);
+    ESP_LOGI(TAG, "active-scan window opened: %ds (battery refresh)", seconds);
 }
 
 void ha_ble_scan_pause(void)  { s_paused = true;  ble_gap_disc_cancel(); }

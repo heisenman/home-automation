@@ -138,6 +138,15 @@ static void dispatch_cmd(const cJSON *cmd) {
                                     cJSON_IsString(host) ? host->valuestring : NULL);
             ha_mqtt_log("repoint apply returned — NVS write failed, node not moved");  // apply reboots on success
         } else ha_mqtt_log("repoint cmd: missing ssid/psk/broker");
+    } else if (cJSON_IsString(op) && strcmp(op->valuestring, "batt_refresh") == 0) {
+        // Battery refresh: {"op":"batt_refresh","window_s":8,"mac":<optional,informational>}. Opens a
+        // brief ACTIVE-scan window so SwitchBot meters' fd3d scan-responses (carrying battery%) are
+        // captured; the per-MAC cache then backfills the passive temp/hum stream. Deliberately rare +
+        // short (nightly job + PWA on-demand) so the fleet stays passive and RF-quiet the rest of the day.
+        const cJSON *win = cJSON_GetObjectItem(cmd, "window_s");
+        int secs = cJSON_IsNumber(win) ? (int)win->valuedouble : 8;
+        ESP_LOGI(TAG, "cmd: batt_refresh window=%ds", secs);
+        ha_ble_scan_active_window(secs);
     } else {
         ESP_LOGW(TAG, "unknown/!malformed cmd");
     }
@@ -162,7 +171,10 @@ static void handle_cmd(const char *data, int len) {
         // clock has drifted (the C6 RTC does) can still be OTA-recovered — the OTA directive is signed +
         // image-hash-verified + version anti-downgrade, so a replay just re-flashes the same image.
         const cJSON *op = cJSON_GetObjectItem(inner, "op");
-        long window = (cJSON_IsString(op) && strcmp(op->valuestring, "ota") == 0) ? 86400 : 300;
+        // Wide freshness window for ota (clock-drift recovery) and batt_refresh (benign + idempotent: a
+        // replay just re-opens a harmless active-scan window, and the C6 RTC drifts between nightly runs).
+        long window = (cJSON_IsString(op) && (strcmp(op->valuestring, "ota") == 0
+                                           || strcmp(op->valuestring, "batt_refresh") == 0)) ? 86400 : 300;
         const cJSON *ts = cJSON_GetObjectItem(inner, "ts");      // freshness (clock is SNTP-synced)
         if (cJSON_IsNumber(ts)) {
             long dt = (long)time(NULL) - (long)ts->valuedouble;

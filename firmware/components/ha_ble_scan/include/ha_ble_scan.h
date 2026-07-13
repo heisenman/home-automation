@@ -63,6 +63,12 @@ void ha_ble_scan_start(const ha_ble_scan_cfg_t *cfg);
 void ha_ble_scan_pause(void);
 void ha_ble_scan_resume(void);
 
+// Open a brief ACTIVE-scan window (`seconds`, clamped) then revert to passive. Active scanning solicits
+// scan-responses, which is the ONLY way to capture data some devices keep out of the primary advert —
+// today just SwitchBot meter battery% (fd3d service data). Rare + short by design (nightly + on-demand
+// refresh); the observer stays passive otherwise so RF/WiFi/BT coexistence is undisturbed. (ADR-0020)
+void ha_ble_scan_active_window(int seconds);
+
 // True once the passive scan is confirmed running (on_sync fired + ble_gap_disc ok).
 bool ha_ble_scan_running(void);
 

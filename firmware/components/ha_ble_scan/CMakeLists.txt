@@ -3,4 +3,4 @@
 # hooks, so this pulls in neither esp_hosted nor ha_mqtt/ha_relay.
 idf_component_register(SRCS "ha_ble_scan.c"
                        INCLUDE_DIRS "include"
-                       REQUIRES bt switchbot_decode)
+                       REQUIRES bt switchbot_decode esp_timer)
