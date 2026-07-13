@@ -24,6 +24,7 @@
 #include "ui/ui_chart.h"    // 72h chart fetch worker (ADR-0020)
 #include "ui/ui_grid.h"     // sensor tile grid + card registry + live-state patching (ADR-0020)
 #include "ui/ui_map.h"      // house map: /api/v1/rooms -> spatial room chips (panel-ui-spatial-nav)
+#include "ui/ui_graph.h"    // graph builder view (docs/design/d1001-graph-builder.md)
 #include "ui/ui_admin.h"    // admin session + top-bar toast/gear + idle auto-lock (ADR-0020)
 #include "ui/ui_devices.h"  // devices-management screen: list -> reassign room (canonical relocate)
 #include "ui/ui_scenes.h"   // top-bar row + whole-house scene selector (ADR-0020)
@@ -47,13 +48,16 @@ static int64_t s_catalog_primed_ms;  // last time the shared catalog was (re)pri
 static lv_obj_t *s_header, *s_grid;
 static lv_obj_t *s_map;       // house-map container (absolute-positioned room chips)
 static lv_obj_t *s_devices;   // devices-management screen container (list -> reassign room)
-static lv_obj_t *s_back;      // "< Rooms" back button (shown only in the room-zoom / devices view)
+static lv_obj_t *s_back;      // "< Rooms" back button (shown only in the room-zoom / devices / graphs view)
 static lv_obj_t *s_devbtn;    // "Devices" entry button in the title row (shown only on the house map)
+static lv_obj_t *s_graph;     // graph-builder view container (docs/design/d1001-graph-builder.md)
+static lv_obj_t *s_graphbtn;  // "Graphs" entry button in the title row (shown only on the house map)
 static lv_obj_t *s_batt_lbl;  // battery indicator in the top bar
 
 static char s_room[28];            // selected room slug for room-zoom; "" = house map (landing)
 static char s_room_name[28];       // its display name (for the title label)
 static volatile bool s_devview;    // devices-management screen active (overrides map/room)
+static volatile bool s_graphview;  // graph-builder screen active (overrides map/room/devices)
 static volatile bool s_roomspatial;// room-zoom shows the spatial diagram (arc 3); a device tap -> grid
 static volatile bool s_nav_dirty;  // set on a nav change -> ui_task re-renders promptly (no 10s wait)
 
@@ -87,6 +91,7 @@ static void on_back_clicked(lv_event_t *e)
     (void)e;
     s_room[0] = 0;
     s_devview = false;
+    s_graphview = false;
     ui_expand_clear();           // leaving the room -> destroy its inline charts (not persisted)
     s_nav_dirty = true;
 }
@@ -96,6 +101,14 @@ static void on_devices_clicked(lv_event_t *e)
 {
     (void)e;
     s_devview = true;
+    s_nav_dirty = true;
+}
+
+// "Graphs" button on the house map -> open the graph-builder screen.
+static void on_graphs_clicked(lv_event_t *e)
+{
+    (void)e;
+    s_graphview = true;
     s_nav_dirty = true;
 }
 
@@ -195,7 +208,23 @@ static void do_render_cycle(bool nav)
         if (bc) heap_caps_free(bc);
     }
 
-    if (s_devview) {
+    if (s_graphview) {
+      if (nav) {                                         // render only on entry — static after, no flicker
+        // ── graph-builder screen (docs/design/d1001-graph-builder.md) ──
+        if (lvgl_port_lock(0)) {
+            ui_graph_render(s_graph);
+            lv_obj_clear_flag(s_graph, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_devices, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_graphbtn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(s_back, LV_OBJ_FLAG_HIDDEN);
+            lv_label_set_text(s_header, "Graphs");
+            lvgl_port_unlock();
+        }
+      }
+    } else if (s_devview) {
       if (nav) {                                         // render only on entry — static after, no flicker
         // ── devices-management screen: editable Device/Location/Status table ──
         int lm = 0, lmeta = 0;
@@ -210,7 +239,9 @@ static void do_render_cycle(bool nav)
             lv_obj_clear_flag(s_devices, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_graph, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_graphbtn, LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(s_back, LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(s_header, "Devices");
             lvgl_port_unlock();
@@ -232,7 +263,9 @@ static void do_render_cycle(bool nav)
                 lv_obj_clear_flag(s_map, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_devices, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_graph, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_graphbtn, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_back, LV_OBJ_FLAG_HIDDEN);
                 lv_label_set_text(s_header, s_room_name);
             }
@@ -255,7 +288,9 @@ static void do_render_cycle(bool nav)
             lv_obj_clear_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_devices, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_graph, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_graphbtn, LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(s_back, LV_OBJ_FLAG_HIDDEN);   // back button beside the title
             lvgl_port_unlock();
         }
@@ -278,8 +313,10 @@ static void do_render_cycle(bool nav)
                 lv_obj_clear_flag(s_map, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_devices, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_graph, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_back, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);   // Devices entry only on the map
+                lv_obj_clear_flag(s_graphbtn, LV_OBJ_FLAG_HIDDEN); // Graphs entry only on the map
                 lv_label_set_text(s_header, "House");
                 lvgl_port_unlock();
             }
@@ -490,6 +527,23 @@ void ui_tiles_start(const char *sensors_url)
     lv_obj_set_style_text_color(dblbl, lv_color_hex(0xffffff), 0);
     lv_obj_center(dblbl);
 
+    // "Graphs" entry -> the graph-builder screen. Shown only on the house map (like Devices).
+    s_graphbtn = lv_obj_create(title_row);
+    lv_obj_set_size(s_graphbtn, 150, 46);
+    lv_obj_set_style_bg_color(s_graphbtn, lv_color_hex(0x16204a), 0);
+    lv_obj_set_style_border_color(s_graphbtn, lv_color_hex(0x2f7e7a), 0);
+    lv_obj_set_style_border_width(s_graphbtn, 2, 0);
+    lv_obj_set_style_radius(s_graphbtn, 10, 0);
+    lv_obj_set_style_pad_all(s_graphbtn, 0, 0);
+    lv_obj_clear_flag(s_graphbtn, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_graphbtn, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_graphbtn, on_graphs_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *gblbl = lv_label_create(s_graphbtn);
+    lv_label_set_text(gblbl, LV_SYMBOL_IMAGE "  Graphs");
+    lv_obj_set_style_text_font(gblbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(gblbl, lv_color_hex(0xffffff), 0);
+    lv_obj_center(gblbl);
+
     // The screen itself scrolls vertically: [header] -> [tile grid] -> [expansion stack].
     lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_AUTO);
     lv_obj_set_scroll_dir(scr, LV_DIR_VER);
@@ -532,6 +586,20 @@ void ui_tiles_start(const char *sensors_url)
     lv_obj_set_flex_flow(s_devices, LV_FLEX_FLOW_COLUMN);
     lv_obj_set_scroll_dir(s_devices, LV_DIR_VER);
     lv_obj_add_flag(s_devices, LV_OBJ_FLAG_HIDDEN);
+
+    // Graph-builder screen: a scrollable vertical stack (range control + graph panels). Fills the
+    // leftover height like the map/devices views (only one is ever visible); its own content scrolls.
+    s_graph = lv_obj_create(scr);
+    lv_obj_set_width(s_graph, lv_pct(100));
+    lv_obj_set_height(s_graph, 0);
+    lv_obj_set_flex_grow(s_graph, 1);
+    lv_obj_set_style_bg_opa(s_graph, 0, 0);
+    lv_obj_set_style_border_width(s_graph, 0, 0);
+    lv_obj_set_style_pad_all(s_graph, 0, 0);
+    lv_obj_set_style_pad_row(s_graph, 10, 0);
+    lv_obj_set_flex_flow(s_graph, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_scroll_dir(s_graph, LV_DIR_VER);
+    lv_obj_add_flag(s_graph, LV_OBJ_FLAG_HIDDEN);
 
     ui_expand_init(scr);      // inline expansion stack below the grid (ui/ui_expand)
     ui_controls_init();       // actuator command overlay + worker (ui/ui_controls)
