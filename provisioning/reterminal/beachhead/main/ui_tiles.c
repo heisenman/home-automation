@@ -211,8 +211,12 @@ static void do_render_cycle(bool nav)
     if (s_graphview) {
       if (nav) {                                         // render only on entry — static after, no flicker
         // ── graph-builder screen (docs/design/d1001-graph-builder.md) ──
+        int lg = 0;
+        char *bg = ui_http_get(s_url, &lg);              // /api/v1/sensors — the trace-catalog source
+        cJSON *rg = (bg && lg > 0) ? cJSON_Parse(bg) : NULL;
+        cJSON *gsensors = rg ? cJSON_GetObjectItem(rg, "sensors") : NULL;
         if (lvgl_port_lock(0)) {
-            ui_graph_render(s_graph);
+            ui_graph_render(gsensors, s_graph);          // copies what it needs out of gsensors
             lv_obj_clear_flag(s_graph, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
@@ -223,6 +227,8 @@ static void do_render_cycle(bool nav)
             lv_label_set_text(s_header, "Graphs");
             lvgl_port_unlock();
         }
+        if (rg) cJSON_Delete(rg);
+        if (bg) heap_caps_free(bg);
       }
     } else if (s_devview) {
       if (nav) {                                         // render only on entry — static after, no flicker
@@ -610,5 +616,6 @@ void ui_tiles_start(const char *sensors_url)
     xTaskCreate(state_task, "uistate", 6144, NULL, 4, NULL);
     xTaskCreate(ui_task, "ui", 8192, NULL, 4, NULL);
     ui_chart_start();   // expansion chart fetch worker + queue (ui/ui_chart)
+    ui_graph_start();   // graph-builder fetch worker + queue (ui/ui_graph)
     ESP_LOGI(TAG, "ui_tiles started -> %s", s_url);
 }
