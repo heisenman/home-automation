@@ -134,12 +134,13 @@ void app_main(void) {
     // Dual-role add-on: bring up the gas lane alongside the BLE relay. No-op-safe — if the sensor isn't
     // wired it logs and returns, and the node keeps relaying BLE. The soldered sensor is a per-node
     // compile-select (secrets.h); resolve it to the shared ha_gas component's runtime enum (ADR-0020).
+    // XIAO ESP32-C6 Grove I2C pads: D4 = GPIO22 (SDA), D5 = GPIO23 (SCL).
 #if defined(HA_GAS_SGP30)
-    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_SGP30);
+    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_SGP30, 22, 23);
 #elif defined(HA_GAS_BME680)
-    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_BME680);
+    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_BME680, 22, 23);
 #else
-    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_SGP40);
+    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_SGP40, 22, 23);
 #endif
 
     // If we just booted a freshly-OTA'd image, self-test now and confirm-or-rollback.

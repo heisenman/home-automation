@@ -15,10 +15,12 @@
 
 static const char *TAG = "ha_gas";
 
-// XIAO ESP32-C6 / S3-ETH default I2C pads: D4 = GPIO22 (SDA), D5 = GPIO23 (SCL). Grove SGPxx carries its own
-// 10k pull-ups; internal pull-ups enabled too as belt-and-braces.
-#define GAS_SDA_GPIO   22
-#define GAS_SCL_GPIO   23
+// I2C pads are BOARD-SPECIFIC and passed into ha_gas_start (was a per-board compile-time #define before the
+// ADR-0020 unify; flattening it to one default silently bricked the S3 — see below). Known-good pads:
+//   XIAO ESP32-C6           : D4 = GPIO22 (SDA), D5 = GPIO23 (SCL)
+//   Waveshare ESP32-S3-ETH  : GPIO42 (SDA), GPIO41 (SCL)  — GPIO22/23 DO NOT EXIST on the S3 (i2c bus init
+//                             fails ESP_ERR_INVALID_ARG), and these pads clear the W5500 SPI (9-14) + LED (21).
+// Grove SGPxx carries its own 10k pull-ups; internal pull-ups enabled too as belt-and-braces.
 #define GAS_SCL_HZ     400000
 #define GAS_I2C_PORT   I2C_NUM_0
 #define GAS_TOPIC_KEY  "gas"
@@ -35,6 +37,7 @@ static char s_reg_key[48];              // registry key / payload "mac" = "<node
 static const char *s_dev_type;
 static int s_sample_ms;                 // Sensirion algos REQUIRE 1 Hz; BME680 forced-mode ~10 s
 static int s_publish_every;             // publish 1 in N samples
+static int s_sda, s_scl;                // board-specific I2C pads, set from ha_gas_start args
 
 // One-shot I2C bus scan — the raw ACK proof, independent of the driver. Logs every 7-bit address that ACKs
 // so a mis-solder (nothing / wrong pins) is instantly distinguishable from a driver-level fault.
@@ -45,9 +48,9 @@ static void gas_bus_scan(i2c_master_bus_handle_t bus) {
             n += snprintf(found + n, sizeof(found) - n, "%s0x%02X", n ? "," : "", addr);
         if (n >= (int)sizeof(found) - 6) break;
     }
-    if (found[0]) ha_mqtt_log("gas bus scan (SDA=GPIO%d SCL=GPIO%d): ACK %s", GAS_SDA_GPIO, GAS_SCL_GPIO, found);
+    if (found[0]) ha_mqtt_log("gas bus scan (SDA=GPIO%d SCL=GPIO%d): ACK %s", s_sda, s_scl, found);
     else          ha_mqtt_log("gas bus scan (SDA=GPIO%d SCL=GPIO%d): NO devices ACK — check wiring/power",
-                              GAS_SDA_GPIO, GAS_SCL_GPIO);
+                              s_sda, s_scl);
 }
 
 // --- SGP30 dynamic-baseline persistence (ADR-0035 Q3 — drift root-cause) --------------------------------
@@ -160,8 +163,10 @@ static void gas_task(void *arg) {
     }
 }
 
-void ha_gas_start(const char *node_id, ha_gas_sensor_t sensor) {
+void ha_gas_start(const char *node_id, ha_gas_sensor_t sensor, int sda_gpio, int scl_gpio) {
     s_sensor = sensor;
+    s_sda = sda_gpio;
+    s_scl = scl_gpio;
     snprintf(s_reg_key, sizeof(s_reg_key), "%s-gas", node_id ? node_id : "unknown");
     if (sensor == HA_GAS_SENSOR_SGP30)       { s_dev_type = "sgp30_gas";  s_sample_ms = 1000;  s_publish_every = 10; }
     else if (sensor == HA_GAS_SENSOR_BME680) { s_dev_type = "bme680_gas"; s_sample_ms = 10000; s_publish_every = 1; }
@@ -170,8 +175,8 @@ void ha_gas_start(const char *node_id, ha_gas_sensor_t sensor) {
     i2c_master_bus_config_t bus_cfg = {
         .clk_source                   = I2C_CLK_SRC_DEFAULT,
         .i2c_port                     = GAS_I2C_PORT,
-        .sda_io_num                   = GAS_SDA_GPIO,
-        .scl_io_num                   = GAS_SCL_GPIO,
+        .sda_io_num                   = s_sda,
+        .scl_io_num                   = s_scl,
         .glitch_ignore_cnt            = 7,
         .flags.enable_internal_pullup = true,
     };
@@ -188,7 +193,7 @@ void ha_gas_start(const char *node_id, ha_gas_sensor_t sensor) {
             return;
         }
         ha_mqtt_log("SGP30 up — eCO2/TVOC lane running (SDA=GPIO%d SCL=GPIO%d, 1Hz, ~15s warmup at 400/0)",
-                    GAS_SDA_GPIO, GAS_SCL_GPIO);
+                    s_sda, s_scl);
     } else if (sensor == HA_GAS_SENSOR_BME680) {
         // Try addr 0x76 (SDO->GND) then 0x77 (SDO->VCC); init verifies chip id 0x61 = the live wiring check.
         if ((e = bme680_init(&s_bme, bus, BME680_I2C_ADDR_PRIMARY, GAS_SCL_HZ)) != ESP_OK &&
@@ -198,7 +203,7 @@ void ha_gas_start(const char *node_id, ha_gas_sensor_t sensor) {
             return;
         }
         ha_mqtt_log("BME680 up — T/RH/P + gas-Ω lane running (SDA=GPIO%d SCL=GPIO%d, ~10s cadence, "
-                    "heater 320C/150ms, compensation baked in)", GAS_SDA_GPIO, GAS_SCL_GPIO);
+                    "heater 320C/150ms, compensation baked in)", s_sda, s_scl);
     } else {  // HA_GAS_SENSOR_SGP40
         if ((e = sgp40_init(&s_sgp40, bus, GAS_SCL_HZ)) != ESP_OK) {
             ha_mqtt_log("SGP40: add-device failed: %s", esp_err_to_name(e)); return;
@@ -210,7 +215,7 @@ void ha_gas_start(const char *node_id, ha_gas_sensor_t sensor) {
             return;
         }
         ha_mqtt_log("SGP40 self-test PASS — VOC lane up (SDA=GPIO%d SCL=GPIO%d, 1Hz, ~45s warmup)",
-                    GAS_SDA_GPIO, GAS_SCL_GPIO);
+                    s_sda, s_scl);
         GasIndexAlgorithm_init(&s_voc, GasIndexAlgorithm_ALGORITHM_TYPE_VOC);
     }
     xTaskCreate(gas_task, "gas", 4096, NULL, 4, NULL);

@@ -20,4 +20,6 @@ typedef enum {
     HA_GAS_SENSOR_BME680,      // Bosch BME680 T/RH/P + gas resistance (0x76/0x77)
 } ha_gas_sensor_t;
 
-void ha_gas_start(const char *node_id, ha_gas_sensor_t sensor);
+// sda_gpio/scl_gpio are the board's I2C pads for the gas sensor (board-specific — e.g. XIAO C6 = 22/23,
+// Waveshare S3-ETH = 42/41; GPIO22/23 don't exist on the S3). No-op if the sensor isn't wired/present.
+void ha_gas_start(const char *node_id, ha_gas_sensor_t sensor, int sda_gpio, int scl_gpio);

@@ -50,7 +50,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v20-battfix"
+#define HA_FW_VERSION "v21-s3gaspins"
 #endif
 
 static const char *TAG = "ha_edge";
@@ -196,7 +196,7 @@ void app_main(void) {
     ha_reach_start(&reach_cfg);
 
     // SGP-40 VOC gas lane (I2C, independent of the radio) — no-op if the sensor isn't wired.
-    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_SGP40);   // S3-ETH always carries the SGP40 (shared ha_gas, ADR-0020)
+    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_SGP40, 42, 41);   // S3-ETH SGP40 on Waveshare I2C pads GPIO42/41 (the C6's 22/23 don't exist on the S3)
 
     // If we just booted a freshly-OTA'd image, self-test now and confirm-or-rollback.
     ha_ota_confirm_if_pending();
