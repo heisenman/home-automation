@@ -342,6 +342,15 @@ script:
 # If THIS loop ever stops (crash/hang), the un-kicked watchdog expires (~40s) and the charger resets EN_HIZ->0 =
 # hardware auto-recovery. Telemetry loop (5s) streams state to e1001-bench/battprofile for host capture (Module 3).
 interval:
+  - interval: 10min                  # auto-refresh the server spec every 10 min WHEN PLUGGED IN; skip on battery
+    then:                            # (an ePaper full-refresh costs power — only worth it on wall/USB, Hugh 2026-07-18)
+      - if:
+          condition:
+            lambda: 'return id(charger)->power_good();'   # true = valid wall/USB input present (SY6974B PG_STAT)
+          then:
+            - button.press: fetch_spec                    # pull fresh tiles + redraw
+          else:
+            - lambda: 'ESP_LOGD("refresh", "on battery -> skip 10min auto-refresh");'
   # ADR-0024 §3/§4/§6 safety monitor. On-battery only (on wall = charging = safe -> inert during USB dev). The
   # lambda folds one reading into the state machine + sets intent flags; the if-blocks actuate (a bare lambda
   # can't call components). Thresholds come from the loaded profile's floors (g_*_mv), so this holds pre-curve.
@@ -471,10 +480,13 @@ http_request:                        # P4c: fetch the server-authored spec (BFF)
   verify_ssl: false
 
 globals:                             # parsed tiles as parallel string vectors (std types → no custom-type include)
-  - id: g_tile_labels
+  - id: g_tile_names                 # device name (left column); parallel to g_tile_labels/g_tile_lines
     type: std::vector<std::string>
     restore_value: false
-  - id: g_tile_lines
+  - id: g_tile_labels                # room/location (centered column)
+    type: std::vector<std::string>
+    restore_value: false
+  - id: g_tile_lines                 # value(s) (right column)
     type: std::vector<std::string>
     restore_value: false
   - id: g_page                       # current page (buttons paginate; e-ink = discrete pages, not scroll)
@@ -762,13 +774,15 @@ display:
         it.print(w / 2, (gtop + ftop) / 2, id(font_label), TextAlign::CENTER, "press Green to fetch");
       } else {
         int top = gtop + 30, bot = ftop - 4, rowh = (bot - top) / per, y = top;
-        for (int i = 0; i < n && i < per; i++) {   // single-line tile: label left, value right (server-sliced page)
+        for (int i = 0; i < n && i < per; i++) {   // row: device name left, room centered, value right (server-sliced page)
           int cy = y + rowh / 2;
           if (id(g_density)) {                       // balanced: small fonts, more rows
-            it.print(16, cy, id(font_glabel_b), TextAlign::CENTER_LEFT, id(g_tile_labels)[i].c_str());
+            it.print(16, cy, id(font_glabel_b), TextAlign::CENTER_LEFT, id(g_tile_names)[i].c_str());
+            it.print(w / 2, cy, id(font_glabel_b), TextAlign::CENTER, id(g_tile_labels)[i].c_str());
             it.print(w - 16, cy, id(font_gval_b), TextAlign::CENTER_RIGHT, id(g_tile_lines)[i].c_str());
           } else {                                   // conservative: bigger, fewer rows (default)
-            it.print(16, cy, id(font_label), TextAlign::CENTER_LEFT, id(g_tile_labels)[i].c_str());
+            it.print(16, cy, id(font_label), TextAlign::CENTER_LEFT, id(g_tile_names)[i].c_str());
+            it.print(w / 2, cy, id(font_label), TextAlign::CENTER, id(g_tile_labels)[i].c_str());
             it.print(w - 16, cy, id(font_gval_c), TextAlign::CENTER_RIGHT, id(g_tile_lines)[i].c_str());
           }
           it.line(0, y + rowh, w, y + rowh);
@@ -1188,6 +1202,7 @@ button:
                 ESP_LOGI("spec", "GET -> HTTP %d, %d bytes, %d ms",
                          response->status_code, body.length(), response->duration_ms);
                 if (response->status_code != 200) return;
+                id(g_tile_names).clear();
                 id(g_tile_labels).clear();
                 id(g_tile_lines).clear();
                 bool ok = json::parse_json(body, [](JsonObject root) -> bool {
@@ -1195,6 +1210,10 @@ button:
                   for (JsonObject s : root["sensors"].as<JsonArray>()) {   // one page (<=per); no client cap
                     const char *room = !s["room"].isNull() ? s["room"].as<const char *>()
                                                            : s["device_id"].as<const char *>();
+                    // device name (left column): overlay `name` if set, else the device_id — so two
+                    // sensors in the same room are distinguishable (was room-only, ambiguous). Hugh 2026-07-18.
+                    const char *dname = !s["name"].isNull() ? s["name"].as<const char *>()
+                                                            : s["device_id"].as<const char *>();
                     JsonObject m = s["metrics"].as<JsonObject>();
                     std::string line;
                     int shown = 0;
@@ -1218,7 +1237,7 @@ button:
                         } else { p++; }                        // drop other multi-byte
                       }
                       float v = m[key].as<float>();
-                      if (unit == "C") { v = v * 9.0f / 5.0f + 32.0f; unit = "\xC2\xB0" "F"; }   // C -> °F (font_val has °)
+                      if (unit == "\xC2\xB0" "C") { v = v * 9.0f / 5.0f + 32.0f; unit = "\xC2\xB0" "F"; }   // °C -> °F (server sends normalized "°C"; font_val has °)
                       char fmt[8], val[16];
                       snprintf(fmt, sizeof(fmt), "%%.%df", prec);
                       snprintf(val, sizeof(val), fmt, v);
@@ -1228,6 +1247,7 @@ button:
                       shown++;
                     }
                     if (line.empty()) line = "--";
+                    id(g_tile_names).push_back(dname ? dname : "?");
                     id(g_tile_labels).push_back(room ? room : "?");
                     id(g_tile_lines).push_back(line);
                   }
