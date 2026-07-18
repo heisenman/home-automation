@@ -774,17 +774,23 @@ display:
         it.print(w / 2, (gtop + ftop) / 2, id(font_label), TextAlign::CENTER, "press Green to fetch");
       } else {
         int top = gtop + 30, bot = ftop - 4, rowh = (bot - top) / per, y = top;
-        for (int i = 0; i < n && i < per; i++) {   // row: device name left, room centered, value right (server-sliced page)
+        // Row = [device name | location] on the left, value on the right. Portrait w≈480 + a PROPORTIONAL font
+        // + it.print() does NOT clip -> each field is truncated to a fixed char cap, and the location sits at a
+        // FIXED column x (a defined space right after the name) so columns can't collide. --- TUNABLE (Hugh
+        // reviews): NAME_CHARS = device-name cap, LOC_CHARS = location cap, LOC_X = location column start-x. ---
+        const bool bal = id(g_density);                    // balanced density = smaller font, more chars fit
+        const int NAME_CHARS = bal ? 16 : 11;
+        const int LOC_CHARS  = bal ? 13 : 10;
+        const int LOC_X      = bal ? 120 : 150;
+        auto *lf = bal ? id(font_glabel_b) : id(font_label);   // label font (name + location)
+        auto *vf = bal ? id(font_gval_b)   : id(font_gval_c);  // value font
+        for (int i = 0; i < n && i < per; i++) {
           int cy = y + rowh / 2;
-          if (id(g_density)) {                       // balanced: small fonts, more rows
-            it.print(16, cy, id(font_glabel_b), TextAlign::CENTER_LEFT, id(g_tile_names)[i].c_str());
-            it.print(w / 2, cy, id(font_glabel_b), TextAlign::CENTER, id(g_tile_labels)[i].c_str());
-            it.print(w - 16, cy, id(font_gval_b), TextAlign::CENTER_RIGHT, id(g_tile_lines)[i].c_str());
-          } else {                                   // conservative: bigger, fewer rows (default)
-            it.print(16, cy, id(font_label), TextAlign::CENTER_LEFT, id(g_tile_names)[i].c_str());
-            it.print(w / 2, cy, id(font_label), TextAlign::CENTER, id(g_tile_labels)[i].c_str());
-            it.print(w - 16, cy, id(font_gval_c), TextAlign::CENTER_RIGHT, id(g_tile_lines)[i].c_str());
-          }
+          std::string nm = id(g_tile_names)[i];   if ((int) nm.size() > NAME_CHARS) nm.resize(NAME_CHARS);
+          std::string lc = id(g_tile_labels)[i];  if ((int) lc.size() > LOC_CHARS)  lc.resize(LOC_CHARS);
+          it.print(16,     cy, lf, TextAlign::CENTER_LEFT,  nm.c_str());               // device name (left)
+          it.print(LOC_X,  cy, lf, TextAlign::CENTER_LEFT,  lc.c_str());               // location (fixed column)
+          it.print(w - 16, cy, vf, TextAlign::CENTER_RIGHT, id(g_tile_lines)[i].c_str());  // value (right)
           it.line(0, y + rowh, w, y + rowh);
           y += rowh;
         }
