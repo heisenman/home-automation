@@ -66,6 +66,21 @@ def test_transport_setpoint_maps_to_target():
     assert ack["status"] == "ok" and ack["reported_state"] == {"value": 45}
 
 
+def test_transport_mode_maps_to_mode_flag():
+    captured = {}
+
+    def runner(argv):
+        captured["argv"] = argv
+        return SAMPLE.replace("mode    = 2", "mode    = 1")
+    drv = M.MideaDriver("ip", "t", "k", runner=runner)
+    tr = M.MideaTransport({"dehumidifier_office": drv})
+    cmd = {"id": "c3", "trait": "mode", "action": "set", "args": {"mode": 1}}
+    ack = tr.send_and_wait(node="server", device_id="dehumidifier_office", area="c_office", cmd=cmd)
+    assert ack["status"] == "ok" and ack["reported_state"] == {"mode": 1}
+    a = captured["argv"]
+    assert "--mode" in a and a[a.index("--mode") + 1] == "1"
+
+
 def test_transport_unknown_device_returns_none():
     tr = M.MideaTransport({})
     ack = tr.send_and_wait(node="server", device_id="nope", area="x",

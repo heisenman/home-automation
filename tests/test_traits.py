@@ -4,7 +4,39 @@ from tests._harness import raises, run_module
 
 
 def test_known_traits():
-    assert set(T.known_traits()) == {"switchable", "ranged", "positionable", "lockable", "setpoint", "indicator"}
+    assert set(T.known_traits()) == {"switchable", "ranged", "positionable", "lockable",
+                                     "setpoint", "indicator", "mode"}
+
+
+_MODE_CFG = {"values": {"set": 1, "continuous": 2, "dry": 4}, "safe": "set"}
+
+
+def test_mode_set_by_label():
+    tr = T.get_trait("mode")
+    assert tr.validate_command("set", {"mode": "continuous"}, _MODE_CFG) == {"mode": 2}
+    assert tr.validate_command("set", {"mode": "set"}, _MODE_CFG) == {"mode": 1}
+
+
+def test_mode_set_by_int():
+    tr = T.get_trait("mode")
+    assert tr.validate_command("set", {"mode": 4}, _MODE_CFG) == {"mode": 4}
+    assert tr.validate_command("set", {"mode": "2"}, _MODE_CFG) == {"mode": 2}
+
+
+def test_mode_set_rejects_unknown():
+    tr = T.get_trait("mode")
+    with raises(T.TraitError):
+        tr.validate_command("set", {"mode": 3}, _MODE_CFG)          # Smart (3) unsupported on this unit
+    with raises(T.TraitError):
+        tr.validate_command("set", {"mode": "auto"}, _MODE_CFG)
+    with raises(T.TraitError):
+        tr.validate_command("set", {}, _MODE_CFG)
+
+
+def test_mode_safe_state():
+    tr = T.get_trait("mode")
+    assert tr.safe_state(_MODE_CFG) == {"mode": 1}      # safe = Set (graceful idle)
+    assert tr.safe_state({"values": {"set": 1}}) == {}   # no `safe` declared -> empty
 
 
 def test_switchable_set():

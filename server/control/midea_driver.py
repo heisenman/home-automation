@@ -10,6 +10,7 @@ Trait → Midea mapping (MVP):
     switchable {on}     -> --running       , reported {"on": running}
     setpoint   {value}  -> --target-humidity, reported {"value": target}
     ranged     {level}  -> --fan-speed      , reported {"level": fan}
+    mode       {mode}   -> --mode          , reported {"mode": mode}   (Set=1/Continuous=2/Dry=4)
 
 The CLI runner is injectable so the Transport is unit-testable with no hardware.
 """
@@ -82,11 +83,13 @@ class MideaDriver:
         return _parse_status(self._run(self._argv("set", *extra)))
 
 
-# trait -> (midea set flag, status field carrying its value, reported state key)
+# trait -> (midea set flag, status field carrying its value, reported/arg key). The reported key doubles
+# as the normalised-arg key (switchable→on, setpoint→value, ranged→level, mode→mode).
 _TRAIT_MAP = {
     "switchable": ("running", "running", "on"),
     "setpoint": ("target_humidity", "target", "value"),
     "ranged": ("fan_speed", "fan", "level"),
+    "mode": ("mode", "mode", "mode"),
 }
 
 
@@ -105,8 +108,8 @@ class MideaTransport:
             return protocol.build_ack(cmd_id=cmd["id"], status="rejected",
                                       reason=f"midea: unsupported {trait}/{action}")
         flag, status_field, report_key = m
-        # the normalized arg value lives under the trait's own key (on|value|level)
-        val = args.get("on" if trait == "switchable" else "value" if trait == "setpoint" else "level")
+        # the normalized arg value lives under the trait's own key (on|value|level|mode) == report_key
+        val = args.get(report_key)
         try:
             state = drv.set(**{flag: val})
         except Exception as e:                           # transport/connection failure

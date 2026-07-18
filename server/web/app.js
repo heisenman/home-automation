@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v47 per-device battery refresh button (mesh active-scan on demand)";
+const BUILD = "v48 dehumidifier mode control (Set/Continuous/Dry) — graceful compressor-off";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -397,9 +397,10 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
 function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
   const act = vm.actuator || {};
   const cmds = (vm.controls || []).filter((c) =>
-    c.kind === "setpoint" || c.kind === "ranged" || c.kind === "indicator");
+    c.kind === "setpoint" || c.kind === "ranged" || c.kind === "mode" || c.kind === "indicator");
   const spCtl = cmds.find((c) => c.kind === "setpoint");
   const rgCtl = cmds.find((c) => c.kind === "ranged");
+  const modeCtl = cmds.find((c) => c.kind === "mode");
   const indCtl = cmds.find((c) => c.kind === "indicator");
   const spInit = spCtl ? (act[spCtl.now_key] ?? spCtl.safe_value ?? "") : "";
   const [open, setOpen] = useState(false);
@@ -429,6 +430,9 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
   const u = spCtl && spCtl.unit ? spCtl.unit : "";
   const spNow = spCtl ? act[spCtl.now_key] : null;
   const rgNow = rgCtl ? act[rgCtl.now_key] : null;
+  const modeNow = modeCtl ? act[modeCtl.now_key] : null;
+  const modeLabel = modeCtl && modeNow != null
+    ? ((modeCtl.options.find((o) => o.value === modeNow) || {}).label ?? modeNow) : null;
   const indNow = indCtl ? act[indCtl.now_key] : null;
   return html`
     <div class="settings">
@@ -451,6 +455,15 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
                 title=${o.value} onClick=${() => cmd(rgCtl, o.value, "ranged")}>${o.label}</button>`)}
           </div>
           ${rgNow != null && html`<span class="note">now: ${rgNow}</span>`}
+        </div>`}
+      ${modeCtl && html`
+        <div class="field"><label>${modeCtl.label}</label>
+          <div class="controls">
+            ${modeCtl.options.map((o) => html`
+              <button class="btn sm ${modeNow === o.value ? "primary" : ""}" disabled=${busy === "mode"}
+                title=${o.value} onClick=${() => cmd(modeCtl, o.value, "mode")}>${o.label}</button>`)}
+          </div>
+          ${modeLabel != null && html`<span class="note">now: ${modeLabel}</span>`}
         </div>`}
       ${indCtl && html`
         <div class="field"><label>${indCtl.label}</label>

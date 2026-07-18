@@ -194,6 +194,22 @@ class Controller:
                              f"night-mode -> LED {'on' if want_on else 'off'}", True, r.status)
             log.info("night-mode: %s LED -> %s (%s)", device_id, "on" if want_on else "off", r.status)
 
+    def _mode_cfg(self, device_id):
+        """If this device declares a `mode` enum trait wired for graceful on/off (run_mode + idle_mode
+        naming labels in its `values` map), return the resolved mapping; else None. Lets the controller
+        drive the compressor down GRACEFULLY — switch to Set mode — instead of a hard power cut on 'off'
+        (Midea dehumidifier, verified live 2026-07-18)."""
+        ctl = self.registry.get(device_id)
+        mcfg = (getattr(ctl, "traits_cfg", {}) or {}).get("mode") if ctl else None
+        if not mcfg:
+            return None
+        values = mcfg.get("values") or {}
+        run_mode, idle_mode = mcfg.get("run_mode"), mcfg.get("idle_mode")
+        if run_mode not in values or idle_mode not in values:
+            return None                                # mode trait present but not wired for on/off
+        return {"run_mode": run_mode, "idle_mode": idle_mode,
+                "run_val": int(values[run_mode]), "idle_val": int(values[idle_mode])}
+
     def _tick_device(self, conn, device_id, pol, now, tod, scene, dry_run):
         drv = self.drivers.get(device_id)
         if drv is not None:
@@ -221,7 +237,15 @@ class Controller:
         if st.get("error"):
             interlocks.append("error")
         last_on, last_off = store.get_cycle(conn, device_id)
-        dev_state = DeviceState(running=bool(st.get("running")), interlocks=tuple(interlocks),
+        # For a graceful-mode device, "running" (for hysteresis + cycle gating) means actively
+        # dehumidifying = the appliance is in its run_mode (Continuous), NOT merely powered — so the
+        # rule drives the MODE (Set<->Continuous) and the compressor spins down gracefully on 'off'.
+        mcfg = self._mode_cfg(device_id)
+        if mcfg and st.get("mode") is not None:
+            running_now = int(st["mode"]) == mcfg["run_val"]
+        else:
+            running_now = bool(st.get("running"))
+        dev_state = DeviceState(running=running_now, interlocks=tuple(interlocks),
                                 last_on_ts=last_on, last_off_ts=last_off,
                                 level=(int(st["fan"]) if st.get("fan") is not None else None))
         # fold the active house scene into the effective policy (relaxed thresholds and/or force-off)
@@ -245,6 +269,16 @@ class Controller:
                                       args={"on": True})
                 result = self.issuer.issue(device_id=device_id, trait="ranged", action="set",
                                            args={"level": res.level})
+            elif mcfg is not None:
+                # graceful on/off via operating mode: ON -> run_mode (Continuous, actively dehumidify),
+                # OFF -> idle_mode (Set, compressor idles at its setpoint and spins down gracefully).
+                # The appliance stays powered either way — never a hard compressor cut from automation.
+                if res.running and not bool(st.get("running")):
+                    self.issuer.issue(device_id=device_id, trait="switchable", action="set",
+                                      args={"on": True})
+                target_mode = mcfg["run_mode"] if res.running else mcfg["idle_mode"]
+                result = self.issuer.issue(device_id=device_id, trait="mode", action="set",
+                                           args={"mode": target_mode})
             else:
                 result = self.issuer.issue(device_id=device_id, trait="switchable", action="set",
                                            args={"on": res.running})
@@ -285,6 +319,8 @@ class Controller:
             metrics["target_humidity_pct"] = st["target"]      # device setpoint (telemetry, for the UI)
         if "fan" in st:
             metrics["fan_speed"] = st["fan"]                   # current fan level
+        if "mode" in st:
+            metrics["mode"] = st["mode"]                       # operating mode (Set=1/Continuous=2/Dry=4)
         # ADR-0027: single shared stamp. area from the reload-aware control registry (self.registry, kept
         # fresh by _refresh_registry each tick); the helper stamps a fresh ts per call (the writer keys on
         # (device_id, ts, metric), so a stale ts would collide and freeze onboard RH). writer reads area
@@ -293,7 +329,8 @@ class Controller:
             device_id=device_id, device_type="dehumidifier",
             area=actuator_state.resolve_area(self.registry, device_id),
             metrics=metrics, transport="midea-lan", meta={"authoritative": False},
-            extra={"running": st.get("running"), "target_pct": st.get("target")})
+            extra={"running": st.get("running"), "target_pct": st.get("target"),
+                   "mode": st.get("mode")})
         try:
             self.mqtt.publish(topic, json.dumps(payload), qos=0)
         except Exception:

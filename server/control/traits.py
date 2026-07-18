@@ -93,6 +93,35 @@ def _setpoint_set(args, cfg):
     return {"value": val}
 
 
+def _mode_set(args, cfg):
+    """Enum operating-mode: cfg carries a `values` map of label->int (e.g. {set:1, continuous:2, dry:4}).
+    Accepts either the label or the raw int; normalises to {"mode": <int>}."""
+    values = cfg.get("values") or {}
+    if not values:
+        raise TraitError("mode trait needs a non-empty 'values' map in the device config")
+    ints = {int(v) for v in values.values()}
+    raw = args.get("mode")
+    if raw is None:
+        raise TraitError("'mode' is required")
+    if isinstance(raw, str) and raw in values:
+        return {"mode": int(values[raw])}
+    try:
+        n = int(raw)
+    except (TypeError, ValueError):
+        raise TraitError(f"'mode' must be a label {sorted(values)} or an int {sorted(ints)}, got {raw!r}")
+    if n not in ints:
+        raise TraitError(f"'mode'={raw!r} not an allowed value (labels {sorted(values)}, ints {sorted(ints)})")
+    return {"mode": n}
+
+
+def _mode_safe(cfg):
+    values = cfg.get("values") or {}
+    safe = cfg.get("safe")
+    if safe in values:
+        return {"mode": int(values[safe])}
+    return {}
+
+
 _TRAITS: dict[str, Trait] = {
     "switchable": Trait(
         name="switchable", state_keys=("on",),
@@ -135,6 +164,16 @@ _TRAITS: dict[str, Trait] = {
         actions={"set": _setpoint_set},
         sensitive_actions=frozenset(),
         safe_state=lambda cfg: {"value": cfg["safe_value"]} if "safe_value" in cfg else {},
+    ),
+    # an enum operating-mode (e.g. a dehumidifier's Set/Continuous/Dry). The device declares its own
+    # label->int `values` map + a `safe` label in the registry, so the trait carries no product specifics.
+    # Used to switch the Midea between continuous run and setpoint (Set) mode — Set lets the compressor
+    # spin down GRACEFULLY at target instead of a hard power cut (verified live 2026-07-18).
+    "mode": Trait(
+        name="mode", state_keys=("mode",),
+        actions={"set": _mode_set},
+        sensitive_actions=frozenset(),
+        safe_state=_mode_safe,
     ),
 }
 

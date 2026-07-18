@@ -560,6 +560,15 @@ def _ranged_options(cfg: dict) -> list[dict]:
     return [{"value": v, "label": names[i] if names else str(v)} for i, v in enumerate(vals)]
 
 
+def _mode_options(cfg: dict) -> list[dict]:
+    """Enumerate a mode enum trait's values → [{value:int, label}], preserving the registry's `values`
+    order. Label = an explicit `labels` override, else the humanised key (set→Set, continuous→Continuous)."""
+    values = cfg.get("values") or {}
+    labels = cfg.get("labels") or {}
+    return [{"value": int(v), "label": labels.get(k) or k.replace("_", " ").title()}
+            for k, v in values.items()]
+
+
 def _setpoint_label(cfg: dict) -> tuple[str, str]:
     unit = cfg.get("unit", "")
     if unit in ("%", "%RH", "pct", "percent"):
@@ -604,6 +613,13 @@ def build_controls(traits_cfg: dict | None) -> list[dict]:
             "options": _ranged_options(cfg), "now_key": "fan_speed",
             "action": {"method": "POST", "path": _CMD_PATH, "trait": "ranged", "action": "set",
                        "arg_key": "level"}})
+    if "mode" in tc:
+        cfg = tc.get("mode") or {}
+        controls.append({
+            "kind": "mode", "trait": "mode", "label": cfg.get("label") or "Mode", "admin": True,
+            "options": _mode_options(cfg), "now_key": "mode",
+            "action": {"method": "POST", "path": _CMD_PATH, "trait": "mode", "action": "set",
+                       "arg_key": "mode"}})
     if "indicator" in tc:
         cfg = tc.get("indicator") or {}
         controls.append({
@@ -672,6 +688,7 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         fv = _latest_any(device_id, "fan_speed")
         fo = _latest_any(device_id, "fan_on")
         led = _latest_any(device_id, "led_on")
+        mode = _latest_any(device_id, "mode")
         if tv:
             actuator["target_pct"] = tv[0]
         if fv:
@@ -680,6 +697,8 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
             actuator["fan_on"] = fo[0]
         if led is not None:
             actuator["led_on"] = bool(led[0])
+        if mode is not None:
+            actuator["mode"] = int(mode[0])
 
     # command capabilities (traits + ranges) so the UI can render manual controls
     traits = None

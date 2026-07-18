@@ -73,6 +73,22 @@ def test_ranged_control_action_uses_level_arg():
                            "trait": "ranged", "action": "set", "arg_key": "level"}
 
 
+# ── mode (enum) ──────────────────────────────────────────────────────────────────────────────────────
+def test_mode_enum_options_values_labels_and_action():
+    c = _by_kind(build_controls({"mode": {"values": {"set": 1, "continuous": 2, "dry": 4}, "safe": "set"}}))["mode"]
+    assert c["label"] == "Mode" and c["now_key"] == "mode"
+    assert c["options"] == [{"value": 1, "label": "Set"}, {"value": 2, "label": "Continuous"},
+                            {"value": 4, "label": "Dry"}]          # order preserved; keys humanised
+    assert c["action"] == {"method": "POST", "path": "/devices/{id}/command",
+                           "trait": "mode", "action": "set", "arg_key": "mode"}
+
+
+def test_mode_labels_override():
+    c = _by_kind(build_controls({"mode": {"values": {"set": 1, "continuous": 2},
+                                          "labels": {"set": "Auto/Set"}}}))["mode"]
+    assert c["options"][0] == {"value": 1, "label": "Auto/Set"}    # explicit label wins over humanised key
+
+
 # ── indicator ────────────────────────────────────────────────────────────────────────────────────────
 def test_indicator_boolean_on_action():
     c = _by_kind(build_controls({"indicator": {}}))["indicator"]

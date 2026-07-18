@@ -14,6 +14,11 @@ from tests._harness import run_module  # noqa: E402
 NOW = 1_000_000.0
 STATUS_ON = "  running = True\n  humid%  = 30\n  target% = 35\n  fan = 40\n  tank = False\n  error = 0\n"
 STATUS_ON_TANK = STATUS_ON.replace("tank = False", "tank = True")
+# graceful-mode device: powered + in an operating mode (2=Continuous active, 1=Set idle)
+STATUS_MODE_CONT = STATUS_ON + "  mode = 2\n"
+STATUS_MODE_SET = STATUS_ON + "  mode = 1\n"
+MODE_TRAITS_CFG = {"mode": {"values": {"set": 1, "continuous": 2, "dry": 4},
+                            "safe": "set", "run_mode": "continuous", "idle_mode": "set"}}
 
 
 class FakeIssuer:
@@ -39,6 +44,60 @@ def _make(tmp, status_text):
     iss = FakeIssuer()
     ctrl = C.Controller(iss, {"dehumidifier_office": drv}, {"dehumidifier_office": _Ctl()}, db)
     return ctrl, iss, db
+
+
+class _CtlMode:
+    area = "living_room"
+    traits_cfg = MODE_TRAITS_CFG
+
+
+def _make_mode(tmp, status_text):
+    db = os.path.join(tmp, "control.db")
+    conn = sqlite3.connect(db)
+    store.ensure_schema(conn)
+    store.seed_policy(conn, "dehumidifier_office", C.DEFAULT_POLICY)
+    conn.close()
+    drv = MideaDriver("ip", "t", "k", runner=lambda argv: status_text)
+    iss = FakeIssuer()
+    ctrl = C.Controller(iss, {"dehumidifier_office": drv}, {"dehumidifier_office": _CtlMode()}, db)
+    return ctrl, iss, db
+
+
+def test_graceful_off_switches_to_set_mode():
+    """The key behaviour: when the rule wants OFF, a mode-capable dehumidifier is switched to Set mode
+    (compressor idles at its target, spins down gracefully) — NEVER a hard power-off."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_mode(tmp, STATUS_MODE_CONT)  # currently Continuous (actively dehumidifying)
+        ctrl.inject_reading("meter_pro_living_room", 38.0, ts=NOW - 30)   # <40 -> rule wants OFF
+        ctrl.tick(now=NOW)
+        assert iss.calls[-1]["trait"] == "mode" and iss.calls[-1]["args"] == {"mode": "set"}
+        assert all(c["args"] != {"on": False} for c in iss.calls)        # no hard power-off ever issued
+
+
+def test_graceful_on_switches_to_continuous_mode():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_mode(tmp, STATUS_MODE_SET)   # currently Set (idle)
+        ctrl.inject_reading("meter_pro_living_room", 60.0, ts=NOW - 30)   # >=44 -> rule wants ON
+        ctrl.tick(now=NOW)
+        assert iss.calls[-1]["trait"] == "mode" and iss.calls[-1]["args"] == {"mode": "continuous"}
+
+
+def test_graceful_mode_deadband_holds_no_command():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_mode(tmp, STATUS_MODE_CONT)  # Continuous; RH 42 in deadband -> hold
+        ctrl.inject_reading("meter_pro_living_room", 42.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        assert iss.calls == []                              # no mode churn in the deadband
+
+
+def test_graceful_mode_publishes_current_mode():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_mode(tmp, STATUS_MODE_CONT)
+        ctrl.mqtt = _FakeMqtt()
+        ctrl.inject_reading("meter_pro_living_room", 50.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        st = [p for t, p in ctrl.mqtt.published if t.endswith("/state")][-1]
+        assert st["metrics"].get("mode") == 2               # operating mode reaches the UI via telemetry
 
 
 def test_turns_off_when_room_below_threshold():
