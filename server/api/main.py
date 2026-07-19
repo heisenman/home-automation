@@ -916,6 +916,30 @@ def panel_tiles(page: int = 0, per: int = 6):
     return paginate_panel_tiles(sensors, page, per)
 
 
+@app.get("/api/v1/panel/rooms", include_in_schema=True)
+def panel_rooms():
+    """One row per ROOM for the E1001 landscape dashboard: fixed climate columns (temp/humidity/dewpoint)
+    + air-quality band + a free-form `notable` tail (radon, pressure, …). Reuses the same live sensor list
+    as /panel/tiles, then rolls it up per room (resolve_room_climate/resolve_room_air_quality). Small,
+    bounded (one row per room, no pagination needed at house scale). Read-only."""
+    import time
+
+    from server.api.viewmodel import build_panel_rooms, build_sensor_list
+    from server.control import control_store as store
+    hc = _hot_conn() if DB_PATH.exists() else None
+    cc = _control_conn()
+    try:
+        meta = store.all_device_meta(cc) if cc is not None else {}
+        calib = store.all_calibration(cc) if cc is not None else {}
+        sensors = build_sensor_list(hc, time.time(), meta=meta, calib=calib)
+    finally:
+        if hc is not None:
+            hc.close()
+        if cc is not None:
+            cc.close()
+    return build_panel_rooms(sensors)
+
+
 def _load_yaml_section(path: Path, section: str) -> dict:
     """Read `section:` out of a small instance YAML; {} on any absence/parse error (never fatal)."""
     if not path.exists():

@@ -251,3 +251,44 @@ def test_build_rooms_passes_actuator_state_through():
 if __name__ == "__main__":
     from tests._harness import run_module
     raise SystemExit(run_module(globals()))
+
+
+# ── build_panel_rooms: one-row-per-room dashboard (E1001 landscape) ─────────────────────────────────
+def _s(device_id, room, **metrics):
+    return {"device_id": device_id, "room": room, "area": room, "metrics": metrics}
+
+
+def test_panel_rooms_fixed_columns_and_notable_tail():
+    sensors = [
+        _s("meter_office", "c_office", temperature_c=22.5, humidity_pct=40.0, dewpoint_c=8.2, battery_pct=95),
+        _s("radon_crawl", "crawlspace", temperature_c=17.0, humidity_pct=66.0, dewpoint_c=10.9,
+           radon_bqm3=38.0, pressure_hpa=1010.0),
+    ]
+    out = V.build_panel_rooms(sensors)
+    rooms = {r["room"]: r for r in out["rooms"]}
+    assert set(rooms) == {"c_office", "crawlspace"}
+    # fixed climate columns present (temps stay °C — the panel converts)
+    assert rooms["c_office"]["temperature_c"] == 22.5 and rooms["c_office"]["humidity_pct"] == 40
+    assert rooms["c_office"]["dewpoint_c"] == 8.2
+    # battery is NOT a notable extra; c_office has no other metric -> empty tail
+    assert rooms["c_office"]["notable"] == []
+    # crawlspace's room-specific metrics land in the free-form notable tail, labeled from METRIC_CATALOG
+    notable = {n["key"]: n for n in rooms["crawlspace"]["notable"]}
+    assert set(notable) == {"radon_bqm3", "pressure_hpa"}
+    assert notable["radon_bqm3"]["label"] == "Radon" and notable["radon_bqm3"]["value"] == 38
+    assert "temperature_c" not in notable and "humidity_pct" not in notable   # fixed cols never in tail
+
+
+def test_panel_rooms_omits_rooms_without_temperature():
+    # a room with only an actuator/non-temp reading has nothing to anchor a climate row -> omitted
+    sensors = [_s("plug_x", "garage", fan_on=1, fan_speed=80)]
+    assert V.build_panel_rooms(sensors)["rooms"] == []
+
+
+def test_panel_rooms_air_band_from_worst_gas_node():
+    sensors = [{"device_id": "gas_lr", "room": "living_room", "area": "living_room",
+                "metrics": {"temperature_c": 23.0, "humidity_pct": 45.0},
+                "air_quality_report": {"air_quality_band": 3, "air_quality_band_label": "Fair",
+                                       "air_quality_basis": "absolute", "air_quality": 55}}]
+    r = V.build_panel_rooms(sensors)["rooms"][0]
+    assert r["air_band"] == 3 and r["air_band_label"] == "Fair"

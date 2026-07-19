@@ -421,6 +421,73 @@ def resolve_room_air_quality(room_sensors: list[dict]) -> dict | None:
             "explanation": r.get("explanation"), "source_device_id": did, "multi": len(reports) > 1}
 
 
+# One-row-per-room dashboard (E1001 landscape). Fixed climate columns + air band, then a free-form
+# `notable` tail. These metrics are NOT notable extras: the fixed columns themselves, battery, the
+# air-quality internals (the Air column already covers them), and any actuator/derived state.
+_ROOM_FIXED_METRICS = ("temperature_c", "humidity_pct", "dewpoint_c")
+_ROOM_NOTABLE_SKIP = set(_ROOM_FIXED_METRICS) | {
+    "battery_pct", "aqi", "gas_ohm", "voc_raw",                       # battery + air-quality internals (Air col)
+    "fan_on", "fan_speed", "filter_life_pct", "filter_low", "cadr",   # actuator state (no actuators, per Hugh)
+    "target_humidity_pct", "mode", "running", "led_on",
+}
+
+
+def build_panel_rooms(sensors: list[dict]) -> dict:
+    """One row per ROOM for the E1001 landscape dashboard (Hugh 2026-07-19). Fixed climate columns
+    (temperature/humidity/dewpoint) + the room air-quality band, then a free-form `notable` tail — any
+    environmental metric that isn't a fixed column (radon, pressure, CO2, …), labeled from METRIC_CATALOG.
+    Reuses resolve_room_climate (a representative temp/humidity even when a room has several sensors) and
+    resolve_room_air_quality (worst band). Temps stay °C — the panel converts to °F, mirroring /panel/tiles.
+    Rooms with no temperature are omitted (nothing to anchor the row). Pure over the sensor list."""
+    from collections import defaultdict
+    by_room: dict[str, list] = defaultdict(list)
+    for s in sensors:
+        r = s.get("room") or s.get("area")
+        if r:
+            by_room[r].append(s)
+    rooms = []
+    for room in sorted(by_room):
+        rs = by_room[room]
+        climate = resolve_room_climate(rs)
+        if climate is None:                                  # no temperature reading -> no row to draw
+            continue
+        temp = climate["value"].get("temperature_c")
+        hum = climate["value"].get("humidity_pct")
+        # dewpoint: from the representative sensor if one was picked, else the room mean (mirror climate)
+        src = climate.get("source_device_id")
+        dew = None
+        if src:
+            sd = next((s for s in rs if s["device_id"] == src), None)
+            dew = (sd.get("metrics") or {}).get("dewpoint_c") if sd else None
+        if dew is None:
+            dps = [d for s in rs if (d := (s.get("metrics") or {}).get("dewpoint_c")) is not None]
+            dew = _mean(dps) if dps else None
+        aq = resolve_room_air_quality(rs)
+        notable, seen = [], set()
+        for s in rs:                                         # first sensor to report a metric wins (stable)
+            for k, v in (s.get("metrics") or {}).items():
+                if k in _ROOM_NOTABLE_SKIP or k in seen or v is None:
+                    continue
+                spec = METRIC_CATALOG.get(k)
+                if spec is None:                             # unknown/derived -> keep the tail clean
+                    continue
+                seen.add(k)
+                p = spec["precision"]
+                notable.append({"key": k, "label": spec["label"], "unit": spec["unit"],
+                                "value": round(float(v), p) if p else int(round(float(v)))})
+        rooms.append({
+            "room": room,
+            "temperature_c": round(temp, 1) if temp is not None else None,
+            "humidity_pct": int(round(hum)) if hum is not None else None,
+            "dewpoint_c": round(dew, 1) if dew is not None else None,
+            "air_band": aq["air_quality_band"] if aq else None,
+            "air_band_label": aq["air_quality_band_label"] if aq else None,
+            "confidence": climate.get("confidence"),
+            "notable": notable,
+        })
+    return {"rooms": rooms}
+
+
 def actuator_map_state(display_vm: dict) -> dict:
     """`{running, status}` for an actuator on the spatial house map (docs/design/map-room-fill.md Arc 2),
     derived from a `build_display` view-model — so the map, room-zoom, and PWA agree (control registry is the
