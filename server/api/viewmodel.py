@@ -473,7 +473,9 @@ def build_panel_rooms(sensors: list[dict]) -> dict:
                     continue
                 seen.add(k)
                 p = spec["precision"]
-                notable.append({"key": k, "label": spec["label"], "unit": spec["unit"],
+                # ASCII-fold the unit for the panel's mono font (µ->u ³->3 ²->2; ° kept — font has it)
+                unit = spec["unit"].translate({0xB5: "u", 0xB3: "3", 0xB2: "2"})
+                notable.append({"key": k, "label": spec["label"], "unit": unit,
                                 "value": round(float(v), p) if p else int(round(float(v)))})
         rooms.append({
             "room": room,

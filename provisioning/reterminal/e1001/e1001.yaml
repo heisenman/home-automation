@@ -480,13 +480,23 @@ http_request:                        # P4c: fetch the server-authored spec (BFF)
   verify_ssl: false
 
 globals:                             # parsed tiles as parallel string vectors (std types → no custom-type include)
-  - id: g_tile_names                 # device name (left column); parallel to g_tile_labels/g_tile_lines
+  # one-row-per-room dashboard (landscape): parallel per-room string vectors, display-ready from /panel/rooms
+  - id: g_room_name
     type: std::vector<std::string>
     restore_value: false
-  - id: g_tile_labels                # room/location (centered column)
+  - id: g_room_temp                  # "72.5°F" (converted on parse)
     type: std::vector<std::string>
     restore_value: false
-  - id: g_tile_lines                 # value(s) (right column)
+  - id: g_room_hum                   # "40%"
+    type: std::vector<std::string>
+    restore_value: false
+  - id: g_room_dew                   # "48°F"
+    type: std::vector<std::string>
+    restore_value: false
+  - id: g_room_air                   # air-quality band label ("Good"/…) or ""
+    type: std::vector<std::string>
+    restore_value: false
+  - id: g_room_note                  # free-form notable tail ("Radon 38Bq  Pressure 1010hPa")
     type: std::vector<std::string>
     restore_value: false
   - id: g_page                       # current page (buttons paginate; e-ink = discrete pages, not scroll)
@@ -728,7 +738,7 @@ display:
     busy_pin:
       number: GPIO13
       inverted: true                 # BUSY# is active-low on the schematic
-    rotation: 270                    # portrait, USB port toward floor; lambda uses get_width/height so it reflows
+    rotation: 0                      # LANDSCAPE (800x480) for the one-row-per-room dashboard; get_width/height reflows. (180 to flip)
     update_interval: never           # ePaper: draw on-demand (deep-sleep model), not on a timer.
     lambda: |-                       # P4c.1: paginated house sensor tiles (buttons navigate; e-ink = discrete pages).
       int w = it.get_width(), h = it.get_height();
@@ -762,35 +772,42 @@ display:
       if (id(sntp_time).now().is_valid())
         it.strftime(w - 16, hy + 6, id(font_title), TextAlign::TOP_RIGHT, "%H:%M", id(sntp_time).now());
       it.line(0, hy + sh, w, hy + sh);
-      // --- sensor grid (paginated; e-ink = discrete pages, buttons navigate) ---
-      int per = id(g_density) ? 16 : 9;           // density: conservative 9 / balanced 16 tiles per page
-      int n = (int) id(g_tile_labels).size();     // ADR-0029: g_tile_labels holds ONLY the current page
-      int pages = id(g_pages) < 1 ? 1 : id(g_pages);   // server-authored page count (not derived locally)
-      int page = id(g_page);
-      if (page > pages - 1) { page = pages - 1; id(g_page) = page; }
+      // --- room dashboard: ONE ROW PER ROOM, fixed climate columns + free-form notable (landscape) ---
+      int n = (int) id(g_room_name).size();
       int gtop = hy + sh, ftop = h - 30;          // grid band [gtop, ftop); footer below ftop
-      it.printf(w - 16, gtop + 4, id(font_label), TextAlign::TOP_RIGHT, "%d/%d", page + 1, pages);
       if (n == 0) {
         it.print(w / 2, (gtop + ftop) / 2, id(font_label), TextAlign::CENTER, "press Green to fetch");
       } else {
-        int top = gtop + 30, bot = ftop - 4, rowh = (bot - top) / per, y = top;
-        // Row = [device name | location] on the left, value on the right. Portrait w≈480 + a PROPORTIONAL font
-        // + it.print() does NOT clip -> each field is truncated to a fixed char cap, and the location sits at a
-        // FIXED column x (a defined space right after the name) so columns can't collide. --- TUNABLE (Hugh
-        // reviews): NAME_CHARS = device-name cap, LOC_CHARS = location cap, LOC_X = location column start-x. ---
-        const bool bal = id(g_density);                    // balanced density = smaller font, more chars fit
-        const int NAME_CHARS = bal ? 16 : 11;
-        const int LOC_CHARS  = bal ? 13 : 10;
-        const int LOC_X      = bal ? 120 : 150;
-        auto *lf = bal ? id(font_glabel_b) : id(font_label);   // label font (name + location)
-        auto *vf = bal ? id(font_gval_b)   : id(font_gval_c);  // value font
-        for (int i = 0; i < n && i < per; i++) {
+        // Column x anchors (landscape w≈800). Numeric columns right-aligned; text columns left. Proportional
+        // font + it.print() does NOT clip, so room/notable are char-capped. --- ALL TUNABLE (Hugh reviews). ---
+        const int X_ROOM = 16;      // room name (left)
+        const int X_TEMP = 250;     // temperature (right edge)
+        const int X_HUM  = 340;     // humidity    (right edge)
+        const int X_DEW  = 452;     // dewpoint    (right edge)
+        const int X_AIR  = 470;     // air band label (left)
+        const int X_NOTE = 578;     // notable tail (left)
+        const int ROOM_CHARS = 14, NOTE_CHARS = 30;
+        auto *hf = id(font_glabel_b);   // small header + notable font
+        auto *vf = id(font_label);      // room name + column values
+        int hry = gtop + 12;            // column-header row
+        it.print(X_ROOM, hry, hf, TextAlign::CENTER_LEFT,  "Room");
+        it.print(X_TEMP, hry, hf, TextAlign::CENTER_RIGHT, "Temp");
+        it.print(X_HUM,  hry, hf, TextAlign::CENTER_RIGHT, "Hum");
+        it.print(X_DEW,  hry, hf, TextAlign::CENTER_RIGHT, "Dew");
+        it.print(X_AIR,  hry, hf, TextAlign::CENTER_LEFT,  "Air");
+        it.print(X_NOTE, hry, hf, TextAlign::CENTER_LEFT,  "Notable");
+        int top = gtop + 26, bot = ftop - 2, rowh = (bot - top) / n, y = top;
+        it.line(0, top, w, top);
+        for (int i = 0; i < n; i++) {
           int cy = y + rowh / 2;
-          std::string nm = id(g_tile_names)[i];   if ((int) nm.size() > NAME_CHARS) nm.resize(NAME_CHARS);
-          std::string lc = id(g_tile_labels)[i];  if ((int) lc.size() > LOC_CHARS)  lc.resize(LOC_CHARS);
-          it.print(16,     cy, lf, TextAlign::CENTER_LEFT,  nm.c_str());               // device name (left)
-          it.print(LOC_X,  cy, lf, TextAlign::CENTER_LEFT,  lc.c_str());               // location (fixed column)
-          it.print(w - 16, cy, vf, TextAlign::CENTER_RIGHT, id(g_tile_lines)[i].c_str());  // value (right)
+          std::string rm = id(g_room_name)[i]; if ((int) rm.size() > ROOM_CHARS) rm.resize(ROOM_CHARS);
+          std::string nt = id(g_room_note)[i]; if ((int) nt.size() > NOTE_CHARS) nt.resize(NOTE_CHARS);
+          it.print(X_ROOM, cy, vf, TextAlign::CENTER_LEFT,  rm.c_str());                    // room name
+          it.print(X_TEMP, cy, vf, TextAlign::CENTER_RIGHT, id(g_room_temp)[i].c_str());    // temp °F
+          it.print(X_HUM,  cy, vf, TextAlign::CENTER_RIGHT, id(g_room_hum)[i].c_str());     // humidity
+          it.print(X_DEW,  cy, vf, TextAlign::CENTER_RIGHT, id(g_room_dew)[i].c_str());     // dewpoint °F
+          it.print(X_AIR,  cy, vf, TextAlign::CENTER_LEFT,  id(g_room_air)[i].c_str());     // air band
+          it.print(X_NOTE, cy, hf, TextAlign::CENTER_LEFT,  nt.c_str());                    // notable tail
           it.line(0, y + rowh, w, y + rowh);
           y += rowh;
         }
@@ -1196,70 +1213,48 @@ button:
     id: fetch_spec
     on_press:
       - http_request.get:
-          url: !lambda |-
-            static char u[112];
-            snprintf(u, sizeof(u), "${bff_base_url}/api/v1/panel/tiles?per=%d&page=%d",
-                     id(g_density) ? 16 : 9, id(g_page));   // density: conservative 9 / balanced 16 tiles/page
-            return std::string(u);
+          url: "${bff_base_url}/api/v1/panel/rooms"   # one-row-per-room dashboard (no pagination at house scale)
           capture_response: true
-          max_response_buffer_size: 16kB   # ADR-0029: ONE page (~4KB @ per=6), NOT the fleet firehose — bounded
+          max_response_buffer_size: 16kB   # bounded: one small record per room, not the fleet firehose
           on_response:
             - lambda: |-
                 ESP_LOGI("spec", "GET -> HTTP %d, %d bytes, %d ms",
                          response->status_code, body.length(), response->duration_ms);
                 if (response->status_code != 200) return;
-                id(g_tile_names).clear();
-                id(g_tile_labels).clear();
-                id(g_tile_lines).clear();
+                id(g_room_name).clear(); id(g_room_temp).clear(); id(g_room_hum).clear();
+                id(g_room_dew).clear();  id(g_room_air).clear();  id(g_room_note).clear();
+                id(g_pages) = 1;                                 // single page (buttons' page-nav is inert here)
                 bool ok = json::parse_json(body, [](JsonObject root) -> bool {
-                  id(g_pages) = root["pages"] | 1;               // ADR-0029: server-authored page count
-                  for (JsonObject s : root["sensors"].as<JsonArray>()) {   // one page (<=per); no client cap
-                    const char *room = !s["room"].isNull() ? s["room"].as<const char *>()
-                                                           : s["device_id"].as<const char *>();
-                    // device name (left column): overlay `name` if set, else the device_id — so two
-                    // sensors in the same room are distinguishable (was room-only, ambiguous). Hugh 2026-07-18.
-                    const char *dname = !s["name"].isNull() ? s["name"].as<const char *>()
-                                                            : s["device_id"].as<const char *>();
-                    JsonObject m = s["metrics"].as<JsonObject>();
-                    std::string line;
-                    int shown = 0;
-                    for (JsonObject g : s["graphs"].as<JsonArray>()) {   // spec-driven: value + server precision + unit
-                      if (shown >= 2) break;
-                      const char *key = g["key"];
-                      if (!key || m[key].isNull()) continue;
-                      int prec = g["precision"] | 0;
-                      const char *u = g["unit"] | "";
-                      std::string unit;   // ASCII-normalize UTF-8 units for the mono font: µ->u ³->3 ²->2, keep °
-                      for (const char *p = u; *p;) {
-                        unsigned char c = (unsigned char) *p;
-                        if (c < 0x80) { unit += (char) c; p++; }
-                        else if (c == 0xC2 && p[1]) {           // Latin-1 supplement (2-byte)
-                          unsigned char d = (unsigned char) p[1];
-                          if (d == 0xB5) unit += 'u';           // µ micro   (µg/m³ -> ug/m3)
-                          else if (d == 0xB3) unit += '3';      // ³ cubed   (m³)
-                          else if (d == 0xB2) unit += '2';      // ² squared (m²)
-                          else if (d == 0xB0) unit += "\xC2\xB0";  // ° keep (font has the glyph)
-                          p += 2;
-                        } else { p++; }                        // drop other multi-byte
-                      }
-                      float v = m[key].as<float>();
-                      if (unit == "\xC2\xB0" "C") { v = v * 9.0f / 5.0f + 32.0f; unit = "\xC2\xB0" "F"; }   // °C -> °F (server sends normalized "°C"; font_val has °)
-                      char fmt[8], val[16];
-                      snprintf(fmt, sizeof(fmt), "%%.%df", prec);
-                      snprintf(val, sizeof(val), fmt, v);
-                      if (shown) line += "   ";
-                      line += val;
-                      if (!unit.empty()) { line += " "; line += unit; }
-                      shown++;
+                  char b[28];
+                  for (JsonObject r : root["rooms"].as<JsonArray>()) {
+                    id(g_room_name).push_back(r["room"] | "?");
+                    if (!r["temperature_c"].isNull()) {          // °C -> °F on the panel (font has °)
+                      snprintf(b, sizeof(b), "%.1f\xC2\xB0" "F", r["temperature_c"].as<float>() * 9.0f / 5.0f + 32.0f);
+                      id(g_room_temp).push_back(b);
+                    } else id(g_room_temp).push_back("");
+                    if (!r["humidity_pct"].isNull()) { snprintf(b, sizeof(b), "%d%%", (int) r["humidity_pct"].as<int>()); id(g_room_hum).push_back(b); }
+                    else id(g_room_hum).push_back("");
+                    if (!r["dewpoint_c"].isNull()) {
+                      snprintf(b, sizeof(b), "%.0f\xC2\xB0" "F", r["dewpoint_c"].as<float>() * 9.0f / 5.0f + 32.0f);
+                      id(g_room_dew).push_back(b);
+                    } else id(g_room_dew).push_back("");
+                    id(g_room_air).push_back(r["air_band_label"] | "");
+                    std::string note;                            // "Label value unit  Label value unit" (units ASCII-folded server-side)
+                    for (JsonObject nn : r["notable"].as<JsonArray>()) {
+                      if (!note.empty()) note += "  ";
+                      note += (const char *) (nn["label"] | "");
+                      double v = nn["value"].as<double>();
+                      char vb[20];
+                      if (v == (long) v) snprintf(vb, sizeof(vb), " %ld", (long) v);
+                      else               snprintf(vb, sizeof(vb), " %.1f", v);
+                      note += vb;
+                      note += (const char *) (nn["unit"] | "");
                     }
-                    if (line.empty()) line = "--";
-                    id(g_tile_names).push_back(dname ? dname : "?");
-                    id(g_tile_labels).push_back(room ? room : "?");
-                    id(g_tile_lines).push_back(line);
+                    id(g_room_note).push_back(note);
                   }
                   return true;
                 });
-                ESP_LOGI("spec", "parsed %d tiles (ok=%d)", id(g_tile_labels).size(), ok);
+                ESP_LOGI("spec", "parsed %d rooms (ok=%d)", id(g_room_name).size(), ok);
                 id(g_fetch_uptime) = id(uptime_s).state;   // stamp: footer shows "updated Xs ago"
       - http_request.get:                          # sibling: active house scene for the header (Home/Away/Sleep)
           url: ${bff_base_url}/api/v1/house
