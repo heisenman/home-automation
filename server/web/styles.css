@@ -138,7 +138,7 @@ body {
   padding: 18px; width: 100%; max-width: 380px;
   max-height: calc(100dvh - 32px); overflow-y: auto; overscroll-behavior: contain; }
 .modal h3 { margin: 0 0 4px; }
-.modal input {
+.modal input, .modal select {
   width: 100%; background: var(--bg); border: 1px solid var(--line); color: var(--txt);
   border-radius: 8px; padding: 10px; font-size: 15px; margin: 10px 0;
 }
@@ -255,3 +255,27 @@ details > summary { cursor: pointer; }
   border-radius: 8px; padding: 5px 8px; font-size: 13px; cursor: pointer;
 }
 .panel-x { margin-left: auto; }
+
+/* ── Add-sensor discovery panel (v49) ─────────────────────────────────────── */
+.note.sm, .err.sm { font-size: 11px; }
+.mono { font-family: ui-monospace, Menlo, monospace; }
+.discover {
+  border: 1px solid var(--line); border-radius: 10px; padding: 8px;
+  margin: 4px 0 10px; background: var(--panel-2); max-height: 220px; overflow-y: auto;
+}
+.discover-hd {
+  display: flex; justify-content: space-between; align-items: baseline;
+  font-size: 12px; color: var(--muted); margin-bottom: 6px;
+}
+.cand {
+  display: flex; align-items: center; gap: 10px; width: 100%;
+  padding: 7px 9px; margin: 4px 0; text-align: left; cursor: pointer;
+  background: var(--panel); color: var(--txt);
+  border: 1px solid var(--line); border-radius: 9px;
+}
+.cand:hover { border-color: var(--accent); }
+.cand.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent) inset; }
+.cand-sig { font-family: ui-monospace, Menlo, monospace; color: var(--accent); letter-spacing: 1px; }
+.cand-main { display: flex; flex-direction: column; flex: 1; min-width: 0; }
+.cand-main b { font-size: 13px; }
+.cand-vals { display: flex; gap: 8px; flex-wrap: wrap; font-size: 12px; color: var(--muted); }

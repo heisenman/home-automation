@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v48 dehumidifier mode control (Set/Continuous/Dry) — graceful compressor-off";
+const BUILD = "v49 Add-sensor discovery — see nearby unregistered BLE devices + one-click intake";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -1201,6 +1201,63 @@ function DeviceMetaModal({ device, areas, onClose, onSaved }) {
 }
 
 const KNOWN_TRAITS = ["switchable", "ranged", "setpoint", "lockable", "positionable"];
+// Sensor device_types offered in the Add-sensor dropdown (BLE-heard first, then edge/I2C). "Other…"
+// reveals a free-text box so a brand-new model is still addable. Keep in step with the registry.
+const SENSOR_TYPES = [
+  "switchbot_meter_outdoor", "switchbot_meter_pro", "switchbot_meter_plus", "switchbot_meter",
+  "aranet_radon_plus", "bme680_gas", "sgp40_gas", "sgp30_gas",
+];
+
+// Signal-strength glyph from RSSI (dBm): closer device → more bars. Held-to-the-hub is usually > -50.
+function sigBars(rssi) {
+  const n = rssi >= -50 ? 4 : rssi >= -65 ? 3 : rssi >= -80 ? 2 : 1;
+  return "▁▂▄▆█".slice(0, 0) + ["▂··", "▂▄·", "▂▄▆", "▂▄█"][n - 1];
+}
+
+// After a sensor is registered we don't tell the user to restart anything: ha-scanner/ha-edge-mapper
+// hot-reload devices.yaml on mtime (RegistryReloader), so the new device starts publishing within
+// seconds. We prove it by polling its last reading — a live success/failure watch instead of a note.
+function LiveConfirm({ deviceId, onDone }) {
+  const [state, setState] = useState("waiting");   // waiting | live | slow
+  const [readings, setReadings] = useState(null);
+  useEffect(() => {
+    let alive = true, tries = 0;
+    const poll = async () => {
+      tries += 1;
+      try {
+        const r = await fetch(`/devices/${deviceId}/last`);
+        if (r.ok) {
+          const d = await r.json();
+          if (alive) { setReadings(d.readings || []); setState("live"); }
+          return true;
+        }
+      } catch (e) { /* not reporting yet */ }
+      if (tries >= 12 && alive) setState("slow");   // ~24s with no reading
+      return false;
+    };
+    poll();
+    const id = setInterval(async () => { if (await poll()) clearInterval(id); }, 2000);
+    return () => { alive = false; clearInterval(id); };
+  }, [deviceId]);
+  const fmt = (r) => {
+    if (r.metric === "temperature_c") return `${Math.round((r.value * 9 / 5 + 32) * 10) / 10}°F`;
+    if (r.metric === "humidity_pct") return `${Math.round(r.value)}% RH`;
+    if (r.metric === "battery_pct") return `🔋 ${Math.round(r.value)}%`;
+    return `${r.metric} ${r.value}`;
+  };
+  return html`
+    <p class="note ok">✅ Registered <b>${deviceId}</b> — hot-reloaded into the scanner (no restart).</p>
+    ${state === "waiting" && html`<p class="note">⏳ Waiting for its first reading… keep it powered near the hub.</p>`}
+    ${state === "live" && html`
+      <p class="note ok">📡 It's live — reporting now:</p>
+      <div class="cand-vals">${(readings || []).map((r) => html`<span>${fmt(r)}</span>`)}</div>`}
+    ${state === "slow" && html`
+      <p class="note">No reading yet after ~25s. Keep it powered and close. If it stays silent it may be
+        out of range of this hub, or the scanner needs a restart (<code>systemctl restart ha-scanner</code>).</p>`}
+    <div class="modal-actions">
+      <button class="btn primary" onClick=${onDone}>Done</button>
+    </div>`;
+}
 
 function AddDeviceModal({ onClose, onSaved }) {
   const [kind, setKind] = useState("sensor");        // sensor | actuator
@@ -1214,7 +1271,37 @@ function AddDeviceModal({ onClose, onSaved }) {
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [done, setDone] = useState(null);
+  const [cands, setCands] = useState(null);          // null = not fetched yet; [] = heard nothing
+  const [scanErr, setScanErr] = useState("");
+  const [typeManual, setTypeManual] = useState(false);   // "Other…" chosen → free-text device_type
   const toggleTrait = (t) => setTraits((ts) => (ts.includes(t) ? ts.filter((x) => x !== t) : [...ts, t]));
+
+  // Poll the discovery feed while adding a SENSOR — the "see the filtered-out data" half of onboarding.
+  useEffect(() => {
+    if (kind !== "sensor" || done) return;
+    let alive = true;
+    const tick = async () => {
+      try {
+        const r = await adminSend("GET", "/api/v1/discover");
+        if (alive) { setCands(r.candidates || []); setScanErr(""); }
+      } catch (e) { if (alive) setScanErr(String(e.message)); }
+    };
+    tick();
+    const id = setInterval(tick, 3000);
+    return () => { alive = false; clearInterval(id); };
+  }, [kind, done]);
+
+  const pick = (c) => {
+    setMac(c.mac);
+    if (c.device_type) { setDeviceType(c.device_type); setTypeManual(!SENSOR_TYPES.includes(c.device_type)); }
+    setErr("");
+  };
+  const onTypeSelect = (e) => {
+    const v = e.target.value;
+    if (v === "__other__") { setTypeManual(true); setDeviceType(""); }
+    else { setTypeManual(false); setDeviceType(v); }
+  };
+  const typeSelVal = typeManual ? "__other__" : (SENSOR_TYPES.includes(deviceType) ? deviceType : "");
   const save = async () => {
     setBusy(true); setErr("");
     try {
@@ -1232,11 +1319,44 @@ function AddDeviceModal({ onClose, onSaved }) {
       setDone(r);
     } catch (e) { setErr(String(e.message)); setBusy(false); }
   };
+
+  const outdoorPicked = deviceType === "switchbot_meter_outdoor";
+  const discover = html`
+    <div class="discover">
+      <div class="discover-hd"><span>Nearby unregistered devices</span>
+        <span class="note sm">${cands === null ? "listening…" : "live · every 3s"}</span></div>
+      ${scanErr && html`<p class="err sm">${scanErr}</p>`}
+      ${cands === null ? html`<p class="note sm">Listening — power the new device on and hold it near the hub.</p>`
+        : cands.length === 0 ? html`<p class="note sm">Nothing heard yet. Keep the device close; the scanner
+            surfaces each one about once a minute.</p>`
+        : cands.map((c) => html`
+          <button class="cand ${c.mac === mac ? "sel" : ""}" onClick=${() => pick(c)}>
+            <span class="cand-sig" title=${`${c.rssi_max} dBm`}>${sigBars(c.rssi_max)}</span>
+            <span class="cand-main">
+              <b>${c.device_type || c.brand}</b>
+              <span class="note sm mono">${c.mac}</span>
+            </span>
+            <span class="cand-vals">
+              ${c.temperature_f != null ? html`<span>${c.temperature_f}°F</span>` : ""}
+              ${c.humidity_pct != null ? html`<span>${c.humidity_pct}% RH</span>` : ""}
+              ${c.battery_pct != null ? html`<span>🔋${c.battery_pct}%</span>` : html`<span class="note sm">batt ?</span>`}
+            </span>
+          </button>`)}
+    </div>`;
+
   const sensorFields = html`
-    <input value=${mac} placeholder="MAC — e.g. AA:BB:CC:DD:EE:FF"
+    ${discover}
+    <input value=${mac} placeholder="MAC — pick above, or type AA:BB:CC:DD:EE:FF"
       onInput=${(e) => setMac(e.target.value.toUpperCase())} />
-    <input value=${deviceType} placeholder="device_type — e.g. switchbot_meter_pro, aranet_radon_plus"
-      onInput=${(e) => setDeviceType(e.target.value)} />
+    <select value=${typeSelVal} onChange=${onTypeSelect}>
+      <option value="" disabled>device type…</option>
+      ${SENSOR_TYPES.map((t) => html`<option value=${t}>${t}</option>`)}
+      <option value="__other__">Other… (type manually)</option>
+    </select>
+    ${typeManual && html`<input value=${deviceType} placeholder="device_type — e.g. switchbot_meter_outdoor"
+      onInput=${(e) => setDeviceType(e.target.value)} />`}
+    ${outdoorPicked && html`<p class="note sm">Outdoor meters use a rotating BLE address — you're binding the
+      MAC shown now; if it later rotates you'd re-add it.</p>`}
     <input value=${notes} placeholder="notes (optional)" onInput=${(e) => setNotes(e.target.value)} />`;
   const actuatorFields = html`
     <input value=${node} placeholder="node — the enrolled edge node, e.g. c6-bench"
@@ -1250,21 +1370,14 @@ function AddDeviceModal({ onClose, onSaved }) {
       <button class="btn sm ${kind === "sensor" ? "primary" : "ghost"}" onClick=${() => setKind("sensor")}>Sensor</button>
       <button class="btn sm ${kind === "actuator" ? "primary" : "ghost"}" onClick=${() => setKind("actuator")}>Actuator</button>
     </div>
-    <input value=${deviceId} placeholder=${`device_id slug — e.g. ${kind === "sensor" ? "meter_living_room" : "lamp_office"}`}
-      onInput=${(e) => setDeviceId(e.target.value)} />
-    <input value=${area} placeholder="area slug — e.g. living_room" onInput=${(e) => setArea(e.target.value)} />
     ${kind === "sensor" ? sensorFields : actuatorFields}
+    <input value=${deviceId} placeholder=${`device_id slug — e.g. ${kind === "sensor" ? "meter_patio" : "lamp_office"}`}
+      onInput=${(e) => setDeviceId(e.target.value)} />
+    <input value=${area} placeholder="area slug — e.g. patio" onInput=${(e) => setArea(e.target.value)} />
     ${err && html`<div class="err">${err}</div>`}
     <div class="modal-actions">
       <button class="btn ghost" onClick=${onClose}>Cancel</button>
       <button class="btn primary" disabled=${busy} onClick=${save}>${busy ? "Adding…" : "Add"}</button>
-    </div>`;
-  const success = html`
-    <p class="note">✅ Registered <b>${done && done.device_id}</b>.</p>
-    <p class="note">${done && done.note}</p>
-    <p class="note"><code>${done && done.reload_cmd}</code></p>
-    <div class="modal-actions">
-      <button class="btn primary" onClick=${() => { onSaved(); onClose(); }}>Done</button>
     </div>`;
   return html`
     <div class="modal-bg" onClick=${onClose}>
@@ -1272,8 +1385,8 @@ function AddDeviceModal({ onClose, onSaved }) {
         <h3>Add a ${kind}</h3>
         <p class="note">${kind === "actuator"
           ? "Appends to control.yaml. The node must already be enrolled, or it won't be commandable."
-          : "Appends to the sensor registry (devices.yaml)."}</p>
-        ${done ? success : form}
+          : "Pick a nearby device below (no pairing — the hub already hears it), name it, and give it a room."}</p>
+        ${done ? html`<${LiveConfirm} deviceId=${done.device_id} onDone=${() => { onSaved(); onClose(); }} />` : form}
       </div>
     </div>`;
 }

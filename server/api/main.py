@@ -32,6 +32,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 
+from server.ingest.discovery import DiscoveryCache, start_subscriber  # BLE 'Add sensor' discovery feed
+
 # ── Config ────────────────────────────────────────────────────────────────────
 
 DB_PATH = Path(os.environ.get("HA_DB", "instance/db/hot.db"))
@@ -162,11 +164,19 @@ async def lifespan(app: FastAPI):
         push_task = asyncio.create_task(_alert_loop())
     else:
         log.info("HA_API_BACKGROUND=0 — background loops disabled in this instance")
+    # Discovery subscriber runs in EVERY instance (read-only, not gated): whichever uvicorn serves a
+    # GET /api/v1/discover must have a populated cache. Best-effort — None if the broker is unreachable.
+    disc_client = start_subscriber(DISCOVERY_CACHE,
+                                   broker=os.environ.get("HA_BROKER", "localhost"),
+                                   port=int(os.environ.get("HA_BROKER_PORT", "1883")))
     try:
         yield
     finally:
         if push_task is not None:
             push_task.cancel()
+        if disc_client is not None:
+            disc_client.loop_stop()
+            disc_client.disconnect()
         log.info("API shutdown")
 
 
@@ -196,6 +206,11 @@ AREAS_YAML = Path(os.environ.get("HA_AREAS", "instance/areas.yaml"))            
 HOUSE_GEOMETRY = Path(os.environ.get("HA_HOUSE_GEOMETRY", "instance/house-geometry.json"))  # room polygons (render source)
 DEVICE_PLACEMENT = Path(os.environ.get("HA_DEVICE_PLACEMENT", "instance/device-placement.yaml"))  # per-device in-room (x,y)
 WEB_DIR = Path(__file__).resolve().parents[1] / "web"   # server/web — the no-build PWA
+
+# Rolling cache of unregistered BLE candidates for the PWA "Add sensor" flow (GET /api/v1/discover).
+# Fed by a best-effort MQTT subscriber started per-instance in the lifespan (read-only, not VIP-gated:
+# both uvicorns serve requests, so each keeps its own cache). See server/ingest/discovery.py.
+DISCOVERY_CACHE = DiscoveryCache()
 
 
 def _make_auth_router(legacy_ok, signing_key):
@@ -290,7 +305,8 @@ def _mount_control(app: FastAPI) -> None:
         app.include_router(make_override_router(api_authz, CONTROL_DB, device_ids=set(registry)))
         app.include_router(make_device_meta_router(api_authz, CONTROL_DB, placement_path=DEVICE_PLACEMENT))   # R8 friendly-name/room/hide + placement
         app.include_router(make_registry_router(api_authz, DEVICES_REGISTRY, CONTROL_REGISTRY,
-                                                 NODE_SECRETS_LUT, master))  # add-device: sensor / actuator / node-enroll
+                                                 NODE_SECRETS_LUT, master,
+                                                 discovery_cache=DISCOVERY_CACHE))  # add-device: discover + sensor/actuator/node-enroll
         app.include_router(make_battery_router(master, NODE_SECRETS_LUT, broker=broker, port=port))  # on-demand SwitchBot battery refresh
         app.state.control_registry = registry      # device_id -> DeviceCtl (traits for manual-control UI)
         # live-reload control.yaml so an actuator RELOCATE (area edit) is reflected in /rooms + /displays

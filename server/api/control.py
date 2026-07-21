@@ -551,8 +551,11 @@ def make_device_meta_router(api_authz, control_db, placement_path=None):
     return router
 
 
-def make_registry_router(api_authz, devices_path, control_path=None, node_secrets_path=None, master=None):
+def make_registry_router(api_authz, devices_path, control_path=None, node_secrets_path=None, master=None,
+                         discovery_cache=None):
     """Admin-gated device registration (the add-device flow, ADR-0002 trait registry):
+      GET  /api/v1/discover         -> unregistered BLE candidates heard nearby (the "see the filtered-out
+                                       data" half of onboarding). Omitted unless discovery_cache is given.
       POST /api/v1/devices          -> append a SENSOR to devices.yaml
       POST /api/v1/control-devices  -> append an ACTUATOR to control.yaml (its command secret is derived
                                        from the owning node's enrolled cmd_secret). Omitted if control_path None.
@@ -564,7 +567,7 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
     from fastapi import APIRouter, Body, Depends, Header, HTTPException
     from fastapi.responses import JSONResponse
 
-    from server.device_registry import handle_add_actuator, handle_add_device, handle_enroll_node
+    from server.device_registry import handle_add_actuator, handle_add_device, handle_enroll_node, load_devices
 
     router = APIRouter(prefix="/api/v1", tags=["devices"])
 
@@ -572,6 +575,15 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
         if api_authz is None or not api_authz(authorization):
             raise HTTPException(status_code=401, detail="unauthorized",
                                 headers={"WWW-Authenticate": "Bearer"})
+
+    if discovery_cache is not None:
+        @router.get("/discover", dependencies=[Depends(require_admin)])
+        async def discover():
+            """Candidates the scanner heard but that aren't registered yet — decoded (model, temp/hum,
+            battery), ranked by signal strength (closest ≈ the one being held to the box). Already-
+            registered MACs are filtered out so a just-added device drops off."""
+            known = load_devices(Path(devices_path))
+            return {"candidates": discovery_cache.candidates(known)}
 
     @router.post("/devices", dependencies=[Depends(require_admin)])
     async def add_device(body: dict = Body(...)):
