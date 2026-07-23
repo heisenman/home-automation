@@ -303,7 +303,8 @@ def _mount_control(app: FastAPI) -> None:
         app.include_router(make_router(issuer, make_confirm_verifier(master), command_authz))
         # the manual-override + control-state router (writes control.db, read by the controller each tick)
         app.include_router(make_override_router(api_authz, CONTROL_DB, device_ids=set(registry)))
-        app.include_router(make_device_meta_router(api_authz, CONTROL_DB, placement_path=DEVICE_PLACEMENT))   # R8 friendly-name/room/hide + placement
+        app.include_router(make_device_meta_router(api_authz, CONTROL_DB, placement_path=DEVICE_PLACEMENT,
+                                                   devices_path=DEVICES_REGISTRY, db_path=DB_PATH))   # R8 friendly-name/room/hide + placement + history check/recover
         app.include_router(make_registry_router(api_authz, DEVICES_REGISTRY, CONTROL_REGISTRY,
                                                  NODE_SECRETS_LUT, master,
                                                  discovery_cache=DISCOVERY_CACHE))  # add-device: discover + sensor/actuator/node-enroll

@@ -1062,6 +1062,33 @@ function MaintResult({ res }) {
       <pre class="mono">${JSON.stringify(res.report || res.job || res, null, 2)}</pre></details></div>`;
 }
 
+// Render the history checker's gap report: a clean "no gaps" line, or the list of holes + whether
+// they're recoverable (the device has an on-board buffer we can pull).
+function HistoryReport({ hist }) {
+  if (!hist) return null;
+  const gaps = hist.gaps || [];
+  const fmt = (iso) => {
+    if (!iso) return "—";
+    const d = new Date(iso), p = (n) => String(n).padStart(2, "0");
+    return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+  };
+  const dur = (m) => (m >= 60 ? `${(m / 60).toFixed(1)}h` : `${Math.round(m)}m`);
+  if (gaps.length === 0) {
+    return html`<p class="note ok">✅ No gaps over ${hist.min_gap_min}min in the last ${hist.lookback_days} days
+      (${hist.reading_count} readings). Last reading ${fmt(hist.last_reading)}.</p>`;
+  }
+  return html`
+    <div class="note">
+      <p>⚠️ ${gaps.length} gap${gaps.length > 1 ? "s" : ""} in the last ${hist.lookback_days} days
+        (biggest ${dur(hist.biggest_gap_min)}). ${hist.recoverable
+          ? html`Recoverable via <b>${hist.recover_via}</b> — its on-board log can be pulled to backfill.`
+          : html`<b>Not recoverable</b> — no on-device buffer for this sensor type.`}</p>
+      <ul class="gap-list">
+        ${gaps.map((g) => html`<li class="mono-id">${fmt(g.start)} → ${fmt(g.end)} · <b>${dur(g.gap_min)}</b></li>`)}
+      </ul>
+    </div>`;
+}
+
 function DeviceMetaModal({ device, areas, onClose, onSaved }) {
   const [name, setName] = useState(device.name || "");
   const [hidden, setHidden] = useState(!!device.hidden);
@@ -1076,6 +1103,12 @@ function DeviceMetaModal({ device, areas, onClose, onSaved }) {
   const [maBusy, setMaBusy] = useState(false);          // one maintenance op at a time
   const [maErr, setMaErr] = useState("");
   const [maRes, setMaRes] = useState(null);
+  // ── History: gap check + on-demand recovery (reuses the nightly gap-watcher's scan + backfill) ──
+  const [hcBusy, setHcBusy] = useState(false);
+  const [hist, setHist] = useState(null);               // last gap report from the checker
+  const [hrBusy, setHrBusy] = useState(false);
+  const [hrMsg, setHrMsg] = useState("");
+  const [histErr, setHistErr] = useState("");
   const metrics = GRAPHABLE.filter((g) => device.metrics && device.metrics[g.key] != null);
   const id = encodeURIComponent(device.device_id);
   const save = async () => {
@@ -1112,6 +1145,26 @@ function DeviceMetaModal({ device, areas, onClose, onSaved }) {
     } catch (e) { setMaErr(String(e.message)); }
     finally { setMaBusy(false); }
   };
+  // History checker (read-only gap scan) + recovery (fire the type-appropriate on-board history pull,
+  // then re-check so the closed gap is the proof — matches how the recover endpoint is designed).
+  const checkHistory = async () => {
+    setHcBusy(true); setHistErr(""); setHrMsg("");
+    try { setHist(await adminSend("GET", `/api/v1/devices/${id}/history/gaps`)); }
+    catch (e) { setHistErr(String(e.message)); }
+    finally { setHcBusy(false); }
+  };
+  const recoverHistory = async () => {
+    setHrBusy(true); setHistErr(""); setHrMsg("");
+    try {
+      const res = await adminSend("POST", `/api/v1/devices/${id}/history/recover`, {});
+      if (res.status === "no_route") { setHrMsg(res.note || "No recovery route for this device type."); return; }
+      setHrMsg(`Recovery started via ${res.via}${res.node ? ` (${res.node})` : ""} — re-checking in 45s…`);
+      await new Promise((r) => setTimeout(r, 45000));
+      await checkHistory();
+      setHrMsg(`Recovery via ${res.via} dispatched — gap list refreshed above. Re-check again if a hole remains.`);
+    } catch (e) { setHistErr(String(e.message)); }
+    finally { setHrBusy(false); }
+  };
   const areaChanged = relArea.trim() && relArea.trim() !== (device.area || "");
   const idChanged = newId.trim() && newId.trim() !== device.device_id;
   return html`
@@ -1147,6 +1200,20 @@ function DeviceMetaModal({ device, areas, onClose, onSaved }) {
           <button class="btn ghost" onClick=${onClose}>Cancel</button>
           <button class="btn primary" disabled=${busy} onClick=${save}>${busy ? "Saving…" : "Save"}</button>
         </div>
+
+        <div class="divider"></div>
+        <h4 class="scope-hd">History <span class="scope-sub">· stored data — check &amp; recover gaps</span></h4>
+        <p class="note">Scans the last 3 days for windows with no readings (e.g. after a power outage). If the
+          device buffers history on-board (SwitchBot meters, Aranet), <b>Recover</b> pulls it to backfill the
+          hole — idempotent, safe to re-run.</p>
+        <div class="modal-actions" style=${{ justifyContent: "flex-start" }}>
+          <button class="btn ghost" disabled=${hcBusy} onClick=${checkHistory}>${hcBusy ? "Checking…" : "Check history"}</button>
+          ${hist && hist.recoverable && (hist.gaps || []).length > 0 && html`
+            <button class="btn primary" disabled=${hrBusy} onClick=${recoverHistory}>${hrBusy ? "Recovering…" : "Recover history"}</button>`}
+        </div>
+        <${HistoryReport} hist=${hist} />
+        ${hrMsg && html`<p class="note ok">${hrMsg}</p>`}
+        ${histErr && html`<div class="err">${histErr}</div>`}
 
         <div class="divider"></div>
         <h4 class="scope-hd">Location &amp; identity <span class="scope-sub">· canonical — changes stored data</span></h4>

@@ -157,6 +157,8 @@ body {
   color: var(--txt); }
 .scope-sub { text-transform: none; letter-spacing: 0; font-weight: 400; color: var(--muted); font-size: 12px; }
 .mono-id { font-family: ui-monospace, Menlo, monospace; }
+.gap-list { margin: 4px 0 0; padding-left: 18px; }
+.gap-list li { font-size: 12px; margin: 2px 0; color: var(--txt); }
 details.advanced { margin-top: 10px; }
 details.advanced > summary { color: var(--muted); font-size: 13px; padding: 4px 0; }
 .field-block.danger { border-left: 2px solid var(--bad); padding-left: 10px; margin-top: 8px; }

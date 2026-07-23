@@ -405,6 +405,103 @@ def handle_device_rename(device_id: str, body: dict[str, Any]) -> tuple[int, dic
     return _maintain("rename", device_id, body)
 
 
+# ── history gap check + recovery (reuses the daily gap-watcher's scan + backfill routing) ─────────
+_GAP_MOD = None
+
+
+def _gap_watcher():
+    """Lazy-import tools/gap_watcher.py (not a package) once. It owns the gap scan + per-device-type
+    backfill routing/dispatch used by the nightly ha-gap-watcher timer — we reuse it verbatim so the
+    on-demand path can never drift from the scheduled one."""
+    global _GAP_MOD
+    if _GAP_MOD is None:
+        import importlib.util
+        from pathlib import Path
+        gw = Path(__file__).resolve().parents[2] / "tools" / "gap_watcher.py"
+        spec = importlib.util.spec_from_file_location("ha_gap_watcher", gw)
+        mod = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(mod)
+        _GAP_MOD = mod
+    return _GAP_MOD
+
+
+def _load_registry_device(devices_path, device_id: str):
+    """Return ``(mac, info)`` for ``device_id`` from the sensor registry, or ``(None, None)``.
+    ``info`` carries device_type/area/backfill — everything the routing + dispatch need."""
+    import yaml
+    reg = (yaml.safe_load(open(devices_path).read()) or {}).get("devices", {}) if devices_path else {}
+    for mac, info in reg.items():
+        if (info or {}).get("device_id") == device_id:
+            return mac, info
+    return None, None
+
+
+def handle_history_gaps(device_id: str, devices_path, db_path,
+                        lookback_days: int = 3, min_gap_min: float = 20.0) -> tuple[int, dict]:
+    """Read-only history checker. Scans the last ``lookback_days`` of ``hot.db`` for windows with no
+    readings longer than ``min_gap_min`` and reports them, plus whether a recovery route exists for this
+    device's type. Pure read — touches nothing."""
+    import datetime
+    import sqlite3
+    gw = _gap_watcher()
+    mac, info = _load_registry_device(devices_path, device_id)
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    try:
+        gaps, n = gw.device_gaps(conn, device_id, lookback_days, min_gap_min * 60.0)
+        last = conn.execute("SELECT MAX(ts) FROM readings WHERE device_id=?", (device_id,)).fetchone()[0]
+    finally:
+        conn.close()
+
+    def _iso(epoch):
+        return datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    plan = gw.backfill_plan(info) if info else None
+    out_gaps = [{"start": _iso(a), "end": _iso(b), "gap_min": round(s / 60.0, 1)} for a, b, s in gaps]
+    return 200, {
+        "status": "ok",
+        "device_id": device_id,
+        "known": info is not None,
+        "lookback_days": lookback_days,
+        "min_gap_min": min_gap_min,
+        "reading_count": n,
+        "last_reading": last,
+        "gaps": out_gaps,
+        "biggest_gap_min": max((g["gap_min"] for g in out_gaps), default=0),
+        "recoverable": plan is not None,
+        "recover_via": (plan or {}).get("via"),
+    }
+
+
+def handle_history_recover(device_id: str, devices_path, db_path,
+                           body: dict[str, Any] | None = None) -> tuple[int, dict]:
+    """Fire a type-appropriate history backfill for one device (edge GATT-pull / server pull / aranet).
+    Fire-and-forget: the pull runs in a background thread and lands rows via the normal idempotent
+    (INSERT OR IGNORE) path, so re-clicking is harmless. The real confirmation is re-running the checker
+    and seeing the gap close — that's what the UI does."""
+    import threading
+    gw = _gap_watcher()
+    mac, info = _load_registry_device(devices_path, device_id)
+    if info is None or not mac:
+        return 404, {"status": "unknown-device", "device_id": device_id,
+                     "reason": "no registry entry (needs a MAC to pull history)"}
+    plan = gw.backfill_plan(info)
+    if not plan:
+        return 200, {"status": "no_route", "device_id": device_id,
+                     "device_type": info.get("device_type"),
+                     "note": "no history-recovery route for this device type — its readings aren't "
+                             "buffered on-device (e.g. gas/plug streams), so a gap can't be backfilled."}
+    threading.Thread(target=gw.dispatch, args=(mac, info, plan, False), daemon=True).start()
+    return 202, {
+        "status": "launched",
+        "device_id": device_id,
+        "via": plan["via"],
+        "node": plan.get("node"),
+        "profile": plan.get("profile"),
+        "note": "history pull started — re-check in ~30–60s to confirm the gap closed. "
+                "Idempotent: safe to run again.",
+    }
+
+
 def handle_device_placement(device_id: str, body: dict[str, Any], placement_path) -> tuple[int, dict]:
     """Upsert a device's in-room placement for the spatial room-zoom (map arc 3). Body ``{x, y, anchor?}``:
     ``x,y`` normalized to the room bbox, a number in [0,1] or ``null`` (not captured); ``anchor`` one of
@@ -462,8 +559,11 @@ def make_battery_router(master, node_secrets_lut, broker="localhost", port=1883)
     return router
 
 
-def make_device_meta_router(api_authz, control_db, placement_path=None):
-    """Admin-gated device overlay editor (prefix /api/v1/devices). Works for any device (sensors too)."""
+def make_device_meta_router(api_authz, control_db, placement_path=None, devices_path=None, db_path=None):
+    """Admin-gated device overlay editor (prefix /api/v1/devices). Works for any device (sensors too).
+    ``devices_path``/``db_path`` enable the history checker + recovery endpoints (registry MAC lookup +
+    hot.db gap scan); omit them and those two routes are simply not mounted."""
+    import os
     import sqlite3
 
     from fastapi import APIRouter, Body, Depends, Header, HTTPException
@@ -537,6 +637,21 @@ def make_device_meta_router(api_authz, control_db, placement_path=None):
         finally:
             c.close()
         return JSONResponse(status_code=code, content=payload)
+
+    if devices_path is not None:
+        _db = db_path or os.environ.get("HA_DB", "instance/db/hot.db")
+
+        @router.get("/{device_id}/history/gaps", dependencies=[Depends(require_admin)])
+        async def get_history_gaps(device_id: str, lookback_days: int = 3, min_gap_min: float = 20.0):
+            from starlette.concurrency import run_in_threadpool
+            code, payload = await run_in_threadpool(
+                handle_history_gaps, device_id, devices_path, _db, lookback_days, min_gap_min)
+            return JSONResponse(status_code=code, content=payload)
+
+        @router.post("/{device_id}/history/recover", dependencies=[Depends(require_admin)])
+        async def post_history_recover(device_id: str, body: dict = Body(default={})):
+            code, payload = handle_history_recover(device_id, devices_path, _db, body)
+            return JSONResponse(status_code=code, content=payload)
 
     @router.get("/meta")            # open read: hidden devices (to un-hide) + calibration offsets
     async def get_all_meta():
