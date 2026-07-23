@@ -1062,6 +1062,12 @@ function MaintResult({ res }) {
       <pre class="mono">${JSON.stringify(res.report || res.job || res, null, 2)}</pre></details></div>`;
 }
 
+// Recover is gated OFF until the on-device SwitchBot history-protocol DECODE is finished: a live prod
+// pull connects to the meter and streams notifications but the reassembly yields no anchored samples
+// (meta count>0 but newest=0/oldest=0 — see docs/switchbot-ble-history-protocol.md). The /history/recover
+// endpoint stays mounted (dormant) so flipping this to true ships the button once the decode lands.
+const RECOVER_ENABLED = false;
+
 // Render the history checker's gap report: a clean "no gaps" line, or the list of holes + whether
 // they're recoverable (the device has an on-board buffer we can pull).
 function HistoryReport({ hist }) {
@@ -1203,12 +1209,12 @@ function DeviceMetaModal({ device, areas, onClose, onSaved }) {
 
         <div class="divider"></div>
         <h4 class="scope-hd">History <span class="scope-sub">· stored data — check &amp; recover gaps</span></h4>
-        <p class="note">Scans the last 3 days for windows with no readings (e.g. after a power outage). If the
-          device buffers history on-board (SwitchBot meters, Aranet), <b>Recover</b> pulls it to backfill the
-          hole — idempotent, safe to re-run.</p>
+        <p class="note">Scans the last 3 days for windows with no readings (e.g. after a power outage) and
+          flags whether the device buffers history on-board, so a gap could be backfilled once on-demand
+          recovery is enabled.${RECOVER_ENABLED ? " Recover pulls that on-board log to fill the hole — idempotent, safe to re-run." : ""}</p>
         <div class="modal-actions" style=${{ justifyContent: "flex-start" }}>
           <button class="btn ghost" disabled=${hcBusy} onClick=${checkHistory}>${hcBusy ? "Checking…" : "Check history"}</button>
-          ${hist && hist.recoverable && (hist.gaps || []).length > 0 && html`
+          ${RECOVER_ENABLED && hist && hist.recoverable && (hist.gaps || []).length > 0 && html`
             <button class="btn primary" disabled=${hrBusy} onClick=${recoverHistory}>${hrBusy ? "Recovering…" : "Recover history"}</button>`}
         </div>
         <${HistoryReport} hist=${hist} />
