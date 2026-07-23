@@ -66,3 +66,32 @@ captures (Meter Pro = `meter_pro_master_bed`; Outdoor = `meter_living_room`).
 
 `tools/switchbot_history.py` picks the profile from device_type (`*outdoor*` → outdoor).
 Same `decode_meter_pro()` + `assign_timestamps()` for both.
+
+## ⚠️ DEAD-END — live edge pull returns no anchored samples (2026-07-23)
+
+Status as of 2026-07-23: **history recovery does NOT work end-to-end on the live edge fleet.** A
+correctly-signed `op:history` fired at a co-located C6 node (prod: `coffice_c6` → `meter_pro_c_office`,
+firmware `v20-battfix`) was observed on the node log (`home/edge/<node>/log`):
+
+```
+pull …: connecting (addr_type=0, profile=meter_pro)
+connect status=0                 ← GATT connect OK
+discovered: cmd=19 notify=16     ← SwitchBot svc found
+notif[15]=016a0434096a37405100006ce80078   ← notifications DO stream
+meta try 0: count=2 newest=0 oldest=0      ← but metadata reads ZERO records
+meta try 1: count=4 newest=0 oldest=0
+```
+
+So the node **connects and streams**, but the on-device metadata reassembly yields `newest=0 oldest=0`
+→ no records to page → nothing decoded → nothing ingested (the outage gap did NOT fill).
+
+**Ruled out this session:** clock-skew (firmware `history` freshness window is 300s vs 86400s for
+`batt_refresh`/`ota`, but the node *accepted and acted on* the command — not a `stale` reject); routing
+(co-located node, `connect status=0`); signing (LUT `cmd_secret` verified, node acted). The failure is in
+the **metadata/record decode** — the `count>0 newest=0 oldest=0` path — i.e. the handshake/metadata step
+above (plan steps 3–4) does not actually surface the ring-buffer indices on this firmware. The prior
+"confirmed against captures" was an **offline btsnoop decode**, never a proven live device→hot.db pull.
+
+**Next:** capture a fresh live btsnoop of the metadata exchange on `v20-battfix`, compare against the
+offline capture the profiles were derived from, and fix the on-device index read. Until then recover stays
+gated (`RECOVER_ENABLED=false`). Tracked: `docs/FOLLOWUPS.md` (2026-07-23) + memory `edge-history-pull-broken`.

@@ -7,6 +7,30 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## ⚠️ 2026-07-23 — history RECOVERY (backfill) is non-functional; PWA checker shipped, recover gated
+
+Prompted by the 2026-07-22 power outage (2h8m meter gap, 21:52→00:00Z). The PWA per-device editor now has a
+**history gap CHECKER** (`GET /api/v1/devices/{id}/history/gaps`, shipped `7a512e6`, deployed ha-2, verified
+live). The **fill/recover** half is built (`POST …/history/recover`, mounted) but the **button is gated OFF**
+(`RECOVER_ENABLED=false` in `server/web/app.js`) because the underlying pull does not land data. Two problems:
+
+- **① On-device SwitchBot history decode is unfinished (the real blocker).** A correctly-signed `op:history`
+  fired at a co-located node on prod CONNECTS + streams GATT notifications but reassembly yields
+  `meta: count>0, newest=0, oldest=0` → zero anchored samples ingested. Ruled out skew (firmware accepted the
+  cmd), routing, and signing. See dead-end notes in `docs/switchbot-ble-history-protocol.md`. Fixing this is
+  firmware/decode R&D, not config. Aranet radon is the exception (real `aranet4` lib) and may work with a BLE
+  central in range — untested.
+- **② Nightly `ha-gap-watcher` is a silent no-op for edge routes.** `instance/gap-watcher.env` does not exist on
+  EITHER box → `HA_CMD_SECRET` unset → `edge_pull_history.py` can't sign → `gap_watcher.dispatch` swallows the
+  failure (`subprocess.run(check=False)`) and the timer exits 0. So BLE meters have effectively never been
+  auto-recovered. (server/aranet routes would sign; meters route via edge.)
+
+**To ship recover (in order):** (a) finish the SwitchBot history decode/anchoring so a live pull produces
+timestamped samples; (b) wire recover to sign per-target-node via the node-secrets LUT (mirror
+`server/mesh/battery_refresh.py`, NOT shell `edge_pull_history.py` which needs `HA_CMD_SECRET` in env); (c) add
+`instance/gap-watcher.env` so the nightly sweep signs; (d) note routing is partial — only ~6/12 meters have a
+co-located live C6/S3 node in GATT range. Then flip `RECOVER_ENABLED=true`. Board task: `history-pull-decode`.
+
 ## 2026-07-10 — ADR-0034 device object model (Node/Ability/Entity) + `model_project.py`
 
 **Landed:** ADR-0034 (`99f22ce`) names the object-model spine — **Node** (physical unit / transport plane) *hosts*
