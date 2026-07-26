@@ -109,9 +109,18 @@ void app_main(void) {
     ha_sntp_start_periodic(30 * 60 * 1000);   // re-sync every 30 min (the C6 RTC drifts fast)
 
     ha_relay_init();                // load the persisted Phase-B coverage allowlist (default: relay-all)
+    // ADR-0036 intake: advertise the soldered gas sensor's device_type so the server can surface this node
+    // as a standby-hardware candidate in the PWA. Matches the compile-select below (secrets.h).
+#if defined(HA_GAS_SGP30)
+    const char *node_abilities = "sgp30_gas";
+#elif defined(HA_GAS_BME680)
+    const char *node_abilities = "bme680_gas";
+#else
+    const char *node_abilities = "sgp40_gas";
+#endif
     ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = HA_CMD_SECRET, .ota_host = cfg.ota_host,
         .mqtt_user = HA_MQTT_USER, .mqtt_pass = HA_MQTT_PASS, .fw_version = HA_FW_VERSION,
-        .enable_reach = true });
+        .abilities = node_abilities, .enable_reach = true });
     ha_mqtt_start(cfg.broker_uri, cfg.node_id);
     ha_ble_scan_cfg_t scan_cfg = {
         .controller_init = NULL,          // native controller (nimble_port_init brings it up)

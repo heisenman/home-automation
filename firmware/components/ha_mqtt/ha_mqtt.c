@@ -17,6 +17,8 @@
 #include "mqtt_client.h"
 #include "esp_log.h"
 #include "esp_ota_ops.h"
+#include "esp_chip_info.h"      // ADR-0036 hello: chip model → "esp32c6"/"esp32s3"/…
+#include "esp_mac.h"            // ADR-0036 hello: base MAC for the self-describing identity doc
 #include "cJSON.h"
 #include <time.h>
 #include "mbedtls/md.h"
@@ -32,6 +34,8 @@ static char s_cmd_topic[64];
 static char s_relay_topic[64];        // home/edge/<node>/relay — signed Phase-B coverage directives
 static char s_reach_req_topic[64];    // home/edge/<node>/reach/req — signed census trigger (ADR-0023)
 static char s_online_msg[64];     // "online <slot> <fwver>" — shows which OTA slot/version is running
+static char s_hello_topic[64];    // home/edge/<node>/hello — ADR-0036 retained self-describing identity
+static char s_hello_msg[256];     // the identity JSON, built once at start, published retained on connect
 static volatile bool s_connected;
 
 void ha_mqtt_init(const ha_mqtt_cfg_t *cfg) { if (cfg) s_cfg = *cfg; }
@@ -248,6 +252,8 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
             ESP_LOGI(TAG, "connected");
             if (s_cfg.on_connected) s_cfg.on_connected(s_cfg.user);
             esp_mqtt_client_publish(s_client, s_status_topic, s_online_msg, 0, 1, true);
+            if (s_hello_msg[0])   // ADR-0036: retained self-describing identity for PWA intake discovery
+                esp_mqtt_client_publish(s_client, s_hello_topic, s_hello_msg, 0, 1, true);
             esp_mqtt_client_subscribe(s_client, s_cmd_topic, 1);
             esp_mqtt_client_subscribe(s_client, s_relay_topic, 1);   // Phase B coverage directives (retained)
             if (s_cfg.enable_reach)
@@ -286,6 +292,54 @@ static void edge_ota_radio_pause(void *user) { (void)user; ha_ble_scan_pause(); 
 static void edge_ota_radio_resume(void *user) { (void)user; ha_ble_scan_resume(); }
 static void edge_ota_on_fail(void *user) { if (s_cfg.ota_on_fail) s_cfg.ota_on_fail(s_cfg.user); }
 
+// ADR-0036 intake: map the runtime chip model to the target string the server keys on.
+static const char *chip_model_str(esp_chip_model_t m) {
+    switch (m) {
+        case CHIP_ESP32C6: return "esp32c6";
+        case CHIP_ESP32S3: return "esp32s3";
+        case CHIP_ESP32C3: return "esp32c3";
+        case CHIP_ESP32:   return "esp32";
+        default:           return "esp32?";
+    }
+}
+
+// Build the retained self-describing identity doc for home/edge/<node>/hello — identity ONLY (never the
+// secret). node/chip/mac/fw/slot let the server surface this unit as an intake candidate; abilities is the
+// comma-list from the board (app_main) rendered as a JSON array. Called once from ha_mqtt_start.
+static void build_hello(const esp_partition_t *run) {
+    esp_chip_info_t ci; esp_chip_info(&ci);
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char macbuf[18];
+    snprintf(macbuf, sizeof(macbuf), "%02x:%02x:%02x:%02x:%02x:%02x",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    cJSON *root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "schema", 1);
+    cJSON_AddStringToObject(root, "node", s_node);
+    cJSON_AddStringToObject(root, "chip", chip_model_str(ci.model));
+    cJSON_AddStringToObject(root, "mac", macbuf);
+    cJSON_AddStringToObject(root, "fw", s_cfg.fw_version ? s_cfg.fw_version : "?");
+    cJSON_AddStringToObject(root, "slot", run ? run->label : "?");
+    // enrolled = does this node hold a usable command secret yet? (Layer-0 self-provision flips this true
+    // once claimed; today it just mirrors the compiled secret so the server can flag un-adopted hardware.)
+    cJSON_AddBoolToObject(root, "enrolled", ha_mqtt_has_cmd_secret());
+    cJSON *abil = cJSON_CreateArray();
+    if (s_cfg.abilities && s_cfg.abilities[0]) {
+        char tmp[128];
+        snprintf(tmp, sizeof(tmp), "%s", s_cfg.abilities);
+        for (char *save = NULL, *tok = strtok_r(tmp, ",", &save); tok; tok = strtok_r(NULL, ",", &save)) {
+            while (*tok == ' ') tok++;                       // trim leading spaces
+            if (*tok) cJSON_AddItemToArray(abil, cJSON_CreateString(tok));
+        }
+    }
+    cJSON_AddItemToObject(root, "abilities", abil);
+
+    char *s = cJSON_PrintUnformatted(root);
+    if (s) { snprintf(s_hello_msg, sizeof(s_hello_msg), "%s", s); cJSON_free(s); }
+    cJSON_Delete(root);
+}
+
 void ha_mqtt_start(const char *broker_uri, const char *node_id) {
     ha_gatt_init(&(ha_gatt_cfg_t){ .publish = edge_gatt_publish, .log = edge_gatt_log });
     ha_gatt_exec_init(&(ha_gatt_exec_cfg_t){ .publish_reply = edge_exec_reply, .log = edge_gatt_log });
@@ -297,9 +351,11 @@ void ha_mqtt_start(const char *broker_uri, const char *node_id) {
     snprintf(s_cmd_topic, sizeof(s_cmd_topic), "home/edge/%s/cmd", s_node);
     snprintf(s_relay_topic, sizeof(s_relay_topic), "home/edge/%s/relay", s_node);
     snprintf(s_reach_req_topic, sizeof(s_reach_req_topic), "home/edge/%s/reach/req", s_node);
+    snprintf(s_hello_topic, sizeof(s_hello_topic), "home/edge/%s/hello", s_node);
     const esp_partition_t *run = esp_ota_get_running_partition();
     snprintf(s_online_msg, sizeof(s_online_msg), "online %s %s", run ? run->label : "?",
              s_cfg.fw_version ? s_cfg.fw_version : "?");
+    build_hello(run);   // ADR-0036: compose the retained identity doc once (published on each connect)
 
     esp_mqtt_client_config_t cfg = {
         .broker.address.uri = broker_uri,

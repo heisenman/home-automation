@@ -129,6 +129,9 @@ void app_main(void) {
     // before ha_mqtt_start. LED hooks are S3-specific; reach is wired on this node.
     ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = HA_CMD_SECRET, .ota_host = cfg.ota_host,
         .mqtt_user = HA_MQTT_USER, .mqtt_pass = HA_MQTT_PASS, .fw_version = HA_FW_VERSION,
+        // ADR-0036 intake: S3-ETH compiles SGP40 unconditionally (gas_kitchen on the wired node); advertise it
+        // so the hello identity is complete. Nodes with no physical sensor still carry the manifest's tag.
+        .abilities = "sgp40_gas",
         .enable_reach = true, .on_connected = s3_led_ok, .on_disconnected = s3_led_mqtt_down,
         .ota_on_fail = s3_led_ota_fail });
 

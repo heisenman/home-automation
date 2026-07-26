@@ -14,6 +14,8 @@ typedef struct {
     const char *mqtt_user;     // HA_MQTT_USER — "" ⇒ anonymous (latent until broker-auth cutover)
     const char *mqtt_pass;     // HA_MQTT_PASS
     const char *fw_version;    // HA_FW_VERSION — human tag in the "online <slot> <ver>" status message
+    const char *abilities;     // ADR-0036 intake: comma-list of device_types this node offers (e.g.
+                               // "bme680_gas"); emitted as a JSON array in the retained hello. NULL/"" ⇒ [].
     bool enable_reach;         // ADR-0023 mesh reach census — false on nodes that don't wire ha_reach
     void (*on_connected)(void *user);      // MQTT connected (S3: LED = OK). NULL ⇒ no-op.
     void (*on_disconnected)(void *user);   // MQTT dropped   (S3: LED = MQTT_DOWN). NULL ⇒ no-op.
