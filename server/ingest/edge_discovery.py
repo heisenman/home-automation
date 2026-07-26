@@ -31,6 +31,7 @@ log = logging.getLogger("ha.ingest.edge_discovery")
 REPO = Path(__file__).resolve().parents[2]
 MANIFESTS = [REPO / "edge" / "esp32c6" / "nodes.yaml",
              REPO / "edge" / "esp32s3-eth" / "nodes.yaml"]
+REGISTRY = REPO / "instance" / "devices.yaml"   # live placement truth (relocate updates it) — see load_registry_areas
 
 HELLO_TOPIC = "home/edge/+/hello"
 STATUS_TOPIC = "home/edge/+/status"
@@ -65,6 +66,26 @@ def load_manifest() -> dict:
         for nid, rec in (raw.get("nodes") or {}).items():
             if isinstance(rec, dict):
                 out[nid] = rec
+    return out
+
+
+def load_registry_areas() -> dict:
+    """node_id -> assigned area from the LIVE device registry (instance/devices.yaml). This is the source of
+    truth for placement (relocate updates it) and, unlike the build-time manifest, it can't drift on an
+    air-gapped box — so it's the PRIMARY 'is this node already placed?' signal. A node with a gas device in a
+    real room here is excluded from intake, which prevents a stale manifest from surfacing a live sensor as
+    'adoptable' (and thus a mis-click relocating it)."""
+    out: dict = {}
+    try:
+        import yaml
+        reg = (yaml.safe_load(REGISTRY.read_text()) or {}).get("devices", {})
+    except Exception:
+        log.debug("edge_discovery: device registry unreadable — placement cross-check disabled", exc_info=True)
+        return out
+    for info in reg.values():
+        nid, area = (info or {}).get("node_id"), (info or {}).get("area")
+        if nid and area and nid not in out:
+            out[nid] = area
     return out
 
 
@@ -120,11 +141,13 @@ class EdgeDiscoveryCache:
                 row.setdefault("slot", parts[1])
                 row.setdefault("fw", parts[2])
 
-    def candidates(self, *, manifest: dict | None = None, now: float | None = None) -> list[dict]:
+    def candidates(self, *, manifest: dict | None = None, registry_areas: dict | None = None,
+                   now: float | None = None) -> list[dict]:
         """Online, not-yet-placed edge nodes, annotated for the UI. Identity is merged from the manifest
         where `hello` didn't provide it. Newest-heard first."""
         now = time.time() if now is None else now
         manifest = load_manifest() if manifest is None else manifest
+        registry_areas = load_registry_areas() if registry_areas is None else registry_areas
         out: list[dict] = []
         with self._lock:
             # housekeeping: drop long-offline rows so the map doesn't grow unbounded
@@ -139,9 +162,20 @@ class EdgeDiscoveryCache:
             node = row["node"]
             man = manifest.get(node, {})
             area = str(man.get("area") or "").strip().lower()
-            unassigned = (node not in manifest) or (area in UNASSIGNED_AREAS)
-            if not unassigned:
+            reg_area = str(registry_areas.get(node, "")).strip().lower()
+            # PLACED if EITHER the live registry OR the manifest puts it in a real room. The registry is the
+            # primary signal (can't drift on the air-gapped box); the manifest is the fallback for nodes with
+            # no device record yet. A node surfaces for intake only if NEITHER places it.
+            placed = (reg_area and reg_area not in UNASSIGNED_AREAS) or \
+                     (node in manifest and area and area not in UNASSIGNED_AREAS)
+            if placed:
                 continue                        # already placed in a real room — not an intake candidate
+            # Only surface nodes we can actually intake: one bound to a device we can relocate (in the
+            # registry), or one self-describing via hello (a fresh unit worth adopting). Without this a
+            # placed-elsewhere relay with no gas device AND a stale/missing manifest entry would show up as
+            # spurious "standby hardware" (harmless — intake 404s — but confusing).
+            if node not in registry_areas and not row.get("abilities"):
+                continue
 
             item = dict(row)
             # fill identity from the manifest for pre-hello firmware (hello values win — setdefault)
