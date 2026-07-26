@@ -175,14 +175,39 @@ def build_alerts(sensors: list[dict], displays: list[dict], now: float) -> list[
     return out
 
 
+_AREA_META_CACHE = None
+
+
+def _area_meta() -> dict:
+    """{area: {zone, level}} from instance/areas.yaml (ADR-0026) — for proximity tiering. Cached; a
+    restart (or registry reload) refreshes it. Empty on any error → falls back to house-wide search."""
+    global _AREA_META_CACHE
+    if _AREA_META_CACHE is None:
+        try:
+            import os
+            import yaml
+            with open(os.environ.get("HA_AREAS", "instance/areas.yaml")) as f:
+                d = yaml.safe_load(f) or {}
+            _AREA_META_CACHE = {k: {"zone": (v or {}).get("zone"), "level": (v or {}).get("level")}
+                                for k, v in (d.get("areas") or {}).items()}
+        except Exception:
+            _AREA_META_CACHE = {}
+    return _AREA_META_CACHE
+
+
 def _resolve_ambient_ref(gas: dict, devices: list[dict]) -> dict | None:
-    """Auto-pick the reference T/H sensor for a self-heated gas node — the SYSTEM's own guess, NO config:
-    the nearest reliable same-room sensor that reports both temperature + humidity and isn't itself a
-    (self-heated) gas node. Prefers a 'pro' meter, then the freshest. Same area is the proximity proxy."""
-    area = gas.get("area")
-    best = None
+    """Auto-pick the reference T/H sensor for a self-heated gas node — the SYSTEM's own guess, NO config.
+    Prefers the SAME room; if the room has no reliable T/H meter (e.g. a closet), it WIDENS by proximity —
+    same zone, then same floor, then house-wide — so a meter-less room still gets a real ambient humidity
+    instead of none (the gas node's own T/RH are self-heated and never used). Within the closest available
+    tier: prefers a 'pro' meter, then the freshest reading."""
+    am = _area_meta()
+    g_area = gas.get("area")
+    gm = am.get(g_area) or {}
+    g_zone, g_level = gm.get("zone"), gm.get("level")
+    best = None                                                # (tier, pro_rank), ts, device — lower is closer
     for d in devices:
-        if d is gas or d.get("area") != area:
+        if d is gas:
             continue
         dt = (d.get("device_type") or "").lower()
         if "gas" in dt or "bme680" in dt:                     # skip self-heated / gas nodes
@@ -190,10 +215,21 @@ def _resolve_ambient_ref(gas: dict, devices: list[dict]) -> dict | None:
         dm = d.get("metrics") or {}
         if dm.get("humidity_pct") is None or dm.get("temperature_c") is None:
             continue
-        score = (1 if "pro" in d.get("device_id", "") else 0, d.get("ts") or "")
-        if best is None or score > best[0]:
-            best = (score, d)
-    return best[1] if best else None
+        d_area = d.get("area")
+        dmeta = am.get(d_area) or {}
+        if d_area == g_area:
+            tier = 0                                          # same room
+        elif g_zone and dmeta.get("zone") == g_zone:
+            tier = 1                                          # same zone (e.g. suite)
+        elif g_level and dmeta.get("level") == g_level:
+            tier = 2                                          # same floor
+        else:
+            tier = 3                                          # anywhere in the house
+        key = (tier, 0 if "pro" in d.get("device_id", "") else 1)
+        ts = d.get("ts") or ""
+        if best is None or key < best[0] or (key == best[0] and ts > best[1]):
+            best = (key, ts, d)
+    return best[2] if best else None
 
 
 def _gas_baseline(hot_conn, device_id: str):
