@@ -1350,6 +1350,7 @@ function AddDeviceModal({ onClose, onSaved }) {
   const [edgeCands, setEdgeCands] = useState(null);  // ADR-0036: online-but-unassigned edge NODES (standby hw)
   const [edgePick, setEdgePick] = useState(null);    // the standby node chosen for adoption
   const [edgeArea, setEdgeArea] = useState("");
+  const [edgeName, setEdgeName] = useState("");       // optional rename-on-adopt (fired AFTER the relocate)
   const [edgeBusy, setEdgeBusy] = useState(false);
   const [edgeErr, setEdgeErr] = useState("");
   const [edgeDone, setEdgeDone] = useState(null);
@@ -1427,6 +1428,14 @@ function AddDeviceModal({ onClose, onSaved }) {
     setEdgeBusy(true); setEdgeErr("");
     try {
       const r = await adminSend("POST", `/api/v1/edge-nodes/${edgePick.node}/intake`, { area: edgeArea.trim() });
+      // Optional rename-on-adopt: the intake relocate is async/detached, so the rename is a SEPARATE
+      // follow-up request (as the backend intends) — never chained server-side. Best-effort; if it races the
+      // relocate you can still rename via the pencil. new_id must be [a-z0-9_]+.
+      const nm = edgeName.trim();
+      if (nm && r && r.device_id) {
+        try { await adminSend("POST", `/api/v1/devices/${r.device_id}/rename`, { new_id: nm }); r.renamed_to = nm; }
+        catch (e2) { r.rename_error = String(e2.message); }
+      }
       setEdgeDone(r);
     } catch (e) { setEdgeErr(String(e.message)); }
     setEdgeBusy(false);
@@ -1451,11 +1460,14 @@ function AddDeviceModal({ onClose, onSaved }) {
       ${edgePick && html`
         <div class="edge-adopt">
           ${areaSelect(edgeArea, setEdgeArea, edgeAreaManual, setEdgeAreaManual, "new area slug — e.g. living_room")}
+          <input value=${edgeName} placeholder="rename to (optional) — e.g. gas_office [a-z0-9_]"
+            onInput=${(e) => setEdgeName(e.target.value.trim())} />
           <button class="btn primary sm" disabled=${edgeBusy || !edgeArea.trim()} onClick=${adoptNode}>
             ${edgeBusy ? "Adopting…" : `Adopt ${edgePick.node}${edgeArea ? " → " + edgeArea : ""}`}</button>
           ${edgeErr && html`<p class="err sm">${edgeErr}</p>`}
           ${edgeDone && html`<p class="note sm">✓ ${edgeDone.node} adopting into <b>${edgeDone.area}</b>
-            (device ${edgeDone.device_id}). The fleet restarts to pick it up — give it a moment.</p>`}
+            (device ${edgeDone.renamed_to || edgeDone.device_id}). The fleet restarts to pick it up — give it a moment.
+            ${edgeDone.rename_error && html`<br/><span class="err">rename deferred (${edgeDone.rename_error}) — use the pencil once it settles.</span>`}</p>`}
         </div>`}
     </div>`;
 
