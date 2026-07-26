@@ -54,6 +54,10 @@ static const uint8_t HANDSHAKE_PREFIX[] = {0x57,0x00,0x05,0x03,0x04,0x00,0x00,0x
                              // metadata captures (Δaddr 56 / Δts 3369s). Used to synthesize oldest_ts so
                              // the server's assign_timestamps gets a consistent interval; reanchor_to_now
                              // then corrects the meter's own clock drift.
+#define MP_INTERVAL_S   60   // meter_pro: PLACEHOLDER per-address interval used to synthesize oldest_ts
+                             // when the meter reports only the write pointer (current firmware, 2026-07-26).
+                             // Calibrate from real pulled records; the server's reanchor pins newest≈now,
+                             // so an off interval only skews intra-window spacing, never the newest sample.
 
 // Fast connection params for the pull — without these the link can negotiate a ~300ms interval, making a
 // 4096-read paging pass take ~20 min (and pausing the scanner that whole time). 30–50ms keeps it ~1–2 min.
@@ -183,10 +187,16 @@ static void parse_meta(const uint8_t *d, int len) {
         g.probe_ptr = ptr; g.probe_ts = ts; g.probe_got = true; g.meta_seen = true;
         return;
     }
-    if (d[1] != 0x69) return;
-    uint16_t ptr = ((uint16_t)d[11]<<8)|d[12];     // meter_pro: unchanged 2-byte pointer
+    // The active-bank metadata type flipped 0x69 -> 0x6a on current meter firmware (confirmed live
+    // 2026-07-26, meter_pro_c_office): the buffer descriptor is a single 0x6a frame carrying the WRITE
+    // pointer, plus a second 0x6a frame that echoes the handshake time with ptr==0 (the "now echo" /
+    // empty-buffer marker). Accept both types; ignore the zero-pointer echo; track the largest write
+    // pointer as newest. The meter no longer reports a distinct oldest pointer, so oldest is synthesized
+    // by windowing back in pull_task — the same model the outdoor path uses.
+    if (d[1] != 0x69 && d[1] != 0x6a) return;
+    uint16_t ptr = ((uint16_t)d[11]<<8)|d[12];     // meter_pro: 2-byte pointer @ d[11:13]
+    if (ptr == 0) return;                          // now-echo / empty-buffer marker — not a buffer descriptor
     if (!g.meta_seen || ptr > g.newest_ptr) { g.newest_ptr = ptr; g.newest_ts = ts; }
-    if (!g.meta_seen || ptr < g.oldest_ptr) { g.oldest_ptr = ptr; g.oldest_ts = ts; }
     g.meta_seen = true;
 }
 
@@ -421,24 +431,33 @@ static void pull_task(void *arg) {
             vTaskDelay(pdMS_TO_TICKS(300));
         }
         vTaskDelay(pdMS_TO_TICKS(2000));
-        gatt_log("meta try %d: count=%d newest=%u oldest=%u", attempt, g.meta_count, g.newest_ptr, g.oldest_ptr);
-        if (g.meta_seen && g.newest_ptr > g.oldest_ptr) break;
+        gatt_log("meta try %d: count=%d newest=%u", attempt, g.meta_count, g.newest_ptr);
+        if (g.meta_seen && g.newest_ptr > 0) break;
     }
     g.diag = false;   // stop per-notification logging before the (high-volume) paging phase
-    if (!g.meta_seen || g.newest_ptr <= g.oldest_ptr) { finish("no/!bad metadata"); vTaskDelete(NULL); return; }
+    if (!g.meta_seen || g.newest_ptr == 0) { finish("no/!bad metadata"); vTaskDelete(NULL); return; }
 
     // Bound the pull to the most-recent window_records addresses (1 sample/address unit). start_addr tells
     // the server's assign_timestamps where paging began, so ts(newest) still lands on newest_ts (~now after
     // re-anchor) — the newest records are what a shared-radio panel can actually finish before a link-layer
     // timeout, and they're what makes the freshness guard pass. window_records==0 => full range (edge).
-    uint16_t start = g.oldest_ptr;
-    if (g.window_records > 0 && (g.newest_ptr - g.oldest_ptr) > g.window_records)
-        start = (uint16_t)(g.newest_ptr - g.window_records);
-    start -= (start - g.oldest_ptr) % REC_STRIDE;     // keep on the stride grid relative to oldest_ptr
+    // The meter reports only the write pointer (newest); synthesize the pull window by counting back from
+    // it, mirroring the outdoor path. Default ~2048 records bounds pull time; a shared-radio caller can pass
+    // a smaller window_records. Synthesize oldest_ptr/oldest_ts (interval MP_INTERVAL_S) so the server's
+    // reanchor + timestamp assignment get a consistent anchor pair.
+    // Default to the recent 256 records (near the write pointer) — the meter drops the link if paged far
+    // below its valid range. Caller can override via op:history {"window":N}; capped to bound pull time.
+    uint32_t win_recs = (g.window_records > 0) ? (uint32_t)g.window_records : 256u;
+    if (win_recs > 4096) win_recs = 4096;
+    uint32_t window = win_recs * REC_STRIDE;
+    uint16_t start = (g.newest_ptr > window) ? (uint16_t)(g.newest_ptr - window) : 0;
+    start -= start % REC_STRIDE;
     g.start_addr = start;
+    g.oldest_ptr = start;
+    g.oldest_ts  = g.newest_ts - (uint32_t)(g.newest_ptr - start) * MP_INTERVAL_S;
     publish_meta();
-    ESP_LOGI(TAG, "paging %u..%u (%u recs, window=%d)", start, g.newest_ptr,
-             (g.newest_ptr-start)/REC_STRIDE, g.window_records);
+    gatt_log("paging %u..%u (%u recs, win=%d)", start, g.newest_ptr,
+             (g.newest_ptr - start) / REC_STRIDE, g.window_records);
 
     // page: write read commands for each address in the window
     uint8_t cmd[16];

@@ -124,13 +124,14 @@ class HistoryIngest:
         meta = {k: s.meta.get(k) for k in
                 ("newest_ts", "newest_ptr", "oldest_ts", "oldest_ptr", "start_addr", "pull_now")}
         samples = sbh.decode_meter_pro(s.notifs)
+        raw_newest_ts = meta.get("newest_ts")            # device-clock ts BEFORE reanchor (frozen-buffer guard)
         sbh.reanchor_to_now(meta, enabled=True)          # correct drifted device clocks
-        is_outdoor = "outdoor" in (reg.get("device_type") or "").lower()
-        if is_outdoor and samples and meta.get("newest_ts"):
-            # Outdoor history banks can WRAP, so the paged records don't begin at start_addr and the
-            # address->index mapping in assign_timestamps slides the timestamps. The last relayed record
-            # IS the newest, so anchor it to newest_ts (already re-anchored to ~now) and count backward at
-            # the interval — robust regardless of where the records physically sit (h_bed bank 3).
+        # Both Outdoor (multi-bank, can WRAP) and current-firmware Meter Pro report only a single write
+        # pointer; the node windows back from it (oldest is synthesized, not a real second pointer). In both
+        # cases the LAST relayed record is the newest, so anchor it to newest_ts (already re-anchored to
+        # ~now) and count backward at the interval — robust to the address->sample-index slide that would
+        # otherwise mistime assign_timestamps' output (decode yields multiple samples per address unit).
+        if samples and meta.get("newest_ts"):
             np_, op, ot = meta.get("newest_ptr"), meta.get("oldest_ptr"), meta.get("oldest_ts")
             interval = ((meta["newest_ts"] - ot) / (np_ - op)
                         if ot is not None and np_ and op is not None and np_ != op else 60.0)
@@ -150,11 +151,88 @@ class HistoryIngest:
             log.error("[%s] newest sample %.0fs from now — refusing insert", key, skew)
             self._record_pull(reg["device_id"], node, ok=False, n=0, reason="skew")
             return
+
+        # frozen-buffer guard: a dead meter (e.g. clock stopped, as seen on meter_pro_c_office 2026-07-26)
+        # keeps returning the SAME write pointer + the same old records; reanchoring them to "now" injects
+        # stale data as current. Refuse when the pointer hasn't advanced since the last pull; and for a
+        # large-drift FIRST pull (no prior pointer) when the newest record disagrees with the live reading.
+        did = reg["device_id"]
+        newest_ptr = meta.get("newest_ptr")
+        last_ptr, _ = self._last_pull_ptr(did)
+        if newest_ptr is not None and last_ptr is not None and newest_ptr == last_ptr:
+            log.warning("[%s] write pointer static at %s since last pull — buffer not advancing "
+                        "(frozen meter or no new data); refusing insert", key, newest_ptr)
+            self._record_pull(did, node, ok=False, n=0, reason="ptr_static")
+            return
+        raw_drift_h = abs(time.time() - raw_newest_ts) / 3600.0 if raw_newest_ts else 0.0
+        if last_ptr is None and raw_drift_h > 2.0:
+            adv = self._latest_adv(did)
+            nt_temp, nt_hum = tsamples[-1][1], tsamples[-1][2]
+            bad = (("temperature_c" in adv and abs(nt_temp - adv["temperature_c"]) > 1.0)
+                   or ("humidity_pct" in adv and abs(nt_hum - adv["humidity_pct"]) > 3.0))
+            if adv and bad:
+                log.warning("[%s] first pull, device clock %.0fh behind; newest history %.1f°C/%d%% disagrees "
+                            "with live %s°C/%s%% — likely frozen buffer; refusing insert", key, raw_drift_h,
+                            nt_temp, nt_hum, adv.get("temperature_c"), adv.get("humidity_pct"))
+                self._record_pull(did, node, ok=False, n=0, reason="stale_vs_live")
+                self._record_pull_ptr(did, newest_ptr, raw_newest_ts)   # remember it so re-pulls are caught too
+                return
+
         n = sbh.insert_samples(self._db, reg["device_id"],
                                reg.get("device_type", "unknown"), reg.get("area", "unknown"), tsamples)
+        self._record_pull_ptr(did, newest_ptr, raw_newest_ts)
         log.info("[%s] %d notifs -> %d samples -> inserted %d new rows (%s)",
                  key, len(s.notifs), len(tsamples), n, reg["device_id"])
         self._record_pull(reg["device_id"], node, ok=True, n=n, reason="")
+
+    def _ensure_ptr_table(self, c) -> None:
+        c.execute("CREATE TABLE IF NOT EXISTS history_pull_ptr "
+                  "(device_id TEXT PRIMARY KEY, newest_ptr INTEGER, raw_newest_ts INTEGER, updated TEXT)")
+
+    def _last_pull_ptr(self, device_id):
+        """Last (newest_ptr, raw_newest_ts) recorded for this device, or (None, None). Frozen-buffer guard."""
+        import sqlite3
+        try:
+            c = sqlite3.connect(str(self._db))
+            self._ensure_ptr_table(c)
+            row = c.execute("SELECT newest_ptr, raw_newest_ts FROM history_pull_ptr WHERE device_id=?",
+                            (device_id,)).fetchone()
+            c.close()
+            return (row[0], row[1]) if row else (None, None)
+        except Exception as exc:                       # pragma: no cover
+            log.debug("pull_ptr read failed: %s", exc)
+            return (None, None)
+
+    def _record_pull_ptr(self, device_id, newest_ptr, raw_newest_ts) -> None:
+        import sqlite3
+        try:
+            c = sqlite3.connect(str(self._db))
+            self._ensure_ptr_table(c)
+            c.execute("INSERT INTO history_pull_ptr(device_id,newest_ptr,raw_newest_ts,updated) VALUES(?,?,?,?) "
+                      "ON CONFLICT(device_id) DO UPDATE SET newest_ptr=excluded.newest_ptr, "
+                      "raw_newest_ts=excluded.raw_newest_ts, updated=excluded.updated",
+                      (device_id, newest_ptr, raw_newest_ts, _utc_now()))
+            c.commit()
+            c.close()
+        except Exception as exc:                       # pragma: no cover
+            log.debug("pull_ptr write failed: %s", exc)
+
+    def _latest_adv(self, device_id):
+        """Latest live advertised temp/hum (last 30 min) to sanity-check a large-drift first pull."""
+        import sqlite3
+        out = {}
+        try:
+            c = sqlite3.connect(f"file:{self._db}?mode=ro", uri=True)
+            for metric in ("temperature_c", "humidity_pct"):
+                r = c.execute("SELECT value FROM readings WHERE device_id=? AND metric=? AND transport='ble-adv' "
+                              "AND ts > datetime('now','-30 minutes') ORDER BY ts DESC LIMIT 1",
+                              (device_id, metric)).fetchone()
+                if r:
+                    out[metric] = r[0]
+            c.close()
+        except Exception as exc:                       # pragma: no cover
+            log.debug("latest_adv read failed: %s", exc)
+        return out
 
     def _record_pull(self, device_id, node, ok: bool, n: int, reason: str) -> None:
         """Append this edge pull's outcome to pull_log so the mesh router learns which node can pull

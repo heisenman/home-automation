@@ -67,7 +67,39 @@ captures (Meter Pro = `meter_pro_master_bed`; Outdoor = `meter_living_room`).
 `tools/switchbot_history.py` picks the profile from device_type (`*outdoor*` → outdoor).
 Same `decode_meter_pro()` + `assign_timestamps()` for both.
 
-## ⚠️ DEAD-END — live edge pull returns no anchored samples (2026-07-23)
+## ✅ RESOLVED — meter_pro live edge pull works (2026-07-26)
+
+The dead-end below was a **metadata frame-type change on current meter firmware**. Diagnosed by driving the
+live meter through the generic GATT forwarder (`op:gatt`/`tools/edge_gatt.py`) and reading the raw frames:
+
+- The active-bank metadata type **flipped `0x69` → `0x6a`** on current Meter Pro firmware. The old parser
+  accepted only `0x69`, so it discarded the one frame carrying the write pointer → `newest=0`.
+- Current firmware emits **two `0x6a` frames**: the real buffer descriptor (write pointer, e.g. `0x6682`,
+  device-clock ts) and a **now-echo** that reflects the handshake time with **ptr=0**. The meter no longer
+  reports a distinct *oldest* pointer.
+
+**Fix** (`firmware/components/ha_gatt/ha_gatt.c`, shipped as `v23-mphist`): accept `0x6a`, ignore the
+`ptr==0` echo, take the single write pointer as `newest`, and **window back** from it (synthesizing the
+oldest anchor) — the same model the outdoor path already used. Added a tunable `op:history {"window":N}`
+knob (default 256 records near the pointer; the meter drops the link if paged far below its valid range).
+Server ingest (`server/ingest/edge_history.py`) anchors the last relayed record to `newest_ts` and counts
+backward at the interval (robust to the address→sample-index slide).
+
+**Proven end-to-end** on `meter_pro_h_bed` via `hbed_c6`: newest recovered sample `24.4°C/40%` matched the
+live advertised `24.3°C/40%`, timestamped ~now.
+
+**Frozen-buffer guard** (`edge_history.py`): a dead meter (`meter_pro_c_office` — history clock stopped
+~35 days ago, still advertises live) returns the same static write pointer + stale records; reanchoring
+them to "now" would inject stale data. The guard refuses a pull whose pointer hasn't advanced since the
+last pull, and a large-drift first pull whose newest record disagrees with the live reading. Such a meter
+needs a SwitchBot-app time resync before its history is usable.
+
+Recover (`RECOVER_ENABLED`) is now LIVE. `MP_INTERVAL_S` (per-address interval) is a 60 s placeholder —
+calibrate from real cadence; it only affects intra-window spacing, never the (reanchored) newest sample.
+
+---
+
+## ⚠️ (historical) DEAD-END — live edge pull returns no anchored samples (2026-07-23)
 
 Status as of 2026-07-23: **history recovery does NOT work end-to-end on the live edge fleet.** A
 correctly-signed `op:history` fired at a co-located C6 node (prod: `coffice_c6` → `meter_pro_c_office`,

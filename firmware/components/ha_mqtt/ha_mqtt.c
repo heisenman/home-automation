@@ -100,9 +100,11 @@ static void dispatch_cmd(const cJSON *cmd) {
     const cJSON *prof = cJSON_GetObjectItem(cmd, "profile");
     if (cJSON_IsString(op) && strcmp(op->valuestring, "history") == 0 && cJSON_IsString(mac)) {
         const char *profile = cJSON_IsString(prof) ? prof->valuestring : "outdoor";
-        ESP_LOGI(TAG, "cmd: history pull mac=%s profile=%s", mac->valuestring, profile);
+        const cJSON *win = cJSON_GetObjectItem(cmd, "window");   // optional: records back from the write ptr
+        int window = cJSON_IsNumber(win) ? win->valueint : 0;    // 0 = profile default
+        ESP_LOGI(TAG, "cmd: history pull mac=%s profile=%s window=%d", mac->valuestring, profile, window);
         if (ha_gatt_exec_busy()) ESP_LOGW(TAG, "central busy; dropping history pull");
-        else ha_gatt_history_pull(mac->valuestring, profile, 0);   // 0 = full range (edge backfill; native radio)
+        else ha_gatt_history_pull(mac->valuestring, profile, window);
     } else if (cJSON_IsString(op) && strcmp(op->valuestring, "gatt") == 0 && cJSON_IsString(mac)) {
         // Generic GATT forwarder: {"op":"gatt","reqid":"..","mac":"..","steps":[...]}
         const cJSON *reqid = cJSON_GetObjectItem(cmd, "reqid");

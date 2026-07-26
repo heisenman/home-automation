@@ -119,10 +119,35 @@ def choose_plan(info: dict, routes: dict | None, conn=None) -> dict | None:
     return plan
 
 
+import functools
+
+
+@functools.lru_cache(maxsize=1)
+def _node_lut() -> dict:
+    """Decrypt the per-node secret LUT so edge `op:history` commands can be signed with the TARGET node's
+    own cmd_secret (each node verifies against its baked secret). Best-effort — empty on failure. Reads the
+    master passphrase from $HA_MASTER_PASS_FILE (set on ha-api/gap-watcher) or instance/.master_pass."""
+    try:
+        from server.control import secret_store as S
+        mp = Path(os.environ.get("HA_MASTER_PASS_FILE") or (REPO / "instance" / ".master_pass"))
+        return S.load_lut(str(REPO / "instance" / "node_secrets.enc"), mp.read_text().strip())
+    except Exception as exc:                                # pragma: no cover
+        log.warning("node secret LUT unavailable (%s) — edge pulls can't be signed", exc)
+        return {}
+
+
 def dispatch(mac: str, info: dict, plan: dict, dry: bool) -> None:
     via, did = plan["via"], info.get("device_id")
+    env = dict(os.environ)
     if via == "edge":
-        cmd = [PY, str(REPO / "tools" / "edge_pull_history.py"), "--node", plan.get("node", EDGE_NODE),
+        node = plan.get("node", EDGE_NODE)
+        # Sign with the target node's own cmd_secret (from the LUT); the node rejects any other signature.
+        secret = (_node_lut().get(node) or {}).get("cmd_secret")
+        if secret:
+            env["HA_CMD_SECRET"] = secret
+        elif "HA_CMD_SECRET" not in env:
+            log.warning("%s: no cmd_secret for node %s and HA_CMD_SECRET unset — pull will fail to sign", did, node)
+        cmd = [PY, str(REPO / "tools" / "edge_pull_history.py"), "--node", node,
                "--mac", mac, "--profile", plan.get("profile", "outdoor"), "--broker", BROKER]
     elif via == "server":
         cmd = [PY, str(REPO / "tools" / "switchbot_history.py"), "--device", mac,
@@ -139,7 +164,7 @@ def dispatch(mac: str, info: dict, plan: dict, dry: bool) -> None:
         log.info("  [dry-run] not executed")
         return
     try:
-        subprocess.run(cmd, timeout=plan.get("timeout", 300), check=False)
+        subprocess.run(cmd, env=env, timeout=plan.get("timeout", 300), check=False)
     except subprocess.TimeoutExpired:
         log.warning("  %s backfill dispatch timed out (an edge pull still completes async)", did)
 

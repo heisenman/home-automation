@@ -11,7 +11,7 @@ FW="${3:-v20-battfix}"
 REPO=/home/visko/home_automation
 BDIR="$REPO/edge/$BOARD"
 cd "$REPO"
-LOG=/tmp/claude-1000/-home-visko-home-automation/3b184822-e6c9-46ee-b2b3-27c0f4cdd711/scratchpad/ota-${NODE}.log
+LOG=$(mktemp "/tmp/ota-${NODE}.XXXXXX.log")   # build log (was a stale per-session scratchpad path)
 
 echo "[$NODE] emit secrets + brand ${NODE}@${FW}"
 HA_MASTER_PASSPHRASE="$(cat instance/.master_pass)" venv/bin/python3 tools/enroll_node.py \

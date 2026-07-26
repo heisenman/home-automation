@@ -1062,11 +1062,12 @@ function MaintResult({ res }) {
       <pre class="mono">${JSON.stringify(res.report || res.job || res, null, 2)}</pre></details></div>`;
 }
 
-// Recover is gated OFF until the on-device SwitchBot history-protocol DECODE is finished: a live prod
-// pull connects to the meter and streams notifications but the reassembly yields no anchored samples
-// (meta count>0 but newest=0/oldest=0 — see docs/switchbot-ble-history-protocol.md). The /history/recover
-// endpoint stays mounted (dormant) so flipping this to true ships the button once the decode lands.
-const RECOVER_ENABLED = false;
+// Recover is LIVE (2026-07-26): the on-device SwitchBot meter_pro history decode is fixed — the metadata
+// type flipped 0x69->0x6a on current meter firmware (v23-mphist); the node windows back from the write
+// pointer and the server ingest anchors + inserts (proven end-to-end on meter_pro_h_bed: newest recovered
+// sample matched the live reading). A frozen-buffer guard (edge_history.py) refuses dead meters whose
+// pointer never advances, so a stale unit (e.g. meter_pro_c_office) can't inject reanchored-old data.
+const RECOVER_ENABLED = true;
 
 // Render the history checker's gap report: a clean "no gaps" line, or the list of holes + whether
 // they're recoverable (the device has an on-board buffer we can pull).
