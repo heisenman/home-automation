@@ -33,6 +33,8 @@ from fastapi.responses import FileResponse, HTMLResponse, JSONResponse, Streamin
 from fastapi.staticfiles import StaticFiles
 
 from server.ingest.discovery import DiscoveryCache, start_subscriber  # BLE 'Add sensor' discovery feed
+from server.ingest.edge_discovery import EdgeDiscoveryCache  # ADR-0036 standby edge-node intake feed
+from server.ingest.edge_discovery import start_subscriber as start_edge_subscriber
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -169,6 +171,10 @@ async def lifespan(app: FastAPI):
     disc_client = start_subscriber(DISCOVERY_CACHE,
                                    broker=os.environ.get("HA_BROKER", "localhost"),
                                    port=int(os.environ.get("HA_BROKER_PORT", "1883")))
+    # ADR-0036: same deal for the edge-NODE intake feed (home/edge/+/{hello,status}) — read-only, every instance.
+    edge_disc_client = start_edge_subscriber(EDGE_DISCOVERY_CACHE,
+                                             broker=os.environ.get("HA_BROKER", "localhost"),
+                                             port=int(os.environ.get("HA_BROKER_PORT", "1883")))
     # Cluster/service alerts for the PWA banner — also every instance, read-only (see cluster_alerts.py).
     from server.api.cluster_alerts import start_cluster_alert_subscriber
     clu_client = start_cluster_alert_subscriber(CLUSTER_ALERT_CACHE,
@@ -217,6 +223,10 @@ WEB_DIR = Path(__file__).resolve().parents[1] / "web"   # server/web — the no-
 # Fed by a best-effort MQTT subscriber started per-instance in the lifespan (read-only, not VIP-gated:
 # both uvicorns serve requests, so each keeps its own cache). See server/ingest/discovery.py.
 DISCOVERY_CACHE = DiscoveryCache()
+
+# ADR-0036: rolling cache of online-but-unassigned edge NODES (standby hardware) surfaced in the same
+# "Add device" flow. Fed by a best-effort subscriber to home/edge/+/{hello,status} (see edge_discovery.py).
+EDGE_DISCOVERY_CACHE = EdgeDiscoveryCache()
 
 # Cluster/service-health alerts (service_missing / node_down) for the PWA banner, fed from retained cluster
 # topics by a per-instance subscriber (read-only, not VIP-gated). See server/api/cluster_alerts.py.
@@ -318,7 +328,8 @@ def _mount_control(app: FastAPI) -> None:
                                                    devices_path=DEVICES_REGISTRY, db_path=DB_PATH))   # R8 friendly-name/room/hide + placement + history check/recover
         app.include_router(make_registry_router(api_authz, DEVICES_REGISTRY, CONTROL_REGISTRY,
                                                  NODE_SECRETS_LUT, master,
-                                                 discovery_cache=DISCOVERY_CACHE))  # add-device: discover + sensor/actuator/node-enroll
+                                                 discovery_cache=DISCOVERY_CACHE,
+                                                 edge_discovery_cache=EDGE_DISCOVERY_CACHE))  # add-device: BLE discover + standby-node intake (ADR-0036) + sensor/actuator/node-enroll
         app.include_router(make_battery_router(master, NODE_SECRETS_LUT, broker=broker, port=port))  # on-demand SwitchBot battery refresh
         app.state.control_registry = registry      # device_id -> DeviceCtl (traits for manual-control UI)
         # live-reload control.yaml so an actuator RELOCATE (area edit) is reflected in /rooms + /displays

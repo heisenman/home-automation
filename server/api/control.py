@@ -450,6 +450,17 @@ def _load_registry_device(devices_path, device_id: str):
     return None, None
 
 
+def _device_for_node(devices_path, node_id: str) -> str | None:
+    """The device_id of the (gas) device owned by ``node_id`` in the sensor registry, or None. Used by
+    ADR-0036 edge-node intake to resolve e.g. node standby_c6 -> device gas_standby."""
+    import yaml
+    reg = (yaml.safe_load(open(devices_path).read()) or {}).get("devices", {}) if devices_path else {}
+    for info in reg.values():
+        if (info or {}).get("node_id") == node_id:
+            return (info or {}).get("device_id")
+    return None
+
+
 def handle_history_gaps(device_id: str, devices_path, db_path,
                         lookback_days: int = 3, min_gap_min: float = 20.0) -> tuple[int, dict]:
     """Read-only history checker. Scans the last ``lookback_days`` of ``hot.db`` for windows with no
@@ -681,10 +692,14 @@ def make_device_meta_router(api_authz, control_db, placement_path=None, devices_
 
 
 def make_registry_router(api_authz, devices_path, control_path=None, node_secrets_path=None, master=None,
-                         discovery_cache=None):
+                         discovery_cache=None, edge_discovery_cache=None):
     """Admin-gated device registration (the add-device flow, ADR-0002 trait registry):
       GET  /api/v1/discover         -> unregistered BLE candidates heard nearby (the "see the filtered-out
-                                       data" half of onboarding). Omitted unless discovery_cache is given.
+                                       data" half of onboarding). Also returns edge_nodes[] (ADR-0036:
+                                       online-but-unassigned edge NODES for standby-hardware intake) when
+                                       edge_discovery_cache is given. Omitted unless a cache is provided.
+      POST /api/v1/edge-nodes/{node}/intake -> adopt a standby edge node into a room (ADR-0036): relocate
+                                       its dormant gas device (gas_standby) to `area`, waking air_quality.
       POST /api/v1/devices          -> append a SENSOR to devices.yaml
       POST /api/v1/control-devices  -> append an ACTUATOR to control.yaml (its command secret is derived
                                        from the owning node's enrolled cmd_secret). Omitted if control_path None.
@@ -705,14 +720,47 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
             raise HTTPException(status_code=401, detail="unauthorized",
                                 headers={"WWW-Authenticate": "Bearer"})
 
-    if discovery_cache is not None:
+    if discovery_cache is not None or edge_discovery_cache is not None:
         @router.get("/discover", dependencies=[Depends(require_admin)])
         async def discover():
-            """Candidates the scanner heard but that aren't registered yet — decoded (model, temp/hum,
-            battery), ranked by signal strength (closest ≈ the one being held to the box). Already-
-            registered MACs are filtered out so a just-added device drops off."""
-            known = load_devices(Path(devices_path))
-            return {"candidates": discovery_cache.candidates(known)}
+            """Two intake feeds: `candidates` = unregistered BLE devices the scanner heard (decoded model,
+            temp/hum, battery; ranked by signal), already-registered MACs filtered out. `edge_nodes` =
+            online-but-unassigned edge NODES that announced themselves (ADR-0036) — standby hardware
+            awaiting a room. Either list is present only if its cache is wired."""
+            resp: dict = {}
+            if discovery_cache is not None:
+                known = load_devices(Path(devices_path))
+                resp["candidates"] = discovery_cache.candidates(known)
+            if edge_discovery_cache is not None:
+                resp["edge_nodes"] = edge_discovery_cache.candidates()
+            return resp
+
+    @router.post("/edge-nodes/{node}/intake", dependencies=[Depends(require_admin)])
+    async def edge_node_intake(node: str, body: dict = Body(...)):
+        """ADR-0036: adopt a standby edge node into a room. Relocates the node's dormant gas device
+        (e.g. gas_standby) to `area`, waking its air_quality ability. Body {area, dry_run?=false}.
+        Reuses the same relocate maintenance path as the per-device pencil menu, so intake can never
+        drift from it. (device_id rename gas_standby->gas_<area> is a separate follow-up — the relocate
+        is detached/async, so it isn't safe to chain a rename in the same request.)"""
+        area = (body or {}).get("area")
+        if not isinstance(area, str) or not area.strip():
+            return JSONResponse(status_code=400,
+                                content={"status": "bad-request", "reason": "area must be a non-empty string"})
+        area = area.strip()
+        dry_run = bool((body or {}).get("dry_run", False))
+        # Intake default 'forward': the node's banked standby/bench data STAYS where it was (it isn't this
+        # room's history); only readings from adoption onward are the room's. Override with mode=restamp to
+        # carry the whole history to the new area.
+        mode = (body or {}).get("mode", "forward")
+        device_id = _device_for_node(Path(devices_path), node)
+        if not device_id:
+            return JSONResponse(status_code=404,
+                                content={"status": "not-found", "reason": f"no registered device for node {node!r}"})
+        code, payload = handle_device_relocate(device_id, {"new_area": area, "mode": mode, "dry_run": dry_run})
+        return JSONResponse(status_code=code,
+                            content={"status": payload.get("status", "?"), "node": node,
+                                     "device_id": device_id, "area": area, "dry_run": dry_run,
+                                     "relocate": payload})
 
     @router.post("/devices", dependencies=[Depends(require_admin)])
     async def add_device(body: dict = Body(...)):

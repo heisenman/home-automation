@@ -1347,6 +1347,12 @@ function AddDeviceModal({ onClose, onSaved }) {
   const [done, setDone] = useState(null);
   const [cands, setCands] = useState(null);          // null = not fetched yet; [] = heard nothing
   const [scanErr, setScanErr] = useState("");
+  const [edgeCands, setEdgeCands] = useState(null);  // ADR-0036: online-but-unassigned edge NODES (standby hw)
+  const [edgePick, setEdgePick] = useState(null);    // the standby node chosen for adoption
+  const [edgeArea, setEdgeArea] = useState("");
+  const [edgeBusy, setEdgeBusy] = useState(false);
+  const [edgeErr, setEdgeErr] = useState("");
+  const [edgeDone, setEdgeDone] = useState(null);
   const [typeManual, setTypeManual] = useState(false);   // "Other…" chosen → free-text device_type
   const toggleTrait = (t) => setTraits((ts) => (ts.includes(t) ? ts.filter((x) => x !== t) : [...ts, t]));
 
@@ -1357,7 +1363,7 @@ function AddDeviceModal({ onClose, onSaved }) {
     const tick = async () => {
       try {
         const r = await adminSend("GET", "/api/v1/discover");
-        if (alive) { setCands(r.candidates || []); setScanErr(""); }
+        if (alive) { setCands(r.candidates || []); setEdgeCands(r.edge_nodes || []); setScanErr(""); }
       } catch (e) { if (alive) setScanErr(String(e.message)); }
     };
     tick();
@@ -1394,6 +1400,45 @@ function AddDeviceModal({ onClose, onSaved }) {
     } catch (e) { setErr(String(e.message)); setBusy(false); }
   };
 
+  // ADR-0036 intake: adopt a standby edge node into a room (relocate its dormant gas device → area).
+  const adoptNode = async () => {
+    if (!edgePick || !edgeArea.trim()) return;
+    setEdgeBusy(true); setEdgeErr("");
+    try {
+      const r = await adminSend("POST", `/api/v1/edge-nodes/${edgePick.node}/intake`, { area: edgeArea.trim() });
+      setEdgeDone(r);
+    } catch (e) { setEdgeErr(String(e.message)); }
+    setEdgeBusy(false);
+  };
+  const edgeDiscover = html`
+    <div class="discover">
+      <div class="discover-hd"><span>Standby / unassigned hardware</span>
+        <span class="note sm">${edgeCands === null ? "listening…" : "live · every 3s"}</span></div>
+      ${edgeCands !== null && edgeCands.length === 0 && html`<p class="note sm">No unassigned edge nodes
+        online. Power a standby node (C6/S3) on the house network — it self-announces and shows up here.</p>`}
+      ${(edgeCands || []).map((n) => html`
+        <button class="cand ${edgePick && edgePick.node === n.node ? "sel" : ""}"
+          onClick=${() => { setEdgePick(n); setEdgeArea(""); setEdgeErr(""); setEdgeDone(null); }}>
+          <span class="cand-main">
+            <b>${n.node}</b>
+            <span class="note sm mono">${n.chip || "?"} · ${(n.abilities || []).join(", ") || "sensor?"}${n.fw ? " · " + n.fw : ""}${n.known === false ? " · unmanifested" : ""}</span>
+          </span>
+          <span class="cand-vals">
+            <span class="note sm">${n.age_s != null ? `seen ${Math.round(n.age_s)}s ago` : "online"}</span>
+          </span>
+        </button>`)}
+      ${edgePick && html`
+        <div class="edge-adopt">
+          <input value=${edgeArea} placeholder="assign to area — e.g. living_room"
+            onInput=${(e) => setEdgeArea(e.target.value.trim())} />
+          <button class="btn primary sm" disabled=${edgeBusy || !edgeArea.trim()} onClick=${adoptNode}>
+            ${edgeBusy ? "Adopting…" : `Adopt ${edgePick.node}${edgeArea ? " → " + edgeArea : ""}`}</button>
+          ${edgeErr && html`<p class="err sm">${edgeErr}</p>`}
+          ${edgeDone && html`<p class="note sm">✓ ${edgeDone.node} adopting into <b>${edgeDone.area}</b>
+            (device ${edgeDone.device_id}). The fleet restarts to pick it up — give it a moment.</p>`}
+        </div>`}
+    </div>`;
+
   const outdoorPicked = deviceType === "switchbot_meter_outdoor";
   const discover = html`
     <div class="discover">
@@ -1419,6 +1464,7 @@ function AddDeviceModal({ onClose, onSaved }) {
     </div>`;
 
   const sensorFields = html`
+    ${edgeDiscover}
     ${discover}
     <input value=${mac} placeholder="MAC — pick above, or type AA:BB:CC:DD:EE:FF"
       onInput=${(e) => setMac(e.target.value.toUpperCase())} />
