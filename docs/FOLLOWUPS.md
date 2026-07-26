@@ -7,29 +7,28 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
-## ⚠️ 2026-07-23 — history RECOVERY (backfill) is non-functional; PWA checker shipped, recover gated
+## ✅ 2026-07-26 — history RECOVERY (backfill) RESOLVED + LIVE (was gated 2026-07-23)
 
-Prompted by the 2026-07-22 power outage (2h8m meter gap, 21:52→00:00Z). The PWA per-device editor now has a
-**history gap CHECKER** (`GET /api/v1/devices/{id}/history/gaps`, shipped `7a512e6`, deployed ha-2, verified
-live). The **fill/recover** half is built (`POST …/history/recover`, mounted) but the **button is gated OFF**
-(`RECOVER_ENABLED=false` in `server/web/app.js`) because the underlying pull does not land data. Two problems:
+Shipped `4531ef6`, deployed prod (`RECOVER_ENABLED=true`, `:443`). The 2026-07-23 "recover no-op" was a
+**metadata frame-type change on current meter firmware** (meter_pro active-bank descriptor flipped
+`0x69`→`0x6a`; the `0x69`-only parser dropped the write-pointer frame → `newest=0`). Diagnosed by driving the
+live meter through the generic GATT forwarder (`op:gatt`/`tools/edge_gatt.py`) — no OTA needed to RE.
 
-- **① On-device SwitchBot history decode is unfinished (the real blocker).** A correctly-signed `op:history`
-  fired at a co-located node on prod CONNECTS + streams GATT notifications but reassembly yields
-  `meta: count>0, newest=0, oldest=0` → zero anchored samples ingested. Ruled out skew (firmware accepted the
-  cmd), routing, and signing. See dead-end notes in `docs/switchbot-ble-history-protocol.md`. Fixing this is
-  firmware/decode R&D, not config. Aranet radon is the exception (real `aranet4` lib) and may work with a BLE
-  central in range — untested.
-- **② Nightly `ha-gap-watcher` is a silent no-op for edge routes.** `instance/gap-watcher.env` does not exist on
-  EITHER box → `HA_CMD_SECRET` unset → `edge_pull_history.py` can't sign → `gap_watcher.dispatch` swallows the
-  failure (`subprocess.run(check=False)`) and the timer exits 0. So BLE meters have effectively never been
-  auto-recovered. (server/aranet routes would sign; meters route via edge.)
+Fixes: firmware `ha_gatt.c` (v23-mphist: accept `0x6a`, ignore the `ptr==0` now-echo, window back from the
+single write pointer + tunable `op:history {"window":N}`); server `edge_history.py` (meter_pro anchor-last-
+to-newest + **frozen-buffer guard**); `gap_watcher.dispatch` signs per-node from the LUT (fixes the button
+AND supersedes the missing `gap-watcher.env`). Proven end-to-end on `meter_pro_h_bed` (recovered newest
+matched live). Full write-up: `docs/switchbot-ble-history-protocol.md` (RESOLVED section).
 
-**To ship recover (in order):** (a) finish the SwitchBot history decode/anchoring so a live pull produces
-timestamped samples; (b) wire recover to sign per-target-node via the node-secrets LUT (mirror
-`server/mesh/battery_refresh.py`, NOT shell `edge_pull_history.py` which needs `HA_CMD_SECRET` in env); (c) add
-`instance/gap-watcher.env` so the nightly sweep signs; (d) note routing is partial — only ~6/12 meters have a
-co-located live C6/S3 node in GATT range. Then flip `RECOVER_ENABLED=true`. Board task: `history-pull-decode`.
+**Still open (smaller):**
+- **`meter_pro_c_office` meter has a DEAD history buffer** — clock stopped ~35d ago (still advertises live).
+  The guard refuses it; needs a SwitchBot-app time resync before its history is usable.
+- **Routing is partial** — only `meter_pro_h_bed` + `meter_pro_c_office` are in `instance/backfill-routes.yaml`
+  (validated). Route `meter_pro_living_room` + the outdoor meters once their reaching node is confirmed
+  (mesh-probe or a manual `op:history` returning a non-zero pointer). Outdoor pull path is unchanged by v23
+  but unproven live.
+- **`MP_INTERVAL_S`** is a 60s placeholder — calibrate from real cadence (affects intra-window spacing only).
+- `standby_c6` still on old firmware (was offline during the v23 OTA sweep).
 
 ## 2026-07-10 — ADR-0034 device object model (Node/Ability/Entity) + `model_project.py`
 
