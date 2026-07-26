@@ -1354,7 +1354,28 @@ function AddDeviceModal({ onClose, onSaved }) {
   const [edgeErr, setEdgeErr] = useState("");
   const [edgeDone, setEdgeDone] = useState(null);
   const [typeManual, setTypeManual] = useState(false);   // "Other…" chosen → free-text device_type
+  const [areas, setAreas] = useState([]);                // canonical rooms {id,name} for the area dropdowns
+  const [areaManual, setAreaManual] = useState(false);   // device-add "Other…" → free-text NEW area
+  const [edgeAreaManual, setEdgeAreaManual] = useState(false);   // edge-adopt "Other…" → free-text NEW area
   const toggleTrait = (t) => setTraits((ts) => (ts.includes(t) ? ts.filter((x) => x !== t) : [...ts, t]));
+
+  // Canonical rooms for the area pickers (ADR-0026) — a dropdown beats free-text (typos spawn phantom areas).
+  useEffect(() => {
+    getJSON("/api/v1/rooms")
+      .then((d) => setAreas((d.rooms || []).map((r) => ({ id: r.id, name: r.name }))))
+      .catch(() => setAreas([]));
+  }, []);
+  // Reusable area picker: dropdown of canonical rooms + "Other…" → free-text for a genuinely new room.
+  const areaSelect = (val, setVal, manual, setManual, ph) => html`
+    <select value=${manual ? "__other__" : (areas.some((a) => a.id === val) ? val : "")}
+      onChange=${(e) => { const v = e.target.value;
+        if (v === "__other__") { setManual(true); setVal(""); } else { setManual(false); setVal(v); } }}>
+      <option value="" disabled>room / area…</option>
+      ${areas.map((a) => html`<option value=${a.id}>${a.name}</option>`)}
+      <option value="__other__">Other… (new room)</option>
+    </select>
+    ${manual && html`<input value=${val} placeholder=${ph}
+      onInput=${(e) => setVal(e.target.value.trim())} />`}`;
 
   // Poll the discovery feed while adding a SENSOR — the "see the filtered-out data" half of onboarding.
   useEffect(() => {
@@ -1429,8 +1450,7 @@ function AddDeviceModal({ onClose, onSaved }) {
         </button>`)}
       ${edgePick && html`
         <div class="edge-adopt">
-          <input value=${edgeArea} placeholder="assign to area — e.g. living_room"
-            onInput=${(e) => setEdgeArea(e.target.value.trim())} />
+          ${areaSelect(edgeArea, setEdgeArea, edgeAreaManual, setEdgeAreaManual, "new area slug — e.g. living_room")}
           <button class="btn primary sm" disabled=${edgeBusy || !edgeArea.trim()} onClick=${adoptNode}>
             ${edgeBusy ? "Adopting…" : `Adopt ${edgePick.node}${edgeArea ? " → " + edgeArea : ""}`}</button>
           ${edgeErr && html`<p class="err sm">${edgeErr}</p>`}
@@ -1493,7 +1513,7 @@ function AddDeviceModal({ onClose, onSaved }) {
     ${kind === "sensor" ? sensorFields : actuatorFields}
     <input value=${deviceId} placeholder=${`device_id slug — e.g. ${kind === "sensor" ? "meter_patio" : "lamp_office"}`}
       onInput=${(e) => setDeviceId(e.target.value)} />
-    <input value=${area} placeholder="area slug — e.g. patio" onInput=${(e) => setArea(e.target.value)} />
+    ${areaSelect(area, setArea, areaManual, setAreaManual, "new area slug — e.g. patio")}
     ${err && html`<div class="err">${err}</div>`}
     <div class="modal-actions">
       <button class="btn ghost" onClick=${onClose}>Cancel</button>
