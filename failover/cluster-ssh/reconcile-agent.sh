@@ -32,27 +32,31 @@ REL='[0-9A-Za-z._/-]+'     # relative repo path (parquet/hot.db/instance files)
 NAME='[0-9A-Za-z._-]+'     # snap / device name
 PID='[0-9]+'
 HAUNIT='ha-[0-9A-Za-z._-]+\.(service|timer)'   # peer-repair: an ha-* unit this box may be asked to rerun
+# Reconcile targets one of two KNOWN repo roots: this box's own repo, OR the co-resident airgap-standby
+# checkout (~/ha-airgap-standby) — the ha-2 dictator reconciles its hot.db INTO the standby's separate repo,
+# so its `cd <path>` uses that root. Bounded alternation of two fixed absolute paths; same charset/`..` guards.
+ROOT='/home/visko/(home_automation|ha-airgap-standby)'
 
 allow(){ [[ "$c" =~ ^$1$ ]] && run; }
 
 # --- reconcile-history: export (pull) + merge (push) ---
-allow "cd $REPO && bash failover/reconcile-history\.sh --export /tmp/ha-recon-peer\.snap '$TS'"
-allow "cd $REPO && bash failover/reconcile-history\.sh --merge /tmp/ha-recon-local\.snap"
+allow "cd $ROOT && bash failover/reconcile-history\.sh --export /tmp/ha-recon-peer\.snap '$TS'"
+allow "cd $ROOT && bash failover/reconcile-history\.sh --merge /tmp/ha-recon-local\.snap"
 # --- reconcile-parquet: list + merge(+cleanup) + manifest rebuild ---
-allow "cd $REPO && bash failover/reconcile-parquet\.sh --list"
-allow "cd $REPO && bash failover/reconcile-parquet\.sh --merge '$REL' /tmp/pq-local-$PID\.parquet; rm -f /tmp/pq-local-$PID\.parquet"
-allow "cd '$REPO' && \[ -f 'tools/rebuild_parquet_manifest\.py' \] && venv/bin/python3 'tools/rebuild_parquet_manifest\.py' --parquet-dir '$REL' >/dev/null 2>&1"
+allow "cd $ROOT && bash failover/reconcile-parquet\.sh --list"
+allow "cd $ROOT && bash failover/reconcile-parquet\.sh --merge '$REL' /tmp/pq-local-$PID\.parquet; rm -f /tmp/pq-local-$PID\.parquet"
+allow "cd '$ROOT' && \[ -f 'tools/rebuild_parquet_manifest\.py' \] && venv/bin/python3 'tools/rebuild_parquet_manifest\.py' --parquet-dir '$REL' >/dev/null 2>&1"
 # --- sync-standby: existence check + consistent sqlite snapshot + cleanup ---
-allow "test -f $REPO/$REL"
-allow "command -v sqlite3 >/dev/null && sqlite3 $REPO/$REL \"\.backup /tmp/$NAME\.snap\""
+allow "test -f $ROOT/$REL"
+allow "command -v sqlite3 >/dev/null && sqlite3 $ROOT/$REL \"\.backup /tmp/$NAME\.snap\""
 allow "rm -f /tmp/$NAME\.snap"
 # --- scp transfers (legacy protocol; -t=write only to /tmp, -f=read from /tmp or repo) ---
 allow "scp( -[A-Za-z])* -t /tmp/$NAME\.(snap|parquet)"
 allow "scp( -[A-Za-z])* -f /tmp/$NAME\.(snap|parquet)"
-allow "scp( -[A-Za-z])* -f $REPO/$REL"
+allow "scp( -[A-Za-z])* -f $ROOT/$REL"
 # --- peer-repair (plan crystalline-spinning-spindle): a peer may ask this box to RERUN one of its own ha-*
 #     units. Bounded to ha-* (the NOPASSWD sudo scope), charset-clean, nothing else. File-pull needs no verb
-#     here — it rides the `scp -f $REPO/$REL` allow above (canonical repo copy, `..`-guarded). ---
+#     here — it rides the `scp -f $ROOT/$REL` allow above (canonical repo copy, `..`-guarded). ---
 allow "sudo -n systemctl restart $HAUNIT"
 
 refuse
