@@ -1433,7 +1433,9 @@ function AddDeviceModal({ onClose, onSaved }) {
       // relocate you can still rename via the pencil. new_id must be [a-z0-9_]+.
       const nm = edgeName.trim();
       if (nm && r && r.device_id) {
-        try { await adminSend("POST", `/api/v1/devices/${r.device_id}/rename`, { new_id: nm }); r.renamed_to = nm; }
+        // set the free-form DISPLAY NAME overlay (not the internal id) — a light meta write, no fleet
+        // restart / no relocate race, and uppercase/spaces are fine.
+        try { await adminSend("PUT", `/api/v1/devices/${r.device_id}/meta`, { name: nm }); r.renamed_to = nm; }
         catch (e2) { r.rename_error = String(e2.message); }
       }
       setEdgeDone(r);
@@ -1460,8 +1462,8 @@ function AddDeviceModal({ onClose, onSaved }) {
       ${edgePick && html`
         <div class="edge-adopt">
           ${areaSelect(edgeArea, setEdgeArea, edgeAreaManual, setEdgeAreaManual, "new area slug — e.g. living_room")}
-          <input value=${edgeName} placeholder="rename to (optional) — e.g. gas_office [a-z0-9_]"
-            onInput=${(e) => setEdgeName(e.target.value.trim())} />
+          <input value=${edgeName} placeholder="display name (optional) — e.g. Office Gas Sensor"
+            onInput=${(e) => setEdgeName(e.target.value)} />
           <button class="btn primary sm" disabled=${edgeBusy || !edgeArea.trim()} onClick=${adoptNode}>
             ${edgeBusy ? "Adopting…" : `Adopt ${edgePick.node}${edgeArea ? " → " + edgeArea : ""}`}</button>
           ${edgeErr && html`<p class="err sm">${edgeErr}</p>`}
