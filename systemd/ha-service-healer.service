@@ -1,0 +1,20 @@
+[Unit]
+# Self-healing arm of the required-services supervisor (plan crystalline-spinning-spindle, Stage A).
+# The read-only detector is ha-supervisor (required_services.py check); THIS restarts what it finds down,
+# with a crash-safe attempt counter (instance/.healer-state.json), then screams if it can't recover a unit.
+# Driven by ha-service-healer.timer (~30s). Oneshot: systemd won't overlap ticks while one is running.
+Description=HA service healer — self-heal required units, escalate on failure (one tick)
+After=network-online.target mosquitto.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=visko
+WorkingDirectory=/home/visko/home_automation
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+ExecStart=/home/visko/home_automation/venv/bin/python3 -m server.cluster.service_healer
+# a remaining gap is exit 1 — surface it in `systemctl status` without failing the timer forever
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target

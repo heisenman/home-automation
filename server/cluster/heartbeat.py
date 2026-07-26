@@ -15,7 +15,7 @@ import time
 
 import paho.mqtt.client as mqtt
 
-from server.cluster.state import controller_active, node_id, read_cluster_env, vip_held
+from server.cluster.state import controller_active, node_id, read_cluster_env, services_ok, vip_held
 
 log = logging.getLogger("ha.cluster.heartbeat")
 
@@ -48,10 +48,13 @@ def main() -> None:
     try:
         while True:
             active = controller_active()
+            svc_ok = services_ok()
             c.publish(topic, json.dumps({
                 "node": node, "role": role, "priority": _PRIORITY.get(role, 100),
                 "controller_active": active, "vip_held": vip_held(vip),
-                "healthy": active, "ts": int(time.time()),
+                # `healthy` stays controller_active for back-compat; `services_ok` is the new
+                # completeness signal (plan crystalline-spinning-spindle) the peer's node_watch reacts to.
+                "healthy": active, "services_ok": svc_ok, "ts": int(time.time()),
             }), qos=0, retain=True)
             time.sleep(HEARTBEAT_S)
     finally:

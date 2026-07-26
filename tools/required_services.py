@@ -61,7 +61,7 @@ def resolve(manifest: dict, roles: list[str]) -> dict[str, dict]:
             if name in out and out[name]["must"] == "active":
                 continue
             out[name] = {"must": u.get("must", "active"), "source": u.get("source"),
-                         "optional": bool(u.get("optional"))}
+                         "optional": bool(u.get("optional")), "on_fail": u.get("on_fail", "heal")}
     return out
 
 
@@ -124,9 +124,12 @@ def _publish_alert(host: str, roles: list[str], gaps: list, broker: str) -> None
                  "message": f"{host}: {len(gaps)} required service(s) missing/inactive: " +
                             ", ".join(n for n, _, _ in gaps)}
         c.publish("home/_alert/new", json.dumps(alert), qos=1)
-        # retained per-host supervisor status so cluster-doctor can assert the supervisor itself is fresh
+        # retained per-host supervisor status so cluster-doctor (and the PWA cluster-alert cache) can assert
+        # the supervisor itself is fresh. ts must be a real epoch (was None — broke every freshness check).
+        import time as _t
         c.publish(f"home/_supervisor/{host}/status",
-                  json.dumps({"host": host, "gaps": len(gaps), "ts": None}), qos=1, retain=True)
+                  json.dumps({"host": host, "gaps": len(gaps), "units": [n for n, _, _ in gaps],
+                              "ts": int(_t.time())}), qos=1, retain=True)
         c.loop_stop(); c.disconnect()
     except Exception as exc:                                   # never let alerting break the check
         print(f"  (alert publish failed: {exc})", file=sys.stderr)

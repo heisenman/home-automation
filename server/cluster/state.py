@@ -50,6 +50,22 @@ def vip_held(vip: str) -> bool:
         return False
 
 
+_HEALER_STATE = Path(__file__).resolve().parents[2] / "instance" / ".healer-state.json"
+
+
+def services_ok(state_path: Path = _HEALER_STATE) -> bool:
+    """True unless the service healer has an ESCALATED gap (self-heal + peer-repair exhausted for some
+    required unit). A cheap local read of the healer's crash-safe state file — no systemctl sweep here (the
+    healer already does that on its own tick). Transient, still-being-retried gaps do NOT flip this; only
+    escalated ones do, so the heartbeat's `services_ok` isn't noisy. Absent/empty file -> healthy."""
+    try:
+        import json
+        st = json.loads(state_path.read_text())
+        return not any(v.get("escalated") for v in st.values())
+    except (FileNotFoundError, ValueError):
+        return True
+
+
 def cluster_status() -> dict:
     """This box's cluster view. `healthy` is a coarse proxy (controller_active); the authoritative
     fitness gate is the bash `failover/healthcheck.sh` (API up + Midea reachable) used by keepalived."""

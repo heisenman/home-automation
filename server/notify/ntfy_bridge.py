@@ -27,16 +27,21 @@ _KIND_TAGS = {
     "unreachable": ["warning"],
     "tank_full": ["droplet"],
     "override_expiring": ["hourglass"],
+    # cluster/supervisor kinds (bare-dict alerts from required_services / service_healer / node_watch)
+    "service_missing": ["rotating_light"],
+    "node_down": ["rotating_light"],
+    "node_degraded": ["warning"],
 }
 ALERT_EVENT_TOPIC = "home/_alert/new"
 
 
 def alert_to_ntfy(alert: dict, topic: str) -> dict:
-    """Map one alert {severity,kind,device_id,name,detail} to an ntfy publish payload. Pure."""
+    """Map one alert to an ntfy publish payload. Pure. Handles both the build_alerts shape
+    {severity,kind,device_id,name,detail} and the bare-dict cluster/supervisor shape {severity,kind,host|node,message}."""
     severity = alert.get("severity", "info")
-    name = alert.get("name") or alert.get("device_id") or "device"
+    name = alert.get("name") or alert.get("host") or alert.get("node") or alert.get("device_id") or "device"
     kind = str(alert.get("kind", "alert"))
-    detail = alert.get("detail") or ""
+    detail = alert.get("detail") or alert.get("message") or ""
     title = f"{name}: {kind.replace('_', ' ')}"
     return {
         "topic": topic,
@@ -84,10 +89,14 @@ def main() -> None:
         if not _holds_vip():
             return                                        # standby never notifies (one-notifier invariant)
         try:
-            alert = (json.loads(msg.payload.decode()) or {}).get("alert") or {}
+            payload = json.loads(msg.payload.decode()) or {}
         except Exception:
             return
-        if not alert:
+        # Two shapes ride home/_alert/new: the API loop wraps as {"alert": {...}}; supervisor/cluster/healer
+        # publish the alert as a BARE dict (has a top-level "kind"). Accept both — the bare ones were silently
+        # dropped before, so service_missing/node_down/node_degraded never reached the phone.
+        alert = payload.get("alert") if isinstance(payload.get("alert"), dict) else payload
+        if not isinstance(alert, dict) or "kind" not in alert:
             return
         try:
             status = post_ntfy(ntfy_url, alert_to_ntfy(alert, topic), token)

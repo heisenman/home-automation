@@ -18,14 +18,18 @@
 #         oneshot  -> applies-then-exits; `inactive` is normal (installed+enabled is what's checked)
 #   optional: true -> nice-to-have; a supervisor WARN, not a FAIL, if absent
 #   source: airgap -> unit lives in provisioning/airgap/ (its own installer), not systemd/
+#   on_fail: failover -> serve-the-house-critical: if still down after self-heal + peer-repair past the
+#            healer's threshold (~5 min), the healer writes instance/.unfit -> keepalived hands the VIP to the
+#            standby (plan crystalline-spinning-spindle, Stage C). Default (unset) = heal+scream only, never
+#            flaps the VIP. Curated to the minimum "the house can't be served without this" set (Hugh 07-26).
 
 roles:
 
   # ── core: every HA server (dictator + failover-standby) ───────────────────────────────
   core:
     units:
-      - {unit: ha-writer.service,          must: active}   # home/+/+/state -> hot.db (the sink)
-      - {unit: ha-api.service,             must: active}   # read+control API (control mounts only on VIP holder)
+      - {unit: ha-writer.service,          must: active, on_fail: failover}   # home/+/+/state -> hot.db (the sink)
+      - {unit: ha-api.service,             must: active, on_fail: failover}   # read+control API (control mounts only on VIP holder)
       - {unit: ha-edge-mapper.service,     must: active}   # edge BLE advert -> canonical
       - {unit: ha-edge-history.service,    must: active}
       - {unit: ha-scanner.service,         must: active}   # onboard BLE scan -> canonical
@@ -41,11 +45,12 @@ roles:
       - {unit: ha-gas-quality-sampler.timer, must: active} # derived air-quality
       - {unit: ha-power-sampler.timer,     must: active}
       - {unit: ha-supervisor.timer,        must: active}   # the supervisor watches itself (must run everywhere)
+      - {unit: ha-service-healer.timer,    must: active}   # self-healing arm (restarts what the supervisor flags)
 
   # ── dictator: the record-of-record + active control loop (UNIVERSAL — both ha-2 and .210) ──
   dictator:
     units:
-      - {unit: ha-controller.service,      must: active}   # overrides core's 'gated' -> MUST be active here
+      - {unit: ha-controller.service,      must: active, on_fail: failover}   # overrides core's 'gated' -> MUST be active here
       - {unit: keepalived.service,         must: active}   # VRRP VIP (both dictators hold one)
       - {unit: ha-reconcile-history.service, must: active} # bidirectional hot.db reconcile (ADR-0016)
       - {unit: ha-cluster-heartbeat.service, must: active} # publish this node's liveness on ha/cluster/<node>/heartbeat

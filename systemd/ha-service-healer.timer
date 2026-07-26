@@ -1,0 +1,12 @@
+[Unit]
+Description=HA service healer timer — tick the self-heal loop every 30s
+
+[Timer]
+OnBootSec=90s
+OnUnitActiveSec=30s
+AccuracySec=5s
+# don't stack a backlog of missed ticks after a sleep/outage — one catch-up is enough
+Persistent=false
+
+[Install]
+WantedBy=timers.target

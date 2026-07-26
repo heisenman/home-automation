@@ -169,14 +169,20 @@ async def lifespan(app: FastAPI):
     disc_client = start_subscriber(DISCOVERY_CACHE,
                                    broker=os.environ.get("HA_BROKER", "localhost"),
                                    port=int(os.environ.get("HA_BROKER_PORT", "1883")))
+    # Cluster/service alerts for the PWA banner — also every instance, read-only (see cluster_alerts.py).
+    from server.api.cluster_alerts import start_cluster_alert_subscriber
+    clu_client = start_cluster_alert_subscriber(CLUSTER_ALERT_CACHE,
+                                                broker=os.environ.get("HA_BROKER", "localhost"),
+                                                port=int(os.environ.get("HA_BROKER_PORT", "1883")))
     try:
         yield
     finally:
         if push_task is not None:
             push_task.cancel()
-        if disc_client is not None:
-            disc_client.loop_stop()
-            disc_client.disconnect()
+        for _c in (disc_client, clu_client):
+            if _c is not None:
+                _c.loop_stop()
+                _c.disconnect()
         log.info("API shutdown")
 
 
@@ -211,6 +217,11 @@ WEB_DIR = Path(__file__).resolve().parents[1] / "web"   # server/web — the no-
 # Fed by a best-effort MQTT subscriber started per-instance in the lifespan (read-only, not VIP-gated:
 # both uvicorns serve requests, so each keeps its own cache). See server/ingest/discovery.py.
 DISCOVERY_CACHE = DiscoveryCache()
+
+# Cluster/service-health alerts (service_missing / node_down) for the PWA banner, fed from retained cluster
+# topics by a per-instance subscriber (read-only, not VIP-gated). See server/api/cluster_alerts.py.
+from server.api.cluster_alerts import ClusterAlertCache
+CLUSTER_ALERT_CACHE = ClusterAlertCache()
 
 
 def _make_auth_router(legacy_ok, signing_key):
@@ -1042,7 +1053,12 @@ def _build_current_alerts(now: float) -> list[dict]:
             reg = _control_registry()
             displays = [vm for did in sorted(store.all_policies(cc))
                         if (vm := build_display(cc, hc, did, now, registry=reg, meta=meta)) is not None]
-        return build_alerts(sensors, displays, now)
+        alerts = build_alerts(sensors, displays, now)
+        # merge in cluster/service-health alerts (service_missing / node_down) for the banner + MQTT snapshot
+        alerts += CLUSTER_ALERT_CACHE.to_alerts(now)
+        rank = {"critical": 0, "warning": 1, "info": 2}
+        alerts.sort(key=lambda a: (rank.get(a.get("severity"), 3), a.get("device_id", "")))
+        return alerts
     finally:
         if hc is not None:
             hc.close()

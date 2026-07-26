@@ -48,6 +48,7 @@ class NodeWatch:
         self._c = client
         self._last: dict[str, float] = {}     # node -> wall time of last FRESH heartbeat we saw
         self._down: set[str] = set()          # nodes currently in the alerted-down state
+        self._degraded: set[str] = set()      # nodes alive but reporting services_ok=false (plan Stage B)
 
     def on_connect(self, c, u, f, rc, props=None):
         c.subscribe("ha/cluster/+/heartbeat", qos=1)
@@ -72,6 +73,17 @@ class NodeWatch:
                 self._down.discard(node)
                 self._alert(node, "node_up", "info", d, "recovered")
                 self._liveness(node, True)
+            # Stage B: peer is ALIVE but its healer reports an escalated service gap (services_ok=false). VRRP
+            # can't see this; surface it as node_degraded (edge-triggered, like down/up). The peer's OWN healer
+            # is self-healing/peer-repairing; this is the "failover monitors services on the dictator" signal.
+            svc_ok = d.get("services_ok")
+            if svc_ok is False and node not in self._degraded:
+                self._degraded.add(node)
+                self._alert(node, "node_degraded", "warning", d,
+                            "alive but a required service is unhealed (services_ok=false)")
+            elif svc_ok is True and node in self._degraded:
+                self._degraded.discard(node)
+                self._alert(node, "node_undegraded", "info", d, "services recovered")
         # a payload without a fresh ts (e.g. a retained last-will 'offline') is handled by the staleness sweep
 
     def sweep(self):

@@ -19,7 +19,10 @@ vrrp_script chk_dictator {
     timeout 4
     fall 2
     rise 2
-    weight -40                 # an unfit dictator drops below the peer's priority -> failover
+    # -60 so an unfit MASTER (150-60=90) actually drops BELOW the standby (100) and yields the VIP. -40 was a
+    # latent bug: 150-40=110 > 100, so an unfit dictator never lost on health alone (failover only happened when
+    # it went fully silent). Widened as part of service-aware failover (plan crystalline-spinning-spindle, Stage C).
+    weight -60                 # unfit dictator drops below the standby's priority -> failover
 }
 
 vrrp_instance HA_DICTATOR {

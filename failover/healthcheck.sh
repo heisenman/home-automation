@@ -20,6 +20,19 @@ if [ -f "$FIT_FLAG" ]; then
   [ "$_age" -ge 0 ] && [ "$_age" -le "$MAINT_FIT_MAX_AGE" ] && exit 0
 fi
 
+# 0b. Service-completeness UNFIT (plan crystalline-spinning-spindle, Stage C). The service healer writes and
+# REFRESHES instance/.unfit while a FAILOVER-WORTHY required unit has stayed down past its threshold (self-heal
+# + peer-repair both failed). A FRESH marker -> this box is unfit to be dictator even though ha-api answers
+# (the 2026-07-26 case: :8123 up, but the front-end/controller dead), so the standby takes over. Applies on
+# ALL nets incl. air-gap. A STALE marker (healer stopped refreshing) is IGNORED so we never fail over on a
+# dead signal; maintenance-inhibit above still overrides (deliberate ops don't trip failover).
+: "${UNFIT_FRESH_S:=90}"
+UNFIT_FLAG="$REPO/instance/.unfit"
+if [ -f "$UNFIT_FLAG" ]; then
+  _uage=$(( $(date +%s) - $(stat -c %Y "$UNFIT_FLAG" 2>/dev/null || echo 0) ))
+  [ "$_uage" -ge 0 ] && [ "$_uage" -le "$UNFIT_FRESH_S" ] && exit 1
+fi
+
 # 1. local ha-api up (proves the stack is alive)
 curl -fsS --max-time 4 "$API/api/v1/sensors" >/dev/null 2>&1 || exit 1
 

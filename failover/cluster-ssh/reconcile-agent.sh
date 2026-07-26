@@ -31,6 +31,7 @@ TS='[0-9A-Za-z:._-]+'      # cutoff timestamp, e.g. 2026-07-09T00:00:00Z
 REL='[0-9A-Za-z._/-]+'     # relative repo path (parquet/hot.db/instance files)
 NAME='[0-9A-Za-z._-]+'     # snap / device name
 PID='[0-9]+'
+HAUNIT='ha-[0-9A-Za-z._-]+\.(service|timer)'   # peer-repair: an ha-* unit this box may be asked to rerun
 
 allow(){ [[ "$c" =~ ^$1$ ]] && run; }
 
@@ -49,5 +50,9 @@ allow "rm -f /tmp/$NAME\.snap"
 allow "scp( -[A-Za-z])* -t /tmp/$NAME\.(snap|parquet)"
 allow "scp( -[A-Za-z])* -f /tmp/$NAME\.(snap|parquet)"
 allow "scp( -[A-Za-z])* -f $REPO/$REL"
+# --- peer-repair (plan crystalline-spinning-spindle): a peer may ask this box to RERUN one of its own ha-*
+#     units. Bounded to ha-* (the NOPASSWD sudo scope), charset-clean, nothing else. File-pull needs no verb
+#     here — it rides the `scp -f $REPO/$REL` allow above (canonical repo copy, `..`-guarded). ---
+allow "sudo -n systemctl restart $HAUNIT"
 
 refuse
