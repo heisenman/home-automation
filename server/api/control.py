@@ -425,6 +425,20 @@ def _gap_watcher():
     return _GAP_MOD
 
 
+def _backfill_routes():
+    """Load ``instance/backfill-routes.yaml`` (device_id -> {via,node,profile}) so the on-demand recover +
+    checker route to the same node the nightly gap-watcher does. Without this the API falls back to
+    device_type inference (retired default node). Re-read each call (mtime is cheap; the file is tiny) so an
+    edit takes effect without an API restart. Returns {} if absent/unreadable."""
+    import yaml
+    from pathlib import Path
+    p = Path(__file__).resolve().parents[2] / "instance" / "backfill-routes.yaml"
+    try:
+        return yaml.safe_load(p.read_text()) or {} if p.exists() else {}
+    except Exception:
+        return {}
+
+
 def _load_registry_device(devices_path, device_id: str):
     """Return ``(mac, info)`` for ``device_id`` from the sensor registry, or ``(None, None)``.
     ``info`` carries device_type/area/backfill — everything the routing + dispatch need."""
@@ -455,7 +469,7 @@ def handle_history_gaps(device_id: str, devices_path, db_path,
     def _iso(epoch):
         return datetime.datetime.fromtimestamp(epoch, datetime.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
-    plan = gw.backfill_plan(info) if info else None
+    plan = gw.backfill_plan(info, _backfill_routes()) if info else None
     out_gaps = [{"start": _iso(a), "end": _iso(b), "gap_min": round(s / 60.0, 1)} for a, b, s in gaps]
     return 200, {
         "status": "ok",
@@ -484,7 +498,7 @@ def handle_history_recover(device_id: str, devices_path, db_path,
     if info is None or not mac:
         return 404, {"status": "unknown-device", "device_id": device_id,
                      "reason": "no registry entry (needs a MAC to pull history)"}
-    plan = gw.backfill_plan(info)
+    plan = gw.backfill_plan(info, _backfill_routes())
     if not plan:
         return 200, {"status": "no_route", "device_id": device_id,
                      "device_type": info.get("device_type"),
