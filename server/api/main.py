@@ -329,7 +329,8 @@ def _mount_control(app: FastAPI) -> None:
         app.include_router(make_registry_router(api_authz, DEVICES_REGISTRY, CONTROL_REGISTRY,
                                                  NODE_SECRETS_LUT, master,
                                                  discovery_cache=DISCOVERY_CACHE,
-                                                 edge_discovery_cache=EDGE_DISCOVERY_CACHE))  # add-device: BLE discover + standby-node intake (ADR-0036) + sensor/actuator/node-enroll
+                                                 edge_discovery_cache=EDGE_DISCOVERY_CACHE,
+                                                 broker=broker, port=port))  # add-device: BLE discover + standby-node intake (ADR-0036) + claim/enroll
         app.include_router(make_battery_router(master, NODE_SECRETS_LUT, broker=broker, port=port))  # on-demand SwitchBot battery refresh
         app.state.control_registry = registry      # device_id -> DeviceCtl (traits for manual-control UI)
         # live-reload control.yaml so an actuator RELOCATE (area edit) is reflected in /rooms + /displays

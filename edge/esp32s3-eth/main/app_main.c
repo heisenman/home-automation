@@ -118,7 +118,7 @@ void app_main(void) {
     static ha_config_t cfg;
     ha_config_load(&cfg, &(ha_config_t){ .wifi_ssid = HA_WIFI_SSID, .wifi_psk = HA_WIFI_PSK,
         .broker_uri = HA_BROKER_URI, .node_id = HA_NODE_ID, .ntp_server = HA_NTP_SERVER,
-        .ota_host = HA_OTA_HOST });
+        .ota_host = HA_OTA_HOST, .cmd_secret = HA_CMD_SECRET });
 
     // Air-gap repoint safety (DJ-19): BEFORE the network comes up, count this boot if a repoint is pending
     // and revert to the last-good config after too many failures (a bad broker/creds self-heals over the
@@ -127,7 +127,12 @@ void app_main(void) {
 
     // Install the ha_mqtt seam early — ha_mqtt_has_cmd_secret() is checked below (LED FATAL if un-enrolled),
     // before ha_mqtt_start. LED hooks are S3-specific; reach is wired on this node.
-    ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = HA_CMD_SECRET, .ota_host = cfg.ota_host,
+    //
+    // cmd_secret points at `cfg`'s buffer (which is `static`, so the pointer stays valid) rather than at
+    // the HA_CMD_SECRET literal. That aliasing is LOAD-BEARING on this board: unlike the C6, ha_mqtt_init
+    // runs BEFORE network bring-up, but ADR-0036 Layer 0 can only mint a secret AFTER the radio is up.
+    // Pointing at the buffer lets ha_config_ensure_node_secret() fill it in later and have ha_mqtt see it.
+    ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = cfg.cmd_secret, .ota_host = cfg.ota_host,
         .mqtt_user = HA_MQTT_USER, .mqtt_pass = HA_MQTT_PASS, .fw_version = HA_FW_VERSION,
         // ADR-0036 intake: S3-ETH compiles SGP40 unconditionally (gas_kitchen on the wired node); advertise it
         // so the hello identity is complete. Nodes with no physical sensor still carry the manifest's tag.
@@ -142,8 +147,8 @@ void app_main(void) {
     // Operability LED up early: OFF when healthy, lights ONLY on a fault (see ha_led.h / FIRMWARE-GUIDE §6).
     ha_led_init();
     ha_wifi_set_status_cb(s3_wifi_led);   // this board has an LED — drive it from the shared ha_wifi (ADR-0020)
-    if (!ha_mqtt_has_cmd_secret())
-        ha_led_set(HA_LED_FATAL);    // un-enrolled (no command secret) → can't accept commands/OTA; RED solid
+    // NB the un-enrolled FATAL check moved BELOW network bring-up (ADR-0036 L0): a generic image has no
+    // secret until it can mint one, so checking here would flash RED on every first boot.
 
     // PREFER the wire: try Ethernet first (short wait — the W5500 link comes up fast with a cable in).
     bool net_ok = false, on_wifi = false;
@@ -170,6 +175,15 @@ void app_main(void) {
         vTaskDelay(pdMS_TO_TICKS(10000));
         esp_restart();
     }
+
+    // ADR-0036 Layer 0 — mint this node's own command secret if it doesn't have one. MUST be here: AFTER
+    // the network is up (esp_random() is only a true HW RNG once the radio is running) and BEFORE
+    // ha_mqtt_start. Writes into cfg.cmd_secret, which ha_mqtt_init already aliased above. No-op for a
+    // node that already has one, so the enrolled fleet is unaffected.
+    if (!ha_config_ensure_node_secret(&cfg))
+        ESP_LOGE(TAG, "no command secret — node will reject every signed command (incl. OTA)");
+    if (!ha_mqtt_has_cmd_secret())
+        ha_led_set(HA_LED_FATAL);    // still no command secret → can't accept commands/OTA; RED solid
 
     if (!ha_sntp_sync(cfg.ntp_server, 15000)) {
         ESP_LOGW(TAG, "SNTP not synced — readings ship without ts; mapper stamps on ingest");

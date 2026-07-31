@@ -61,9 +61,14 @@ void app_main(void) {
         ESP_ERROR_CHECK(nvs_flash_init());
     }
 
-    ha_config_t cfg;
+    // STATIC, not a stack local — ha_mqtt/ha_ota keep POINTERS into this struct, so once app_main returns
+    // a stack cfg is freed and they read garbage (the C6 and S3 forks both hit this: the OTA gate saw
+    // node_id "unknown" and rejected every OTA). This fork still had the stack version; ADR-0036 Layer 0
+    // makes it acute, because cmd_secret is now aliased the same way.
+    static ha_config_t cfg;
     ha_config_load(&cfg, &(ha_config_t){ .wifi_ssid = HA_WIFI_SSID, .wifi_psk = HA_WIFI_PSK,
-        .broker_uri = HA_BROKER_URI, .node_id = HA_NODE_ID, .ntp_server = HA_NTP_SERVER });
+        .broker_uri = HA_BROKER_URI, .node_id = HA_NODE_ID, .ntp_server = HA_NTP_SERVER,
+        .cmd_secret = HA_CMD_SECRET });
 
     if (ha_wifi_connect(cfg.wifi_ssid, cfg.wifi_psk, 30000) != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi connect failed — restarting in 10s");
@@ -71,13 +76,19 @@ void app_main(void) {
         esp_restart();
     }
 
+    // ADR-0036 Layer 0 — mint this node's own command secret if it doesn't have one. AFTER Wi-Fi (the HW
+    // RNG needs the radio up), BEFORE ha_mqtt_init. No-op if it already has one.
+    if (!ha_config_ensure_node_secret(&cfg))
+        ESP_LOGE(TAG, "no command secret — node will reject every signed command (incl. OTA)");
+
     if (!ha_sntp_sync(cfg.ntp_server, 15000)) {
         ESP_LOGW(TAG, "SNTP not synced — readings ship without ts; mapper stamps on ingest");
     }
     ha_sntp_start_periodic(30 * 60 * 1000);   // re-sync every 30 min (the C6 RTC drifts fast)
 
     ha_relay_init();                // load the persisted Phase-B coverage allowlist (default: relay-all)
-    ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = HA_CMD_SECRET, .ota_host = HA_OTA_HOST,
+    // cfg.cmd_secret, NOT HA_CMD_SECRET — NVS-first (node-born/provisioned), compile-time fallback.
+    ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = cfg.cmd_secret, .ota_host = HA_OTA_HOST,
         .mqtt_user = HA_MQTT_USER, .mqtt_pass = HA_MQTT_PASS, .fw_version = HA_FW_VERSION,
         .enable_reach = false });   // c3 doesn't wire ha_reach
     ha_mqtt_start(cfg.broker_uri, cfg.node_id);

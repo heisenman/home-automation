@@ -75,6 +75,24 @@ link-up/down interrupts so a cable plug/unplug **reboots** to re-pick the transp
 VIP for broker/NTP/OTA-host (§3.6). The scan duty-cycle is keyed off which transport won (§3.2).
 
 ## 5. Security model — enrollment, signed commands, OTA
+
+> **Two enrollment models now coexist.** *Build-time* (below) bakes a secret into `secrets.h` — still the
+> path for the existing fleet, and still what `enroll_node.py` does. *Node-born* (ADR-0036 Layer 0,
+> shipped 2026-07-31) has the node mint its own secret on first boot and hand it to the dictator once, at
+> intake, so **one generic image can flash any board**. Precedence is NVS-first, compile-time fallback, so
+> a node that already has a build-time secret keeps it and never regenerates — reflashing the current
+> fleet changes nothing.
+>
+> Node-born, in short: after the radio is up (`esp_random()` is only a true HW RNG then — generating at
+> cold boot would mint predictable secrets across identical units), `ha_config_ensure_node_secret()`
+> computes `HMAC_SHA256(key = 32 random bytes, msg = base MAC)` and persists it to NVS. `hello.enrolled`
+> then means **claimed**, not "holds a secret" — every node holds one, so only a claim distinguishes
+> adopted hardware. The dictator claims via `POST /api/v1/edge-nodes/<node>/claim` (or implicitly on
+> intake), which is the **one unsigned request** the firmware honours, exactly once, ever. Two latches
+> bound it: the node's persistent one-shot (NVS wipe = physical presence to re-adopt) and the dictator's
+> TOFU-lock (first claim of a `node_id` binds it; a different secret or MAC later is refused, never
+> overwritten). See ADR-0036 and `server/control/edge_enroll.py`.
+
 Trust root = **physical-presence cable flash from the dictator** (ADR-0010/0011). Per node:
 ```bash
 HA_MASTER_PASSPHRASE="$(cat instance/.master_pass)" python3 tools/enroll_node.py \

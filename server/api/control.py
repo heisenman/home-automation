@@ -692,7 +692,7 @@ def make_device_meta_router(api_authz, control_db, placement_path=None, devices_
 
 
 def make_registry_router(api_authz, devices_path, control_path=None, node_secrets_path=None, master=None,
-                         discovery_cache=None, edge_discovery_cache=None):
+                         discovery_cache=None, edge_discovery_cache=None, broker="localhost", port=1883):
     """Admin-gated device registration (the add-device flow, ADR-0002 trait registry):
       GET  /api/v1/discover         -> unregistered BLE candidates heard nearby (the "see the filtered-out
                                        data" half of onboarding). Also returns edge_nodes[] (ADR-0036:
@@ -748,6 +748,46 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
                                 content={"status": "bad-request", "reason": "area must be a non-empty string"})
         area = area.strip()
         dry_run = bool((body or {}).get("dry_run", False))
+
+        # ADR-0036 Layer 3 — CLAIM before adopt. A node-born node (Layer 0) minted its own command secret
+        # and nobody else knows it yet, so the dictator cannot sign anything to it: no OTA, no history
+        # pull, no relay directive. Adopting it into a room without claiming would produce a half-wired
+        # device that publishes readings but can never be commanded — the same half-wired-record failure
+        # ADR-0036 was written to avoid. Claim first, and refuse the adopt if we can't.
+        #
+        # Skipped when the node is ALREADY in the LUT (every legacy build-time-enrolled node), so this is
+        # a no-op for the existing fleet. Also skipped on dry_run — a dry run must not burn the node's
+        # one-shot enroll window.
+        claim_result = None
+        if node_secrets_path is not None and master is not None and not dry_run:
+            from server.control import edge_enroll
+            from server.control import secret_store as ss
+            try:
+                already = node in ss.load_lut(Path(node_secrets_path), master)
+            except Exception as exc:                      # noqa: BLE001 — LUT unreadable is operator-facing
+                return JSONResponse(status_code=500,
+                                    content={"status": "error", "reason": f"cannot read node LUT: {exc}"})
+            if not already:
+                try:
+                    claim_result = edge_enroll.claim_node(
+                        node, broker=broker, port=port, node_secrets_path=Path(node_secrets_path),
+                        master=master)
+                except edge_enroll.ClaimError as exc:
+                    # Escape hatch for hardware that legitimately can't be claimed — pre-ADR-0036 firmware
+                    # with no enroll handler, or a node whose one-shot window is already spent. Opt-in and
+                    # LOUD, never a silent fallback: the resulting device publishes readings but cannot be
+                    # commanded (no OTA, no history pull, no relay directive), and the operator should know
+                    # they are adopting a half-wired node rather than discover it later.
+                    if not bool((body or {}).get("allow_unclaimed", False)):
+                        return JSONResponse(status_code=409,
+                                            content={"status": "claim-failed", "node": node,
+                                                     "reason": str(exc),
+                                                     "hint": "re-POST with allow_unclaimed=true to adopt "
+                                                             "anyway; the node will NOT accept commands "
+                                                             "or OTA until it is enrolled"})
+                    claim_result = {"status": "unclaimed", "node_id": node, "reason": str(exc),
+                                    "warning": "adopted WITHOUT a command secret — node cannot be "
+                                               "commanded or OTA'd"}
         # Intake default 'forward': the node's banked standby/bench data STAYS where it was (it isn't this
         # room's history); only readings from adoption onward are the room's. Override with mode=restamp to
         # carry the whole history to the new area.
@@ -760,7 +800,7 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
         return JSONResponse(status_code=code,
                             content={"status": payload.get("status", "?"), "node": node,
                                      "device_id": device_id, "area": area, "dry_run": dry_run,
-                                     "relocate": payload})
+                                     "claim": claim_result, "relocate": payload})
 
     @router.post("/devices", dependencies=[Depends(require_admin)])
     async def add_device(body: dict = Body(...)):
@@ -778,6 +818,23 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
         async def enroll_node(body: dict = Body(...)):
             code, payload = handle_enroll_node(Path(node_secrets_path), master, body)
             return JSONResponse(status_code=code, content=payload)
+
+        @router.post("/edge-nodes/{node}/claim", dependencies=[Depends(require_admin)])
+        async def claim_edge_node(node: str):
+            """ADR-0036 Layer 3: claim a node-born node's secret WITHOUT adopting it into a room.
+
+            The adopt flow (/intake) claims implicitly; this exists for the cases where you want the two
+            separated — re-running a claim whose reply was lost, or enrolling bench hardware you aren't
+            placing yet. Idempotent when the same node re-presents the same secret; a different secret for
+            a known node_id is refused by the TOFU-lock rather than overwritten. Never returns the secret."""
+            from server.control import edge_enroll
+            try:
+                return JSONResponse(status_code=200, content=edge_enroll.claim_node(
+                    node, broker=broker, port=port, node_secrets_path=Path(node_secrets_path),
+                    master=master))
+            except edge_enroll.ClaimError as exc:
+                return JSONResponse(status_code=409,
+                                    content={"status": "claim-failed", "node": node, "reason": str(exc)})
 
     return router
 

@@ -90,7 +90,7 @@ void app_main(void) {
     static ha_config_t cfg;
     ha_config_load(&cfg, &(ha_config_t){ .wifi_ssid = HA_WIFI_SSID, .wifi_psk = HA_WIFI_PSK,
         .broker_uri = HA_BROKER_URI, .node_id = HA_NODE_ID, .ntp_server = HA_NTP_SERVER,
-        .ota_host = HA_OTA_HOST });
+        .ota_host = HA_OTA_HOST, .cmd_secret = HA_CMD_SECRET });
 
     // Air-gap repoint safety (DJ-19): BEFORE we touch Wi-Fi, count this boot if a repoint is pending and
     // revert to the last-good config after too many failures. Must be here — a bad SSID fails the connect
@@ -102,6 +102,13 @@ void app_main(void) {
         vTaskDelay(pdMS_TO_TICKS(10000));
         esp_restart();
     }
+
+    // ADR-0036 Layer 0 — mint this node's own command secret if it doesn't have one. MUST be here:
+    // AFTER the radio is up (esp_random() is only a true HW RNG once it is — generating at cold boot
+    // would mint predictable secrets across identical units) and BEFORE ha_mqtt_init consumes it.
+    // No-op for a node that already has one, so the existing enrolled fleet is unaffected.
+    if (!ha_config_ensure_node_secret(&cfg))
+        ESP_LOGE(TAG, "no command secret — node will reject every signed command (incl. OTA)");
 
     if (!ha_sntp_sync(cfg.ntp_server, 15000)) {
         ESP_LOGW(TAG, "SNTP not synced — readings ship without ts; mapper stamps on ingest");
@@ -118,7 +125,9 @@ void app_main(void) {
 #else
     const char *node_abilities = "sgp40_gas";
 #endif
-    ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = HA_CMD_SECRET, .ota_host = cfg.ota_host,
+    // cfg.cmd_secret, NOT HA_CMD_SECRET — ha_config resolves NVS-first (node-born or provisioned) with
+    // the compile-time value as the legacy fallback (ADR-0036 L0).
+    ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = cfg.cmd_secret, .ota_host = cfg.ota_host,
         .mqtt_user = HA_MQTT_USER, .mqtt_pass = HA_MQTT_PASS, .fw_version = HA_FW_VERSION,
         .abilities = node_abilities, .enable_reach = true });
     ha_mqtt_start(cfg.broker_uri, cfg.node_id);

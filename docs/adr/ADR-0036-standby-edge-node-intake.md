@@ -1,5 +1,25 @@
 # ADR-0036 — Standby edge-node intake (self-provision + discover + relocate)
 
+**Implementation status (2026-07-31):** Layers 1–3 (discover → PWA standby list → relocate) shipped
+2026-07-26 @f243a54. **Layer 0 (node-born secret) + the Layer 3 claim/TOFU-lock — deferred at the time —
+are now implemented** (Hugh, 2026-07-31):
+
+| Piece | Where |
+|---|---|
+| Self-generate after radio-up, NVS-first precedence | `ha_config_ensure_node_secret()` — `firmware/components/ha_config/` |
+| `enrolled` = *claimed*, not *holds a secret* | `ha_config_is_claimed()`; drives `hello.enrolled` |
+| Node-side one-shot enroll latch | `handle_enroll_req()` — `firmware/components/ha_mqtt/ha_mqtt.c` |
+| Dictator-side claim + **TOFU-lock** | `server/control/edge_enroll.py` |
+| Claim wired into adopt, plus a standalone verb | `POST /api/v1/edge-nodes/{node}/intake`, `…/claim` |
+| Lock regression tests | `tests/test_edge_enroll.py` (8 cases) |
+
+Notable refinement vs. the design below: the ADR specified the node replies with its secret if
+"not yet claimed", but left `enrolled` reading as "holds a usable command secret". Once **every** node
+self-provisions on first boot that predicate is always true, so it can no longer distinguish adoptable
+hardware. `enrolled` was therefore redefined as **claimed** (persistent NVS latch), with a compile-time
+secret counting as claimed-by-construction so the legacy fleet is unaffected. Flashing this firmware to
+an already-enrolled node is a no-op: it keeps its build-time secret and never regenerates.
+
 **Status:** Accepted (2026-07-26, Hugh). Interactive design session; decisions recorded
 inline below. Supersedes the flash-time-only enrollment assumption of ADR-0020 for *new*
 standby hardware (already-enrolled nodes are unaffected).
@@ -133,6 +153,18 @@ last-seen`). Selecting one opens **"assign to area"**, which drives:
 - **Demo vehicle:** `standby_c6` is *already enrolled* (secret in node + LUT), so it proves
   the **discover → relocate** loop today. The **self-provision + register** path (Layer 0/1
   claim) is proven separately on a unit flashed with the generic, secret-less image.
+  *(2026-07-31: the dictator half is proven against a mock node — first claim binds; the node's
+  one-shot latch refuses the second; a rogue presenting a different secret for a bound `node_id`
+  is refused by the TOFU-lock with the LUT verifiably unchanged. Proving the firmware half still
+  needs a real unit flashed with a secret-less image — see the open item below.)*
+- **OPEN — needs hardware:** no live node has yet been flashed with a secret-less image, so the
+  firmware half of Layer 0/3 is compile-verified (all three targets build) and logic-verified, not
+  bench-verified. Do that on a USB-recoverable bench unit before trusting it in the field: the
+  failure mode to watch is a node that mints a secret the dictator never learns, which is
+  un-commandable and un-OTA-able — recoverable only by cable.
+- Adopting a node the dictator cannot claim is refused by default (409). `allow_unclaimed=true`
+  overrides it for pre-ADR-0036 hardware, and says plainly in the response that the resulting
+  device takes no commands and no OTA.
 - Bring-up hazard (recorded): the C6 build tree's `secrets.h` is per-node and git-ignored;
   for a *legacy* reflash use `enroll_node.py --from-manifest --reuse` for the **correct**
   node_id or you overwrite a live node's identity (split-brain).

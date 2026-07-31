@@ -13,13 +13,52 @@ typedef struct {
     char ntp_server[64];
     char ota_host[64];      // OTA host pin (ADR-0010). Overlaid from NVS "ha" key "ota_host" so a repoint
                             // can move it; app_main seeds the compile-time default (HA_OTA_HOST).
+    char cmd_secret[65];    // ADR-0036 Layer 0: the node's HMAC command secret, 64 hex chars + NUL.
+                            // Precedence is NVS-FIRST, compile-time fallback (the reverse of every other
+                            // key here): a node-born secret must never be shadowed by a stale build-time
+                            // one. Empty on a generic image until ha_config_ensure_node_secret() runs.
 } ha_config_t;
 
 // Seed *cfg from *defaults (the board's compile-time secrets.h values, passed by app_main so this
 // component stays secrets-free), then overlay any NVS-provisioned values (namespace "ha", keys
-// wifi_ssid/wifi_psk/broker_uri/node_id/ntp_server/ota_host). NVS wins where present (production
-// provisioning). The loaded effective config is cached for ha_config_repoint_apply's backup.
+// wifi_ssid/wifi_psk/broker_uri/node_id/ntp_server/ota_host/cmd_secret). NVS wins where present
+// (production provisioning). The loaded effective config is cached for ha_config_repoint_apply's backup.
 void ha_config_load(ha_config_t *cfg, const ha_config_t *defaults);
+
+// --- ADR-0036 Layer 0: node-born command secret -----------------------------------------------------
+// Ensure this node HAS a command secret, generating one if it doesn't. Call ONCE, AFTER the network is
+// up and BEFORE ha_mqtt_init.
+//
+// **The timing is load-bearing, not stylistic.** esp_random() is only a true hardware RNG once the radio
+// is running; before that it degrades to a weak PRNG. Generating at cold boot would mint predictable
+// secrets across a whole fleet of identical units. Call this only after ha_wifi_connect()/ha_eth has
+// succeeded.
+//
+// Precedence, in order:
+//   1. an NVS secret (namespace "ha", key "cmd_secret") — a node-born or provisioned secret, wins;
+//   2. else the compile-time secret in cfg->cmd_secret (a LEGACY enrolled node, ADR-0020) — kept as-is
+//      and NEVER overwritten, so flashing this firmware to the existing fleet changes nothing;
+//   3. else generate: secret = HMAC_SHA256(key = 32 random bytes, msg = base MAC), hex-encoded.
+//      The 256-bit random is what makes it unguessable; the MAC is a domain separator giving
+//      uniqueness-by-construction. The secret is NOT derived from the MAC alone — a MAC is public, so
+//      that would be predictable.
+//
+// Writes through to cfg->cmd_secret either way, so the caller can hand it straight to ha_mqtt_init.
+// Returns true if *cfg ends up holding a usable secret. Idempotent across reboots (case 1 after the
+// first run). At 256 bits the birthday bound is ~2^128, so chance collision is not a concern.
+bool ha_config_ensure_node_secret(ha_config_t *cfg);
+
+// True once this node has been CLAIMED by a dictator (ADR-0036 Layer 3 TOFU), or if it carries a
+// legacy compile-time secret (already enrolled by construction). Drives `hello.enrolled`, which is what
+// the PWA uses to tell adoptable hardware from adopted. NB this is deliberately NOT "do I hold a
+// secret" — with Layer 0 every node self-provisions a secret on first boot, so holding one no longer
+// implies anyone knows it.
+bool ha_config_is_claimed(void);
+
+// Record that this node has been claimed (persists to NVS). Called by the enroll handler after it hands
+// the secret to the dictator exactly once. Returns false if the NVS write failed — the caller MUST then
+// treat the claim as not having happened, or a reboot would re-open the one-shot window.
+bool ha_config_mark_claimed(void);
 
 // --- Repoint (air-gap migration; the signed "repoint" cmd, ADR-0028/DJ-19) -------------------------
 // Move this node to a new Wi-Fi + broker by rewriting the "ha" overlay, then rebooting. node_id is

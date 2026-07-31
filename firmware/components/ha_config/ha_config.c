@@ -8,10 +8,20 @@
 #include "nvs.h"
 #include "esp_log.h"
 #include "esp_system.h"
+#include "esp_random.h"         // ADR-0036 Layer 0: HW RNG for the node-born secret (radio must be up)
+#include "esp_mac.h"            // ADR-0036 Layer 0: base MAC as the secret's domain separator
+#include "mbedtls/md.h"         // ADR-0036 Layer 0: HMAC-SHA256 construction
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 
 static const char *TAG = "ha_config";
+
+// ADR-0036 Layer 0/3 provisioning state. The secret itself lives in the "ha" namespace beside the rest of
+// the overlay (so a repoint backup/restore never touches it); the one-shot CLAIM flag lives here, apart
+// from config, because it is a security latch rather than a setting — clearing config must not silently
+// re-open the enroll window.
+#define PROV_NS      "ha_prov"
+#define PROV_CLAIMED "claimed"
 
 // Repoint boot-count revert (DJ-19): a separate NVS namespace holds the pending flag, the trial-boot
 // counter, and a backup of the pre-repoint effective config. After RP_MAX_TRIES failed trial boots the
@@ -24,13 +34,24 @@ static const char *TAG = "ha_config";
 static ha_config_t s_effective;
 static bool s_have_effective;
 
-// Overlay one string key from NVS namespace "ha" if present.
-static void nvs_overlay(nvs_handle_t h, const char *key, char *dst, size_t dst_sz) {
+// Overlay one string key from NVS namespace "ha" if present. Returns true if NVS supplied the value —
+// the caller uses that for cmd_secret to tell a PROVISIONED secret (node-born or written by a flashing
+// tool) from a compile-time one, which is what distinguishes adoptable hardware from a legacy enrolled
+// node. Do NOT log the value of a secret key; the key name alone is fine.
+static bool nvs_overlay(nvs_handle_t h, const char *key, char *dst, size_t dst_sz) {
     size_t len = dst_sz;
     if (nvs_get_str(h, key, dst, &len) == ESP_OK) {
         ESP_LOGI(TAG, "config[%s] from NVS", key);
+        return true;
     }
+    return false;
 }
+
+// Did cmd_secret come from NVS (node-born / provisioned) rather than the compiled defaults? Persisted
+// implicitly: it is recomputed from NVS on every ha_config_load, so it survives reboots correctly. A
+// compile-time secret means the node was enrolled at build time (ADR-0020) and is claimed by
+// construction; an NVS secret means nobody necessarily knows it yet.
+static bool s_secret_from_nvs;
 
 void ha_config_load(ha_config_t *cfg, const ha_config_t *defaults) {
     // 1) compile-time defaults (board's secrets.h, passed by app_main)
@@ -45,12 +66,95 @@ void ha_config_load(ha_config_t *cfg, const ha_config_t *defaults) {
         nvs_overlay(h, "node_id", cfg->node_id, sizeof(cfg->node_id));
         nvs_overlay(h, "ntp_server", cfg->ntp_server, sizeof(cfg->ntp_server));
         nvs_overlay(h, "ota_host", cfg->ota_host, sizeof(cfg->ota_host));
+        // ADR-0036 Layer 0. Same overlay call, but note the PRECEDENCE here is the same as every other
+        // key (NVS wins over the compile default) — which for the secret is the security-critical
+        // direction: a node-born secret must never be shadowed by a stale build-time one.
+        s_secret_from_nvs = nvs_overlay(h, "cmd_secret", cfg->cmd_secret, sizeof(cfg->cmd_secret));
         nvs_close(h);
     }
     s_effective = *cfg;          // cache for repoint backup
     s_have_effective = true;
-    ESP_LOGI(TAG, "node=%s broker=%s ntp=%s ssid=%s ota_host=%s",
-             cfg->node_id, cfg->broker_uri, cfg->ntp_server, cfg->wifi_ssid, cfg->ota_host);
+    // NB: cmd_secret is deliberately absent from this line — we log its PRESENCE, never its value.
+    ESP_LOGI(TAG, "node=%s broker=%s ntp=%s ssid=%s ota_host=%s secret=%s",
+             cfg->node_id, cfg->broker_uri, cfg->ntp_server, cfg->wifi_ssid, cfg->ota_host,
+             cfg->cmd_secret[0] ? "yes" : "no");
+}
+
+// --- ADR-0036 Layer 0: node-born command secret -----------------------------------------------------
+
+bool ha_config_is_claimed(void) {
+    nvs_handle_t h;
+    if (nvs_open(PROV_NS, NVS_READONLY, &h) == ESP_OK) {   // namespace absent on a never-claimed node
+        uint8_t v = 0;
+        esp_err_t e = nvs_get_u8(h, PROV_CLAIMED, &v);
+        nvs_close(h);
+        if (e == ESP_OK && v == 1) return true;
+    }
+    // Legacy path: a COMPILE-TIME secret means the node was enrolled at build time (ADR-0020) and is
+    // claimed by construction — it must never show up in the PWA as adoptable standby hardware. A secret
+    // that came from NVS proves nothing: it may be node-born and still unknown to any dictator.
+    return s_have_effective && s_effective.cmd_secret[0] && !s_secret_from_nvs;
+}
+
+bool ha_config_mark_claimed(void) {
+    nvs_handle_t h;
+    if (nvs_open(PROV_NS, NVS_READWRITE, &h) != ESP_OK) return false;
+    esp_err_t e = nvs_set_u8(h, PROV_CLAIMED, 1);
+    if (e == ESP_OK) e = nvs_commit(h);
+    nvs_close(h);
+    if (e != ESP_OK) { ESP_LOGE(TAG, "claim: NVS commit failed (%s)", esp_err_to_name(e)); return false; }
+    ESP_LOGW(TAG, "claimed by dictator — enroll window CLOSED (wipe NVS to re-adopt)");
+    return true;
+}
+
+bool ha_config_ensure_node_secret(ha_config_t *cfg) {
+    if (!cfg) return false;
+
+    // 1) / 2) Already have one (NVS-overlaid by ha_config_load, or compiled in) — never regenerate.
+    // Regenerating would orphan the node: the dictator's LUT still holds the old secret, so every signed
+    // command (including the OTA that could fix it) would fail verification.
+    if (cfg->cmd_secret[0]) return true;
+
+    // 3) Generate. esp_random() is a TRUE hardware RNG only once the radio is up — the caller guarantees
+    // that by calling us after network bring-up. 32 random bytes are the entropy; the base MAC is a
+    // domain separator so two units can never collide even in the pathological case of a shared RNG
+    // stream. Deriving from the MAC ALONE would be predictable (a MAC is public), hence HMAC(random, mac)
+    // and not HMAC(mac, anything).
+    uint8_t key[32];
+    esp_fill_random(key, sizeof(key));
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+
+    unsigned char out[32];
+    const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
+    if (!info || mbedtls_md_hmac(info, key, sizeof(key), mac, sizeof(mac), out) != 0) {
+        ESP_LOGE(TAG, "secret: HMAC failed — node stays unprovisioned");
+        return false;
+    }
+    char hex[65];
+    for (int i = 0; i < 32; i++) snprintf(hex + i * 2, 3, "%02x", out[i]);
+    hex[64] = '\0';
+
+    // Persist BEFORE adopting it in-process: if the commit fails we must not run with a secret the node
+    // would forget on reboot (the dictator would enroll a secret that dies at the next power cycle).
+    nvs_handle_t h;
+    esp_err_t e = nvs_open("ha", NVS_READWRITE, &h);
+    if (e == ESP_OK) {
+        e = nvs_set_str(h, "cmd_secret", hex);
+        if (e == ESP_OK) e = nvs_commit(h);
+        nvs_close(h);
+    }
+    if (e != ESP_OK) {
+        ESP_LOGE(TAG, "secret: NVS persist failed (%s) — node stays unprovisioned", esp_err_to_name(e));
+        return false;
+    }
+
+    snprintf(cfg->cmd_secret, sizeof(cfg->cmd_secret), "%s", hex);
+    s_effective = *cfg;                 // keep the repoint backup in step with reality
+    s_have_effective = true;
+    s_secret_from_nvs = true;           // node-born => NVS-sourced => UNCLAIMED until a dictator claims it
+    ESP_LOGW(TAG, "node-born command secret generated + persisted (unclaimed; awaiting dictator intake)");
+    return true;
 }
 
 bool ha_config_repoint_apply(const char *ssid, const char *psk, const char *broker,

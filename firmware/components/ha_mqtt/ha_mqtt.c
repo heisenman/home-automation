@@ -33,6 +33,8 @@ static char s_status_topic[64];
 static char s_cmd_topic[64];
 static char s_relay_topic[64];        // home/edge/<node>/relay — signed Phase-B coverage directives
 static char s_reach_req_topic[64];    // home/edge/<node>/reach/req — signed census trigger (ADR-0023)
+static char s_enroll_req_topic[72];   // home/edge/<node>/enroll/req — ADR-0036 L3 claim (UNSIGNED, one-shot)
+static char s_enroll_rep_topic[72];   // home/edge/<node>/enroll/reply — the one-time secret handover
 static char s_online_msg[64];     // "online <slot> <fwver>" — shows which OTA slot/version is running
 static char s_hello_topic[64];    // home/edge/<node>/hello — ADR-0036 retained self-describing identity
 static char s_hello_msg[256];     // the identity JSON, built once at start, published retained on connect
@@ -244,6 +246,59 @@ static void handle_reach_req(const char *data, int len) {
     cJSON_Delete(root);
 }
 
+static void build_hello(const esp_partition_t *run);   // defined below; the claim re-publishes hello
+
+// ADR-0036 Layer 3 — the claim (TOFU handover). This is the ONE unsigned request this firmware honours,
+// and it is honoured AT MOST ONCE in the life of the node's NVS.
+//
+// Chicken-and-egg: the dictator cannot sign a request to a node whose secret it does not yet know, so
+// the very first contact must be unsigned. We bound that hole with a one-shot latch instead of a
+// signature: the node hands its node-born secret over exactly once, sets a persistent `claimed` flag,
+// and every subsequent enroll request — signed or not — is refused. Re-adoption requires an NVS wipe,
+// i.e. physical presence, which keeps the ADR-0010/0011 trust root intact.
+//
+// The residual exposure is the window between first boot and intake: anyone on the broker in that window
+// could claim the unit first. That is the accepted TOFU trade (Hugh, ADR-0036) on an air-gapped LAN with
+// an anonymous broker, and it FAILS SAFE AND LOUD — a hijacked claim burns the one shot, so the
+// dictator's own claim is refused and the operator sees the node stuck unadopted rather than silently
+// owned. Hardening for an internet-facing broker (a shared bootstrap key) does not change this shape.
+static void handle_enroll_req(const char *data, int len) {
+    (void)data; (void)len;                    // the request carries no fields we act on — presence is the ask
+
+    if (ha_config_is_claimed()) {             // one-shot latch: already claimed -> refuse, say nothing more
+        ha_mqtt_log("enroll/req refused: already claimed (NVS wipe required to re-adopt)");
+        return;
+    }
+    const char *secret = s_cfg.cmd_secret;
+    if (!secret || !secret[0]) {              // nothing to hand over (generation failed / legacy blank)
+        ha_mqtt_log("enroll/req refused: no node secret to hand over");
+        return;
+    }
+
+    // Latch FIRST, then reply. If the commit fails we must not emit the secret at all — otherwise a node
+    // that forgets it was claimed would hand the same secret out again after a reboot, turning a one-shot
+    // into an open window.
+    if (!ha_config_mark_claimed()) {
+        ha_mqtt_log("enroll/req refused: could not persist claim latch");
+        return;
+    }
+
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char msg[192];
+    snprintf(msg, sizeof(msg),
+             "{\"schema\":1,\"node\":\"%s\",\"mac\":\"%02x:%02x:%02x:%02x:%02x:%02x\",\"secret\":\"%s\"}",
+             s_node, mac[0], mac[1], mac[2], mac[3], mac[4], mac[5], secret);
+    // QoS 1, retain=FALSE — deliberately. A retained secret would sit on the broker for any later
+    // subscriber to read; this must reach the dictator listening now, once, and then be gone.
+    esp_mqtt_client_publish(s_client, s_enroll_rep_topic, msg, 0, 1, false);
+    ESP_LOGW(TAG, "enroll: secret handed over; node CLAIMED");
+
+    // Re-publish hello so the dictator/PWA see enrolled=true without waiting for a reconnect.
+    build_hello(esp_ota_get_running_partition());
+    if (s_hello_msg[0]) esp_mqtt_client_publish(s_client, s_hello_topic, s_hello_msg, 0, 1, true);
+}
+
 static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id, void *event_data) {
     esp_mqtt_event_handle_t e = event_data;
     switch ((esp_mqtt_event_id_t)event_id) {
@@ -258,6 +313,11 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
             esp_mqtt_client_subscribe(s_client, s_relay_topic, 1);   // Phase B coverage directives (retained)
             if (s_cfg.enable_reach)
                 esp_mqtt_client_subscribe(s_client, s_reach_req_topic, 1);   // ADR-0023 census trigger
+            // ADR-0036 L3: only an UNCLAIMED node listens for a claim at all. Once claimed we don't even
+            // subscribe — the one-shot latch is enforced in the handler too, but not being on the topic
+            // makes the closed window structural rather than a code path someone could regress.
+            if (!ha_config_is_claimed())
+                esp_mqtt_client_subscribe(s_client, s_enroll_req_topic, 1);
             break;
         case MQTT_EVENT_DISCONNECTED:
             s_connected = false;
@@ -272,6 +332,9 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
             else if (s_cfg.enable_reach && e->topic_len == (int)strlen(s_reach_req_topic) &&
                      strncmp(e->topic, s_reach_req_topic, e->topic_len) == 0)
                 handle_reach_req(e->data, e->data_len);
+            else if (e->topic_len == (int)strlen(s_enroll_req_topic) &&
+                     strncmp(e->topic, s_enroll_req_topic, e->topic_len) == 0)
+                handle_enroll_req(e->data, e->data_len);      // ADR-0036 L3 claim (one-shot, unsigned)
             break;
         default:
             break;
@@ -321,9 +384,11 @@ static void build_hello(const esp_partition_t *run) {
     cJSON_AddStringToObject(root, "mac", macbuf);
     cJSON_AddStringToObject(root, "fw", s_cfg.fw_version ? s_cfg.fw_version : "?");
     cJSON_AddStringToObject(root, "slot", run ? run->label : "?");
-    // enrolled = does this node hold a usable command secret yet? (Layer-0 self-provision flips this true
-    // once claimed; today it just mirrors the compiled secret so the server can flag un-adopted hardware.)
-    cJSON_AddBoolToObject(root, "enrolled", ha_mqtt_has_cmd_secret());
+    // enrolled = has a dictator CLAIMED this node (ADR-0036 L3), i.e. does anyone else know its secret?
+    // NOT "do I hold a secret": since Layer 0 every node mints its own on first boot, holding one no
+    // longer implies it is adopted — that distinction is exactly what the PWA's standby list keys off.
+    // A legacy node with a compile-time secret reads as claimed by construction.
+    cJSON_AddBoolToObject(root, "enrolled", ha_config_is_claimed());
     cJSON *abil = cJSON_CreateArray();
     if (s_cfg.abilities && s_cfg.abilities[0]) {
         char tmp[128];
@@ -352,6 +417,8 @@ void ha_mqtt_start(const char *broker_uri, const char *node_id) {
     snprintf(s_relay_topic, sizeof(s_relay_topic), "home/edge/%s/relay", s_node);
     snprintf(s_reach_req_topic, sizeof(s_reach_req_topic), "home/edge/%s/reach/req", s_node);
     snprintf(s_hello_topic, sizeof(s_hello_topic), "home/edge/%s/hello", s_node);
+    snprintf(s_enroll_req_topic, sizeof(s_enroll_req_topic), "home/edge/%s/enroll/req", s_node);
+    snprintf(s_enroll_rep_topic, sizeof(s_enroll_rep_topic), "home/edge/%s/enroll/reply", s_node);
     const esp_partition_t *run = esp_ota_get_running_partition();
     snprintf(s_online_msg, sizeof(s_online_msg), "online %s %s", run ? run->label : "?",
              s_cfg.fw_version ? s_cfg.fw_version : "?");
