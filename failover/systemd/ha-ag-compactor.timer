@@ -1,0 +1,13 @@
+[Unit]
+# 03:00 UTC — an hour after the dictator's ha-compactor (02:00) so the two boxes don't rewrite the same
+# Parquet partitions at the same moment and hand ha-ag-reconcile-parquet a needlessly large diff.
+Description=[AG-FAILOVER] Home Automation — Daily Parquet Compactor Timer
+After=ha-ag-writer.service
+
+[Timer]
+OnCalendar=*-*-* 03:00:00 UTC
+Persistent=true
+Unit=ha-ag-compactor.service
+
+[Install]
+WantedBy=timers.target

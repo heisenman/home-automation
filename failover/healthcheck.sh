@@ -33,8 +33,21 @@ if [ -f "$UNFIT_FLAG" ]; then
   [ "$_uage" -ge 0 ] && [ "$_uage" -le "$UNFIT_FRESH_S" ] && exit 1
 fi
 
-# 1. local ha-api up (proves the stack is alive)
-curl -fsS --max-time 4 "$API/api/v1/sensors" >/dev/null 2>&1 || exit 1
+# 1. local ha-api up (proves the stack is alive: uvicorn serving AND the hot DB readable).
+#
+# MUST be an O(1) probe. This used to hit /api/v1/sensors, which builds the whole PWA sensor view via an
+# UNBOUNDED `GROUP BY device_id, metric` scan of every authoritative row (viewmodel.build_sensor_list) — so
+# the probe's cost scaled with dataset size. On 2026-07-27 that bit hard: the air-gap standby's hot.db had
+# grown to 2.9M rows (no compactor in the ha-ag-* set), /api/v1/sensors hit 8.96s, and keepalived calls this
+# script every 5s with a 4s timeout. curl gave up at 4s but uvicorn's anyio worker kept running the 9s query
+# to completion (a client disconnect does NOT cancel a sync threadpool call), so work arrived faster than it
+# drained -> a core pinned at 100% (+8W at the wall) AND the check could never pass -> weight -60 -> the
+# air-gap VIP could no longer move to the standby. A liveness probe silently disarmed failover.
+#
+# /health is index-backed (MAX(ts) on idx_readings_ts) and proves strictly MORE than the old probe did:
+# same "uvicorn is answering", plus the hot DB actually opens and reads. 0.48s vs 8.96s on that same 2.9M-row
+# db. Keep any future fitness signal O(1) — never wire this to a view builder.
+curl -fsS --max-time 4 "$API/health" >/dev/null 2>&1 || exit 1
 
 # Air-gap dictator: no household actuators to reach (its actuator set grows as devices migrate) —
 # fit on API alone, else it'd be wrongly marked unfit for a .0.x Midea it can't reach. (DJ-16)

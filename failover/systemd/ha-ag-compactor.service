@@ -1,0 +1,39 @@
+[Unit]
+# The air-gap standby's missing compactor (added 2026-07-31).
+#
+# The hand-curated ha-ag-* unit set gave the standby a full INGEST path (writer, mapper, edge-history,
+# tasmota-bridge, reconcile) but no COMPACTOR — so its hot.db only ever grew. That was inert while the
+# standby was stalled, but the 2026-07-26 reconcile fix (CLUSTER_SSH_PORT=47222) turned the tap on at
+# ~440k rows/day and hot.db reached 2.9M rows / 656MB + a 608MB WAL in five days. Every O(rows) read path
+# scaled with it — most damagingly /api/v1/sensors, which keepalived's healthcheck was probing every 5s
+# (see failover/healthcheck.sh §1). Unbounded hot-tier growth on a box that ingests is a bug, not a
+# tuning knob: mirror the dictator's daily compaction here so the standby stays a faithful replica in
+# SHAPE as well as content.
+#
+# Same policy as ha-compactor on the dictator: flush everything older than yesterday 00:00 UTC to
+# partitioned Parquet + the summaries tier, then delete those rows from hot. Parquet divergence between
+# peers is expected and is exactly what ha-ag-reconcile-parquet.timer already reconciles.
+Description=[AG-FAILOVER] Home Automation — Daily Parquet Compactor (one-shot)
+Documentation=file:///home/visko/ha-airgap-standby/home-automation-architecture-plan.md
+After=ha-ag-writer.service
+
+[Service]
+Type=oneshot
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/ha-airgap-standby
+ExecStart=/home/visko/ha-airgap-standby/venv/bin/python3 \
+    server/storage/compactor.py \
+    --db instance/db/hot.db \
+    --parquet-dir instance/db/parquet \
+    --log-level INFO
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/visko/ha-airgap-standby/instance
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-ag-compactor
