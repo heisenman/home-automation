@@ -1,0 +1,26 @@
+[Unit]
+# Board task healthcheck-latency-guard. Watches the MARGIN on every keepalived track_script rather than
+# its verdict, because the 2026-07-27 outage was silent for four days: the probe took 8.96s against a 4s
+# timeout, so it could never pass and the air-gap VIP could never move — and a permanently-failing probe
+# looks identical to a working one from the outside. Alerts at 50% of the timeout, while there is still
+# room to act. See docs/decisions/os-service-optimization.md, failover/healthcheck.sh.
+Description=HA failover — keepalived track_script latency guard (alert before the timeout is crossed)
+Documentation=file:///home/visko/home_automation/tools/healthcheck_latency_guard.py
+After=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as root: it reads /etc/keepalived/keepalived.conf and truncates stat files that keepalived (root)
+# appends to. It only ever reads config and writes its own stat files.
+User=root
+WorkingDirectory=/home/visko/home_automation
+ExecStart=/home/visko/home_automation/venv/bin/python3 \
+    /home/visko/home_automation/tools/healthcheck_latency_guard.py --broker 127.0.0.1
+# Findings exit 1 — that is a report, not a unit failure. Without this the timer would show as failed
+# every cycle while a real finding is outstanding, which trains everyone to ignore it.
+SuccessExitStatus=0 1
+Nice=10
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

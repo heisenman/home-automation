@@ -1,0 +1,16 @@
+[Unit]
+Description=HA failover — run the keepalived track_script latency guard every 5 minutes
+Documentation=file:///home/visko/home_automation/tools/healthcheck_latency_guard.py
+
+[Timer]
+# Every 5 minutes. The probe itself runs every 5s, so one cycle collects ~60 samples per leg — enough to
+# catch a spike, while keeping the guard itself far too infrequent to matter for power (the thing that
+# started this whole thread). Latency creep is a days-long trend; 5 minutes is ample resolution.
+OnBootSec=5min
+OnUnitActiveSec=5min
+# Survive a reboot gap: if the box was down, run once shortly after boot rather than waiting a full cycle.
+Persistent=true
+AccuracySec=30s
+
+[Install]
+WantedBy=timers.target

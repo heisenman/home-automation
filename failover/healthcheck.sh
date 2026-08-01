@@ -7,6 +7,26 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && p
 [ -f "$REPO/instance/cluster.env" ] && . "$REPO/instance/cluster.env"
 : "${API:=http://localhost:8123}"
 
+# --- latency self-instrumentation (board healthcheck-latency-guard) --------------------------------
+# Record how long THIS run took and how it exited, so healthcheck_latency_guard.py can alert BEFORE the
+# script crosses keepalived's `timeout` — the 2026-07-27 outage was silent for 4 days precisely because
+# nothing watched this number (8.96s against a 4s timeout, so the check could never pass and the air-gap
+# VIP could never move).
+#
+# MUST cost ~nothing: this runs every 5s on every leg, and keepalived's fork/exec churn is already a
+# measured power item (board os-idle-churn — ~14 processes per cycle). So: $EPOCHREALTIME is a bash
+# builtin (no `date`), printf is a builtin, and the append is one redirect. Zero extra processes.
+# The guard truncates the file when it reads; errors are swallowed so instrumentation can NEVER make a
+# fitness probe fail (a broken stat file must not take down failover).
+_HC_T0=$EPOCHREALTIME
+_HC_STAT="$REPO/instance/.healthcheck-latency"
+_hc_record() {
+    local rc=$?
+    printf '%s %s %s\n' "$_HC_T0" "$EPOCHREALTIME" "$rc" >>"$_HC_STAT" 2>/dev/null
+    return $rc
+}
+trap _hc_record EXIT
+
 # 0. Maintenance inhibit. While a FRESH flag exists, report FIT so a DELIBERATE ha-api restart (the
 # device-admin orchestration's fleet-restart, or a cutover restart) can't drop priority -> spurious
 # failover (the failover-primitives lesson: don't let an op flap the VIP it runs under). Staleness-bounded
