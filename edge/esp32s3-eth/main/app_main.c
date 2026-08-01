@@ -120,6 +120,17 @@ void app_main(void) {
         .broker_uri = HA_BROKER_URI, .node_id = HA_NODE_ID, .ntp_server = HA_NTP_SERVER,
         .ota_host = HA_OTA_HOST, .cmd_secret = HA_CMD_SECRET });
 
+    // Phase-0 identity gate (ADR-0036): refuse to run if this board is not the one the NVS blob was minted
+    // for. With a GENERIC image the binary no longer carries a node identity, so this eFuse-MAC binding IS
+    // the anti-cross-provisioning guard that the per-node build used to provide — it is stronger, because
+    // it checks silicon rather than trusting a manifest line a human typed. Without it a generic S3 image
+    // would happily adopt whatever blob it found. (The C6 has had this since 412da0a.)
+    char why[96];
+    if (!ha_config_identity_ok(&cfg, why, sizeof(why))) {
+        ESP_LOGE(TAG, "REFUSING TO START — %s. Re-flash this board with an NVS blob minted for it.", why);
+        while (1) vTaskDelay(pdMS_TO_TICKS(10000));
+    }
+
     // Air-gap repoint safety (DJ-19): BEFORE the network comes up, count this boot if a repoint is pending
     // and revert to the last-good config after too many failures (a bad broker/creds self-heals over the
     // air). Transport-agnostic — works with this node's Ethernet-first / Wi-Fi-fallback path.
@@ -132,11 +143,34 @@ void app_main(void) {
     // the HA_CMD_SECRET literal. That aliasing is LOAD-BEARING on this board: unlike the C6, ha_mqtt_init
     // runs BEFORE network bring-up, but ADR-0036 Layer 0 can only mint a secret AFTER the radio is up.
     // Pointing at the buffer lets ha_config_ensure_node_secret() fill it in later and have ha_mqtt see it.
+    // Resolve the gas chip BEFORE ha_mqtt_init so the hello advertises what this board ACTUALLY has.
+    // Safe this early: probing is pure I2C and needs no radio. Precedence matches the C6 — NVS pin (what
+    // the PWA flasher wrote) -> legacy compile-select from secrets.h -> AUTO, ask the hardware.
+    // Pads are board-specific: Waveshare S3-ETH is GPIO42 (SDA) / GPIO41 (SCL); the C6's 22/23 DO NOT
+    // EXIST on this chip. Autodetect also separates SGP40 from SGP41 (shared address 0x59 — a wrong guess
+    // silently costs the NOx pixel; see sgp4x_identify).
+    ha_gas_sensor_t gas = ha_gas_from_name(cfg.gas_sensor);
+    if (gas == HA_GAS_SENSOR_AUTO) {
+#if defined(HA_GAS_SGP30)
+        gas = HA_GAS_SENSOR_SGP30;
+#elif defined(HA_GAS_BME680)
+        gas = HA_GAS_SENSOR_BME680;
+#elif defined(HA_GAS_SGP41)
+        gas = HA_GAS_SENSOR_SGP41;
+#elif defined(HA_GAS_SGP40)
+        gas = HA_GAS_SENSOR_SGP40;
+#else
+        gas = ha_gas_detect(42, 41);      // generic image, nothing pinned -> ask the hardware
+#endif
+    }
+
     ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = cfg.cmd_secret, .ota_host = cfg.ota_host,
         .mqtt_user = HA_MQTT_USER, .mqtt_pass = HA_MQTT_PASS, .fw_version = HA_FW_VERSION,
-        // ADR-0036 intake: S3-ETH compiles SGP40 unconditionally (gas_kitchen on the wired node); advertise it
-        // so the hello identity is complete. Nodes with no physical sensor still carry the manifest's tag.
-        .abilities = "sgp40_gas",
+        // ADR-0036 intake: advertise what we RESOLVED, never a hardcoded guess. This said "sgp40_gas"
+        // unconditionally, which a generic image must not do — a node claiming an ability it lacks gets
+        // auto-registered into a device record that never produces data (the half-wired-record failure).
+        // NULL for a board with no sensor: that is a legitimate relay-only node, not a broken one.
+        .abilities = ha_gas_device_type(gas),
         .enable_reach = true, .on_connected = s3_led_ok, .on_disconnected = s3_led_mqtt_down,
         .ota_on_fail = s3_led_ota_fail });
 
@@ -212,8 +246,9 @@ void app_main(void) {
     };
     ha_reach_start(&reach_cfg);
 
-    // SGP-40 VOC gas lane (I2C, independent of the radio) — no-op if the sensor isn't wired.
-    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_SGP40, 42, 41);   // S3-ETH SGP40 on Waveshare I2C pads GPIO42/41 (the C6's 22/23 don't exist on the S3)
+    // Gas lane (I2C, independent of the radio) — no-op if no sensor is wired. `gas` was resolved above,
+    // before ha_mqtt_init, so the hello and the running lane can never disagree.
+    ha_gas_start(cfg.node_id, gas, 42, 41);   // cfg.node_id, NOT HA_NODE_ID — identity lives in NVS now
 
     // If we just booted a freshly-OTA'd image, self-test now and confirm-or-rollback.
     ha_ota_confirm_if_pending();

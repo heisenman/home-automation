@@ -70,6 +70,16 @@ void app_main(void) {
         .broker_uri = HA_BROKER_URI, .node_id = HA_NODE_ID, .ntp_server = HA_NTP_SERVER,
         .cmd_secret = HA_CMD_SECRET });
 
+    // Phase-0 identity gate (ADR-0036): refuse to run if this board is not the one the NVS blob was minted
+    // for. With a GENERIC image the binary carries no node identity, so this eFuse-MAC binding IS the
+    // anti-cross-provisioning guard the per-node build used to provide — and a stronger one, since it
+    // checks silicon rather than trusting a manifest line a human typed.
+    char why[96];
+    if (!ha_config_identity_ok(&cfg, why, sizeof(why))) {
+        ESP_LOGE(TAG, "REFUSING TO START — %s. Re-flash this board with an NVS blob minted for it.", why);
+        while (1) vTaskDelay(pdMS_TO_TICKS(10000));
+    }
+
     if (ha_wifi_connect(cfg.wifi_ssid, cfg.wifi_psk, 30000) != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi connect failed — restarting in 10s");
         vTaskDelay(pdMS_TO_TICKS(10000));
