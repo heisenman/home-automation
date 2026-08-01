@@ -13,6 +13,11 @@ typedef struct {
     char ntp_server[64];
     char ota_host[64];      // OTA host pin (ADR-0010). Overlaid from NVS "ha" key "ota_host" so a repoint
                             // can move it; app_main seeds the compile-time default (HA_OTA_HOST).
+    char gas_sensor[12];    // "sgp40"|"sgp30"|"bme680"|"none"|"auto"(default) — which gas chip is fitted.
+                            // NVS-provisioned by the flasher, or left empty/"auto" to let the firmware
+                            // probe the I2C bus and find out. Resolved via ha_gas_from_name().
+    char bind_mac[18];      // "AA:BB:CC:DD:EE:FF" — the eFuse base MAC this NVS blob was minted FOR.
+                            // Empty = unbound (legacy / hand-flashed). See ha_config_identity_ok().
     char cmd_secret[65];    // ADR-0036 Layer 0: the node's HMAC command secret, 64 hex chars + NUL.
                             // Precedence is NVS-FIRST, compile-time fallback (the reverse of every other
                             // key here): a node-born secret must never be shadowed by a stale build-time
@@ -24,6 +29,22 @@ typedef struct {
 // wifi_ssid/wifi_psk/broker_uri/node_id/ntp_server/ota_host/cmd_secret). NVS wins where present
 // (production provisioning). The loaded effective config is cached for ha_config_repoint_apply's backup.
 void ha_config_load(ha_config_t *cfg, const ha_config_t *defaults);
+
+// --- Identity binding (generic-image flashing) ------------------------------------------------------
+// Does this NVS config actually belong to THIS chip? Returns true if cfg->bind_mac is empty (unbound —
+// legacy nodes and hand-built images, unchanged behaviour) or matches the eFuse base MAC.
+//
+// This is the ADR-0020 anti-cross-provisioning gate, MOVED rather than dropped. Historically an image was
+// branded for one node_id at build time, so flashing it to the wrong board was the hazard (the 2026-07-05
+// coffice_c6-onto-cbed_c6 incident). With one generic image per target that hazard moves to the NVS blob:
+// the wrong blob would give a board someone else's identity. Binding the blob to the eFuse MAC read off
+// the physical chip at flash time makes that impossible — and it is STRONGER than the old gate, because
+// the MAC comes from the silicon rather than from a manifest line a human typed.
+//
+// Call after ha_config_load and BEFORE anything uses the identity (MQTT, OTA). A mismatch means the board
+// was re-flashed with a blob minted for a different chip; the caller should refuse to come up rather than
+// impersonate another node.
+bool ha_config_identity_ok(const ha_config_t *cfg, char *why, size_t why_sz);
 
 // --- ADR-0036 Layer 0: node-born command secret -----------------------------------------------------
 // Ensure this node HAS a command secret, generating one if it doesn't. Call ONCE, AFTER the network is

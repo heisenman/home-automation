@@ -1,5 +1,6 @@
 #include "ha_gas.h"
 #include <stdio.h>
+#include <string.h>         // strcmp — the ha_gas_from_name/name mapping (ADR-0036 generic image)
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
 #include "esp_log.h"
@@ -163,7 +164,81 @@ static void gas_task(void *arg) {
     }
 }
 
+// --- Name/type mapping + autodetect (ADR-0036 generic image) -----------------------------------------
+// The three families ACK at DISTINCT I2C addresses, so a bus probe identifies the soldered part with no
+// configuration at all. That is what lets ONE build serve any sensor: the image stops needing to know.
+
+#define ADDR_SGP30   0x58
+#define ADDR_SGP40   0x59
+#define ADDR_BME680A 0x76
+#define ADDR_BME680B 0x77
+
+ha_gas_sensor_t ha_gas_from_name(const char *name) {
+    if (!name || !name[0])                return HA_GAS_SENSOR_AUTO;
+    if (!strcmp(name, "sgp40"))           return HA_GAS_SENSOR_SGP40;
+    if (!strcmp(name, "sgp30"))           return HA_GAS_SENSOR_SGP30;
+    if (!strcmp(name, "bme680"))          return HA_GAS_SENSOR_BME680;
+    if (!strcmp(name, "none"))            return HA_GAS_SENSOR_NONE;
+    return HA_GAS_SENSOR_AUTO;            // unknown -> probe; never guess a driver from a bad string
+}
+
+const char *ha_gas_name(ha_gas_sensor_t s) {
+    switch (s) {
+        case HA_GAS_SENSOR_SGP40:  return "sgp40";
+        case HA_GAS_SENSOR_SGP30:  return "sgp30";
+        case HA_GAS_SENSOR_BME680: return "bme680";
+        case HA_GAS_SENSOR_NONE:   return "none";
+        default:                   return "auto";
+    }
+}
+
+const char *ha_gas_device_type(ha_gas_sensor_t s) {
+    switch (s) {
+        case HA_GAS_SENSOR_SGP40:  return "sgp40_gas";
+        case HA_GAS_SENSOR_SGP30:  return "sgp30_gas";
+        case HA_GAS_SENSOR_BME680: return "bme680_gas";
+        default:                   return NULL;          // AUTO/NONE describe no concrete ability
+    }
+}
+
+ha_gas_sensor_t ha_gas_detect(int sda_gpio, int scl_gpio) {
+    i2c_master_bus_config_t bus_cfg = {
+        .clk_source                   = I2C_CLK_SRC_DEFAULT,
+        .i2c_port                     = GAS_I2C_PORT,
+        .sda_io_num                   = sda_gpio,
+        .scl_io_num                   = scl_gpio,
+        .glitch_ignore_cnt            = 7,
+        .flags.enable_internal_pullup = true,
+    };
+    i2c_master_bus_handle_t bus;
+    if (i2c_new_master_bus(&bus_cfg, &bus) != ESP_OK) return HA_GAS_SENSOR_NONE;
+    ha_gas_sensor_t found = HA_GAS_SENSOR_NONE;
+    // Order matters only for the BME680's two possible addresses; the families cannot collide.
+    if      (i2c_master_probe(bus, ADDR_SGP40,   50) == ESP_OK) found = HA_GAS_SENSOR_SGP40;
+    else if (i2c_master_probe(bus, ADDR_SGP30,   50) == ESP_OK) found = HA_GAS_SENSOR_SGP30;
+    else if (i2c_master_probe(bus, ADDR_BME680A, 50) == ESP_OK) found = HA_GAS_SENSOR_BME680;
+    else if (i2c_master_probe(bus, ADDR_BME680B, 50) == ESP_OK) found = HA_GAS_SENSOR_BME680;
+    i2c_del_master_bus(bus);                 // leave the bus free for ha_gas_start to claim properly
+    return found;
+}
+
+ha_gas_sensor_t ha_gas_active(void) { return s_sensor; }
+
 void ha_gas_start(const char *node_id, ha_gas_sensor_t sensor, int sda_gpio, int scl_gpio) {
+    if (sensor == HA_GAS_SENSOR_NONE) {      // relay-only node: no lane, and that is not an error
+        s_sensor = HA_GAS_SENSOR_NONE;
+        return;
+    }
+    if (sensor == HA_GAS_SENSOR_AUTO) {
+        sensor = ha_gas_detect(sda_gpio, scl_gpio);
+        if (sensor == HA_GAS_SENSOR_NONE) {
+            s_sensor = HA_GAS_SENSOR_NONE;
+            ha_mqtt_log("GAS: autodetect found nothing on SDA=GPIO%d SCL=GPIO%d — relay-only "
+                        "(check wiring/3V3 if a sensor IS fitted)", sda_gpio, scl_gpio);
+            return;
+        }
+        ha_mqtt_log("GAS: autodetected %s", ha_gas_name(sensor));
+    }
     s_sensor = sensor;
     s_sda = sda_gpio;
     s_scl = scl_gpio;

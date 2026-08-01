@@ -92,6 +92,17 @@ void app_main(void) {
         .broker_uri = HA_BROKER_URI, .node_id = HA_NODE_ID, .ntp_server = HA_NTP_SERVER,
         .ota_host = HA_OTA_HOST, .cmd_secret = HA_CMD_SECRET });
 
+    // Identity gate (ADR-0020, moved to the NVS blob for generic-image flashing). If this NVS config was
+    // minted for a DIFFERENT chip, refuse to come up rather than impersonate another node — a wrong blob
+    // is the generic-image equivalent of the 2026-07-05 cross-flash. No-op when unbound (legacy images).
+    // Halt rather than reboot-loop: the board is on a bench with a cable, and a loop would just obscure
+    // the log line that says exactly what to do.
+    char why[96];
+    if (!ha_config_identity_ok(&cfg, why, sizeof(why))) {
+        ESP_LOGE(TAG, "REFUSING TO START — %s. Re-flash this board with an NVS blob minted for it.", why);
+        while (1) vTaskDelay(pdMS_TO_TICKS(10000));
+    }
+
     // Air-gap repoint safety (DJ-19): BEFORE we touch Wi-Fi, count this boot if a repoint is pending and
     // revert to the last-good config after too many failures. Must be here — a bad SSID fails the connect
     // below and reboots before any late hook, so only an early counter catches that failure mode.
@@ -116,15 +127,29 @@ void app_main(void) {
     ha_sntp_start_periodic(30 * 60 * 1000);   // re-sync every 30 min (the C6 RTC drifts fast)
 
     ha_relay_init();                // load the persisted Phase-B coverage allowlist (default: relay-all)
-    // ADR-0036 intake: advertise the soldered gas sensor's device_type so the server can surface this node
-    // as a standby-hardware candidate in the PWA. Matches the compile-select below (secrets.h).
+
+    // Which gas chip is fitted, resolved at RUNTIME so one generic image serves any node. Precedence:
+    //   1. NVS `gas_sensor` (set by the flasher from the PWA's selection) — an explicit pin;
+    //   2. else the legacy compile-select from secrets.h, so existing per-node builds behave exactly as
+    //      before and reflashing the current fleet changes nothing;
+    //   3. else AUTO — probe the bus. The families ACK at distinct addresses, so this is unambiguous.
+    // XIAO ESP32-C6 Grove I2C pads: D4 = GPIO22 (SDA), D5 = GPIO23 (SCL).
+    ha_gas_sensor_t gas = ha_gas_from_name(cfg.gas_sensor);
+    if (gas == HA_GAS_SENSOR_AUTO) {
 #if defined(HA_GAS_SGP30)
-    const char *node_abilities = "sgp30_gas";
+        gas = HA_GAS_SENSOR_SGP30;
 #elif defined(HA_GAS_BME680)
-    const char *node_abilities = "bme680_gas";
+        gas = HA_GAS_SENSOR_BME680;
+#elif defined(HA_GAS_SGP40)
+        gas = HA_GAS_SENSOR_SGP40;
 #else
-    const char *node_abilities = "sgp40_gas";
+        gas = ha_gas_detect(22, 23);      // generic image, nothing pinned -> ask the hardware
 #endif
+    }
+    // Advertise what we ACTUALLY resolved, not what we were told — a node that reports an ability it
+    // doesn't have would be auto-registered by ADR-0036 intake into a device record that never produces
+    // data (the half-wired-record failure). NULL for a relay-only node: no gas ability to claim.
+    const char *node_abilities = ha_gas_device_type(gas);
     // cfg.cmd_secret, NOT HA_CMD_SECRET — ha_config resolves NVS-first (node-born or provisioned) with
     // the compile-time value as the legacy fallback (ADR-0036 L0).
     ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = cfg.cmd_secret, .ota_host = cfg.ota_host,
@@ -150,16 +175,10 @@ void app_main(void) {
     ha_reach_start(&reach_cfg);
 
     // Dual-role add-on: bring up the gas lane alongside the BLE relay. No-op-safe — if the sensor isn't
-    // wired it logs and returns, and the node keeps relaying BLE. The soldered sensor is a per-node
-    // compile-select (secrets.h); resolve it to the shared ha_gas component's runtime enum (ADR-0020).
-    // XIAO ESP32-C6 Grove I2C pads: D4 = GPIO22 (SDA), D5 = GPIO23 (SCL).
-#if defined(HA_GAS_SGP30)
-    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_SGP30, 22, 23);
-#elif defined(HA_GAS_BME680)
-    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_BME680, 22, 23);
-#else
-    ha_gas_start(HA_NODE_ID, HA_GAS_SENSOR_SGP40, 22, 23);
-#endif
+    // wired it logs and returns, and the node keeps relaying BLE. `gas` was resolved above (NVS pin ->
+    // legacy compile-select -> autodetect), and node_id comes from cfg so a generic image uses whatever
+    // identity its NVS blob carries rather than a baked-in HA_NODE_ID.
+    ha_gas_start(cfg.node_id, gas, 22, 23);
 
     // If we just booted a freshly-OTA'd image, self-test now and confirm-or-rollback.
     ha_ota_confirm_if_pending();

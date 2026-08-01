@@ -120,9 +120,18 @@ def image_app_version(bin_path):
     return hdr[16:48].split(b"\0", 1)[0].decode("utf-8", "replace")
 
 
-def assert_image_matches_node(bin_path, node, force=False):
-    """Cross-provisioning guard (ADR-0020): the image is branded '<node>@<ver>' in app_desc.version.
-    Refuse to push an image built for a different node (this is the 2026-07-05 cbed<-coffice class of bug)."""
+def assert_image_matches_node(bin_path, node, force=False, target=None):
+    """Cross-provisioning guard (ADR-0020). Two legitimate brandings in app_desc.version:
+
+        "<node>@<ver>"      a per-node build (the historical model, still how the fleet ships)
+        "generic@<target>"  the ADR-0036 generic image, which carries NO node identity at all
+
+    Accepting the generic form does not weaken the guard. The harm it exists to prevent is an image coming
+    up wearing a DIFFERENT node's identity (2026-07-05, cbed_c6 <- coffice_c6). A generic image has no
+    identity to wear — node_id/broker/gas live in NVS, which OTA never writes, and that blob is bound to
+    the chip's eFuse MAC. So the harm is structurally impossible rather than merely checked-for. Chip
+    target still matters, which is why the generic form names it; pass `target` to enforce it here too
+    (the firmware enforces it regardless, against its own CONFIG_IDF_TARGET)."""
     ver = image_app_version(bin_path)
     if ver is None:
         print(f"  WARNING: no app_desc in {bin_path} — cannot verify image identity", file=sys.stderr)
@@ -130,9 +139,21 @@ def assert_image_matches_node(bin_path, node, force=False):
     if ver.startswith(f"{node}@"):
         print(f"  identity OK: image '{ver}' is built for '{node}'")
         return
+    if ver.startswith("generic@"):
+        img_target = ver.split("@", 1)[1]
+        if target and img_target != target:
+            msg = (f"REFUSING OTA: generic image is for target '{img_target}' but node '{node}' is "
+                   f"'{target}'. Wrong chip family — this would fail its self-test and roll back.")
+            if force:
+                print(f"  --force: {msg}", file=sys.stderr)
+                return
+            sys.exit(msg)
+        print(f"  identity OK: generic image '{ver}' (identity lives in NVS, bound to the chip's eFuse MAC)")
+        return
     msg = (f"REFUSING OTA: image is branded '{ver}' but target node is '{node}' "
-           f"(expected '{node}@…'). Cross-provisioning guard (ADR-0020) — rebuild for {node} via "
-           f"`enroll_node.py --node-id {node} --from-manifest --reuse` then rebuild, or pass --force.")
+           f"(expected '{node}@…' or 'generic@<target>'). Cross-provisioning guard (ADR-0020) — rebuild "
+           f"for {node} via `enroll_node.py --node-id {node} --from-manifest --reuse` then rebuild, "
+           f"or pass --force.")
     if force:
         print(f"  --force: {msg}", file=sys.stderr)
     else:

@@ -129,14 +129,29 @@ static void ota_task(void *arg) {
         ota_log("OTA REJECTED: no image descriptor"); goto fail;
     }
     {
-        char want[48]; snprintf(want, sizeof(want), "%s@", node_id());
-        if (strncmp(img_desc.version, want, strlen(want)) != 0) {
-            ota_log("OTA REJECTED: image built for another node (version='%s', this node=%s)",
-                    img_desc.version, node_id());
+        // Two legitimate brandings:
+        //   "<node_id>@<ver>"  — a per-node build (the historical model; still how the deployed fleet ships)
+        //   "generic@<target>" — the ADR-0036 generic image, which carries NO identity at all
+        //
+        // Accepting the generic form does NOT weaken the gate. What the gate exists to prevent is an image
+        // coming up wearing a DIFFERENT node's identity (2026-07-05, cbed_c6 <- coffice_c6). A generic
+        // image has no identity to wear: node_id, broker and the rest live in NVS, which OTA never writes,
+        // and the NVS blob is itself bound to this chip's eFuse MAC (ha_config_identity_ok). So the harm is
+        // structurally impossible rather than merely checked-for. What DOES still matter is the chip
+        // target, so the generic form must name it — an esp32s3 image must never be accepted here.
+        char want_node[48];    snprintf(want_node, sizeof(want_node), "%s@", node_id());
+        char want_generic[48]; snprintf(want_generic, sizeof(want_generic), "generic@%s", CONFIG_IDF_TARGET);
+        bool per_node = strncmp(img_desc.version, want_node, strlen(want_node)) == 0;
+        bool generic  = strcmp(img_desc.version, want_generic) == 0;
+        if (!per_node && !generic) {
+            ota_log("OTA REJECTED: image is neither built for this node nor generic for this target "
+                    "(version='%s', this node=%s, target=%s)",
+                    img_desc.version, node_id(), CONFIG_IDF_TARGET);
             goto fail;
         }
+        ota_log("OTA identity OK: %s image accepted (version=%s, node=%s)",
+                generic ? "generic" : "per-node", img_desc.version, node_id());
     }
-    ota_log("OTA identity OK: image is for %s (version=%s)", node_id(), img_desc.version);
 
     do { err = esp_https_ota_perform(h); } while (err == ESP_ERR_HTTPS_OTA_IN_PROGRESS);
     if (err != ESP_OK || !esp_https_ota_is_complete_data_received(h)) {

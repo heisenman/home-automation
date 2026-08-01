@@ -18,8 +18,29 @@ typedef enum {
     HA_GAS_SENSOR_SGP40 = 0,   // Sensirion SGP40 VOC index (0x59) — the default
     HA_GAS_SENSOR_SGP30,       // Sensirion SGP30 eCO2 + TVOC (0x58)
     HA_GAS_SENSOR_BME680,      // Bosch BME680 T/RH/P + gas resistance (0x76/0x77)
+    HA_GAS_SENSOR_AUTO,        // probe the bus and pick — see ha_gas_start / ha_gas_detect
+    HA_GAS_SENSOR_NONE,        // no gas lane on this node (relay-only); ha_gas_start returns immediately
 } ha_gas_sensor_t;
+
+// Probe the I2C bus and return which supported gas chip is present, or HA_GAS_SENSOR_NONE if none ACKs.
+// The three families sit at DISTINCT addresses (SGP30 0x58, SGP40 0x59, BME680 0x76/0x77), so a probe
+// identifies the part unambiguously — no configuration needed to know what is soldered. Safe to call
+// before ha_gas_start; it leaves the bus deinitialised.
+ha_gas_sensor_t ha_gas_detect(int sda_gpio, int scl_gpio);
+
+// Map to/from the short names used on the wire and in NVS ("sgp40"/"sgp30"/"bme680"/"auto"/"none").
+// ha_gas_from_name returns HA_GAS_SENSOR_AUTO for NULL/""/unrecognised — the safe default, because an
+// unknown string must not silently select the wrong driver.
+ha_gas_sensor_t ha_gas_from_name(const char *name);
+const char *ha_gas_name(ha_gas_sensor_t s);
+// The device_type this family publishes under ("sgp40_gas" etc.), or NULL for AUTO/NONE. Used for the
+// ADR-0036 `hello` abilities list, so a node advertises what it ACTUALLY found, not what it was told.
+const char *ha_gas_device_type(ha_gas_sensor_t s);
 
 // sda_gpio/scl_gpio are the board's I2C pads for the gas sensor (board-specific — e.g. XIAO C6 = 22/23,
 // Waveshare S3-ETH = 42/41; GPIO22/23 don't exist on the S3). No-op if the sensor isn't wired/present.
+// Pass HA_GAS_SENSOR_AUTO to probe-and-pick (ADR-0036 generic image: one build serves any sensor).
 void ha_gas_start(const char *node_id, ha_gas_sensor_t sensor, int sda_gpio, int scl_gpio);
+
+// Which sensor ha_gas_start actually ended up running (resolved from AUTO), or NONE if the lane is down.
+ha_gas_sensor_t ha_gas_active(void);

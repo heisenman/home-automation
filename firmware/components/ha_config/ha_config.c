@@ -69,6 +69,8 @@ void ha_config_load(ha_config_t *cfg, const ha_config_t *defaults) {
         // ADR-0036 Layer 0. Same overlay call, but note the PRECEDENCE here is the same as every other
         // key (NVS wins over the compile default) — which for the secret is the security-critical
         // direction: a node-born secret must never be shadowed by a stale build-time one.
+        nvs_overlay(h, "gas_sensor", cfg->gas_sensor, sizeof(cfg->gas_sensor));
+        nvs_overlay(h, "bind_mac", cfg->bind_mac, sizeof(cfg->bind_mac));
         s_secret_from_nvs = nvs_overlay(h, "cmd_secret", cfg->cmd_secret, sizeof(cfg->cmd_secret));
         nvs_close(h);
     }
@@ -78,6 +80,28 @@ void ha_config_load(ha_config_t *cfg, const ha_config_t *defaults) {
     ESP_LOGI(TAG, "node=%s broker=%s ntp=%s ssid=%s ota_host=%s secret=%s",
              cfg->node_id, cfg->broker_uri, cfg->ntp_server, cfg->wifi_ssid, cfg->ota_host,
              cfg->cmd_secret[0] ? "yes" : "no");
+}
+
+// --- Identity binding (generic-image flashing) ------------------------------------------------------
+
+bool ha_config_identity_ok(const ha_config_t *cfg, char *why, size_t why_sz) {
+    if (why && why_sz) why[0] = '\0';
+    if (!cfg || !cfg->bind_mac[0]) return true;      // unbound: legacy / hand-built image — unchanged
+
+    uint8_t mac[6] = {0};
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    char actual[18];
+    snprintf(actual, sizeof(actual), "%02X:%02X:%02X:%02X:%02X:%02X",
+             mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+
+    // Case-insensitive: the blob may be minted with either case; the silicon is the authority either way.
+    if (strcasecmp(actual, cfg->bind_mac) == 0) return true;
+
+    if (why && why_sz)
+        snprintf(why, why_sz, "NVS bound to %s but this chip is %s", cfg->bind_mac, actual);
+    ESP_LOGE(TAG, "IDENTITY MISMATCH: NVS config was minted for %s, this chip is %s — refusing to run as "
+                  "'%s'. Re-flash with a blob minted for THIS chip.", cfg->bind_mac, actual, cfg->node_id);
+    return false;
 }
 
 // --- ADR-0036 Layer 0: node-born command secret -----------------------------------------------------
