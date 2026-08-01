@@ -73,13 +73,17 @@ def _maintenance_inhibited() -> bool:
 
 def _detect_gaps(manifest: dict, roles: list[str]) -> dict[str, dict]:
     """Same classification as required_services.cmd_check, returned structured: {unit: {state, why, must}}."""
-    units = rs.resolve(manifest, roles)
+    units = rs.resolve(manifest, roles, rs.host_options())
     gaps: dict[str, dict] = {}
+    # ONE `systemctl show` for the whole set, not two spawns per unit. This runs every 30 SECONDS, so the
+    # per-unit form was ~82 processes/run on .210's 41-unit set — around 2.7 forks/s all by itself, the
+    # single largest contributor to the idle churn in board task os-idle-churn (it out-spawned even
+    # keepalived's two 5-second healthcheck legs). Same classification, same vocabulary.
+    states = rs.unit_states([n for n, m in units.items() if not m.get("optional")])
     for name, meta in units.items():
         if meta.get("optional"):
             continue                                          # optional gaps are WARN, never healed/screamed
-        enabled = rs._sysctl("is-enabled", name)
-        active = rs._sysctl("is-active", name)
+        enabled, active = states.get(name, ("not-found", ""))
         of = meta.get("on_fail", "heal")
         if enabled == "not-found":
             gaps[name] = {"state": "NOT-INSTALLED", "why": "unit file absent", "must": meta["must"], "on_fail": of}

@@ -99,6 +99,43 @@ def _sysctl(verb: str, unit: str) -> str:
     return (r.stdout or r.stderr).strip()
 
 
+def unit_states(units: list[str]) -> dict[str, tuple[str, str]]:
+    """{unit: (enabled_state, active_state)} for many units in ONE systemctl call.
+
+    Was two `systemctl` subprocesses PER UNIT (`is-enabled` + `is-active`), i.e. 82 processes per
+    supervisor run on .210's 41-unit household set — and this box now runs the check on two stacks. That
+    is a lot of fork/exec for a status read, and fork traffic is exactly what board task os-idle-churn is
+    about: it is not the CPU that matters so much as the wakeups (C-state residency).
+
+    `systemctl show` accepts many units and emits one blank-line-separated block each, so the whole
+    survey is a single spawn. Mapping back to the old vocabulary: LoadState=not-found is the dangerous
+    "never provisioned" case that `is-enabled` reported as `not-found`; UnitFileState is what
+    `is-enabled` printed; ActiveState is what `is-active` printed.
+    """
+    if not units:
+        return {}
+    r = subprocess.run(
+        ["systemctl", "show", "--property=Id,LoadState,UnitFileState,ActiveState", "--", *units],
+        capture_output=True, text=True)
+    out: dict[str, tuple[str, str]] = {}
+    for block in r.stdout.split("\n\n"):
+        if not block.strip():
+            continue
+        kv = dict(line.split("=", 1) for line in block.strip().splitlines() if "=" in line)
+        uid = kv.get("Id")
+        if not uid:
+            continue
+        # A unit systemd has never heard of reports LoadState=not-found; UnitFileState is then empty.
+        enabled = "not-found" if kv.get("LoadState") == "not-found" else (kv.get("UnitFileState") or "")
+        out[uid] = (enabled, kv.get("ActiveState") or "")
+    # `systemctl show` omits nothing normally, but never let a parse miss look like a healthy unit:
+    # anything unaccounted for falls back to the per-unit path rather than being silently dropped.
+    for u in units:
+        if u not in out:
+            out[u] = (_sysctl("is-enabled", u), _sysctl("is-active", u))
+    return out
+
+
 def cmd_list(manifest, roles, args) -> int:
     units = resolve(manifest, roles, host_options())
     for name, meta in units.items():
@@ -110,10 +147,10 @@ def cmd_list(manifest, roles, args) -> int:
 
 def cmd_check(manifest, roles, args) -> int:
     units = resolve(manifest, roles, host_options())
+    states = unit_states(sorted(units))            # ONE systemctl call, not two per unit
     gaps, warns, ok = [], [], []
     for name, meta in sorted(units.items()):
-        enabled = _sysctl("is-enabled", name)     # enabled|disabled|static|not-found|...
-        active = _sysctl("is-active", name)        # active|inactive|failed|...
+        enabled, active = states.get(name, ("not-found", ""))
         installed = enabled != "not-found"
         must = meta["must"]
         if not installed:

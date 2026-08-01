@@ -3,7 +3,19 @@
 # Fit = ha-api responding AND the Midea reachable on the LAN. An unfit MASTER loses 'weight'
 # priority (see keepalived.conf.tmpl) -> the healthy standby takes over.
 set -uo pipefail
-HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && pwd)"
+# Resolve our own paths WITHOUT forking (board os-idle-churn). The classic
+# `$(cd "$(dirname "$0")" && pwd)` idiom costs three processes — two command substitutions plus
+# `dirname` — for what is pure string manipulation. That is normally invisible, but keepalived runs this
+# script on EVERY leg every 5 seconds forever, so it was ~60% of the fork traffic of the whole probe.
+# Parameter expansion is free. keepalived always invokes by absolute path (the `script` line in
+# keepalived.conf), which is the hot path; a relative invocation (a human running it from elsewhere)
+# falls back to the subshell form, where the cost does not matter.
+_src=${BASH_SOURCE[0]}
+_dir=${_src%/*}; [ "$_dir" = "$_src" ] && _dir=.
+case $_dir in
+    /*) HERE=$_dir; REPO=${HERE%/*} ;;
+    *)  HERE="$(cd "$_dir" && pwd)"; REPO="$(cd "$HERE/.." && pwd)" ;;
+esac
 [ -f "$REPO/instance/cluster.env" ] && . "$REPO/instance/cluster.env"
 : "${API:=http://localhost:8123}"
 
