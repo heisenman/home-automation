@@ -143,12 +143,28 @@ def is_usable(conn: sqlite3.Connection) -> bool:
 def compare_with_source(conn: sqlite3.Connection) -> tuple[int, list]:
     """Audit: (#differences, sample). Compares the cache against the O(rows) derivation it replaces.
     Used by the tests and by tools/rebuild_latest_readings.py --verify to prove the fast path agrees with
-    the slow one on real data, rather than asserting it."""
-    want = {(d, m): (v, t) for d, m, v, t in conn.execute(LATEST_SELECT)}
-    got = {(d, m): (v, t) for d, m, v, t in
-           conn.execute("SELECT device_id, metric, value, ts FROM latest_readings")}
-    diffs = []
-    for k in set(want) | set(got):
-        if want.get(k) != got.get(k):
-            diffs.append({"key": k, "expected": want.get(k), "cached": got.get(k)})
+    the slow one on real data, rather than asserting it.
+
+    ONE statement, deliberately. Reading the two sides as separate queries races against live ingest: on
+    ha-2 (~1 reading/s) rows land between them and the cache legitimately comes back NEWER than the
+    "expected" snapshot, so the audit cries drift on a perfectly healthy database. Found doing exactly
+    that during the 2026-08-01 ha-2 deploy. A single statement sees one consistent snapshot.
+    """
+    sql = f"""
+    WITH src AS ({LATEST_SELECT})
+    SELECT COALESCE(s.device_id, l.device_id), COALESCE(s.metric, l.metric),
+           s.value, s.ts, l.value, l.ts
+      FROM src s LEFT JOIN latest_readings l
+        ON l.device_id = s.device_id AND l.metric = s.metric
+     WHERE l.device_id IS NULL OR l.value IS NOT s.value OR l.ts IS NOT s.ts
+    UNION ALL
+    SELECT l.device_id, l.metric, NULL, NULL, l.value, l.ts
+      FROM latest_readings l LEFT JOIN src s
+        ON s.device_id = l.device_id AND s.metric = l.metric
+     WHERE s.device_id IS NULL
+    """
+    diffs = [{"key": (d, m),
+              "expected": None if st is None else (sv, st),
+              "cached": None if lt is None else (lv, lt)}
+             for d, m, sv, st, lv, lt in conn.execute(sql)]
     return len(diffs), diffs[:20]
