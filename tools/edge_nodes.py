@@ -16,7 +16,10 @@ import yaml
 REPO = Path(__file__).resolve().parents[1]
 DEFAULT_MANIFEST = REPO / "edge" / "esp32c6" / "nodes.yaml"
 
-SENSORS = ("sgp30", "sgp40", "bme680")  # eCO2+TVOC / VOC-index / BME680 (T·RH·P·gas-Ω) — compile-time select
+# eCO2+TVOC / VOC-index / VOC+NOx-index / BME680 (T·RH·P·gas-Ω) — compile-time select. NB the SGP40 and
+# SGP41 share I2C address 0x59, so this manifest line is a human's claim about the board, not something
+# the flasher can verify; the firmware re-checks it against the part on the bus at boot.
+SENSORS = ("sgp30", "sgp40", "sgp41", "bme680")
 REQUIRED = ("mac", "target", "sensor", "area", "broker", "ota_host")
 
 
@@ -26,6 +29,8 @@ def sensor_define(sensor: str) -> str | None:
         return "#define HA_GAS_SGP30            // Sensirion SGP30 (eCO2 + TVOC)"
     if sensor == "sgp40":
         return None                     # default path in ha_gas.c — no #define
+    if sensor == "sgp41":
+        return "#define HA_GAS_SGP41            // Sensirion SGP41 (VOC index + NOx index)"
     if sensor == "bme680":
         return "#define HA_GAS_BME680           // Bosch BME680 (T·RH·P + gas resistance, Ω)"
     raise ValueError(f"unknown sensor {sensor!r} (expected one of {SENSORS})")

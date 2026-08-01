@@ -23,10 +23,14 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 from server.api.viewmodel import build_sensor_list          # noqa: E402  (reuses the fusion + auto-reference)
 from server.gas_compensation import (air_quality_for, sgp30_air_quality, sgp40_air_quality,  # noqa: E402
-                                     bme680_air_quality, clean_air_baseline)
+                                     sgp41_air_quality, bme680_air_quality, clean_air_baseline)
 
-# family (from device_type substring) → the RAW signal that drives its air-quality + freshness gate
-FAMILY_RAW = {"sgp30": "tvoc", "sgp40": "voc_index", "bme680": "gas_ohm"}
+# family (from device_type substring) → the RAW signal that drives its air-quality + freshness gate.
+# The SGP41's gate is voc_index, not nox_index: the NOx pixel is legitimately absent for the first hours
+# of a node's life (10 s conditioning, then ~4.75 h of algorithm learning), so gating on it would skip a
+# perfectly healthy new node. Order matters for _family's substring match — sgp40 before sgp41 is fine
+# because neither string contains the other, but keep them distinct if a future part is named sgp4x.
+FAMILY_RAW = {"sgp30": "tvoc", "sgp40": "voc_index", "sgp41": "voc_index", "bme680": "gas_ohm"}
 
 
 def _family(device_type: str):
@@ -135,8 +139,30 @@ def _backfill_simple(conn, gid, dtype, area, raw_metric, fn) -> int:
     return n
 
 
+def _backfill_sgp41(conn, gid, dtype, area) -> int:
+    """SGP41: needs BOTH pixels, so it pairs voc_index with nox_index before scoring.
+
+    No time-tolerance join is needed (unlike the BME680, which borrows humidity from a DIFFERENT device):
+    both metrics are published in the same MQTT payload by the same node, so they land on an identical
+    timestamp. Points with no NOx partner still score — sgp41_air_quality bands them on VOC alone, which
+    is exactly right for the node's first hours before the NOx algorithm has learned.
+    """
+    voc = conn.execute("SELECT ts, value FROM readings WHERE device_id=? AND metric='voc_index' "
+                       "AND authoritative=1 ORDER BY ts", (gid,)).fetchall()
+    nox = dict(conn.execute("SELECT ts, value FROM readings WHERE device_id=? AND metric='nox_index' "
+                            "AND authoritative=1", (gid,)).fetchall())
+    n = 0
+    for ts, v in voc:
+        aq = sgp41_air_quality(v, nox.get(ts))["air_quality"]
+        if aq is not None:
+            _write(conn, gid, dtype, area, ts, aq)
+            n += 1
+    print(f"  {gid}: backfilled {n}/{len(voc)} air_quality points (voc_index + {len(nox)} nox_index)")
+    return n
+
+
 def backfill(conn) -> int:
-    """Reconstruct air_quality over the full stored history of every gas node (all 3 families)."""
+    """Reconstruct air_quality over the full stored history of every gas node (all families)."""
     total = 0
     for d in build_sensor_list(conn, time.time()):
         fam = _family(d.get("device_type"))
@@ -149,6 +175,8 @@ def backfill(conn) -> int:
             total += _backfill_simple(conn, gid, dtype, area, "tvoc", lambda v: sgp30_air_quality(v))
         elif fam == "sgp40":
             total += _backfill_simple(conn, gid, dtype, area, "voc_index", lambda v: sgp40_air_quality(v))
+        elif fam == "sgp41":
+            total += _backfill_sgp41(conn, gid, dtype, area)
         conn.commit()
     return total
 

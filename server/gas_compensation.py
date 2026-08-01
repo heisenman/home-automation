@@ -119,6 +119,17 @@ _SGP30_Y = [100.0, 80.0, 60.0, 40.0, 20.0, 0.0]
 # SGP40: Sensirion VOC Index native scale (100 = the sensor's own 24 h baseline). basis=relative.
 _SGP40_X = [0.0, 100.0, 200.0, 300.0, 400.0, 500.0]
 _SGP40_Y = [100.0, 80.0, 60.0, 40.0, 20.0, 0.0]
+# SGP41 NOx Index. NOTE THE SCALE DIFFERENCE: unlike the VOC Index (100 = baseline), the NOx Index sits at
+# 1 in clean air and only climbs on a NOx event (combustion — a gas hob, a nearby road, a wood stove).
+# Sensirion's own guidance treats the range as 1..500 with 1 as "no NOx detected", so the knots below are
+# NOT symmetric with the VOC ones and MUST NOT be copied from them.
+#
+# PROVISIONAL — these thresholds are NOT shadow-tuned. The SGP30/SGP40/BME680 knots above came out of the
+# ADR-0035 characterization against weeks of this house's own data; we have no NOx history at all yet, so
+# these are seeded from Sensirion's documented scale and are a starting point to be re-tuned once a real
+# SGP41 has banked a few weeks. Recorded in docs/air-quality/SENSOR-METHODOLOGY.md.
+_NOX_X = [1.0, 20.0, 50.0, 100.0, 200.0, 500.0]
+_NOX_Y = [100.0, 80.0, 60.0, 40.0, 20.0, 0.0]
 # BME680: gas-resistance ratio r = gas_ohm / clean-air baseline (pollution drops R). basis=relative.
 _BME_X = [0.10, 0.30, 0.50, 0.70, 0.90, 1.00]
 _BME_Y = [0.0, 20.0, 40.0, 60.0, 80.0, 100.0]
@@ -167,6 +178,48 @@ def sgp40_air_quality(voc_index) -> dict:
     return _report(score, "relative", "SGP40", "VOC Index", round(float(voc_index), 0), expl)
 
 
+def sgp41_air_quality(voc_index, nox_index=None) -> dict:
+    """SGP41 → RELATIVE band from TWO pixels: the SGP40's VOC Index plus a NOx Index.
+
+    The two are not averaged. The band reports the WORSE of the two and names which pollutant drove it —
+    the same dominant-pollutant rule a regulatory AQI uses, and the only safe one here: averaging would let
+    clean VOC air mask a live combustion event, which is the specific thing the NOx pixel was added to
+    catch. `nox_dominant` says which one won so the UI can label the cause.
+
+    NOx lags: its algorithm needs ~4.75 h of learning against ~0.75 h for VOC (INIT_DURATION_MEAN_NOX in
+    the Sensirion component), and the firmware holds it at 0 through the 10 s conditioning phase. So a
+    fresh node reports a VOC-only band for the first few hours rather than a confidently wrong one.
+    """
+    voc = sgp40_air_quality(voc_index)
+    voc["family"] = "SGP41"                        # same VOC pixel + algorithm as the SGP40
+    if nox_index is None or nox_index <= 0:
+        # No NOx yet (conditioning, blackout, or still learning) — band on VOC alone and say so.
+        if voc.get("air_quality") is not None:
+            voc["explanation"] += " NOx pixel still warming up — this band reflects VOC only."
+        voc["nox_index"] = None
+        voc["nox_dominant"] = False
+        return voc
+    nox_score = _interp(float(nox_index), _NOX_X, _NOX_Y)
+    if voc.get("air_quality") is None:             # VOC not valid yet — band on NOx alone
+        b, label = band_for_score(nox_score)
+        expl = (f"{label}. NOx Index {nox_index:.0f} (1 = no NOx detected) — VOC pixel not yet valid, so "
+                f"this band reflects NOx only.")
+        return _report(nox_score, "relative", "SGP41", "NOx Index", round(float(nox_index), 0), expl,
+                       nox_index=round(float(nox_index), 0), nox_dominant=True)
+    if nox_score >= voc["air_quality"]:            # VOC is the worse (lower) score → keep the VOC report
+        voc["explanation"] += f" NOx Index {nox_index:.0f} is clean (1 = no NOx detected)."
+        voc["nox_index"] = round(float(nox_index), 0)
+        voc["nox_dominant"] = False
+        return voc
+    b, label = band_for_score(nox_score)
+    expl = (f"{label}. NOx Index {nox_index:.0f} — elevated above the clean-air value of 1, which points at "
+            f"a combustion source (gas hob, stove, traffic). This is the worse of the two pixels; VOC Index "
+            f"is {voc_index:.0f}. A relative measure, not comparable to other rooms.")
+    return _report(nox_score, "relative", "SGP41", "NOx Index", round(float(nox_index), 0), expl,
+                   nox_index=round(float(nox_index), 0), voc_index=round(float(voc_index), 0),
+                   nox_dominant=True)
+
+
 def bme680_air_quality(gas_ohm, ambient_rh_pct, gas_baseline_ohm, gas_valid=1, baseline_ready=True) -> dict:
     """BME680 → RELATIVE band on the resistance ratio r = gas_ohm / clean-air baseline (de-clamped; the old
     0..100 index pinned ~22 % of samples at 100). Humidity-compensates gas_ohm with the reference sensor's
@@ -204,6 +257,8 @@ def air_quality_for(device_type, metrics, *, ambient_rh_pct=None, gas_baseline_o
     m = metrics or {}
     if "sgp30" in dt:
         return sgp30_air_quality(m.get("tvoc"), m.get("eco2"))
+    if "sgp41" in dt:                       # before sgp40: the SGP41 carries a VOC pixel too
+        return sgp41_air_quality(m.get("voc_index"), m.get("nox_index"))
     if "sgp40" in dt:
         return sgp40_air_quality(m.get("voc_index"))
     if "bme680" in dt:

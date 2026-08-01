@@ -79,7 +79,10 @@ TARGETS = {
 
 NODE_RE = re.compile(r"^[a-z0-9_]+$")
 MAC_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
-GAS_CHOICES = ("auto", "sgp40", "sgp30", "bme680", "none")
+# "auto" is the right answer for almost everyone — and specifically for the SGP40/SGP41 pair, which share
+# I2C address 0x59. Pinning one of those by hand asserts something the flasher cannot check; the firmware
+# asks the part itself at boot (ha_gas_detect -> sgp4x_identify), so auto is strictly better informed.
+GAS_CHOICES = ("auto", "sgp40", "sgp41", "sgp30", "bme680", "none")
 
 
 class FlashError(Exception):

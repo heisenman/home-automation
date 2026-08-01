@@ -43,7 +43,8 @@ UNASSIGNED_AREAS = {"", "standby", "unassigned", "none", "spare", "staging"}
 OFFLINE_TTL_S = 24 * 3600
 
 # manifest sensor -> the device_type ability string the firmware also emits (keep in lockstep with app_main)
-_SENSOR_ABILITY = {"sgp30": "sgp30_gas", "sgp40": "sgp40_gas", "bme680": "bme680_gas"}
+_SENSOR_ABILITY = {"sgp30": "sgp30_gas", "sgp40": "sgp40_gas", "sgp41": "sgp41_gas",
+                   "bme680": "bme680_gas"}
 
 
 def load_manifest() -> dict:

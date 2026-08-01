@@ -102,6 +102,29 @@ QUALIFY row_number() OVER (PARTITION BY device_id,ts,metric ORDER BY value)=1;
 - **Consequence:** two SGP40s in two rooms both reading "100" are each at *their own*
   baseline — the rooms are NOT necessarily equally clean in absolute terms.
 
+### 3.2b SGP41 — VOC Index + NOx Index (added 2026-08-01)
+- **VOC pixel is the SGP40's**, same algorithm, same semantics as §3.2 above. Everything
+  said there applies unchanged.
+- **NOx Index does NOT share the VOC scale.** This is the trap. The VOC Index centers on
+  **100** (= own 24 h baseline); the NOx Index sits at **1** in clean air and only climbs
+  on a NOx event. Range is 1–500 for both, but "100" means *ordinary* on one pixel and
+  *a serious event* on the other. Copying the VOC knots to NOx would band a bad reading
+  as fine. (`GasIndexAlgorithm_NOX_INDEX_OFFSET_DEFAULT = 1.f` vs `VOC…= 100.f`.)
+- **What NOx actually indicates:** combustion — a gas hob, wood stove, or traffic drawn
+  in from outside. It is a genuinely *different* pollutant axis, not a better VOC.
+- **NOx learns far more slowly:** `INIT_DURATION_MEAN_NOX` = 4.75 h vs 0.75 h for VOC,
+  plus a mandatory 10 s hotplate conditioning phase at boot. A fresh node legitimately
+  has no NOx reading for hours — that must read as "not yet valid", never as "pristine".
+- **Fusion rule chosen: worst-of, not average.** The band reports the lower of the two
+  pixel scores and names which one drove it (`nox_dominant`). Averaging would let clean
+  VOC air mask a live combustion event — the exact thing the second pixel exists to catch.
+  This mirrors the dominant-pollutant rule in a regulatory AQI.
+- ⚠ **Banding is PROVISIONAL — step 3 of the §7 checklist is NOT done.** The SGP30/SGP40/
+  BME680 knots came out of real characterization against weeks of this house's data. We
+  have **zero** NOx history, so the NOx knots (`_NOX_X/_NOX_Y` in `server/gas_compensation.py`)
+  are seeded from Sensirion's documented scale alone. Re-tune once a real SGP41 has banked
+  a few weeks, and record the result here.
+
 ### 3.3 BME680 — gas resistance (Ω), and Bosch BSEC IAQ (which we do NOT run)
 - **Raw gas resistance direction:** the MOX gas layer's resistance **RISES in clean air
   and FALLS as reducing-VOC concentration rises.** So "higher Ω = cleaner." It is
@@ -223,6 +246,25 @@ freshness gating).
    against `sensirion.com` / `bosch-sensortec.com` got every fact needed at ~1% of the
    cost. **Lesson: match verification depth to how contested the facts are.** Killed the
    workflow at ~1.2M spent; finished with targeted search.
+
+8. **Identify an SGP4x by its I2C address (or by the module's silkscreen / product listing).**
+   ❌ Rejected 2026-08-01, after the address probe gave a confidently wrong answer. The
+   **SGP40 and SGP41 both ACK at 0x59** — the SGP41 is a pin-, package- and
+   address-compatible upgrade — and **both pass the same `0x280E` self-test**. Our
+   autodetect assumed SGP40 at 0x59, so a node would log `SGP40 self-test PASS` while
+   sitting on either part: a claim the firmware had no evidence for. The parts are not
+   interchangeable in software — `measure_raw` is `0x260F` on the SGP40 and `0x2619` on
+   the SGP41, and **neither implements the other's** — so guessing wrong means a dead gas
+   lane, and a silkscreen is just a human's claim about a cheap module.
+   ✅ What works: ask the part. `sgp4x_identify()` issues the SGP41-only `0x2619` and
+   requires an ACK *plus* two CRC-valid words, falling back to the SGP40's `0x260F`.
+   *Also rejected:* using `get_featureset` (`0x202F`, low 9 bits: `0x20`=SGP40,
+   `0x40`=SGP41) as the **authoritative** test, which is what most libraries do. It is
+   documented in **neither** datasheet's command table, and newer die revisions have
+   shipped values that broke exact-match checks in the wild (esphome/issues#5995). We
+   read it and **log** it as corroboration, but the behavioural probe decides.
+   **Lesson: when two parts are deliberately drop-in compatible, identity must be proven
+   behaviourally — compatibility is exactly what defeats identification by inspection.**
 
 ---
 

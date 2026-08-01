@@ -132,7 +132,8 @@ void app_main(void) {
     //   1. NVS `gas_sensor` (set by the flasher from the PWA's selection) — an explicit pin;
     //   2. else the legacy compile-select from secrets.h, so existing per-node builds behave exactly as
     //      before and reflashing the current fleet changes nothing;
-    //   3. else AUTO — probe the bus. The families ACK at distinct addresses, so this is unambiguous.
+    //   3. else AUTO — probe the bus. Distinct addresses separate the families; the SGP40/SGP41 pair
+    //      shares 0x59 and is separated by asking the part itself (see ha_gas_detect).
     // XIAO ESP32-C6 Grove I2C pads: D4 = GPIO22 (SDA), D5 = GPIO23 (SCL).
     ha_gas_sensor_t gas = ha_gas_from_name(cfg.gas_sensor);
     if (gas == HA_GAS_SENSOR_AUTO) {
@@ -140,6 +141,8 @@ void app_main(void) {
         gas = HA_GAS_SENSOR_SGP30;
 #elif defined(HA_GAS_BME680)
         gas = HA_GAS_SENSOR_BME680;
+#elif defined(HA_GAS_SGP41)
+        gas = HA_GAS_SENSOR_SGP41;
 #elif defined(HA_GAS_SGP40)
         gas = HA_GAS_SENSOR_SGP40;
 #else

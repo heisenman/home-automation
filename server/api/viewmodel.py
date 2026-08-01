@@ -67,6 +67,8 @@ METRIC_CATALOG: dict[str, dict] = {
     "aqi":           {"label": "AQI",         "unit": "",      "color": "#fbbf24", "precision": 0, "graph": True},
     "voc_index":     {"label": "VOC Index",   "unit": "VOC",   "color": "#34d399", "precision": 0, "graph": True},
     "voc_raw":       {"label": "VOC (raw)",   "unit": "",      "color": "#6ee7b7", "precision": 0, "graph": True},
+    "nox_index":     {"label": "NOx Index",   "unit": "NOx",   "color": "#f472b6", "precision": 0, "graph": True},
+    "nox_raw":       {"label": "NOx (raw)",   "unit": "",      "color": "#f9a8d4", "precision": 0, "graph": True},
     "eco2":          {"label": "eCO₂",        "unit": "ppm",   "color": "#f59e0b", "precision": 0, "graph": True},
     "tvoc":          {"label": "TVOC",        "unit": "ppb",   "color": "#a3e635", "precision": 0, "graph": True},
     "gas_ohm":       {"label": "Gas resistance", "unit": "Ω",  "color": "#2dd4bf", "precision": 0, "graph": True},
@@ -242,7 +244,7 @@ def _gas_baseline(hot_conn, device_id: str):
 
 def _is_gas_node(device_type: str) -> bool:
     dt = (device_type or "").lower()
-    return any(fam in dt for fam in ("sgp30", "sgp40", "bme680"))
+    return any(fam in dt for fam in ("sgp30", "sgp40", "sgp41", "bme680"))
 
 
 def _unify_gas_nodes(devices: list[dict], hot_conn) -> None:
@@ -381,6 +383,7 @@ NORMAL_RANGES: dict[str, tuple[float, float]] = {
     "co2_ppm":       (0.0, 1000.0),
     "pm25_ugm3":     (0.0, 35.0),
     "voc_index":     (0.0, 250.0),
+    "nox_index":     (0.0, 20.0),       # NOx Index sits at 1 in clean air; >20 = a real combustion source
     "radon_bqm3":    (0.0, 150.0),
     "aqi":           (0.0, 100.0),
     "air_quality":   (40.0, 100.0),     # unified band score (higher=cleaner); <40 = Poor/Very Poor → flag

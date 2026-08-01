@@ -66,8 +66,15 @@ def _area(dpath, hot, device_id):
 
 
 def _raw_metric(device_type):
+    """The driving raw signal per family. NB `sgp41` must be matched explicitly — it does not contain the
+    substring "sgp40", so without this it would fall through to gas_ohm, find no such series, and recompute
+    NOTHING while reporting success."""
     dt = (device_type or "").lower()
-    return "tvoc" if "sgp30" in dt else "voc_index" if "sgp40" in dt else "gas_ohm"
+    if "sgp30" in dt:
+        return "tvoc"
+    if "sgp40" in dt or "sgp41" in dt:
+        return "voc_index"
+    return "gas_ohm"
 
 
 def recompute_device(dpath, hot, gas_id, ref_id):
@@ -79,6 +86,8 @@ def recompute_device(dpath, hot, gas_id, ref_id):
     if not gas:
         return dtype, area, []
     baseline = clean_air_baseline([v for _, v in gas]) if "bme680" in dtype.lower() else None
+    # SGP41's second pixel. Same node, same payload → exact timestamp match, no tolerance join needed.
+    nox = dict(_series(dpath, hot, gas_id, "nox_index")) if "sgp41" in dtype.lower() else {}
     hum = _series(dpath, hot, ref_id, "humidity_pct") if ref_id else []
     h_ep = [_epoch(t) for t, _ in hum]
     h_val = [v for _, v in hum]
@@ -93,7 +102,10 @@ def recompute_device(dpath, hot, gas_id, ref_id):
                 j = min(cand, key=lambda k: abs(h_ep[k] - _epoch(ts)))
                 if abs(h_ep[j] - _epoch(ts)) <= JOIN_TOLERANCE_S:
                     rh = h_val[j]
-        rep = air_quality_for(dtype, {raw: v}, ambient_rh_pct=rh, gas_baseline_ohm=baseline)
+        metrics = {raw: v}
+        if ts in nox:
+            metrics["nox_index"] = nox[ts]
+        rep = air_quality_for(dtype, metrics, ambient_rh_pct=rh, gas_baseline_ohm=baseline)
         if rep and rep.get("air_quality") is not None:
             out.append((ts, rep["air_quality"]))
     return dtype, area, out

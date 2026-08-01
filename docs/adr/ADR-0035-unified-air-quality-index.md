@@ -113,6 +113,28 @@ native meaning. `basis = relative`.
   → lower air_quality).
 - Startup gate: first ~45 s / `voc_index==0` sentinels → `conf=warmup` (Phase-1 §4.2).
 
+**SGP41 → RELATIVE (two pixels, worst-of).** *Amendment 2026-08-01 — a fourth family.* The
+SGP41 is the SGP40 plus a NOx pixel; its VOC half uses the SGP40 row above unchanged.
+
+| NOx Index | Band | Meaning |
+|---|---|---|
+| 1 | Excellent | clean air — **1, not 100, is this pixel's baseline** |
+| 1 – 20 | Excellent→Good | |
+| 20 – 50 | Good→Fair | a combustion source is likely present |
+| 50 – 200 | Fair→Poor | |
+| > 200 | Very Poor | strong combustion source |
+
+- **The two pixels are combined worst-of, never averaged**, and the report names the driver
+  (`nox_dominant`). Averaging would let clean VOC air mask a live combustion event — exactly
+  what the NOx pixel was added to catch. Same rule a regulatory AQI uses (dominant pollutant).
+- **NOx absent ≠ NOx clean.** The pixel needs a 10 s conditioning phase plus ~4.75 h of
+  algorithm learning (vs 0.75 h for VOC), and the firmware holds it at 0 until then. A node in
+  that window bands on VOC alone and says so, rather than reporting a falsely pristine 1.
+- ⚠ **These NOx thresholds are NOT shadow-tuned** — unlike every other row here, which went
+  through the Q2 pass on real captured data. We have no NOx history at all yet; they are
+  seeded from Sensirion's documented scale. **Re-tune once an SGP41 has banked a few weeks**
+  (methodology doc §3.2b). Tracked as a follow-on, not a closed decision.
+
 **BME680 → RELATIVE (de-clamped resistance ratio).** Reuse `gas_compensation.py`'s
 humidity-compensated, rolling-baseline approach — but **fix the ceiling clamp** that
 pinned ~22 % of samples at 100 (Phase-1 dead-end §5.1). Band on the resistance ratio

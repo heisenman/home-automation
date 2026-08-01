@@ -19,6 +19,7 @@ set(EXTRA_COMPONENT_DIRS
     "${_shared}/ha_wifi"
     "${_shared}/ha_gas"
     "${_shared}/sgp40"
+    "${_shared}/sgp41"
     "${_shared}/sgp30"
     "${_shared}/sensirion_gas_index"
     "${_shared}/bme680")

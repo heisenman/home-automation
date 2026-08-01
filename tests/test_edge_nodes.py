@@ -65,8 +65,10 @@ def test_macs_are_unique():
 def test_sensor_define_mapping():
     assert "HA_GAS_SGP30" in EN.sensor_define("sgp30")
     assert EN.sensor_define("sgp40") is None          # SGP40 is the firmware default (no define)
-    with raises(ValueError):
-        EN.sensor_define("bme680")
+    assert "HA_GAS_SGP41" in EN.sensor_define("sgp41")
+    assert "HA_GAS_BME680" in EN.sensor_define("bme680")
+    with raises(ValueError):                          # an unknown chip must never silently pick a driver
+        EN.sensor_define("nope")
 
 
 def test_validate_rejects_missing_and_bad():

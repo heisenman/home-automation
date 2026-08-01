@@ -1,3 +1,5 @@
+// BREADCRUMB: firmware/components > ha_gas - node-local gas lane: picks the fitted chip (SGP40/SGP41/SGP30/BME680) at runtime — probing the bus when told AUTO — runs its sampling loop and publishes on the shared node-sensor path, so one generic image serves any sensor. Contract: ADR-0020. Parent: firmware/AGENTS.md.
+// REUSE-WHEN: a node has (or might have) a gas sensor on I2C and you want it sampled and published without the image needing to know which part is soldered.
 #pragma once
 
 // Node-local gas lane — a dual-role add-on that runs ALONGSIDE the BLE relay (+ GATT central on the S3).
@@ -16,6 +18,7 @@
 // / `HA_GAS_BME680` compile-select flags a node's secrets.h uses to pick which one is soldered.
 typedef enum {
     HA_GAS_SENSOR_SGP40 = 0,   // Sensirion SGP40 VOC index (0x59) — the default
+    HA_GAS_SENSOR_SGP41,       // Sensirion SGP41 VOC index + NOx index (0x59 — SAME ADDRESS as the SGP40)
     HA_GAS_SENSOR_SGP30,       // Sensirion SGP30 eCO2 + TVOC (0x58)
     HA_GAS_SENSOR_BME680,      // Bosch BME680 T/RH/P + gas resistance (0x76/0x77)
     HA_GAS_SENSOR_AUTO,        // probe the bus and pick — see ha_gas_start / ha_gas_detect
@@ -23,12 +26,17 @@ typedef enum {
 } ha_gas_sensor_t;
 
 // Probe the I2C bus and return which supported gas chip is present, or HA_GAS_SENSOR_NONE if none ACKs.
-// The three families sit at DISTINCT addresses (SGP30 0x58, SGP40 0x59, BME680 0x76/0x77), so a probe
-// identifies the part unambiguously — no configuration needed to know what is soldered. Safe to call
-// before ha_gas_start; it leaves the bus deinitialised.
+//
+// Address alone is NOT enough. The Sensirion SGP40 and SGP41 share I2C address 0x59 — the SGP41 is a
+// pin- and address-compatible upgrade that adds a NOx pixel — so a bus scan sees one address for two
+// different command sets, and a module's silkscreen or product listing is not reliable either. When
+// 0x59 ACKs, this asks the part itself which it is (sgp4x_identify), rather than assuming SGP40 as it
+// did before. The other families are unambiguous by address (SGP30 0x58, BME680 0x76/0x77).
+//
+// Safe to call before ha_gas_start; it leaves the bus deinitialised.
 ha_gas_sensor_t ha_gas_detect(int sda_gpio, int scl_gpio);
 
-// Map to/from the short names used on the wire and in NVS ("sgp40"/"sgp30"/"bme680"/"auto"/"none").
+// Map to/from the short names used on the wire and in NVS ("sgp40"/"sgp41"/"sgp30"/"bme680"/"auto"/"none").
 // ha_gas_from_name returns HA_GAS_SENSOR_AUTO for NULL/""/unrecognised — the safe default, because an
 // unknown string must not silently select the wrong driver.
 ha_gas_sensor_t ha_gas_from_name(const char *name);

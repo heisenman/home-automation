@@ -466,6 +466,7 @@ def _device_for_node(devices_path, node_id: str) -> str | None:
 # auto-registered node gets exactly what an install-time-registered one gets.
 _GAS_CAPABILITIES = {
     "sgp40_gas":  ["voc_index", "voc_raw"],
+    "sgp41_gas":  ["voc_index", "voc_raw", "nox_index", "nox_raw"],
     "sgp30_gas":  ["eco2", "tvoc"],
     "bme680_gas": ["temperature_c", "humidity_pct", "pressure_hpa", "gas_ohm"],
 }

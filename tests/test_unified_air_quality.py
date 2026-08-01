@@ -106,3 +106,56 @@ def test_dispatch_by_device_type():
     assert air_quality_for("bme680_gas", {"gas_ohm": 98_000},
                            ambient_rh_pct=40.0, gas_baseline_ohm=100_000)["family"] == "BME680"
     assert air_quality_for("meter_pro", {"temperature_c": 21}) is None    # not a gas node
+
+
+# ── SGP41 (VOC + NOx) ────────────────────────────────────────────────────────────────
+# The SGP41 shares the SGP40's VOC pixel and adds a NOx one. Two things make it its own case: the NOx
+# Index sits at 1 in clean air (not 100 like VOC), and the two pixels are combined worst-of rather than
+# averaged, so a combustion event can't be masked by clean VOC air.
+
+def test_sgp41_dispatch_and_family():
+    r = air_quality_for("sgp41_gas", {"voc_index": 120, "nox_index": 1})
+    assert r["family"] == "SGP41"
+    assert air_quality_for("sgp41_gas", {"voc_index": 100})["family"] == "SGP41"
+
+
+def test_sgp41_clean_nox_leaves_voc_in_charge():
+    """NOx at its clean-air value of 1 must not drag the band down — it is the BEST possible NOx reading."""
+    from server.gas_compensation import sgp41_air_quality, sgp40_air_quality
+    r = sgp41_air_quality(120, 1)
+    assert r["nox_dominant"] is False
+    assert r["air_quality"] == sgp40_air_quality(120)["air_quality"]   # identical to the VOC-only verdict
+    assert r["raw_signal"] == "VOC Index"
+
+
+def test_sgp41_elevated_nox_dominates_clean_voc():
+    """The whole point of the second pixel: clean VOC air must NOT mask a combustion event."""
+    from server.gas_compensation import sgp41_air_quality
+    r = sgp41_air_quality(30, 250)          # VOC pristine (score would be ~94), NOx badly elevated
+    assert r["nox_dominant"] is True
+    assert r["raw_signal"] == "NOx Index"
+    assert r["air_quality"] < 40            # Poor or worse — driven entirely by NOx
+    assert r["air_quality_band"] <= 2
+    assert "combustion" in r["explanation"]
+
+
+def test_sgp41_nox_warmup_bands_on_voc_alone():
+    """NOx needs ~4.75 h to learn and is 0 during the firmware's 10 s conditioning. A fresh node must
+    report a VOC-only band, not a falsely pristine one."""
+    from server.gas_compensation import sgp41_air_quality, sgp40_air_quality
+    for not_yet in (None, 0):
+        r = sgp41_air_quality(150, not_yet)
+        assert r["nox_dominant"] is False
+        assert r["nox_index"] is None
+        assert r["air_quality"] == sgp40_air_quality(150)["air_quality"]
+        assert "warming up" in r["explanation"]
+
+
+def test_sgp41_nox_scale_is_not_the_voc_scale():
+    """Guards the easiest mistake here: reusing the VOC knots (100 = baseline) for NOx (1 = baseline).
+    A NOx Index of 100 is a serious event, whereas a VOC Index of 100 is perfectly ordinary."""
+    from server.gas_compensation import sgp41_air_quality, sgp40_air_quality
+    assert sgp40_air_quality(100)["air_quality"] == 80.0        # VOC 100 = the sensor's own baseline
+    nox_100 = sgp41_air_quality(1, 100)                          # same number on the NOx pixel
+    assert nox_100["nox_dominant"] is True
+    assert nox_100["air_quality"] == 40.0                        # ...is a far worse reading

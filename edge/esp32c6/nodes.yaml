@@ -8,7 +8,11 @@
 # node_id -> :
 #   mac       chip eFuse BASE MAC (`esptool.py read_mac`) — the physical-device binding for the flash gate
 #   target    idf target (esp32c6)
-#   sensor    gas chip: sgp30 (eCO2 + TVOC) | sgp40 (VOC index) — compile-time select (HA_GAS_SGP30)
+#   sensor    gas chip: sgp30 (eCO2+TVOC) | sgp40 (VOC index) | sgp41 (VOC+NOx index) | bme680
+#             — compile-time select (HA_GAS_SGP30 / _SGP41 / _BME680; sgp40 is the no-define default).
+#             NB sgp40 and sgp41 are INDISTINGUISHABLE BY ADDRESS (both 0x59), so this line is a human's
+#             claim about the board, not a verified fact. The firmware re-checks it against the part on
+#             the bus at boot and logs what it actually found — trust that over this file.
 #   area      room / area id (cross-checks instance/devices.yaml)
 #   broker    MQTT broker URI baked into secrets.h (Wi-Fi segment can't ARP the VIP -> box IP .210)
 #   ota_host  HTTP host the node pins for OTA pulls (must equal serve-ip)

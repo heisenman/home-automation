@@ -6,6 +6,7 @@
 #include "esp_log.h"
 #include "driver/i2c_master.h"
 #include "sgp40.h"
+#include "sgp41.h"
 #include "sensirion_gas_index_algorithm.h"
 #include "sgp30.h"
 #include "bme680.h"
@@ -28,9 +29,17 @@ static const char *TAG = "ha_gas";
 
 // Per-sensor state — only the selected one is used (all compiled in; the drivers are small).
 static sgp40_t s_sgp40;
+static sgp41_t s_sgp41;
 static GasIndexAlgorithmParams s_voc;
+static GasIndexAlgorithmParams s_nox;   // SGP41 only — the second pixel gets its own algorithm instance
 static sgp30_t s_sgp30;
 static bme680_t s_bme;
+
+// SGP41 conditioning countdown, in 1 Hz samples. The NOx pixel must be conditioned from idle before the
+// first measure_raw_signals, and the datasheet is explicit that 10 s is both the recommendation and a
+// ceiling ("10 s must not be exceeded"), so this is a bounded phase and NOT a warm-up left running.
+#define SGP41_CONDITION_SAMPLES 10
+static int s_sgp41_cond_left;
 
 // Runtime config resolved in ha_gas_start (was compile-time #ifdef in the old per-node forks).
 static ha_gas_sensor_t s_sensor;
@@ -150,6 +159,31 @@ static void gas_task(void *arg) {
                      "\"gas_ohm\":%.0f,\"gas_valid\":%u}",
                      r.temperature_c, r.humidity_pct, r.pressure_hpa, r.gas_resistance_ohm,
                      (unsigned)r.gas_valid);
+        } else if (s_sensor == HA_GAS_SENSOR_SGP41) {
+            // Two pixels, two algorithm instances. During the bounded conditioning phase only the VOC
+            // pixel reads true — the datasheet explicitly permits reading SRAW_VOC while conditioning, so
+            // the VOC algorithm learns from second one instead of idling for ten.
+            uint16_t sraw_voc = 0, sraw_nox = 0;
+            esp_err_t e;
+            bool conditioning = s_sgp41_cond_left > 0;
+            if (conditioning) {
+                e = sgp41_condition(&s_sgp41, SGP41_DEFAULT_RH, SGP41_DEFAULT_T, &sraw_voc);
+                if (e == ESP_OK && --s_sgp41_cond_left == 0)
+                    ha_mqtt_log("SGP41 conditioning complete (%d s) — NOx pixel live", SGP41_CONDITION_SAMPLES);
+            } else {
+                e = sgp41_measure_raw(&s_sgp41, SGP41_DEFAULT_RH, SGP41_DEFAULT_T, &sraw_voc, &sraw_nox);
+            }
+            if (e != ESP_OK) { ESP_LOGW(TAG, "sgp41 measure: %s", esp_err_to_name(e)); continue; }
+            int32_t voc = 0, nox = 0;
+            GasIndexAlgorithm_process(&s_voc, (int32_t)sraw_voc, &voc);
+            // NOx index settles at 1 in clean air (not 100 like VOC) and rises on a NOx event. Left at 0
+            // while conditioning, which the server reads as "not yet valid" rather than "pristine".
+            if (!conditioning)
+                GasIndexAlgorithm_process(&s_nox, (int32_t)sraw_nox, &nox);
+            if (++since_pub < s_publish_every) continue;
+            snprintf(metrics, sizeof(metrics),
+                     "{\"voc_index\":%ld,\"voc_raw\":%u,\"nox_index\":%ld,\"nox_raw\":%u}",
+                     (long)voc, (unsigned)sraw_voc, (long)nox, (unsigned)sraw_nox);
         } else {  // HA_GAS_SENSOR_SGP40
             uint16_t sraw = 0;
             esp_err_t e = sgp40_measure_raw(&s_sgp40, SGP40_DEFAULT_RH, SGP40_DEFAULT_T, &sraw);
@@ -165,17 +199,26 @@ static void gas_task(void *arg) {
 }
 
 // --- Name/type mapping + autodetect (ADR-0036 generic image) -----------------------------------------
-// The three families ACK at DISTINCT I2C addresses, so a bus probe identifies the soldered part with no
-// configuration at all. That is what lets ONE build serve any sensor: the image stops needing to know.
+// A bus probe identifies the soldered part with no configuration at all. That is what lets ONE build
+// serve any sensor: the image stops needing to know.
+//
+// With one exception, which cost us a wrong answer for a while: SGP40 and SGP41 BOTH ACK at 0x59. The
+// SGP41 is a pin-, package- and address-compatible upgrade that adds a NOx pixel, so the address says
+// only "some SGP4x". We used to assume SGP40 there, and since the SGP41 also passes the same self-test,
+// the node would report "SGP40 self-test PASS" over MQTT while sitting on either part — a claim the
+// firmware had no evidence for. (The two differ where it matters: measure_raw is 0x260F on the SGP40 and
+// 0x2619 on the SGP41, and neither part implements the other's, so guessing wrong means a dead gas lane.)
+// Now the 0x59 case asks the part itself — see sgp4x_identify() in the sgp41 component.
 
 #define ADDR_SGP30   0x58
-#define ADDR_SGP40   0x59
+#define ADDR_SGP4X   0x59   // SGP40 *and* SGP41 — ambiguous by address, resolved by sgp4x_identify()
 #define ADDR_BME680A 0x76
 #define ADDR_BME680B 0x77
 
 ha_gas_sensor_t ha_gas_from_name(const char *name) {
     if (!name || !name[0])                return HA_GAS_SENSOR_AUTO;
     if (!strcmp(name, "sgp40"))           return HA_GAS_SENSOR_SGP40;
+    if (!strcmp(name, "sgp41"))           return HA_GAS_SENSOR_SGP41;
     if (!strcmp(name, "sgp30"))           return HA_GAS_SENSOR_SGP30;
     if (!strcmp(name, "bme680"))          return HA_GAS_SENSOR_BME680;
     if (!strcmp(name, "none"))            return HA_GAS_SENSOR_NONE;
@@ -185,6 +228,7 @@ ha_gas_sensor_t ha_gas_from_name(const char *name) {
 const char *ha_gas_name(ha_gas_sensor_t s) {
     switch (s) {
         case HA_GAS_SENSOR_SGP40:  return "sgp40";
+        case HA_GAS_SENSOR_SGP41:  return "sgp41";
         case HA_GAS_SENSOR_SGP30:  return "sgp30";
         case HA_GAS_SENSOR_BME680: return "bme680";
         case HA_GAS_SENSOR_NONE:   return "none";
@@ -195,6 +239,7 @@ const char *ha_gas_name(ha_gas_sensor_t s) {
 const char *ha_gas_device_type(ha_gas_sensor_t s) {
     switch (s) {
         case HA_GAS_SENSOR_SGP40:  return "sgp40_gas";
+        case HA_GAS_SENSOR_SGP41:  return "sgp41_gas";
         case HA_GAS_SENSOR_SGP30:  return "sgp30_gas";
         case HA_GAS_SENSOR_BME680: return "bme680_gas";
         default:                   return NULL;          // AUTO/NONE describe no concrete ability
@@ -214,7 +259,18 @@ ha_gas_sensor_t ha_gas_detect(int sda_gpio, int scl_gpio) {
     if (i2c_new_master_bus(&bus_cfg, &bus) != ESP_OK) return HA_GAS_SENSOR_NONE;
     ha_gas_sensor_t found = HA_GAS_SENSOR_NONE;
     // Order matters only for the BME680's two possible addresses; the families cannot collide.
-    if      (i2c_master_probe(bus, ADDR_SGP40,   50) == ESP_OK) found = HA_GAS_SENSOR_SGP40;
+    if (i2c_master_probe(bus, ADDR_SGP4X, 50) == ESP_OK) {
+        // 0x59 is shared by the SGP40 and SGP41 — ask the part which it is instead of assuming.
+        uint16_t fs = 0;
+        sgp4x_part_t part = sgp4x_identify(bus, GAS_SCL_HZ, &fs);
+        // Report the raw featureset alongside the verdict: it is the breadcrumb if a future die revision
+        // ever confuses the probe, and it is how an operator confirms a suspect module from the log.
+        ha_mqtt_log("SGP4x at 0x59: identified %s (featureset=0x%04X)",
+                    part == SGP4X_PART_SGP41 ? "SGP41 (VOC+NOx)" :
+                    part == SGP4X_PART_SGP40 ? "SGP40 (VOC only)" : "NEITHER command set — assuming SGP40",
+                    (unsigned)fs);
+        found = (part == SGP4X_PART_SGP41) ? HA_GAS_SENSOR_SGP41 : HA_GAS_SENSOR_SGP40;
+    }
     else if (i2c_master_probe(bus, ADDR_SGP30,   50) == ESP_OK) found = HA_GAS_SENSOR_SGP30;
     else if (i2c_master_probe(bus, ADDR_BME680A, 50) == ESP_OK) found = HA_GAS_SENSOR_BME680;
     else if (i2c_master_probe(bus, ADDR_BME680B, 50) == ESP_OK) found = HA_GAS_SENSOR_BME680;
@@ -243,9 +299,10 @@ void ha_gas_start(const char *node_id, ha_gas_sensor_t sensor, int sda_gpio, int
     s_sda = sda_gpio;
     s_scl = scl_gpio;
     snprintf(s_reg_key, sizeof(s_reg_key), "%s-gas", node_id ? node_id : "unknown");
-    if (sensor == HA_GAS_SENSOR_SGP30)       { s_dev_type = "sgp30_gas";  s_sample_ms = 1000;  s_publish_every = 10; }
-    else if (sensor == HA_GAS_SENSOR_BME680) { s_dev_type = "bme680_gas"; s_sample_ms = 10000; s_publish_every = 1; }
-    else                              { s_dev_type = "sgp40_gas";  s_sample_ms = 1000;  s_publish_every = 10; }
+    // One source of truth for the wire type (it also feeds the ADR-0036 `hello` abilities list).
+    s_dev_type = ha_gas_device_type(sensor);
+    if (sensor == HA_GAS_SENSOR_BME680) { s_sample_ms = 10000; s_publish_every = 1; }   // forced-mode ~10 s
+    else                                { s_sample_ms = 1000;  s_publish_every = 10; }  // Sensirion algos need 1 Hz
 
     i2c_master_bus_config_t bus_cfg = {
         .clk_source                   = I2C_CLK_SRC_DEFAULT,
@@ -279,6 +336,26 @@ void ha_gas_start(const char *node_id, ha_gas_sensor_t sensor, int sda_gpio, int
         }
         ha_mqtt_log("BME680 up — T/RH/P + gas-Ω lane running (SDA=GPIO%d SCL=GPIO%d, ~10s cadence, "
                     "heater 320C/150ms, compensation baked in)", s_sda, s_scl);
+    } else if (sensor == HA_GAS_SENSOR_SGP41) {
+        if ((e = sgp41_init(&s_sgp41, bus, GAS_SCL_HZ)) != ESP_OK) {
+            ha_mqtt_log("SGP41: add-device failed: %s", esp_err_to_name(e)); return;
+        }
+        // Self-test is also the live wiring check. It reports the two pixels separately, so a partial
+        // failure names which one died rather than condemning the whole part — a NOx-pixel failure still
+        // leaves a perfectly good VOC sensor, so we carry on and let the NOx index stay at 0.
+        uint16_t st = 0;
+        if ((e = sgp41_self_test(&s_sgp41, &st)) != ESP_OK) {
+            ha_mqtt_log("SGP41 self-test %s (raw=0x%04X%s%s) — check D4=SDA / D5=SCL / 3V3 / GND; "
+                        "BLE relay continues", esp_err_to_name(e), (unsigned)st,
+                        (st & 0x1) ? ", VOC pixel FAILED" : "", (st & 0x2) ? ", NOx pixel FAILED" : "");
+            if (e != ESP_FAIL) return;      // an I2C-level error means nothing is there; a pixel flag doesn't
+        } else {
+            ha_mqtt_log("SGP41 self-test PASS — VOC+NOx lane up (SDA=GPIO%d SCL=GPIO%d, 1Hz, %ds NOx "
+                        "conditioning then ~45s warmup)", s_sda, s_scl, SGP41_CONDITION_SAMPLES);
+        }
+        s_sgp41_cond_left = SGP41_CONDITION_SAMPLES;
+        GasIndexAlgorithm_init(&s_voc, GasIndexAlgorithm_ALGORITHM_TYPE_VOC);
+        GasIndexAlgorithm_init(&s_nox, GasIndexAlgorithm_ALGORITHM_TYPE_NOX);
     } else {  // HA_GAS_SENSOR_SGP40
         if ((e = sgp40_init(&s_sgp40, bus, GAS_SCL_HZ)) != ESP_OK) {
             ha_mqtt_log("SGP40: add-device failed: %s", esp_err_to_name(e)); return;

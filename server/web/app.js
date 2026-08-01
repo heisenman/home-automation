@@ -705,6 +705,8 @@ const GRAPHABLE = [
   { key: "aqi", unit: "", color: "#fbbf24", label: "AQI" },
   { key: "voc_index", unit: "VOC", color: "#34d399", label: "VOC Index" },
   { key: "voc_raw", unit: "", color: "#6ee7b7", label: "VOC (raw)" },
+  { key: "nox_index", unit: "NOx", color: "#f472b6", label: "NOx Index" },   // SGP41 2nd pixel; 1 = no NOx (not 100 like VOC)
+  { key: "nox_raw", unit: "", color: "#f9a8d4", label: "NOx (raw)" },
   { key: "eco2", unit: "ppm", color: "#f59e0b", label: "eCO₂" },
   { key: "tvoc", unit: "ppb", color: "#a3e635", label: "TVOC" },
   { key: "gas_ohm", unit: "Ω", color: "#2dd4bf", label: "Gas resistance" },
@@ -732,6 +734,7 @@ function SensorVals({ m, unit, aq }) {
         <b style=${`color:${AQ_BAND_COLOR[aq.air_quality_band] || "#94a3b8"}`}>${aq.air_quality_band_label}</b>${aq.air_quality_basis === "relative" ? " ~" : ""} AQ</span>`
       : (m.air_quality != null && html`<span class="sv"><b>${Math.round(m.air_quality)}</b> AQ</span>`)}
     ${m.voc_index != null && html`<span class="sv"><b>${m.voc_index}</b> VOC</span>`}
+    ${m.nox_index > 0 && html`<span class="sv"><b>${m.nox_index}</b> NOx</span>`}
     ${m.power_w != null && html`<span class="sv"><b>${Math.round(m.power_w)}</b>W</span>`}
     ${m.energy_today_kwh != null && html`<span class="sv"><b>${round1(m.energy_today_kwh)}</b>kWh today</span>`}
     ${m.relay_on != null && html`<span class="sv"><b>${m.relay_on ? "on" : "off"}</b> plug</span>`}
@@ -1279,7 +1282,7 @@ const KNOWN_TRAITS = ["switchable", "ranged", "setpoint", "lockable", "positiona
 // reveals a free-text box so a brand-new model is still addable. Keep in step with the registry.
 const SENSOR_TYPES = [
   "switchbot_meter_outdoor", "switchbot_meter_pro", "switchbot_meter_plus", "switchbot_meter",
-  "aranet_radon_plus", "bme680_gas", "sgp40_gas", "sgp30_gas",
+  "aranet_radon_plus", "bme680_gas", "sgp40_gas", "sgp41_gas", "sgp30_gas",
 ];
 
 // Signal-strength glyph from RSSI (dBm): closer device → more bars. Held-to-the-hub is usually > -50.
