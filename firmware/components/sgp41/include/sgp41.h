@@ -11,10 +11,17 @@
 // WHY THIS COMPONENT EXISTS SEPARATELY FROM sgp40, AND WHY sgp4x_identify() IS THE POINT
 // ------------------------------------------------------------------------------------
 // The SGP41 is the SGP40's pin-, package- AND ADDRESS-compatible successor: both ACK at 0x59 and both
-// pass the same self-test. A bus scan therefore sees one address for two DIFFERENT command sets —
-// measure_raw is 0x260F on the SGP40 and 0x2619 on the SGP41, and neither part implements the other's.
-// So an address probe cannot tell them apart, and a module silkscreened one way may carry the other.
-// sgp4x_identify() is the disambiguator; ha_gas calls it instead of trusting the probe.
+// pass the same self-test. A bus scan therefore sees one address for two different command sets —
+// measure_raw is 0x260F on the SGP40 and 0x2619 on the SGP41. An address probe cannot tell them apart,
+// and a module silkscreened one way may carry the other.
+//
+// The failure that motivated this is quieter than it looks. Measured 2026-08-01: an SGP41 happily
+// answers the SGP40's 0x260F with CRC-valid data, so a node that guessed "SGP40" ran for days looking
+// completely healthy — right VOC numbers, self-test passing — while silently dropping the NOx pixel
+// entirely. Nothing in the data stream hinted at it. Guessing wrong does not fail loudly; it costs you
+// half the sensor.
+//
+// sgp4x_identify() is the disambiguator; ha_gas calls it instead of trusting the address.
 //
 // BREADCRUMB: firmware/components > sgp41 - Sensirion SGP41 VOC+NOx I2C driver, plus sgp4x_identify() which tells an SGP41 from an SGP40 behaviourally (they share address 0x59, so a bus scan cannot). Contract: ADR-0020. Parent: firmware/AGENTS.md.
 // REUSE-WHEN: a node has an SGP4x on its I2C bus — always route through sgp4x_identify() rather than assuming the part, and reach here (not sgp40) when you need the NOx pixel.
@@ -41,17 +48,18 @@ typedef enum {
 // Identify the part at 0x59 — the whole reason this component is split out.
 //
 // Method, in priority order, and why:
-//   1. BEHAVIOURAL (authoritative). Issue the SGP41's measure_raw_signals (0x2619) and require an ACK
-//      plus two CRC-valid words. That command is documented for the SGP41 and absent from the SGP40's
-//      command table, so a part that answers it correctly is an SGP41. If it doesn't, try the SGP40's
-//      measure_raw (0x260F) the same way.
-//   2. FEATURESET (corroborating only, logged). get_featureset (0x202F) with the low 9 bits masked is
-//      0x0020 on an SGP40 and 0x0040 on an SGP41. It is what most libraries use — but it is documented
-//      in NEITHER datasheet's command table, and newer die revisions have shipped values that broke
-//      exact-match checks in the wild (esphome/issues#5995). Hence: informative, not decisive.
+//   1. FEATURESET (primary). get_featureset (0x202F), LOW 9 BITS MASKED: 0x0020 = SGP40, 0x0040 = SGP41.
+//      The part stating its own identity beats inferring it. Mask, never compare the whole word — a real
+//      SGP41 measured here returned 0x0240, and exact-match is the documented failure in the wild
+//      (esphome/issues#5995). The command is absent from both datasheets' tables, so it may simply not
+//      answer; that is not an error, it just means fall through.
+//   2. BEHAVIOURAL (fallback). Issue the SGP41's measure_raw_signals (0x2619) and require an ACK plus
+//      two CRC-valid words; else the SGP40's 0x260F. Used only when the featureset is unreadable or
+//      unrecognised — because it is inference, and weaker than it first appears: the parts answer more
+//      commands than they document (an SGP41 answers 0x260F), so only a SUCCESSFUL 0x2619 discriminates.
 //
-// `featureset_out` (optional) receives the raw 0x202F word, or 0 if that read failed — worth logging,
-// because it is the breadcrumb if a future revision confuses the behavioural probe too.
+// `featureset_out` (optional) receives the raw 0x202F word, or 0 if that read failed. Always log it —
+// it is the breadcrumb if a future die revision confuses both paths.
 //
 // Leaves the sensor in IDLE (the probes switch the hotplate on; this turns it back off) so the caller
 // can run the conditioning sequence from the state the datasheet requires. Safe to call before

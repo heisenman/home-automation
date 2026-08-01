@@ -205,9 +205,13 @@ static void gas_task(void *arg) {
 // With one exception, which cost us a wrong answer for a while: SGP40 and SGP41 BOTH ACK at 0x59. The
 // SGP41 is a pin-, package- and address-compatible upgrade that adds a NOx pixel, so the address says
 // only "some SGP4x". We used to assume SGP40 there, and since the SGP41 also passes the same self-test,
-// the node would report "SGP40 self-test PASS" over MQTT while sitting on either part — a claim the
-// firmware had no evidence for. (The two differ where it matters: measure_raw is 0x260F on the SGP40 and
-// 0x2619 on the SGP41, and neither part implements the other's, so guessing wrong means a dead gas lane.)
+// the node reported "SGP40 self-test PASS" over MQTT while sitting on either part — a claim the firmware
+// had no evidence for.
+//
+// The reason that went unnoticed for so long is worth remembering: it does NOT fail loudly. An SGP41
+// answers the SGP40's 0x260F command with perfectly good CRC-valid VOC data (measured 2026-08-01), so a
+// misidentified node looks entirely healthy — correct VOC numbers, self-test passing — and just silently
+// never reports NOx. You lose half the sensor with no error anywhere.
 // Now the 0x59 case asks the part itself — see sgp4x_identify() in the sgp41 component.
 
 #define ADDR_SGP30   0x58

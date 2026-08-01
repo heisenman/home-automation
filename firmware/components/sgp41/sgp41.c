@@ -80,25 +80,34 @@ sgp4x_part_t sgp4x_identify(i2c_master_bus_handle_t bus, uint32_t scl_hz, uint16
     sgp4x_part_t part = SGP4X_PART_UNKNOWN;
     uint8_t r[6];
 
-    // (2) Corroborating read first — it is cheap, harmless, and leaves the part in idle. Undocumented on
-    // both parts, so a failure here is expected and MUST NOT be treated as absence of the sensor.
+    // (1) get_featureset — the part's own identity statement, and the primary test.
+    //
+    // MASK TO 9 BITS. Measured on real silicon 2026-08-01: a genuine SGP41 returned 0x0240, NOT 0x0040.
+    // An exact-match on the whole word — which several libraries do — misidentifies that part. The low 9
+    // bits are the family field (esphome/issues#5995 is this same bug hitting newer die revisions).
+    // Undocumented in both datasheets' command tables, so a failure here is expected on some parts and
+    // MUST NOT be read as "no sensor" — that is what the behavioural fallback below is for.
     uint16_t fs = 0;
     if (cmd_rw(dev, CMD_FEATURESET, 2, r, 3) == ESP_OK) {
         fs = (uint16_t)((r[0] << 8) | r[1]);
         if (featureset_out) *featureset_out = fs;
+        if      ((fs & 0x01FF) == SGP41_FEATURESET) part = SGP4X_PART_SGP41;
+        else if ((fs & 0x01FF) == SGP40_FEATURESET) part = SGP4X_PART_SGP40;
     }
 
-    // (1) Authoritative behavioural probe. An SGP41 answers 0x2619 with two CRC-valid words; an SGP40
-    // has no such command and NAKs it. Requiring BOTH the ACK and two good CRCs means a part that
-    // happens not to NAK still can't be mistaken for an SGP41 — it would have to fabricate valid CRCs.
-    if (cmd_param_rw(dev, CMD_MEASURE_RAW, SGP41_DEFAULT_RH, SGP41_DEFAULT_T, 55, r, 6) == ESP_OK) {
-        part = SGP4X_PART_SGP41;
-    } else if (cmd_param_rw(dev, CMD_SGP40_MEASURE, SGP41_DEFAULT_RH, SGP41_DEFAULT_T, 35, r, 3) == ESP_OK) {
-        part = SGP4X_PART_SGP40;
-    } else if ((fs & 0x01FF) == SGP41_FEATURESET) {   // both probes failed — fall back to the featureset
-        part = SGP4X_PART_SGP41;
-    } else if ((fs & 0x01FF) == SGP40_FEATURESET) {
-        part = SGP4X_PART_SGP40;
+    // (2) Behavioural fallback, only when the featureset was unreadable or unrecognised.
+    //
+    // ORDER IS LOAD-BEARING: try the SGP41's command FIRST. The datasheets imply each part NAKs the
+    // other's measure_raw, but that is NOT true in practice — a real SGP41 answers the SGP40's 0x260F
+    // with CRC-valid data (that is exactly why a mislabelled SGP41 ran for days looking healthy while
+    // silently dropping its NOx pixel). So 0x260F succeeding proves nothing on its own; only 0x2619
+    // succeeding is discriminating, and it must therefore be asked first. Requiring two CRC-valid words
+    // (not just an ACK) keeps a merely-permissive part from passing.
+    if (part == SGP4X_PART_UNKNOWN) {
+        if (cmd_param_rw(dev, CMD_MEASURE_RAW, SGP41_DEFAULT_RH, SGP41_DEFAULT_T, 55, r, 6) == ESP_OK)
+            part = SGP4X_PART_SGP41;
+        else if (cmd_param_rw(dev, CMD_SGP40_MEASURE, SGP41_DEFAULT_RH, SGP41_DEFAULT_T, 35, r, 3) == ESP_OK)
+            part = SGP4X_PART_SGP40;
     }
 
     // The probes switched a hotplate on. Return to idle so the caller can start the conditioning

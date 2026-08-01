@@ -252,19 +252,26 @@ freshness gating).
    **SGP40 and SGP41 both ACK at 0x59** — the SGP41 is a pin-, package- and
    address-compatible upgrade — and **both pass the same `0x280E` self-test**. Our
    autodetect assumed SGP40 at 0x59, so a node would log `SGP40 self-test PASS` while
-   sitting on either part: a claim the firmware had no evidence for. The parts are not
-   interchangeable in software — `measure_raw` is `0x260F` on the SGP40 and `0x2619` on
-   the SGP41, and **neither implements the other's** — so guessing wrong means a dead gas
-   lane, and a silkscreen is just a human's claim about a cheap module.
-   ✅ What works: ask the part. `sgp4x_identify()` issues the SGP41-only `0x2619` and
-   requires an ACK *plus* two CRC-valid words, falling back to the SGP40's `0x260F`.
-   *Also rejected:* using `get_featureset` (`0x202F`, low 9 bits: `0x20`=SGP40,
-   `0x40`=SGP41) as the **authoritative** test, which is what most libraries do. It is
-   documented in **neither** datasheet's command table, and newer die revisions have
-   shipped values that broke exact-match checks in the wild (esphome/issues#5995). We
-   read it and **log** it as corroboration, but the behavioural probe decides.
-   **Lesson: when two parts are deliberately drop-in compatible, identity must be proven
-   behaviourally — compatibility is exactly what defeats identification by inspection.**
+   sitting on either part: a claim the firmware had no evidence for. A silkscreen or a
+   product listing is just a human's claim about a cheap module.
+   **The failure is SILENT, which is why it survived so long.** Confirmed on real hardware
+   2026-08-01: an SGP41 answers the SGP40's `0x260F` with CRC-valid VOC data, despite that
+   command being absent from its datasheet. So a misidentified node looks perfectly
+   healthy — correct VOC numbers, self-test passing, nothing in the data stream wrong —
+   and simply never reports NOx. **You lose half the sensor with no error anywhere.** Do
+   not expect a wrong guess here to announce itself.
+   ✅ What works: `sgp4x_identify()`, primary = `get_featureset` (`0x202F`) **masked to
+   its low 9 bits** (`0x20`=SGP40, `0x40`=SGP41) — the part stating its own identity beats
+   inferring it. **Mask; never exact-match the word:** our real SGP41 returned **`0x0240`**,
+   and whole-word comparison (what several libraries do) misidentifies it. That is the
+   same bug as esphome/issues#5995.
+   Fallback when the featureset is unreadable/unrecognised (it is undocumented, so some
+   parts may not answer): a behavioural probe, `0x2619` first, requiring an ACK *plus* two
+   CRC-valid words. **Order is load-bearing** — since an SGP41 also answers `0x260F`, a
+   `0x260F` success proves nothing; only a `0x2619` success discriminates.
+   **Lesson: drop-in compatibility is exactly what defeats identification by inspection —
+   and permissive parts defeat naive behavioural probes too. Prefer a direct identity
+   register, mask it to its documented field, and log the raw value.**
 
 ---
 
