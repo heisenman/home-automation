@@ -51,3 +51,31 @@ into the dedicated box's provisioning when it's bought.
 - **Refinement (forward):** capture the lean-base profile (omit cloud-init / dpdk / multipathd) in **`provisioning/`**
   (the server spec / a bare-metal profile) when the dedicated HA box is bought — so it's applied at provision time,
   not rediscovered from this decision doc.
+
+## Addendum — `containerd` + `docker` (2026-08-01, board `containerd-unused`)
+
+**This pass missed them.** Both were `enabled` and running on `.210` with **zero** containers
+(`docker ps -a` and `ctr -n moby containers list` both empty), costing ~0.11% of a core continuously
+plus RAM and boot time for nothing.
+
+Verified before applying, same discipline as the `ipvsadm` call above:
+- **Reverse deps:** none but `multi-user.target` (and `docker.service` on `containerd`). No unit file
+  under `/etc/systemd/system/` references either.
+- **Repo:** the only hit is a *comment* in `provisioning/airgap/firewall/apply-airgap-firewall.sh`
+  ("without touching docker/household rules"). No functional dependency — the air-gap rules live in
+  their own `inet airgap` nftables table, independent of docker's `ip nat`/`ip filter` chains.
+- **`docker.socket` was enabled AND active** — disabling `docker.service` alone would have left socket
+  activation to restart it on first connect. All three had to go together.
+
+- **APPLIED:** `sudo systemctl disable --now docker.socket docker.service containerd.service` → all
+  disabled+inactive. Verified post-change: `inet airgap` table intact, all three addresses still held
+  (`.0.210`, VIP `.0.200`, `.1.245`), **0 failed `ha-*` units**, keepalived active with no priority
+  change, both APIs 200 (`/health` 0.012s / 0.016s). Reversible:
+  `sudo systemctl enable --now containerd docker.socket docker`.
+
+**Kept deliberately:** the one stored image, `ghcr.io/esphome/esphome:latest` (972MB). Disabling the
+daemons does not delete it, and it is worth keeping — a container is the clean way to run ESPHome
+*without* the shared-`venv` paho conflict ([[shared-venv-esphome-paho]]): the repo venv is shared and
+esphome's `paho<2` pin breaks `edge_ota`/repoint. If that bites again, `systemctl start docker` on
+demand is a better answer than re-pinning the venv. Delete the image only if reclaiming the 972MB
+matters more than that escape hatch.
