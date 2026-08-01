@@ -21,8 +21,17 @@ AND supersedes the missing `gap-watcher.env`). Proven end-to-end on `meter_pro_h
 matched live). Full write-up: `docs/switchbot-ble-history-protocol.md` (RESOLVED section).
 
 **Still open (smaller):**
-- **`meter_pro_c_office` meter has a DEAD history buffer** — clock stopped ~35d ago (still advertises live).
-  The guard refuses it; needs a SwitchBot-app time resync before its history is usable.
+- ~~**`meter_pro_c_office` meter has a DEAD history buffer**~~ — **RESOLVED 2026-08-01, flag was stale.**
+  Hugh noticed its display clock reads correctly; a live pull confirmed the buffer is fine:
+  `pull start: ptr 19788..21326, 1538 record-addrs` → `256 notifs -> 1536 samples -> inserted 2862 new rows`.
+  The write pointer is non-zero and advancing, so it is **not** frozen and the guard no longer refuses it.
+  **But the underlying clock fault is real and still there** — the pull logged
+  `device clock drift +999.35 h — re-anchoring newest sample to connection time` (~41.6 days, i.e. still
+  accumulating since the "~35d" observation). Two different clocks: the **display** is correct, the
+  **internal history timebase** is 41.6 days adrift. Recovery works anyway because v23 re-anchors the newest
+  sample to connection time, so recovered timestamps are correct *relative to now* (intra-window spacing
+  still governed by the `MP_INTERVAL_S` placeholder below). A SwitchBot-app time resync is now a
+  **root-cause cleanup, not a blocker** — worth doing so recovery stops depending on the re-anchor.
 - **Routing is partial** — only `meter_pro_h_bed` + `meter_pro_c_office` are in `instance/backfill-routes.yaml`
   (validated). Route `meter_pro_living_room` + the outdoor meters once their reaching node is confirmed
   (mesh-probe or a manual `op:history` returning a non-zero pointer). Outdoor pull path is unchanged by v23
