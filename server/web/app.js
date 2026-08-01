@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v50 Flash new hardware — server-side USB provisioning (.210) + node-born secret intake";
+const BUILD = "v51 Flash new hardware — network PROFILES (ssid+broker as one choice)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -1363,7 +1363,7 @@ function AddDeviceModal({ onClose, onSaved }) {
   const [flash, setFlash] = useState(null);          // survey: {boards, images, gas_choices, defaults}
   const [flashPort, setFlashPort] = useState("");
   const [flashNode, setFlashNode] = useState("");
-  const [flashBroker, setFlashBroker] = useState("");
+  const [flashProfile, setFlashProfile] = useState("");   // network profile id (ssid+broker as ONE choice)
   const [flashGas, setFlashGas] = useState("auto");
   const [flashBusy, setFlashBusy] = useState(false);
   const [flashErr, setFlashErr] = useState("");
@@ -1467,17 +1467,18 @@ function AddDeviceModal({ onClose, onSaved }) {
         setFlashPort(b.port);
         if (!flashNode && b.manifest_node) setFlashNode(b.manifest_node);
       }
-      if (!flashBroker && (s.defaults?.brokers || []).length) setFlashBroker(s.defaults.brokers[0]);
+      if (!flashProfile && (s.defaults?.profiles || []).length) setFlashProfile(s.defaults.profiles[0].id);
     } catch (e) { setFlashErr(String(e.message)); }
     setFlashBusy(false);
   };
   const board = (flash?.boards || []).find((b) => b.port === flashPort) || (flash?.boards || [])[0];
   const imageFor = (flash?.images || []).find((i) => i.target === board?.target);
+  const profile = (flash?.defaults?.profiles || []).find((p) => p.id === flashProfile);
 
   const doFlash = async () => {
     setFlashBusy(true); setFlashErr(""); setFlashJob(null);
     try {
-      const body = { port: flashPort, node_id: flashNode.trim(), broker_uri: flashBroker,
+      const body = { port: flashPort, node_id: flashNode.trim(), profile: flashProfile,
                      gas_sensor: flashGas };
       if (board?.needs_rotate) body.confirm_rotate = true;
       const r = await adminSend("POST", "/api/v1/flash", body);
@@ -1518,17 +1519,20 @@ function AddDeviceModal({ onClose, onSaved }) {
             it can be claimed again.</p>`}
           <input value=${flashNode} placeholder="node id — e.g. attic_c6 (lowercase, _)"
             onInput=${(e) => setFlashNode(e.target.value.trim())} />
-          <select value=${flashBroker} onChange=${(e) => setFlashBroker(e.target.value)}>
-            ${(flash.defaults?.brokers || []).map((b) => html`<option value=${b}>${b}</option>`)}
+          <select value=${flashProfile} onChange=${(e) => setFlashProfile(e.target.value)}>
+            <option value="" disabled>network…</option>
+            ${(flash.defaults?.profiles || []).map((p) => html`<option value=${p.id}>${p.label}</option>`)}
           </select>
+          ${profile && html`<p class="note sm mono">${profile.wifi_ssid} → ${profile.broker_uri}</p>`}
+          ${profile?.warn && html`<p class="err sm">⚠ ${profile.warn}</p>`}
+          ${profile && !profile.has_psk && html`<p class="err sm">No stored Wi-Fi key for this network —
+            the board will flash but won't join.</p>`}
           <select value=${flashGas} onChange=${(e) => setFlashGas(e.target.value)}>
             ${(flash.gas_choices || ["auto"]).map((g) => html`
               <option value=${g}>${g === "auto" ? "gas sensor: auto-detect (recommended)" : `gas: ${g}`}</option>`)}
           </select>
-          ${!flash.defaults?.has_wifi_psk && html`<p class="err sm">No stored Wi-Fi key
-            (instance/edge-provision.env) — the board will flash but won't join the network.</p>`}
           <button class="btn primary sm"
-            disabled=${flashBusy || !flashNode.trim() || !flashBroker || !imageFor?.ready}
+            disabled=${flashBusy || !flashNode.trim() || !flashProfile || !imageFor?.ready}
             onClick=${doFlash}>
             ${flashBusy ? "Flashing…" : `Flash ${flashNode || "board"}${board.needs_rotate ? " (rotate)" : ""}`}</button>
           ${flashJob && html`

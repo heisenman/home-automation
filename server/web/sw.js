@@ -1,6 +1,6 @@
 // Service worker — caches the app SHELL only (so the UI loads offline), never the API.
 // Live device state always goes to the network; if the box is unreachable the app shows last-known.
-const CACHE = "ha-shell-v50";   // v50: Flash new hardware panel — server-side USB provisioning (.210) + live job steps
+const CACHE = "ha-shell-v51";   // v51: flash panel picks a NETWORK PROFILE, not a bare broker (ssid+broker are coupled)
 const SHELL = [
   "/app/", "/app/index.html", "/app/app.js", "/app/push.js", "/app/styles.css",
   "/app/vendor/preact-htm.standalone.module.js", "/app/manifest.webmanifest", "/app/icon.svg",

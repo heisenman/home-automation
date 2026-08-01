@@ -347,54 +347,79 @@ def survey(*, node_secrets_path=None, master=None) -> dict:
                      "firmware at boot. Only node name, room and broker need choosing.")}
 
 
-DEFAULTS_PATH = REPO / "instance" / "edge-provision.env"
+PROFILES_PATH = REPO / "instance" / "edge-provision.yaml"
+
+
+def _load_profiles() -> dict:
+    import yaml
+    if not PROFILES_PATH.exists():
+        return {}
+    return yaml.safe_load(PROFILES_PATH.read_text()) or {}
 
 
 def provision_defaults() -> dict:
-    """Site defaults for provisioning, from `instance/edge-provision.env` (gitignored).
+    """Network PROFILES available for provisioning, from `instance/edge-provision.yaml` (gitignored).
 
-    Without this the operator retypes the Wi-Fi PSK on every flash, which is both tedious and a good way
-    to strand a board on a typo'd network — a mistake that costs a re-cable to fix. The PSK is NEVER
-    returned to the client; the UI shows that a stored one exists and the server fills it in at flash
-    time. Keys: EDGE_WIFI_SSID, EDGE_WIFI_PSK, EDGE_BROKER_URI, EDGE_BROKER_URI_ALT, EDGE_OTA_HOST,
-    EDGE_NTP_SERVER.
+    A profile bundles SSID + PSK + broker + OTA host, because **those are not independent choices**: the
+    air-gap broker is only reachable from the air-gap SSID, and the household broker only from the
+    household SSID. Offering a bare broker dropdown against one site-wide SSID is precisely how
+    `sgp40_stdby1` got flashed onto CTWap_24g pointing at 192.168.1.200 on 2026-08-01 — a board that came
+    up healthy, found its sensor, and could never reach a broker. Picking the network is one decision.
+
+    PSKs are NEVER returned to the client; each profile reports only `has_psk`, and the server fills the
+    real value in at flash time.
     """
-    vals: dict[str, str] = {}
-    if DEFAULTS_PATH.exists():
-        for line in DEFAULTS_PATH.read_text().splitlines():
-            line = line.strip()
-            if not line or line.startswith("#") or "=" not in line:
-                continue
-            k, _, v = line.partition("=")
-            vals[k.strip()] = v.strip().strip("'\"")
-    return {
-        "wifi_ssid": vals.get("EDGE_WIFI_SSID", ""),
-        "has_wifi_psk": bool(vals.get("EDGE_WIFI_PSK")),      # presence only — never the value
-        "ntp_server": vals.get("EDGE_NTP_SERVER", "pool.ntp.org"),
-        "ota_host": vals.get("EDGE_OTA_HOST", ""),
-        "brokers": [b for b in (vals.get("EDGE_BROKER_URI", ""), vals.get("EDGE_BROKER_URI_ALT", "")) if b],
-    }
+    cfg = _load_profiles()
+    out = []
+    for pid, p in (cfg.get("profiles") or {}).items():
+        p = p or {}
+        out.append({
+            "id": pid,
+            "label": p.get("label") or pid,
+            "wifi_ssid": p.get("wifi_ssid", ""),
+            "broker_uri": p.get("broker_uri", ""),
+            "ota_host": p.get("ota_host", ""),
+            "has_psk": bool(p.get("wifi_psk")),
+            "warn": p.get("warn") or None,
+        })
+    return {"profiles": out, "ntp_server": cfg.get("ntp_server", "pool.ntp.org")}
 
 
 def apply_defaults(spec: dict) -> dict:
-    """Fill unset provisioning fields from the site defaults. Called server-side at flash time so the
-    Wi-Fi PSK never has to leave the box."""
-    d = provision_defaults()
-    vals: dict[str, str] = {}
-    if DEFAULTS_PATH.exists():
-        for line in DEFAULTS_PATH.read_text().splitlines():
-            if "=" in line and not line.strip().startswith("#"):
-                k, _, v = line.partition("=")
-                vals[k.strip()] = v.strip().strip("'\"")
+    """Resolve `profile` into concrete SSID/PSK/broker/ota_host, server-side, so the PSK never crosses the
+    wire. An explicit broker_uri/wifi_ssid in the spec still wins (CLI and tests bypass profiles).
+
+    Refuses a spec that names a broker with no matching network — the failure mode this whole structure
+    exists to prevent."""
+    cfg = _load_profiles()
+    profiles = cfg.get("profiles") or {}
     out = dict(spec)
-    out.setdefault("wifi_ssid", d["wifi_ssid"])
-    if not out.get("wifi_psk"):
-        out["wifi_psk"] = vals.get("EDGE_WIFI_PSK", "")
-    out.setdefault("ntp_server", d["ntp_server"])
-    if not out.get("ota_host"):
-        out["ota_host"] = d["ota_host"]
-    if not out.get("broker_uri") and d["brokers"]:
-        out["broker_uri"] = d["brokers"][0]
+    pid = out.pop("profile", None)
+    if pid:
+        p = profiles.get(pid)
+        if not p:
+            raise FlashError(f"unknown network profile {pid!r} (have: {', '.join(profiles) or 'none'})")
+        for key in ("wifi_ssid", "wifi_psk", "broker_uri", "ota_host"):
+            if not out.get(key):
+                out[key] = p.get(key, "")
+        if p.get("warn"):
+            out.setdefault("_warn", p["warn"])
+    out.setdefault("ntp_server", cfg.get("ntp_server", "pool.ntp.org"))
+
+    # Coupling check. A Wi-Fi node whose broker is on a different /24 from every profile that uses its
+    # SSID cannot possibly connect — catch it here rather than after a successful-looking flash.
+    ssid, broker = out.get("wifi_ssid"), out.get("broker_uri", "")
+    if ssid and broker:
+        host = broker.split("//", 1)[-1].split(":", 1)[0]
+        same_net = [q for q in profiles.values()
+                    if (q or {}).get("wifi_ssid") == ssid
+                    and str((q or {}).get("broker_uri", "")).split("//", 1)[-1].split(":", 1)[0]
+                        .rsplit(".", 1)[0] == host.rsplit(".", 1)[0]]
+        if profiles and not same_net:
+            raise FlashError(
+                f"broker {host} is not reachable from SSID {ssid!r}. Those are different network "
+                f"segments — the node would come up healthy and never connect. Pick a network profile "
+                f"instead of mixing them: {', '.join(profiles)}.")
     return out
 
 

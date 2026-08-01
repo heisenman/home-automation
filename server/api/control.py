@@ -954,11 +954,24 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
             is node-born (ADR-0036 L0), so this path never handles a credential."""
             from server.maintenance import admin_job, edge_flash as EF
             b = dict(body or {})
-            for required in ("port", "node_id", "broker_uri"):
+            for required in ("port", "node_id"):
                 if not str(b.get(required, "")).strip():
                     return JSONResponse(status_code=400,
                                         content={"status": "bad-request",
                                                  "reason": f"{required} is required"})
+            # A network PROFILE (ssid+psk+broker+ota as one unit) is the supported way to say where the
+            # node lives; a bare broker_uri is accepted only for CLI/test callers that set the SSID too.
+            if not b.get("profile") and not b.get("broker_uri"):
+                return JSONResponse(status_code=400, content={
+                    "status": "bad-request",
+                    "reason": "profile is required — pick the network the node should join. Broker and "
+                              "Wi-Fi are not independent choices: the air-gap broker is only reachable "
+                              "from the air-gap SSID."})
+            try:                                   # resolve NOW so a mismatch fails at the click
+                EF.apply_defaults({**b, "node_id": b["node_id"]})
+            except EF.FlashError as exc:
+                return JSONResponse(status_code=400,
+                                    content={"status": "bad-request", "reason": str(exc)})
             if b.get("cmd_secret"):
                 return JSONResponse(status_code=400, content={
                     "status": "bad-request",
