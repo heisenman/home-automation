@@ -25,6 +25,31 @@ IMAGE="${HA_ESPHOME_IMAGE:-ghcr.io/esphome/esphome:latest}"
 DOCKER="docker"
 if ! docker info >/dev/null 2>&1; then
   DOCKER="sudo docker"
+  if ! sudo docker info >/dev/null 2>&1; then
+    cat >&2 <<'MSG'
+esphome: the docker daemon is not running.
+
+docker + containerd are DISABLED AT BOOT on this box on purpose (2026-08-01, board task
+containerd-unused). Nothing in the RUNNING system uses them — no ha-* service, no ingest,
+no failover — and idle they cost ~0.11% of a core plus RAM and boot time. ESPHome is the
+only consumer and its use is transient, so it pays for itself on demand instead.
+
+Start it for this session, then re-run:
+
+    sudo systemctl start docker
+
+Then leave it. Do NOT `systemctl enable` it — that re-adds the idle cost we removed, and
+docker.socket will silently re-arm the daemon on first connect if you enable that too.
+
+Why esphome is containerised at all (this is load-bearing, not preference): esphome pins
+paho-mqtt<2, and installing it into the shared venv/ downgrades paho, killing EVERY ha-*
+service on its next restart — silently, because running processes keep their imported
+modules. It bit us twice (2026-07-08, 2026-07-10). Any replacement must preserve that
+isolation; a dedicated venv or pipx would also qualify, the shared venv never does.
+See docs/coord/SHARED-VENV-ISOLATION.md + docs/decisions/os-service-optimization.md.
+MSG
+    exit 1
+  fi
 fi
 
 # Pass a serial device through only for cable flashing (opt-in via env).

@@ -73,9 +73,20 @@ Verified before applying, same discipline as the `ipvsadm` call above:
   change, both APIs 200 (`/health` 0.012s / 0.016s). Reversible:
   `sudo systemctl enable --now containerd docker.socket docker`.
 
-**Kept deliberately:** the one stored image, `ghcr.io/esphome/esphome:latest` (972MB). Disabling the
-daemons does not delete it, and it is worth keeping — a container is the clean way to run ESPHome
-*without* the shared-`venv` paho conflict ([[shared-venv-esphome-paho]]): the repo venv is shared and
-esphome's `paho<2` pin breaks `edge_ota`/repoint. If that bites again, `systemctl start docker` on
-demand is a better answer than re-pinning the venv. Delete the image only if reclaiming the 972MB
-matters more than that escape hatch.
+**Kept deliberately — and there IS one consumer.** `tools/esphome` is the repo's canonical ESPHome
+entrypoint and it runs `ghcr.io/esphome/esphome:latest` (972MB, still stored). That covers the E1001
+panel, the ZeroFlow fan controllers, and any ESPHome flash/OTA. It is containerised for a load-bearing
+reason, not preference: esphome pins `paho-mqtt<2`, and installing it into the shared `venv/` downgrades
+paho and kills **every** `ha-*` service on its next restart — silently, since running processes keep
+their imported modules. That bit us twice (2026-07-08, 2026-07-10). See
+[SHARED-VENV-ISOLATION.md](../coord/SHARED-VENV-ISOLATION.md), memory `shared-venv-esphome-paho`.
+
+**So the trade (Hugh's call, 2026-08-01): ESPHome use is transient, the idle cost was constant.** Leave
+the daemons disabled at boot and run `sudo systemctl start docker` for the occasional ESPHome session.
+`tools/esphome` now detects the stopped daemon and prints exactly that instead of a cryptic docker error.
+**Do not `systemctl enable` it** — that restores the cost we removed, and `docker.socket` will re-arm the
+daemon on first connect if enabled too.
+
+**If docker ever does need to go entirely,** the requirement to preserve is *isolation*, not docker: a
+dedicated venv or `pipx` install outside the shared venv qualifies. Verify by building a real E1001
+config through the replacement before removing anything.
