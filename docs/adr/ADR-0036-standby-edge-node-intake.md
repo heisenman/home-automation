@@ -153,15 +153,28 @@ last-seen`). Selecting one opens **"assign to area"**, which drives:
 - **Demo vehicle:** `standby_c6` is *already enrolled* (secret in node + LUT), so it proves
   the **discover → relocate** loop today. The **self-provision + register** path (Layer 0/1
   claim) is proven separately on a unit flashed with the generic, secret-less image.
-  *(2026-07-31: the dictator half is proven against a mock node — first claim binds; the node's
-  one-shot latch refuses the second; a rogue presenting a different secret for a bound `node_id`
-  is refused by the TOFU-lock with the LUT verifiably unchanged. Proving the firmware half still
-  needs a real unit flashed with a secret-less image — see the open item below.)*
-- **OPEN — needs hardware:** no live node has yet been flashed with a secret-less image, so the
-  firmware half of Layer 0/3 is compile-verified (all three targets build) and logic-verified, not
-  bench-verified. Do that on a USB-recoverable bench unit before trusting it in the field: the
-  failure mode to watch is a node that mints a secret the dictator never learns, which is
-  un-commandable and un-OTA-able — recoverable only by cable.
+- **✅ BENCH-PROVEN 2026-08-01 on `bench_c6`** (virgin ESP32-C6FH4 + SGP40, `a0:f2:62:86:f5:74`,
+  fw `v24-nodeborn`, flashed with a secret-less image). The former open item is closed:
+  - **Layer 0 timing, visible in the boot log:** `secret=no` at **528 ms** (config load, pre-WiFi)
+    → `node-born command secret generated + persisted` at **3638 ms** (post-WiFi). It does *not*
+    mint at cold boot, which is the whole point — `esp_random()` is only a true HW RNG once the
+    radio is up. On reboot it logs `config[cmd_secret] from NVS` and does **not** regenerate.
+  - **Layer 3 claim, driven from the PWA:** the dictator learned a secret it never issued. After a
+    full NVS wipe the node minted a *different* secret (`dc46ce66…` → `5ee31b5c2a…`), proving
+    generation rather than resurrection.
+  - **One-shot latch:** a second claim is refused, the node stops subscribing to `enroll/req`
+    entirely, and **the latch survives a reboot**. LUT secret unchanged throughout.
+  - **End state:** auto-registered `gas_mech_closet`, relocated `staging → mech_closet`, ability
+    awake (`air_quality` 99 "Excellent", basis `relative`).
+- **Three bugs the bench run found** (all fixed in `fbe9f26`; see that commit for detail): the
+  claim ran *before* the device lookup so an irreversible one-shot fired on a request that then
+  404'd; **genuinely new hardware could never be adopted at all** because intake required a
+  hand-written `<node>-gas` record and the original demo used an already-registered node; and the
+  auto-created record was born in the target area, making the follow-on relocate a same-area no-op.
+- **Gotcha for anyone repeating this:** deleting a device's rows from one box does **not** stick.
+  `.210`'s rows had already been pushed to `.245`, and the next `ha-reconcile-history` pull merged
+  them straight back (observed 03:06:03). A true purge has to happen on both peers — the same
+  never-silently-lose-data property ADR-0032 is built around, cutting the other way.
 - Adopting a node the dictator cannot claim is refused by default (409). `allow_unclaimed=true`
   overrides it for pre-ADR-0036 hardware, and says plainly in the response that the resulting
   device takes no commands and no OTA.
