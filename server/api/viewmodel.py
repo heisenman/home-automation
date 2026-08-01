@@ -285,14 +285,26 @@ def build_sensor_list(hot_conn, now: float, meta: dict | None = None,
     if hot_conn is None:
         return []
     meta = meta or {}
-    rows = hot_conn.execute(
-        """SELECT r.device_id, r.metric, r.value, r.ts, d.device_type, d.area
-             FROM readings r
-             JOIN (SELECT device_id, metric, MAX(ts) AS mts FROM readings
-                   WHERE authoritative=1 GROUP BY device_id, metric) m
-               ON r.device_id=m.device_id AND r.metric=m.metric AND r.ts=m.mts
-             LEFT JOIN device_last_seen d ON d.device_id=r.device_id
-            WHERE r.authoritative=1""").fetchall()
+    # Latest value per (device, metric). Prefer the materialized cache — the derivation below is O(rows)
+    # and runs on EVERY request; it reached 8.96s on a 2.9M-row db and is what silently disarmed failover
+    # for four days (board sensors-query-unbounded, server/storage/latest_cache.py). The cache is ~107
+    # rows. Fall back to the original query whenever the cache isn't trustworthy — a database without the
+    # migration must be SLOW, never WRONG.
+    from server.storage import latest_cache
+    if latest_cache.is_usable(hot_conn):
+        rows = hot_conn.execute(
+            """SELECT l.device_id, l.metric, l.value, l.ts, d.device_type, d.area
+                 FROM latest_readings l
+                 LEFT JOIN device_last_seen d ON d.device_id=l.device_id""").fetchall()
+    else:
+        rows = hot_conn.execute(
+            """SELECT r.device_id, r.metric, r.value, r.ts, d.device_type, d.area
+                 FROM readings r
+                 JOIN (SELECT device_id, metric, MAX(ts) AS mts FROM readings
+                       WHERE authoritative=1 GROUP BY device_id, metric) m
+                   ON r.device_id=m.device_id AND r.metric=m.metric AND r.ts=m.mts
+                 LEFT JOIN device_last_seen d ON d.device_id=r.device_id
+                WHERE r.authoritative=1""").fetchall()
     by_dev: dict[str, dict] = {}
     for did, metric, value, ts, dtype, area in rows:
         if did.startswith("unknown"):       # unregistered MAC the scanner saw — not a user device; hide

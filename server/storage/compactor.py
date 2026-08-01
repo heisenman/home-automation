@@ -222,6 +222,14 @@ def compact(
         conn.commit()
         log.info("Pruned %d rows from hot tier", cur.rowcount)
 
+        # Keep the materialized latest-reading cache in step with what hot.db still holds. A device whose
+        # newest reading just got compacted away drops out of the sensor view — which is exactly what the
+        # un-cached query did, and changing that would be a UX change hidden inside a perf fix.
+        from server.storage import latest_cache
+        gone = latest_cache.prune(conn, cutoff)
+        if gone:
+            log.info("Pruned %d stale entries from latest_readings", gone)
+
         conn.execute("PRAGMA wal_checkpoint(TRUNCATE)")
         conn.commit()
 

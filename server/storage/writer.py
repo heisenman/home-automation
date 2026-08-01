@@ -125,6 +125,11 @@ def _open_db(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(_DDL)
     _migrate(conn)
+    # Materialized latest-per-(device,metric) + its maintaining trigger (board sensors-query-unbounded).
+    # Created here because the writer is the one component that opens hot.db read-WRITE; the API opens it
+    # read-only and falls back to the O(rows) query until this has run.
+    from server.storage import latest_cache
+    latest_cache.ensure(conn)
     conn.commit()
     log.info("Database opened at %s", path)
     return conn
