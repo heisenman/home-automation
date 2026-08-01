@@ -97,6 +97,24 @@ def _worker(job_id: str) -> int:
     spec = rec.get("spec") or {}
     try:
         op, did = spec.get("op"), spec.get("device_id")
+
+        # Flashing an MCU is the one op with no device_id — it PRE-dates the device existing. It also
+        # streams progress, because a 40s USB write with no feedback is indistinguishable from a hang, and
+        # the operator is standing at the bench deciding whether to unplug.
+        if op == "flash":
+            from server.maintenance import edge_flash as EF
+            steps: list[str] = []
+
+            def say(msg):
+                steps.append(f"{_now()} {msg}")
+                rec.update(status="running", steps=list(steps))
+                _write(job_id, rec)               # publish each step so the PWA can follow it live
+
+            report = EF.flash_node(spec.get("flash") or {}, progress=say)
+            rec.update(status="done", report=report, steps=list(steps), finished=_now())
+            _write(job_id, rec)
+            return 0
+
         if not did:
             raise ValueError("spec missing device_id")
         if op == "rename":

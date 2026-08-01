@@ -134,7 +134,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v49 Add-sensor discovery — see nearby unregistered BLE devices + one-click intake";
+const BUILD = "v50 Flash new hardware — server-side USB provisioning (.210) + node-born secret intake";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -1358,6 +1358,16 @@ function AddDeviceModal({ onClose, onSaved }) {
   const [areas, setAreas] = useState([]);                // canonical rooms {id,name} for the area dropdowns
   const [areaManual, setAreaManual] = useState(false);   // device-add "Other…" → free-text NEW area
   const [edgeAreaManual, setEdgeAreaManual] = useState(false);   // edge-adopt "Other…" → free-text NEW area
+  // Flash-new-hardware panel (server-side USB on .210). Scanned on demand, not polled: probing a serial
+  // port resets the attached board, so doing it on a 3s timer would keep rebooting whatever is plugged in.
+  const [flash, setFlash] = useState(null);          // survey: {boards, images, gas_choices, defaults}
+  const [flashPort, setFlashPort] = useState("");
+  const [flashNode, setFlashNode] = useState("");
+  const [flashBroker, setFlashBroker] = useState("");
+  const [flashGas, setFlashGas] = useState("auto");
+  const [flashBusy, setFlashBusy] = useState(false);
+  const [flashErr, setFlashErr] = useState("");
+  const [flashJob, setFlashJob] = useState(null);
   const toggleTrait = (t) => setTraits((ts) => (ts.includes(t) ? ts.filter((x) => x !== t) : [...ts, t]));
 
   // Canonical rooms for the area pickers (ADR-0026) — a dropdown beats free-text (typos spawn phantom areas).
@@ -1442,6 +1452,94 @@ function AddDeviceModal({ onClose, onSaved }) {
     } catch (e) { setEdgeErr(String(e.message)); }
     setEdgeBusy(false);
   };
+  // ── Flash new hardware (server-side USB, .210 only) ───────────────────────────────────────────────
+  // The step BEFORE adoption: a blank board becomes a node. Chip family, revision and MAC are read off
+  // the silicon and the gas sensor is probed by the firmware at boot, so this is a confirmation surface —
+  // the only things it asks for are the ones the system genuinely cannot know: what to call it, and which
+  // broker it should join.
+  const flashSurvey = async () => {
+    setFlashBusy(true); setFlashErr("");
+    try {
+      const s = await adminSend("GET", "/api/v1/flash/survey");
+      setFlash(s);
+      const b = (s.boards || [])[0];
+      if (b) {
+        setFlashPort(b.port);
+        if (!flashNode && b.manifest_node) setFlashNode(b.manifest_node);
+      }
+      if (!flashBroker && (s.defaults?.brokers || []).length) setFlashBroker(s.defaults.brokers[0]);
+    } catch (e) { setFlashErr(String(e.message)); }
+    setFlashBusy(false);
+  };
+  const board = (flash?.boards || []).find((b) => b.port === flashPort) || (flash?.boards || [])[0];
+  const imageFor = (flash?.images || []).find((i) => i.target === board?.target);
+
+  const doFlash = async () => {
+    setFlashBusy(true); setFlashErr(""); setFlashJob(null);
+    try {
+      const body = { port: flashPort, node_id: flashNode.trim(), broker_uri: flashBroker,
+                     gas_sensor: flashGas };
+      if (board?.needs_rotate) body.confirm_rotate = true;
+      const r = await adminSend("POST", "/api/v1/flash", body);
+      // A flash is ~40s of USB writes; poll the job so the operator sees motion. Silence at a bench is
+      // indistinguishable from a hang, and the wrong instinct there is to unplug mid-write.
+      const poll = setInterval(async () => {
+        try {
+          const j = await adminSend("GET", `/api/v1/devices/jobs/${r.job_id}`);
+          setFlashJob(j);
+          if (["done", "failed", "error"].includes(j.status)) {
+            clearInterval(poll); setFlashBusy(false);
+            if (j.status !== "done") setFlashErr(j.error || "flash failed — see steps");
+          }
+        } catch (e) { clearInterval(poll); setFlashBusy(false); setFlashErr(String(e.message)); }
+      }, 2500);
+    } catch (e) { setFlashErr(String(e.message)); setFlashBusy(false); }
+  };
+
+  const flashPanel = html`
+    <div class="discover flash">
+      <div class="discover-hd"><span>Flash new hardware</span>
+        <button class="btn sm" disabled=${flashBusy} onClick=${flashSurvey}>
+          ${flash ? "Rescan" : "Scan USB"}</button></div>
+      <p class="note sm">Plug a board into <b>this box</b> over USB. Chip type and MAC are read from the
+        chip itself; the gas sensor is detected at boot.</p>
+      ${flashErr && html`<p class="err sm">${flashErr}</p>`}
+      ${flash && (flash.boards || []).length === 0 && html`<p class="note sm">No board detected. Check the
+        cable (a charge-only cable shows nothing) and that it's in the USB port on this box.</p>`}
+      ${board && html`
+        <div class="edge-adopt">
+          <p class="note sm mono">${board.chip || board.target || "?"} · ${board.mac || "mac?"}
+            ${board.manifest_node ? ` · known as ${board.manifest_node}` : " · new hardware"}</p>
+          ${!imageFor?.ready && html`<p class="err sm">No generic image for
+            <b>${board.target || "this chip"}</b>${imageFor?.reason ? ` — ${imageFor.reason}` : ""}</p>`}
+          ${board.needs_rotate && html`<p class="err sm">⚠ This board is already enrolled as
+            <b>${board.enrolled_as}</b>. Flashing wipes its NVS, so it mints a new secret while the
+            dictator still holds the old one. Continuing will <b>rotate</b> it — dropping the old entry so
+            it can be claimed again.</p>`}
+          <input value=${flashNode} placeholder="node id — e.g. attic_c6 (lowercase, _)"
+            onInput=${(e) => setFlashNode(e.target.value.trim())} />
+          <select value=${flashBroker} onChange=${(e) => setFlashBroker(e.target.value)}>
+            ${(flash.defaults?.brokers || []).map((b) => html`<option value=${b}>${b}</option>`)}
+          </select>
+          <select value=${flashGas} onChange=${(e) => setFlashGas(e.target.value)}>
+            ${(flash.gas_choices || ["auto"]).map((g) => html`
+              <option value=${g}>${g === "auto" ? "gas sensor: auto-detect (recommended)" : `gas: ${g}`}</option>`)}
+          </select>
+          ${!flash.defaults?.has_wifi_psk && html`<p class="err sm">No stored Wi-Fi key
+            (instance/edge-provision.env) — the board will flash but won't join the network.</p>`}
+          <button class="btn primary sm"
+            disabled=${flashBusy || !flashNode.trim() || !flashBroker || !imageFor?.ready}
+            onClick=${doFlash}>
+            ${flashBusy ? "Flashing…" : `Flash ${flashNode || "board"}${board.needs_rotate ? " (rotate)" : ""}`}</button>
+          ${flashJob && html`
+            <div class="note sm mono flash-steps">
+              ${(flashJob.steps || []).map((s) => html`<div>${s.split(" ").slice(1).join(" ")}</div>`)}
+              ${flashJob.status === "done" && html`<div><b>✓ flashed — it will announce itself below in
+                ~20s, then adopt it into a room.</b></div>`}
+            </div>`}
+        </div>`}
+    </div>`;
+
   const edgeDiscover = html`
     <div class="discover">
       <div class="discover-hd"><span>Standby / unassigned hardware</span>
@@ -1498,6 +1596,7 @@ function AddDeviceModal({ onClose, onSaved }) {
     </div>`;
 
   const sensorFields = html`
+    ${flashPanel}
     ${edgeDiscover}
     ${discover}
     <input value=${mac} placeholder="MAC — pick above, or type AA:BB:CC:DD:EE:FF"

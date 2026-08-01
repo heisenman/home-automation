@@ -46,9 +46,24 @@ LOCK_PATH = REPO / "instance" / ".edge-flash.lock"
 # Toolchain that lives outside the repo venv. nvs_partition_gen needs the IDF's own python env (its
 # esp_idf_nvs_partition_gen module is not in our venv, and the venv is shared — adding packages there
 # has bitten us before, see the esphome/paho pin), so we invoke it by absolute path rather than importing.
-IDF_PATH = Path(os.environ.get("IDF_PATH", Path.home() / "esp" / "esp-idf"))
-IDF_PYTHON = Path(os.environ.get(
-    "HA_IDF_PYTHON", Path.home() / ".espressif" / "python_env" / "idf5.4_py3.13_env" / "bin" / "python"))
+def _real_home() -> Path:
+    """The account's home from /etc/passwd — NOT $HOME.
+
+    Both ha-api and ha-admin-job set `Environment=HOME=<repo>/instance` (so stray tool state lands in the
+    instance dir rather than the real home), which makes Path.home() resolve to `…/instance` and every
+    toolchain path built from it wrong. Found the hard way: the first API-driven flash died with
+    "nvs_partition_gen.py not found at …/instance/esp/esp-idf/…". getpwuid ignores the env override.
+    """
+    import pwd
+    try:
+        return Path(pwd.getpwuid(os.getuid()).pw_dir)
+    except KeyError:                      # no passwd entry (container-ish) — fall back to $HOME
+        return Path(os.path.expanduser("~"))
+
+
+IDF_PATH = Path(os.environ.get("IDF_PATH") or (_real_home() / "esp" / "esp-idf"))
+IDF_PYTHON = Path(os.environ.get("HA_IDF_PYTHON")
+                  or (_real_home() / ".espressif" / "python_env" / "idf5.4_py3.13_env" / "bin" / "python"))
 NVS_GEN = IDF_PATH / "components" / "nvs_flash" / "nvs_partition_generator" / "nvs_partition_gen.py"
 
 NVS_OFFSET = "0x9000"
@@ -291,6 +306,122 @@ def image_set(target: str) -> dict:
             "app": str(parts["0x10000"].relative_to(REPO))}
 
 
+def survey(*, node_secrets_path=None, master=None) -> dict:
+    """Everything the flash UI needs in one call: what is plugged in, who it already is, and what we can
+    write to it.
+
+    Deliberately one round trip and deliberately read-only. The board is identified from the silicon, so
+    the operator is confirming facts rather than typing them — chip family, revision and MAC all come from
+    the chip itself, and `enrolled_as` says whether flashing it would orphan a node the dictator can
+    currently command.
+    """
+    boards = []
+    for p in list_ports():
+        row = {"port": p["port"], "id": p["id"], "detected": False, "error": None}
+        try:
+            row.update(detect(p["port"]), detected=True)
+        except FlashError as e:
+            row["error"] = str(e)
+            row["mac"] = p.get("mac_hint")           # by-id often still tells us who it is
+        mac = row.get("mac")
+        if mac:
+            known = known_node_for_mac(mac)
+            row["manifest_node"] = (known or {}).get("node_id")
+            row["enrolled_as"] = None
+            if node_secrets_path and master:
+                try:
+                    from server.control import secret_store as ss
+                    for nid, rec in ss.load_lut(Path(node_secrets_path), master).items():
+                        if str((rec or {}).get("mac", "")).upper() == mac.upper():
+                            row["enrolled_as"] = nid
+                            break
+                except Exception as e:               # noqa: BLE001 — a bad LUT must not hide the board
+                    row["lut_error"] = str(e)
+            # The single most important thing for the operator to see before they click flash.
+            row["needs_rotate"] = bool(row.get("enrolled_as"))
+        boards.append(row)
+    return {"boards": boards, "images": available_images(),
+            "gas_choices": list(GAS_CHOICES),
+            "defaults": provision_defaults(),
+            "note": ("Chip family and MAC are read from the silicon; the gas sensor is probed by the "
+                     "firmware at boot. Only node name, room and broker need choosing.")}
+
+
+DEFAULTS_PATH = REPO / "instance" / "edge-provision.env"
+
+
+def provision_defaults() -> dict:
+    """Site defaults for provisioning, from `instance/edge-provision.env` (gitignored).
+
+    Without this the operator retypes the Wi-Fi PSK on every flash, which is both tedious and a good way
+    to strand a board on a typo'd network — a mistake that costs a re-cable to fix. The PSK is NEVER
+    returned to the client; the UI shows that a stored one exists and the server fills it in at flash
+    time. Keys: EDGE_WIFI_SSID, EDGE_WIFI_PSK, EDGE_BROKER_URI, EDGE_BROKER_URI_ALT, EDGE_OTA_HOST,
+    EDGE_NTP_SERVER.
+    """
+    vals: dict[str, str] = {}
+    if DEFAULTS_PATH.exists():
+        for line in DEFAULTS_PATH.read_text().splitlines():
+            line = line.strip()
+            if not line or line.startswith("#") or "=" not in line:
+                continue
+            k, _, v = line.partition("=")
+            vals[k.strip()] = v.strip().strip("'\"")
+    return {
+        "wifi_ssid": vals.get("EDGE_WIFI_SSID", ""),
+        "has_wifi_psk": bool(vals.get("EDGE_WIFI_PSK")),      # presence only — never the value
+        "ntp_server": vals.get("EDGE_NTP_SERVER", "pool.ntp.org"),
+        "ota_host": vals.get("EDGE_OTA_HOST", ""),
+        "brokers": [b for b in (vals.get("EDGE_BROKER_URI", ""), vals.get("EDGE_BROKER_URI_ALT", "")) if b],
+    }
+
+
+def apply_defaults(spec: dict) -> dict:
+    """Fill unset provisioning fields from the site defaults. Called server-side at flash time so the
+    Wi-Fi PSK never has to leave the box."""
+    d = provision_defaults()
+    vals: dict[str, str] = {}
+    if DEFAULTS_PATH.exists():
+        for line in DEFAULTS_PATH.read_text().splitlines():
+            if "=" in line and not line.strip().startswith("#"):
+                k, _, v = line.partition("=")
+                vals[k.strip()] = v.strip().strip("'\"")
+    out = dict(spec)
+    out.setdefault("wifi_ssid", d["wifi_ssid"])
+    if not out.get("wifi_psk"):
+        out["wifi_psk"] = vals.get("EDGE_WIFI_PSK", "")
+    out.setdefault("ntp_server", d["ntp_server"])
+    if not out.get("ota_host"):
+        out["ota_host"] = d["ota_host"]
+    if not out.get("broker_uri") and d["brokers"]:
+        out["broker_uri"] = d["brokers"][0]
+    return out
+
+
+def available_images() -> list[dict]:
+    """Which targets are actually flashable right now, with why-not for the ones that aren't.
+
+    Phase 3 of the plan: the UI must never offer an image that does not exist, and when one is missing the
+    operator needs the reason (not built / built per-node instead of generic) rather than a dead option.
+    Reports the app hash so a flash can be traced back to an exact artifact after the fact.
+    """
+    import hashlib
+    out = []
+    for target in TARGETS:
+        row = {"target": target, "ready": False, "reason": None, "version": None,
+               "app": None, "sha256": None, "built": None}
+        try:
+            info = image_set(target)
+            app = REPO / info["app"]
+            row.update(ready=True, version=info["version"], app=info["app"],
+                       sha256=hashlib.sha256(app.read_bytes()).hexdigest()[:16],
+                       built=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(app.stat().st_mtime)))
+        except FlashError as e:
+            row["reason"] = str(e)
+        out.append(row)
+    return out
+
+
 # ── the flash ────────────────────────────────────────────────────────────────────────────────────────
 
 def flash_node(spec: dict, *, progress=None) -> dict:
@@ -305,6 +436,7 @@ def flash_node(spec: dict, *, progress=None) -> dict:
     if not port.startswith("/dev/"):
         raise FlashError("port must be a /dev/tty* path")
 
+    spec = apply_defaults(spec)          # site Wi-Fi/broker/NTP, so the PSK never crosses the wire
     with _PortLock():
         say(f"detecting board on {port}…")
         info = detect(port)

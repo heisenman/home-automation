@@ -928,6 +928,58 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
             code, payload = handle_enroll_node(Path(node_secrets_path), master, body)
             return JSONResponse(status_code=code, content=payload)
 
+        @router.get("/flash/survey", dependencies=[Depends(require_admin)])
+        async def flash_survey():
+            """What is plugged into THIS box, who it already is, and what we can write to it.
+
+            One read-only round trip so the UI is a confirmation surface: chip family, revision and MAC
+            come off the silicon, so the operator confirms rather than types. `needs_rotate` flags a board
+            that is already enrolled — flashing it would orphan a node the dictator can currently command.
+            .210-only by design (Hugh: the one box with reliable USB port access)."""
+            from server.maintenance import edge_flash as EF
+            try:
+                return JSONResponse(status_code=200, content=EF.survey(
+                    node_secrets_path=node_secrets_path, master=master))
+            except EF.FlashError as exc:
+                return JSONResponse(status_code=500,
+                                    content={"status": "error", "reason": str(exc)})
+
+        @router.post("/flash", dependencies=[Depends(require_admin)])
+        async def flash_board(body: dict = Body(...)):
+            """Provision a board over USB. Detached — a flash takes ~40s, far past a sane request timeout —
+            so this returns a job id and the caller polls /api/v1/devices/jobs/{id}, which streams `steps`.
+
+            Body: {port, node_id, target?, gas_sensor?, broker_uri, wifi_ssid?, wifi_psk?, ntp_server?,
+            ota_host?, erase?, confirm_rotate?}. The command secret is NOT accepted or produced here — it
+            is node-born (ADR-0036 L0), so this path never handles a credential."""
+            from server.maintenance import admin_job, edge_flash as EF
+            b = dict(body or {})
+            for required in ("port", "node_id", "broker_uri"):
+                if not str(b.get(required, "")).strip():
+                    return JSONResponse(status_code=400,
+                                        content={"status": "bad-request",
+                                                 "reason": f"{required} is required"})
+            if b.get("cmd_secret"):
+                return JSONResponse(status_code=400, content={
+                    "status": "bad-request",
+                    "reason": "cmd_secret is not accepted — the node mints its own (ADR-0036 Layer 0) and "
+                              "hands it over once at intake. Nothing should be sending one here."})
+            # Validate cheap things NOW, synchronously, so obvious mistakes fail at the click instead of
+            # 40 seconds later inside a detached job.
+            gas = str(b.get("gas_sensor") or "auto")
+            if gas not in EF.GAS_CHOICES:
+                return JSONResponse(status_code=400, content={
+                    "status": "bad-request",
+                    "reason": f"gas_sensor must be one of {', '.join(EF.GAS_CHOICES)}"})
+            b.setdefault("node_secrets_path", str(node_secrets_path))
+            b.setdefault("master", master)
+            job_id = admin_job.launch({"op": "flash", "flash": b})
+            return JSONResponse(status_code=202, content={
+                "status": "launched", "job_id": job_id,
+                "poll": f"/api/v1/devices/jobs/{job_id}",
+                "note": "the board reboots itself when done, mints its own secret, and announces hello — "
+                        "then adopt it from Standby hardware"})
+
         @router.post("/edge-nodes/{node}/claim", dependencies=[Depends(require_admin)])
         async def claim_edge_node(node: str):
             """ADR-0036 Layer 3: claim a node-born node's secret WITHOUT adopting it into a room.
