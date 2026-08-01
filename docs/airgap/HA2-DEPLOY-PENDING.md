@@ -37,3 +37,31 @@ The cutover also deployed device-admin (`control.py`, `apply_rename_worksheet.py
 `ha-admin-job@.service`), the failover maintenance-inhibit (`failover/healthcheck.sh`), `model_project.py` +
 `DEVICE-MODEL.md`, and the PWA — all verified by deployed-file checksum on ha-2, so none needs a tripwire row.
 Deployed manifest recorded on ha-2 at `instance/cutover-deployed.txt`.
+
+---
+
+## ✅ 2026-08-01 — firmware tree synced to ha-2 (board `sync-firmware-tree-to-ha2`)
+
+ha-2 originates C6 fleet OTAs (nodes pin `ota_host` at `.1.210`, memory `c6-fleet-ota-from-ha2`), but only
+SERVER code had been deployed there. Its firmware tree was pre-Phase-0 and **missing five whole
+components** — `ha_eth`, `ha_gas`, `ha_led`, `ha_wifi`, `sgp41` — i.e. no gas lane at all, and
+`tools/edge_ota.py` had no `generic@<target>` gate, so it would have **rejected a generic image**.
+
+Synced the **git-tracked** files under `firmware/` + `edge/` + `tools/edge_ota.py` (165 files, whole-tree
+sha256 verified identical). Git-tracked deliberately: it excludes `secrets.h` (gitignored, per-node
+identity) and `build/` artifacts. **No `secrets.h` exists on ha-2 and the sync did not create one** —
+node identity must never be copied between boxes (ADR-0020 anti-cross-provisioning).
+
+No VIP window was needed: nothing on ha-2 *executes* from these paths. The only references in
+`ha-edge-history.service` / `ha-edge-mapper.service` are `Documentation=` lines.
+
+### ⚠ Correction to a common assumption: **ha-2 cannot BUILD firmware**
+
+There is no ESP-IDF on ha-2 and no build tree. "ha-2 originates OTAs" means it **serves and triggers**
+them, not that it compiles them. The real workflow (already in memory `c6-fleet-ota-from-ha2`) is:
+
+    build on .210  →  scp the .bin to ha-2  →  run tools/edge_ota.py ON ha-2
+
+So this sync makes ha-2's tree *consistent and readable* (module matrix, nodes.yaml manifest for the
+identity gate, edge_ota.py able to accept a generic image) — it does **not** make ha-2 self-sufficient for
+firmware builds, and installing an IDF there is not currently intended.
