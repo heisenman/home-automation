@@ -1,1 +1,0 @@
-generic@esp32c3
