@@ -1,0 +1,34 @@
+[Unit]
+# Air-gap standby copy of ha-rollup (board ag-unit-set-gaps, 2026-08-01).
+# The ADR-0022 rung ladder never rebuilt on the standby: it ingests continuously but had no
+# rollup pass, so every graph/history query would fall back to raw scans the moment this box took over.
+# THE named gap in board task ag-unit-set-gaps.
+#
+# Operates ONLY on this checkout's own instance/ — no shared hardware, so it is safe to run alongside
+# the household stack on the same box. See /home/visko/ha-airgap-standby/instance/host-roles.yaml for the full unit-by-unit call.
+Description=[AG-FAILOVER] Home Automation — Rollup Ladder incremental pass (ADR-0022, one-shot)
+Documentation=file:///home/visko/ha-airgap-standby/docs/design/rollup-ladder-and-replica-sync.md
+After=ha-ag-writer.service
+
+[Service]
+Type=oneshot
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/ha-airgap-standby
+# Incremental: reads new minutes from hot.db since the stored HWM, cascades up the ladder, prunes.
+# One-time history seed (parquet) is a manual op: `python -m server.storage.rollup --parquet`.
+ExecStart=/home/visko/ha-airgap-standby/venv/bin/python3 \
+    -m server.storage.rollup \
+    --raw instance/db/hot.db \
+    --rung instance/db/rungs.db \
+    --log-level INFO
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/visko/ha-airgap-standby/instance
+PrivateTmp=yes
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-ag-rollup

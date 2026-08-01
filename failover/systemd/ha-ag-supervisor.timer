@@ -1,0 +1,11 @@
+[Unit]
+Description=Run the HA required-services supervisor every ~5 min
+Documentation=file:///home/visko/ha-airgap-standby/docs/REQUIRED-SERVICES.md
+
+[Timer]
+OnBootSec=3min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

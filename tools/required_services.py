@@ -47,9 +47,34 @@ def host_roles(explicit: list[str] | None) -> list[str]:
     raise SystemExit(f"no roles: pass --roles or create {HOST_ROLES} with `roles: [core, ...]`")
 
 
-def resolve(manifest: dict, roles: list[str]) -> dict[str, dict]:
+def host_options(path: Path | None = None) -> dict:
+    """Per-box knobs from host-roles.yaml beyond the role list: `unit_prefix` and `exclude`.
+
+    Exists for a SECOND stack co-resident on one box — .210 runs the household `ha-*` set AND the
+    air-gap standby's `ha-ag-*` set from a separate checkout. Before this, that second set was
+    hand-curated and therefore invisible to the supervisor, which is precisely how it ended up with a
+    full ingest path and NO compactor (2026-07-31: hot.db grew to 2.9M rows, every O(rows) read scaled
+    with it, and keepalived's probe crossed its timeout — failover silently disarmed for four days).
+    A hand-kept list cannot be checked; a declared one can.
+
+    `exclude` is how a replica says "deliberately not here", so a genuine omission still shows as a GAP
+    while an intentional one is documented in-place rather than remembered.
+    """
+    p = path or HOST_ROLES
+    d = _load(p) if p.exists() else {}
+    return {"unit_prefix": d.get("unit_prefix") or "", "exclude": set(d.get("exclude") or [])}
+
+
+def resolve(manifest: dict, roles: list[str], opts: dict | None = None) -> dict[str, dict]:
     """Union the units across this host's roles. A later role overrides `must` for the same unit
-    (e.g. dictator sets ha-controller must=active, overriding core's `gated`)."""
+    (e.g. dictator sets ha-controller must=active, overriding core's `gated`).
+
+    `opts` (see host_options) may rename `ha-<x>` to `<prefix><x>` and drop deliberately-absent units.
+    Exclusion is matched on the MANIFEST name (`ha-scanner.service`), not the prefixed one, so the
+    exclude list reads the same on every box.
+    """
+    opts = opts or {"unit_prefix": "", "exclude": set()}
+    prefix, exclude = opts.get("unit_prefix") or "", opts.get("exclude") or set()
     defs = manifest.get("roles", {})
     out: dict[str, dict] = {}
     for role in roles:
@@ -57,6 +82,10 @@ def resolve(manifest: dict, roles: list[str]) -> dict[str, dict]:
             raise SystemExit(f"unknown role {role!r} (manifest roles: {', '.join(defs)})")
         for u in defs[role].get("units", []):
             name = u["unit"]
+            if name in exclude:
+                continue
+            if prefix and name.startswith("ha-"):
+                name = prefix + name[len("ha-"):]
             # role order = precedence; a stronger 'must' (active) wins over 'gated'
             if name in out and out[name]["must"] == "active":
                 continue
@@ -71,7 +100,7 @@ def _sysctl(verb: str, unit: str) -> str:
 
 
 def cmd_list(manifest, roles, args) -> int:
-    units = resolve(manifest, roles)
+    units = resolve(manifest, roles, host_options())
     for name, meta in units.items():
         if args.enable and meta["must"] != "active":       # --enable: only the must-be-running set
             continue
@@ -80,7 +109,7 @@ def cmd_list(manifest, roles, args) -> int:
 
 
 def cmd_check(manifest, roles, args) -> int:
-    units = resolve(manifest, roles)
+    units = resolve(manifest, roles, host_options())
     gaps, warns, ok = [], [], []
     for name, meta in sorted(units.items()):
         enabled = _sysctl("is-enabled", name)     # enabled|disabled|static|not-found|...

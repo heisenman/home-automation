@@ -1,0 +1,19 @@
+# Resolve devices on a migration pending-hold (device_meta.pending_until): fresh data → clear the hold;
+# window expired with no data → drop (retired, HISTORY KEPT); else keep holding. Oneshot, timer-fired.
+[Unit]
+# Air-gap standby copy of ha-pending-sweeper (board ag-unit-set-gaps, 2026-08-01).
+# ADR-0028 pending-holds would never expire on the standby, so migrated devices would stay
+# invisible in its view after takeover.
+#
+# Operates ONLY on this checkout's own instance/ — no shared hardware, so it is safe to run alongside
+# the household stack on the same box. See /home/visko/ha-airgap-standby/instance/host-roles.yaml for the full unit-by-unit call.
+Description=[AG-FAILOVER] HA migration pending-hold sweeper (resolve/drop held devices)
+Documentation=file:///home/visko/ha-airgap-standby/server/maintenance/pending_sweeper.py
+
+[Service]
+Type=oneshot
+User=visko
+WorkingDirectory=/home/visko/ha-airgap-standby
+ExecStart=/home/visko/ha-airgap-standby/venv/bin/python server/maintenance/pending_sweeper.py
+Nice=15
+IOSchedulingClass=idle

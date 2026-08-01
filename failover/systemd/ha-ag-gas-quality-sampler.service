@@ -1,0 +1,21 @@
+# Derived-metric sampler — persist air_quality (BME680 gas fusion) so it has a STORED time-series
+# (data-storage-is-primary directive; server/AGENTS.md). Oneshot, fired by ha-gas-quality-sampler.timer.
+# Reuses the viewmodel fusion, so a stored point == the live-view value. Backfill was a one-time
+# `gas_quality_persist.py --backfill`; this keeps it going forward.
+[Unit]
+# Air-gap standby copy of ha-gas-quality-sampler (board ag-unit-set-gaps, 2026-08-01).
+# Derived air_quality is computed in the READ path only; without this sampler the standby
+# stores none of it, breaking the data-storage-is-primary directive for the replica's own history.
+#
+# Operates ONLY on this checkout's own instance/ — no shared hardware, so it is safe to run alongside
+# the household stack on the same box. See /home/visko/ha-airgap-standby/instance/host-roles.yaml for the full unit-by-unit call.
+Description=[AG-FAILOVER] HA derived-metric sampler — persist air_quality (BME680 gas index)
+Documentation=file:///home/visko/ha-airgap-standby/server/maintenance/gas_quality_persist.py
+
+[Service]
+Type=oneshot
+User=visko
+WorkingDirectory=/home/visko/ha-airgap-standby
+ExecStart=/home/visko/ha-airgap-standby/venv/bin/python server/maintenance/gas_quality_persist.py --once
+Nice=15
+IOSchedulingClass=idle

@@ -1,0 +1,26 @@
+[Unit]
+# Air-gap standby copy of ha-verify-hashes (board ag-unit-set-gaps, 2026-08-01).
+# The standby writes its own Parquet (it has a compactor since 2026-07-31) but never verified
+# those hashes, so silent corruption in the replica's archive would only surface on takeover.
+#
+# Operates ONLY on this checkout's own instance/ — no shared hardware, so it is safe to run alongside
+# the household stack on the same box. See /home/visko/ha-airgap-standby/instance/host-roles.yaml for the full unit-by-unit call.
+Description=[AG-FAILOVER] Home Automation — Parquet Hash Verification (ADR-0004)
+
+[Service]
+Type=oneshot
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/ha-airgap-standby
+ExecStart=/home/visko/ha-airgap-standby/venv/bin/python3 \
+    tools/verify_hashes.py \
+    --parquet-dir instance/db/parquet
+
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadOnlyPaths=/home/visko/ha-airgap-standby/instance
+
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=ha-ag-verify-hashes

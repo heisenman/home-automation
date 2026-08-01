@@ -1,0 +1,21 @@
+[Unit]
+# Air-gap standby copy of ha-supervisor (board ag-unit-set-gaps, 2026-08-01).
+# The standby had NO self-check at all — which is exactly why its missing compactor went
+# unnoticed until it caused an outage. It now resolves ha-ag-* via unit_prefix in instance/host-roles.yaml.
+#
+# Operates ONLY on this checkout's own instance/ — no shared hardware, so it is safe to run alongside
+# the household stack on the same box. See /home/visko/ha-airgap-standby/instance/host-roles.yaml for the full unit-by-unit call.
+Description=[AG-FAILOVER] HA required-services supervisor (manifest-driven unit-completeness check + alert)
+Documentation=file:///home/visko/ha-airgap-standby/docs/REQUIRED-SERVICES.md
+After=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=/home/visko/ha-airgap-standby
+EnvironmentFile=-/home/visko/ha-airgap-standby/instance/mqtt.env
+# Reads provisioning/required-services.yaml + instance/host-roles.yaml; flags any required unit that is
+# NOT-INSTALLED (the silent case) or INACTIVE, and publishes home/_alert/new + a retained supervisor status.
+# Report-only: it never starts/stops units (a "missing" unit may be an intentional role difference).
+ExecStart=/home/visko/ha-airgap-standby/venv/bin/python3 tools/required_services.py check --broker 127.0.0.1
+# a gap sets exit 1 — surface it in `systemctl status` without marking the timer job failed-forever
+SuccessExitStatus=0 1
