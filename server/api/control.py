@@ -461,6 +461,78 @@ def _device_for_node(devices_path, node_id: str) -> str | None:
     return None
 
 
+# The metrics each gas family publishes, mirroring firmware/components/ha_gas (the three drivers linked
+# into every image). Hand-written per record in devices.yaml until now; centralised here so an
+# auto-registered node gets exactly what an install-time-registered one gets.
+_GAS_CAPABILITIES = {
+    "sgp40_gas":  ["voc_index", "voc_raw"],
+    "sgp30_gas":  ["eco2", "tvoc"],
+    "bme680_gas": ["temperature_c", "humidity_pct", "pressure_hpa", "gas_ohm"],
+}
+
+# Where a freshly auto-registered edge ability is parked until intake relocates it into a real room.
+# Matches the area standby_c6-gas has carried since 2026-07-08.
+DORMANT_AREA = "staging"
+
+
+def _register_edge_node_device(devices_path, node_id: str, abilities, area: str, *, dry_run=False):
+    """Synthesise the sensor-registry record for a NEW edge node's gas ability (ADR-0036 intake).
+
+    Returns (device_id, None) on success or (None, reason) if we can't. The record shape matches the
+    hand-written ones exactly (key ``<node>-gas``, ``node_id`` back-reference, device_id ``gas_<area>``)
+    so downstream — edge_mapper, viewmodel, relocate — cannot tell the difference.
+
+    Only the gas lane is auto-registered. BLE relaying needs no record (the node forwards adverts keyed by
+    the peripheral's MAC, which the mapper resolves against the registry independently), so a node with no
+    gas ability is a legitimate relay-only node and is reported as such rather than half-registered.
+    """
+    import yaml
+
+    from pathlib import Path
+
+    gas = next((a for a in (abilities or []) if a in _GAS_CAPABILITIES), None)
+    if not gas:
+        return None, (f"node {node_id!r} announced no gas ability ({list(abilities or []) or 'none'}) and "
+                      f"has no registry record. A relay-only node needs no device record — it forwards "
+                      f"BLE adverts keyed by the peripheral MAC. Nothing to adopt into a room.")
+    device_id = f"gas_{area}"
+    key = f"{node_id}-gas"
+    entry = {
+        "device_id": device_id,
+        "node_id": node_id,
+        "device_type": gas,
+        # Born DORMANT in `staging`, not in the target area — matching the standby_c6 precedent
+        # ("air_quality stays dormant until a real area is assigned (one-line relocate)"). The caller
+        # immediately relocates staging -> area, and THAT move is what wakes the ability. Registering
+        # straight into the target area would make the relocate a same-area no-op, which the relocate
+        # path rejects with a 400 (bench-found 2026-08-01). device_id is already the destination name so
+        # the deferred gas_standby->gas_<area> rename never has to happen for auto-registered nodes.
+        "area": DORMANT_AREA,
+        "capabilities": list(_GAS_CAPABILITIES[gas]),
+        "notes": (f"Auto-registered at ADR-0036 intake from node {node_id}'s self-described hello "
+                  f"(abilities={list(abilities)}). Publishes home/edge/{node_id}/gas/adv; "
+                  f"transport i2c-local."),
+    }
+    if dry_run:
+        return device_id, None
+
+    path = Path(devices_path)
+    raw = yaml.safe_load(path.read_text()) if path.exists() else {}
+    raw = raw or {}
+    # `devices:` with no entries parses to None, not {} — setdefault would hand back that None.
+    devices = raw.get("devices") or {}
+    raw["devices"] = devices
+    if key in devices:                       # someone registered it between our lookup and here
+        return (devices[key] or {}).get("device_id"), None
+    if any((v or {}).get("device_id") == device_id for v in devices.values()):
+        return None, (f"device_id {device_id!r} is already taken by another record — two gas sensors in "
+                      f"{area!r}. Register this node manually with a distinct device_id.")
+    devices[key] = entry
+    from server.device_registry import _write_yaml_preserving
+    _write_yaml_preserving(path, raw)        # atomic + .bak + header-preserving, same as append_device
+    return device_id, None
+
+
 def handle_history_gaps(device_id: str, devices_path, db_path,
                         lookback_days: int = 3, min_gap_min: float = 20.0) -> tuple[int, dict]:
     """Read-only history checker. Scans the last ``lookback_days`` of ``hot.db`` for windows with no
@@ -748,6 +820,47 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
                                 content={"status": "bad-request", "reason": "area must be a non-empty string"})
         area = area.strip()
         dry_run = bool((body or {}).get("dry_run", False))
+        mode = (body or {}).get("mode", "forward")
+
+        # Resolve (and if needed CREATE) the node's device record BEFORE the claim below. Ordering is
+        # deliberate: the claim burns the node's one-shot enroll window and cannot be undone, so nothing
+        # that can still fail may come after it. (Bench-found 2026-08-01: the claim originally ran first,
+        # so adopting brand-new hardware fired the irreversible claim and THEN returned 404 "no registered
+        # device" — a permanent side effect reported to the operator as a failure.)
+        device_id = _device_for_node(Path(devices_path), node)
+        if not device_id:
+            # Brand-new hardware: no hand-written registry record exists yet. ADR-0036's demo used
+            # standby_c6, which had been registered at install time, so this path was never exercised —
+            # every genuinely new node 404'd here. The node's own `hello` already carries everything the
+            # record needs (node id + abilities), which is the whole point of a self-describing node, so
+            # synthesise it rather than making the operator hand-edit devices.yaml.
+            abilities = []
+            if edge_discovery_cache is not None:
+                abilities = (edge_discovery_cache.row(node) or {}).get("abilities") or []
+            created, err = _register_edge_node_device(Path(devices_path), node, abilities, area,
+                                                      dry_run=dry_run)
+            if err:
+                return JSONResponse(status_code=404,
+                                    content={"status": "not-found", "node": node, "reason": err})
+            device_id = created
+            if dry_run:
+                # A dry run writes no record, so there is nothing for handle_device_relocate to read a
+                # CURRENT area from — it would fall back to device_last_seen and, for a node that has
+                # already banked readings, report "target equals current" and 400 a perfectly valid
+                # operation. Describe the two-step plan directly instead of previewing against a state
+                # that doesn't exist yet.
+                return JSONResponse(status_code=200, content={
+                    "status": "preview", "node": node, "device_id": device_id, "area": area,
+                    "dry_run": True, "claim": None,
+                    "plan": [
+                        {"step": "register", "key": f"{node}-gas", "device_id": device_id,
+                         "device_type": next((a for a in abilities if a in _GAS_CAPABILITIES), None),
+                         "area": DORMANT_AREA, "note": "new record, born dormant"},
+                        {"step": "claim", "note": "TOFU claim of the node-born secret (skipped if already "
+                                                  "enrolled)"},
+                        {"step": "relocate", "from": DORMANT_AREA, "to": area,
+                         "note": "wakes the air_quality ability"},
+                    ]})
 
         # ADR-0036 Layer 3 — CLAIM before adopt. A node-born node (Layer 0) minted its own command secret
         # and nobody else knows it yet, so the dictator cannot sign anything to it: no OTA, no history
@@ -790,12 +903,8 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
                                                "commanded or OTA'd"}
         # Intake default 'forward': the node's banked standby/bench data STAYS where it was (it isn't this
         # room's history); only readings from adoption onward are the room's. Override with mode=restamp to
-        # carry the whole history to the new area.
-        mode = (body or {}).get("mode", "forward")
-        device_id = _device_for_node(Path(devices_path), node)
-        if not device_id:
-            return JSONResponse(status_code=404,
-                                content={"status": "not-found", "reason": f"no registered device for node {node!r}"})
+        # carry the whole history to the new area. (`mode` and `device_id` are resolved above, before the
+        # irreversible claim.)
         code, payload = handle_device_relocate(device_id, {"new_area": area, "mode": mode, "dry_run": dry_run})
         return JSONResponse(status_code=code,
                             content={"status": payload.get("status", "?"), "node": node,

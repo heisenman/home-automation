@@ -57,3 +57,15 @@ nodes:
     area: standby
     broker: "mqtt://192.168.0.210:1883"
     ota_host: "192.168.0.210"
+
+  bench_c6:
+    mac: "A0:F2:62:86:F5:74"
+    target: esp32c6
+    sensor: sgp40            # Sensirion SGP40 — VOC index. BENCH unit (2026-08-01).
+    area: standby
+    broker: "mqtt://192.168.0.210:1883"   # DEV-contained per ADR-0036 "first tryout is .210-dev-contained"
+    ota_host: "192.168.0.210"
+    # ADR-0036 Layer 0 PROOF UNIT — deliberately flashed with NO compile-time HA_CMD_SECRET, so it mints
+    # its own on first boot and the dictator learns it via the TOFU claim at intake. Do NOT run
+    # enroll_node.py against this node: minting a build-time secret here would defeat the very thing it
+    # exists to test. It is absent from node_secrets.enc BY DESIGN until the claim lands.

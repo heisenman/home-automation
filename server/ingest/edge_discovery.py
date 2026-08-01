@@ -141,6 +141,16 @@ class EdgeDiscoveryCache:
                 row.setdefault("slot", parts[1])
                 row.setdefault("fw", parts[2])
 
+    def row(self, node_id: str) -> dict | None:
+        """The cached row for one node, or None. A COPY — callers must not mutate cache state.
+
+        Unlike ``candidates()`` this applies no online/not-yet-placed filtering: ADR-0036 intake needs a
+        node's self-described abilities to auto-register its device record, and must not depend on the
+        node still passing the candidate filter at that instant."""
+        with self._lock:
+            row = self._by_node.get(node_id)
+            return dict(row) if row else None
+
     def candidates(self, *, manifest: dict | None = None, registry_areas: dict | None = None,
                    now: float | None = None) -> list[dict]:
         """Online, not-yet-placed edge nodes, annotated for the UI. Identity is merged from the manifest
