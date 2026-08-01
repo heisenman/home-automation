@@ -22,6 +22,21 @@
 #            healer's threshold (~5 min), the healer writes instance/.unfit -> keepalived hands the VIP to the
 #            standby (plan crystalline-spinning-spindle, Stage C). Default (unset) = heal+scream only, never
 #            flaps the VIP. Curated to the minimum "the house can't be served without this" set (Hugh 07-26).
+#
+#            THE TEST BEFORE YOU ADD `on_fail: failover` TO ANYTHING:
+#            **If this goes bad, would moving the VIP to the peer actually fix it?**
+#            Moving the VIP is a DIFFERENTIAL decision — it only helps when the peer can genuinely be
+#            better. A unit that fails because of something BOTH boxes share (a device unplugged, a LAN
+#            segment down, an upstream API 500ing) is a SHARED-FATE signal: the peer fails the identical
+#            check, so failing over hands the VIP to an equally-unfit box, or flaps between them. Those
+#            belong here WITHOUT `on_fail: failover` (heal + scream), or as a gap-watcher alert. Device
+#            health is absolutely worth alerting on — just never with the VIP.
+#            Note the device-facing bridges below (ha-levoit-bridge, ha-tasmota-bridge) are deliberately
+#            `must: active` and NOT failover-worthy for exactly this reason.
+#            This rule was learned the expensive way: failover/healthcheck.sh used to ping the Midea, whose
+#            DHCP address went stale — marking the household dictator permanently unfit while burning 51%
+#            of keepalived's timeout budget on a doomed `ping -W2`. Removed 2026-08-01; the reasoning is
+#            written out at the bottom of failover/healthcheck.sh.
 
 roles:
 

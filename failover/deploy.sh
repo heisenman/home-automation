@@ -29,6 +29,26 @@ chmod +x "$REPO"/failover/*.sh
 
 command -v keepalived >/dev/null || { echo "ERROR: keepalived not installed -> sudo apt install -y keepalived"; exit 1; }
 sudo mkdir -p /etc/keepalived
+
+# GUARD: the template renders exactly ONE vrrp_instance, but a dual-homed box can legitimately run TWO
+# legs from one keepalived (.210 straddles the household VIP .0.200 and the air-gap VIP .1.200 with
+# distinct VRIDs/interfaces — the second block is hand-assembled, not rendered from here). Overwriting
+# such a config with a single-leg render would SILENTLY DELETE the other cluster's leg: keepalived would
+# reload happily, and the missing VIP would only be noticed when a failover didn't happen.
+# Refuse rather than clobber; the operator can merge by hand and re-run with HA_FORCE_KEEPALIVED_CONF=1.
+if [ -f /etc/keepalived/keepalived.conf ] && [ "${HA_FORCE_KEEPALIVED_CONF:-0}" != 1 ]; then
+  _live_legs=$(grep -c '^[[:space:]]*vrrp_instance' /etc/keepalived/keepalived.conf || true)
+  if [ "${_live_legs:-0}" -gt 1 ]; then
+    echo "ERROR: /etc/keepalived/keepalived.conf has $_live_legs vrrp_instance blocks; this template renders 1."
+    echo "       Overwriting would delete the other leg (e.g. .210's air-gap block). Merge by hand, or"
+    echo "       re-run with HA_FORCE_KEEPALIVED_CONF=1 if you really mean to replace the whole file."
+    echo "       A backup of the current file is at /etc/keepalived/keepalived.conf.bak-predeploy-*"
+    sudo cp /etc/keepalived/keepalived.conf \
+            "/etc/keepalived/keepalived.conf.bak-predeploy-$(date -u +%Y%m%dT%H%M%SZ)"
+    exit 1
+  fi
+fi
+
 sed -e "s/@STATE@/$STATE/" -e "s/@PRIORITY@/$PRIORITY/" -e "s#@IFACE@#$IFACE#" \
     -e "s#@VIP@#$VIP#" -e "s/@VRID@/$VRID/" -e "s/@CIDR@/$CIDR/" \
     "$REPO/failover/keepalived.conf.tmpl" | sudo tee /etc/keepalived/keepalived.conf >/dev/null

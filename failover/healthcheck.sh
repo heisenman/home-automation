@@ -69,14 +69,26 @@ fi
 # db. Keep any future fitness signal O(1) — never wire this to a view builder.
 curl -fsS --max-time 4 "$API/health" >/dev/null 2>&1 || exit 1
 
-# Air-gap dictator: no household actuators to reach (its actuator set grows as devices migrate) —
-# fit on API alone, else it'd be wrongly marked unfit for a .0.x Midea it can't reach. (DJ-16)
-[ "${NET_NAME:-}" = airgap ] && exit 0
-
-# 2. Midea reachable on the LAN (can we actually actuate?)
-ENVF="$REPO/instance/midea-device.env"
-if [ -f "$ENVF" ]; then
-  MIP=$(grep -E '^MIDEA_IP=' "$ENVF" | head -1 | cut -d= -f2- | tr -d "\"' ")
-  if [ -n "$MIP" ]; then ping -c1 -W2 "$MIP" >/dev/null 2>&1 || exit 2; fi
-fi
+# 2. There is deliberately NO device-reachability check here. (Removed 2026-08-01; it used to ping the
+# Midea, and the air-gap leg carved itself out of it with `[ "$NET_NAME" = airgap ] && exit 0`.)
+#
+# WHY, because this is the kind of check that looks obviously useful and keeps getting re-added:
+#
+#   A fitness probe answers "should the VIP move to my peer?", which is a DIFFERENTIAL question — it is
+#   only meaningful if the peer could be better. Device reachability is a SHARED-FATE signal: both nodes
+#   ping the same appliance over the same network and get the same answer. So it cannot distinguish "this
+#   node is broken" from "the dehumidifier is unplugged", and failing over cannot fix an unplugged
+#   dehumidifier — you just hand the VIP to a box that fails the identical check, or flap between them.
+#
+#   The test for anything added here: IF THIS SIGNAL GOES BAD, WOULD MOVING THE VIP FIX IT? If no, it
+#   belongs in monitoring (required-services.yaml without `on_fail: failover`, or a gap-watcher alert),
+#   not in this script. Device health is absolutely worth alerting on — just never with the VIP.
+#
+# It also cost real money to keep: the Midea's IP was DHCP-assigned and had gone stale (env said
+# 192.168.0.211, the device had moved to 192.168.1.119), so every 5s cycle burned a 2s `ping -W2` timeout
+# — 51% of keepalived's 4s budget — and marked the household dictator permanently unfit. Plus 4 processes
+# per cycle (grep|cut|tr + ping) against the fork/exec churn this box is already trying to reduce.
+#
+# Everything above this line is node-LOCAL (this box's own uvicorn + hot.db, its own service-healer
+# marker), which is what makes it differential and therefore a legitimate basis for moving a VIP.
 exit 0
