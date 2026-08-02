@@ -476,6 +476,33 @@ _GAS_CAPABILITIES = {
 DORMANT_AREA = "staging"
 
 
+def _gas_device_id(taken, area: str, gas: str) -> str:
+    """A device_id for a gas ability in ``area`` that is FREE BY CONSTRUCTION, given the ``taken`` set.
+
+    `gas_<area>` is the preferred name and the one an operator sees in the common case. It is not unique
+    though: it silently assumes ONE gas sensor per room, and redundant/complementary sensing in a single
+    room is a design goal, not an anomaly (an SGP41 next to a BME680 measures VOC+NOx the BME680 cannot).
+    So collision is an EXPECTED input, and this qualifies by sensor family — `gas_mech_closet_sgp41` —
+    rather than failing and handing an operator a decision the system can make for itself.
+
+    Nothing parses the area back out of a device_id (a device that later relocates keeps its id, so the
+    prefix is already only a mnemonic), which is what makes qualifying it safe.
+
+    Deterministic and total: same registry + same inputs -> same answer, and the numeric tail terminates
+    for any number of same-family sensors in one room.
+    """
+    base = f"gas_{area}"
+    if base not in taken:
+        return base
+    qualified = f"{base}_{gas.removesuffix('_gas')}"     # gas_mech_closet_sgp41
+    if qualified not in taken:
+        return qualified
+    n = 2                                                # ...and a third SGP41 in that room: _2, _3, ...
+    while f"{qualified}_{n}" in taken:
+        n += 1
+    return f"{qualified}_{n}"
+
+
 def _register_edge_node_device(devices_path, node_id: str, abilities, area: str, *, dry_run=False):
     """Synthesise the sensor-registry record for a NEW edge node's gas ability (ADR-0036 intake).
 
@@ -486,18 +513,49 @@ def _register_edge_node_device(devices_path, node_id: str, abilities, area: str,
     Only the gas lane is auto-registered. BLE relaying needs no record (the node forwards adverts keyed by
     the peripheral's MAC, which the mapper resolves against the registry independently), so a node with no
     gas ability is a legitimate relay-only node and is reported as such rather than half-registered.
+
+    THIS PATH MUST NOT REQUIRE A HUMAN. It runs when an operator adopts hardware from the PWA, and the
+    goal is a house that an operator runs alone. Anything it hands back that reads "go hand-edit the
+    registry" is a design failure, not a helpful error — every branch below either completes the
+    registration or explains a condition the SERVER genuinely cannot resolve (see the unknown-ability case).
     """
     import yaml
 
     from pathlib import Path
 
+    # Read the registry FIRST — before the dry-run return. It used to be read after, so a preview computed
+    # `gas_<area>` blind and reported a clean plan that the apply then rejected on collision (2026-08-02:
+    # sgp41_mech previewed fine into mech_closet, then 400'd against the BME680 already holding
+    # gas_mech_closet). A preview that cannot see the state it is previewing against is worse than none.
+    path = Path(devices_path)
+    raw = yaml.safe_load(path.read_text()) if path.exists() else {}
+    raw = raw or {}
+    # `devices:` with no entries parses to None, not {} — setdefault would hand back that None.
+    devices = raw.get("devices") or {}
+    raw["devices"] = devices
+
+    key = f"{node_id}-gas"
+    if key in devices:                       # already registered (re-adopt, or a race) — idempotent
+        return (devices[key] or {}).get("device_id"), None
+
     gas = next((a for a in (abilities or []) if a in _GAS_CAPABILITIES), None)
     if not gas:
+        # Distinguish "no gas lane" from "a gas lane this BUILD has never heard of". Both used to land on
+        # the relay-only message below, which is stated as a verdict about the hardware — so a node that
+        # was simply newer than the server read as a node that needed no record at all (2026-08-02:
+        # ha-2 ran a pre-SGP41 _GAS_CAPABILITIES and told the operator his healthy sgp41_gas node was a
+        # relay). An air-gapped prod box is exactly where the server trails the firmware, so name it.
+        unknown = [a for a in (abilities or []) if a.endswith("_gas")]
+        if unknown:
+            return None, (f"node {node_id!r} announced gas ability {unknown} that THIS SERVER BUILD does "
+                          f"not know (it knows {sorted(_GAS_CAPABILITIES)}). The node is fine — this "
+                          f"server is behind it. Deploy the build that supports {unknown} and re-adopt; "
+                          f"do not re-flash the node.")
         return None, (f"node {node_id!r} announced no gas ability ({list(abilities or []) or 'none'}) and "
                       f"has no registry record. A relay-only node needs no device record — it forwards "
                       f"BLE adverts keyed by the peripheral MAC. Nothing to adopt into a room.")
-    device_id = f"gas_{area}"
-    key = f"{node_id}-gas"
+
+    device_id = _gas_device_id({(v or {}).get("device_id") for v in devices.values()}, area, gas)
     entry = {
         "device_id": device_id,
         "node_id": node_id,
@@ -517,17 +575,6 @@ def _register_edge_node_device(devices_path, node_id: str, abilities, area: str,
     if dry_run:
         return device_id, None
 
-    path = Path(devices_path)
-    raw = yaml.safe_load(path.read_text()) if path.exists() else {}
-    raw = raw or {}
-    # `devices:` with no entries parses to None, not {} — setdefault would hand back that None.
-    devices = raw.get("devices") or {}
-    raw["devices"] = devices
-    if key in devices:                       # someone registered it between our lookup and here
-        return (devices[key] or {}).get("device_id"), None
-    if any((v or {}).get("device_id") == device_id for v in devices.values()):
-        return None, (f"device_id {device_id!r} is already taken by another record — two gas sensors in "
-                      f"{area!r}. Register this node manually with a distinct device_id.")
     devices[key] = entry
     from server.device_registry import _write_yaml_preserving
     _write_yaml_preserving(path, raw)        # atomic + .bak + header-preserving, same as append_device
