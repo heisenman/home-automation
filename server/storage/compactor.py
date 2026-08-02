@@ -2,7 +2,7 @@
 Daily compactor — flushes hot SQLite to partitioned Parquet + summary tier.
 
 Run once per day (via systemd timer). Steps:
-  1. Determine cutoff: yesterday 00:00:00 UTC (everything before stays in Parquet)
+  1. Determine cutoff: TODAY 00:00:00 UTC (everything before stays in Parquet; hot.db keeps today only)
   2. Read all readings before the cutoff from SQLite
   3. Write one Parquet file per (year, month) partition (append; existing partitions
      are rewritten to include any late-arriving rows)
@@ -26,9 +26,13 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
+sys.path.insert(0, str(Path(__file__).resolve().parents[2]))  # repo root (run as a script)
+
 import duckdb
 import pyarrow as pa
 import pyarrow.parquet as pq
+
+from server.storage import latest_cache  # noqa: E402  (needs the sys.path line above)
 
 log = logging.getLogger("ha.compactor")
 
@@ -78,13 +82,14 @@ def _utc_now_iso() -> str:
 
 
 def _cutoff_ts() -> str:
-    """Yesterday midnight UTC — everything strictly before this is compacted."""
+    """TODAY midnight UTC — everything strictly before this is compacted, so hot.db holds today only.
+
+    Named and documented as "yesterday" until 2026-08-02, when the `- timedelta(days=0)` no-op and the
+    stale name cost real time diagnosing a re-merge loop (the arithmetic was read as one day wider than it
+    is). Behaviour is unchanged and deliberate — only the description was wrong.
+    """
     now = datetime.now(timezone.utc)
-    yesterday = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    # Subtract one day
-    from datetime import timedelta
-    cutoff = yesterday - timedelta(days=0)  # compact up to (not including) today
-    return cutoff.strftime("%Y-%m-%dT00:00:00Z")
+    return now.strftime("%Y-%m-%dT00:00:00Z")
 
 
 # ── Main compaction logic ─────────────────────────────────────────────────────
@@ -225,7 +230,9 @@ def compact(
         # Keep the materialized latest-reading cache in step with what hot.db still holds. A device whose
         # newest reading just got compacted away drops out of the sensor view — which is exactly what the
         # un-cached query did, and changing that would be a UX change hidden inside a perf fix.
-        from server.storage import latest_cache
+        # Imported at module scope (not here): this used to be a deferred import, so when it failed on
+        # 2026-08-02 it failed AFTER the DELETE above had already committed — leaving the cache and the WAL
+        # checkpoint behind on both boxes. An import that can fail must fail before the destructive step.
         gone = latest_cache.prune(conn, cutoff)
         if gone:
             log.info("Pruned %d stale entries from latest_readings", gone)
