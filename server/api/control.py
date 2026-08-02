@@ -64,7 +64,19 @@ def handle_command(issuer: CommandIssuer, device_id: str, body: dict[str, Any],
 # controller reads it every tick (store.get_override) and the resolver enforces it (incl. min-off/safety),
 # so there is no separate command path and a stale API can't strand the device ON.
 _OVERRIDE_ACTIONS = ("off", "boost_on", "clear")
-_MAX_OVERRIDE_MIN = 1440          # 24h cap — an override is a timeout, never a permanent mode
+# 7d cap — an override is a TIMEOUT, never a permanent mode: a forgotten pause must still self-clear
+# rather than masquerade as a dead actuator forever. Raised from 24h so a pause can be expressed in days
+# (the UI offers minutes/hours/days); to park a device indefinitely, disable its automation instead.
+MAX_OVERRIDE_MIN = 7 * 24 * 60
+
+
+# Duration units the override UI offers (server-authored — see viewmodel.build_controls). Kept here next
+# to the cap they are validated against so the two can never drift.
+OVERRIDE_UNITS = (
+    {"key": "min",  "label": "minutes", "mult": 1},
+    {"key": "hour", "label": "hours",   "mult": 60},
+    {"key": "day",  "label": "days",    "mult": 1440},
+)
 
 
 def handle_override(conn, device_id: str, body: dict[str, Any], now: float,
@@ -83,9 +95,10 @@ def handle_override(conn, device_id: str, body: dict[str, Any], now: float,
     dur = body.get("duration_min")
     if isinstance(dur, bool) or not isinstance(dur, (int, float)) or dur <= 0:
         return 400, {"status": "bad-request", "reason": "duration_min must be a positive number"}
-    if dur > _MAX_OVERRIDE_MIN:
+    if dur > MAX_OVERRIDE_MIN:
         return 400, {"status": "bad-request",
-                     "reason": f"duration_min exceeds {_MAX_OVERRIDE_MIN} (24h) cap"}
+                     "reason": f"duration_min exceeds {MAX_OVERRIDE_MIN} "
+                               f"({MAX_OVERRIDE_MIN // 1440}d) cap"}
     expiry = now + float(dur) * 60.0
     store.set_override(conn, device_id, action, expiry)
     return 200, {"status": "ok", "device_id": device_id,

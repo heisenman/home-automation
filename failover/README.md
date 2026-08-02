@@ -71,7 +71,10 @@ to issue a Midea command unless it confirms it holds the VIP locally (`ip addr |
 `.245`'s standby must be current to take over well. A timer on `.245` pulls from 210 over **SSH (not git —
 these are secrets)** every ~30 min:
 - `instance/midea-device.env` (the Midea token **rotates ~18 h** — a stale standby can't drive the unit).
-- the live **control policy** (`control.db` `automation_policy` + `override`, or `instance/control.yaml`).
+- the live **control policy** (`control.db` `automation_policy` + `override` + `setpoint_park`, or
+  `instance/control.yaml`). `setpoint_park` is load-bearing on takeover: it holds the setpoint a device
+  had *before* a manual override parked it, so a failover mid-pause still hands the target back instead
+  of stranding the device at its parked value.
 - `.master_pass` + `node_secrets.enc` already on `.245` (it was dictator) — keep.
 
 ## Components (to build in `failover/`)

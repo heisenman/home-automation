@@ -262,5 +262,110 @@ def test_away_scene_relaxes_thresholds():
         assert iss.calls == []                              # relaxed -> no turn-on at RH 50
 
 
+# ── setpoint park (the other half of a graceful off) ─────────────────────────────
+# A mode-only "off" leaves the appliance self-regulating to whatever target it was left at, so a manual
+# override also parks the setpoint at its INERT end. Which end that is, is config: `max` for a
+# dehumidifier (nothing left to remove), `min` for a humidifier/heater.
+PARK_MAX_CFG = {**MODE_TRAITS_CFG, "setpoint": {"min": 35, "max": 85, "park": "max"}}
+PARK_MIN_CFG = {**MODE_TRAITS_CFG, "setpoint": {"min": 35, "max": 85, "park": "min"}}
+NO_PARK_CFG = {**MODE_TRAITS_CFG, "setpoint": {"min": 35, "max": 85}}
+STATUS_PARKED = STATUS_MODE_SET.replace("target% = 35", "target% = 85")
+
+
+def _make_park(tmp, status_text, traits_cfg, override=None):
+    db = os.path.join(tmp, "control.db")
+    conn = sqlite3.connect(db)
+    store.ensure_schema(conn)
+    store.seed_policy(conn, "dehumidifier_office", C.DEFAULT_POLICY)
+    if override is not None:
+        store.set_override(conn, "dehumidifier_office", override, NOW + 3600)
+    conn.close()
+    ctl = type("_C", (), {"area": "living_room", "traits_cfg": traits_cfg})()
+    drv = MideaDriver("ip", "t", "k", runner=lambda argv: status_text)
+    iss = FakeIssuer()
+    ctrl = C.Controller(iss, {"dehumidifier_office": drv}, {"dehumidifier_office": ctl}, db)
+    return ctrl, iss, db
+
+
+def _setpoints(iss):
+    return [c["args"]["value"] for c in iss.calls if c["trait"] == "setpoint"]
+
+
+def test_override_off_parks_setpoint_at_max():
+    """The bug this closes: an override 'off' used to only send mode=Set, leaving the Midea chasing its
+    old 35% target — it kept running right through the "pause" (found live 2026-08-02)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_park(tmp, STATUS_MODE_CONT, PARK_MAX_CFG, override="off")
+        ctrl.inject_reading("meter_pro_living_room", 60.0, ts=NOW - 30)   # rule would want ON
+        ctrl.tick(now=NOW)
+        assert {"mode": "set"} in [c["args"] for c in iss.calls]          # still a graceful mode change
+        assert _setpoints(iss) == [85.0]                                  # ...AND parked at the inert end
+        assert store.get_park(sqlite3.connect(db), "dehumidifier_office") == 35.0   # original remembered
+
+
+def test_park_direction_is_config_not_code():
+    """A humidifier/heater is inert at the BOTTOM of its range — same code, `park: min`."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_park(tmp, STATUS_PARKED, PARK_MIN_CFG, override="off")
+        ctrl.inject_reading("meter_pro_living_room", 60.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        assert _setpoints(iss) == [35.0]
+        assert store.get_park(sqlite3.connect(db), "dehumidifier_office") == 85.0
+
+
+def test_expired_override_restores_the_saved_setpoint():
+    with tempfile.TemporaryDirectory() as tmp:
+        # parked at 85, override already gone (expired/cleared), 35 remembered as the original
+        ctrl, iss, db = _make_park(tmp, STATUS_PARKED, PARK_MAX_CFG)
+        conn = sqlite3.connect(db)
+        store.set_park(conn, "dehumidifier_office", 35.0, NOW - 600)
+        conn.close()
+        ctrl.inject_reading("meter_pro_living_room", 60.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        assert _setpoints(iss) == [35.0]                                  # target handed back
+        assert store.get_park(sqlite3.connect(db), "dehumidifier_office") is None   # park row dropped
+
+
+def test_reparking_never_overwrites_the_original():
+    """Tick 2 of a pause must not save the PARKED value as the thing to restore — else the original is
+    lost and the device is stranded at 85% forever."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_park(tmp, STATUS_MODE_CONT, PARK_MAX_CFG, override="off")
+        ctrl.inject_reading("meter_pro_living_room", 60.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        ctrl.tick(now=NOW + 60)
+        assert store.get_park(sqlite3.connect(db), "dehumidifier_office") == 35.0
+
+
+def test_rule_driven_off_does_not_park():
+    """Parking is for a HUMAN pause. Ordinary rule cycling keeps the plain graceful idle_mode so the
+    device's own setpoint behaviour is untouched."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_park(tmp, STATUS_MODE_CONT, PARK_MAX_CFG)
+        ctrl.inject_reading("meter_pro_living_room", 38.0, ts=NOW - 30)   # <40 -> rule wants OFF
+        ctrl.tick(now=NOW)
+        assert {"mode": "set"} in [c["args"] for c in iss.calls]
+        assert _setpoints(iss) == []
+        assert store.get_park(sqlite3.connect(db), "dehumidifier_office") is None
+
+
+def test_device_without_park_config_is_unchanged():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_park(tmp, STATUS_MODE_CONT, NO_PARK_CFG, override="off")
+        ctrl.inject_reading("meter_pro_living_room", 60.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        assert _setpoints(iss) == []
+        assert store.get_park(sqlite3.connect(db), "dehumidifier_office") is None
+
+
+def test_park_is_dry_run_safe():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_park(tmp, STATUS_MODE_CONT, PARK_MAX_CFG, override="off")
+        ctrl.inject_reading("meter_pro_living_room", 60.0, ts=NOW - 30)
+        ctrl.tick(now=NOW, dry_run=True)
+        assert iss.calls == []
+        assert store.get_park(sqlite3.connect(db), "dehumidifier_office") is None
+
+
 if __name__ == "__main__":
     run_module(globals())

@@ -704,6 +704,7 @@ def build_controls(traits_cfg: dict | None) -> list[dict]:
     indicator are emitted iff the device's traits_cfg declares that trait. Ranges/labels/admin/action are
     fully specified so both renderers stop deriving them client-side. A per-trait cfg `label` overrides
     the default (future device needs no client change)."""
+    from server.api.control import OVERRIDE_UNITS, MAX_OVERRIDE_MIN
     controls: list[dict] = [{
         "kind": "override", "label": "Power", "admin": True,
         "action": {"method": "POST", "path": "/control/{id}/override"},
@@ -712,6 +713,15 @@ def build_controls(traits_cfg: dict | None) -> list[dict]:
             {"action": "boost_on", "duration_min": 60, "label": "Boost 1h"},
             {"action": "clear",    "label": "Resume auto", "when": "override_active"},
         ],
+        # Arbitrary-duration entry alongside the presets: one number + one unit + an action button.
+        # The renderer multiplies value*unit.mult into the SAME `duration_min` the presets post, so
+        # there is no second endpoint and no second validation path. `max_min` mirrors the API cap
+        # (server stays the authority — the client bound is a courtesy, not the check).
+        "custom": {
+            "label": "Off for", "units": list(OVERRIDE_UNITS), "max_min": MAX_OVERRIDE_MIN,
+            "default": {"value": 6, "unit": "hour"},
+            "actions": [{"action": "off", "label": "Off"}],
+        },
         "state": {"from": "override"},
     }]
     tc = traits_cfg or {}

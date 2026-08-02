@@ -23,6 +23,18 @@ def test_override_always_present_even_with_no_traits():
     assert ov["presets"][2]["action"] == "clear" and ov["presets"][2]["when"] == "override_active"
 
 
+def test_override_offers_an_arbitrary_duration():
+    """Presets alone capped a pause at 1h. The custom entry is one number + one unit + an action, and it
+    posts the SAME `duration_min` the presets do — no second endpoint, no second validation path."""
+    from server.api.control import MAX_OVERRIDE_MIN
+    cu = build_controls(None)[0]["custom"]
+    assert [u["key"] for u in cu["units"]] == ["min", "hour", "day"]
+    assert [u["mult"] for u in cu["units"]] == [1, 60, 1440]
+    assert cu["max_min"] == MAX_OVERRIDE_MIN              # client bound mirrors the server's authority
+    assert cu["actions"] == [{"action": "off", "label": "Off"}]
+    assert cu["default"] == {"value": 6, "unit": "hour"}
+
+
 def test_no_traits_emits_only_override():
     assert [c["kind"] for c in build_controls({})] == ["override"]
 

@@ -178,9 +178,20 @@ function prepSeries(s, unit) {
 }
 
 // ── override controls ────────────────────────────────────────────────────────
-// Renders the server-authored `override` control (shared-ui-spec): presets + action contract come from
-// vm.controls, not hardcoded here. Falls back to the legacy Off/Boost/Resume set if the spec is absent
-// (migration safety). Behavior preserved: off/boost always shown, clear only while an override is active.
+// Renders the server-authored `override` control (shared-ui-spec): presets, the custom-duration entry,
+// and the action contract all come from vm.controls, not hardcoded here. Falls back to the legacy
+// Off/Boost/Resume set if the spec is absent (migration safety). Behavior preserved: off/boost always
+// shown, clear only while an override is active.
+
+// "358" -> "5h 58m"; "4321" -> "3d 0h". Minutes alone stop reading as a duration past an hour or two,
+// and the override can now run for days.
+function fmtMins(m) {
+  if (m == null) return "";
+  if (m < 60) return `${m}m`;
+  if (m < 1440) return `${Math.floor(m / 60)}h ${m % 60}m`;
+  return `${Math.floor(m / 1440)}d ${Math.floor((m % 1440) / 60)}h`;
+}
+
 function OverrideControls({ vm, isAdmin, onChange, onNeedAdmin }) {
   const id = vm.device_id;
   const override = vm.override;
@@ -190,10 +201,14 @@ function OverrideControls({ vm, isAdmin, onChange, onNeedAdmin }) {
     { action: "boost_on", duration_min: 60, label: "Boost 1h" },
     { action: "clear", label: "Resume auto", when: "override_active" },
   ];
+  const custom = spec?.custom || null;
+  const units = custom?.units || [];
   const method = spec?.action?.method || "POST";
   const path = (spec?.action?.path || "/control/{id}/override").replace("{id}", id);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [amount, setAmount] = useState(String(custom?.default?.value ?? 1));
+  const [unit, setUnit] = useState(custom?.default?.unit || units[0]?.key || "hour");
   const act = async (p) => {
     if (!isAdmin) return onNeedAdmin();
     setBusy(true); setErr("");
@@ -205,6 +220,11 @@ function OverrideControls({ vm, isAdmin, onChange, onNeedAdmin }) {
     } catch (e) { setErr(String(e.message)); }
     setBusy(false);
   };
+  // custom duration: one number + one unit -> the SAME duration_min the presets post.
+  const mult = units.find((u) => u.key === unit)?.mult || 1;
+  const customMin = Number(amount) * mult;
+  const customBad = !Number.isFinite(customMin) || customMin <= 0
+    || (custom?.max_min != null && customMin > custom.max_min);
   const left = override && override.expires_in_min != null ? Math.ceil(override.expires_in_min) : null;
   return html`
     <div class="controls">
@@ -212,9 +232,23 @@ function OverrideControls({ vm, isAdmin, onChange, onNeedAdmin }) {
         <button class="btn sm ${p.action === "clear" ? "ghost" : ""}" disabled=${busy}
           onClick=${() => act(p)}>${p.label}</button>`)}
       ${override && html`<span class="note">override: <b>${override.action}</b>${
-          left != null ? ` · ${left}m left` : ""}</span>`}
+          left != null ? ` · ${fmtMins(left)} left` : ""}</span>`}
       ${err && html`<span class="err">${err}</span>`}
-    </div>`;
+    </div>
+    ${custom && html`
+    <div class="controls dur-row">
+      <span class="note">${custom.label || "Off for"}</span>
+      <input type="number" min="1" inputmode="numeric" value=${amount}
+        onInput=${(e) => setAmount(e.target.value)} />
+      <select value=${unit} onChange=${(e) => setUnit(e.target.value)}>
+        ${units.map((u) => html`<option value=${u.key}>${u.label}</option>`)}
+      </select>
+      ${(custom.actions || [{ action: "off", label: "Off" }]).map((a) => html`
+        <button class="btn sm" disabled=${busy || customBad}
+          onClick=${() => act({ action: a.action, duration_min: customMin })}>${a.label}</button>`)}
+      ${customBad && custom.max_min != null && html`
+        <span class="err">max ${fmtMins(custom.max_min)}</span>`}
+    </div>`}`;
 }
 
 // ── decision history ("why is it on?") ───────────────────────────────────────

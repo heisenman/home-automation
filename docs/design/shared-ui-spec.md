@@ -50,6 +50,19 @@ the action contract.
       { "action": "boost_on", "duration_min": 60, "label": "Boost 1h" },
       { "action": "clear",                          "label": "Resume auto" }  // shown only when override active
     ],
+    // arbitrary duration alongside the presets: ONE number + ONE unit + an action button. The renderer
+    // multiplies value * unit.mult into the SAME `duration_min` the presets post — one endpoint, one
+    // validation path. `max_min` mirrors the API cap (server stays the authority; this is a courtesy
+    // bound so the UI can grey the button instead of round-tripping a 400). Absent → presets only.
+    "custom": {
+      "label": "Off for",
+      "units": [ { "key": "min", "label": "minutes", "mult": 1 },
+                 { "key": "hour", "label": "hours", "mult": 60 },
+                 { "key": "day",  "label": "days",  "mult": 1440 } ],
+      "max_min": 10080,                   // = server/api/control.py MAX_OVERRIDE_MIN (7d)
+      "default": { "value": 6, "unit": "hour" },
+      "actions": [ { "action": "off", "label": "Off" } ]
+    },
     "state": { "from": "override" }       // renderer reads vm.override for current state / minutes-left
   },
 
@@ -88,6 +101,10 @@ the action contract.
 - `override` is emitted whenever the device has a control policy (every `build_display` device). `presets`
   are the fixed Off/Boost/Resume set the PWA uses today; `clear` preset is advisory-flagged for "only when
   an override is active" (renderer already has `vm.override`).
+- `custom` (added 2026-08-02) is the arbitrary-duration entry. **A renderer may ignore it** — the PWA
+  renders it; the D1001 panel currently does not (it has no numeric-entry widget, and `ui_controls.c`
+  caps at `MAX_PRESET` 4 buttons), so the panel keeps preset-only pauses until that lands. Renderers must
+  therefore treat `custom` as optional, not assume the presets are the whole story.
 - `setpoint` / `ranged` / `indicator` are emitted **iff** the device's `traits_cfg` contains that trait.
   Pull `min`/`max`/`safe_value` (setpoint), `min`/`max`/`step`→enumerated `options` (ranged; the 2-level and
   3-level label maps `Low/High`, `Low/Med/High` move server-side), from `traits_cfg` (see

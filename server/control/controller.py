@@ -210,6 +210,79 @@ class Controller:
         return {"run_mode": run_mode, "idle_mode": idle_mode,
                 "run_val": int(values[run_mode]), "idle_val": int(values[idle_mode])}
 
+    def _park_value(self, device_id):
+        """The setpoint that makes this device INERT while a manual override parks it, or None if the
+        device doesn't opt in. Declared on the `setpoint` trait as `park: max | min | <number>`.
+
+        Which end is inert depends on what the device does: a dehumidifier idles when its target RH is
+        at the TOP of the range (nothing to remove), a humidifier or heater when it's at the BOTTOM. So
+        the direction is config, not code — see instance/control.yaml. Without this, a graceful 'off'
+        only switches the appliance to its idle MODE, where it keeps self-regulating to whatever target
+        it was left at: the Midea sat at target 35% and went right on running (found live 2026-08-02)."""
+        ctl = self.registry.get(device_id)
+        cfg = (getattr(ctl, "traits_cfg", {}) or {}).get("setpoint") if ctl else None
+        if not cfg:
+            return None
+        park = cfg.get("park")
+        if park is None:
+            return None                                # setpoint device that has not opted in
+        lo, hi = cfg.get("min"), cfg.get("max")
+        if park == "max":
+            return None if hi is None else float(hi)
+        if park == "min":
+            return None if lo is None else float(lo)
+        try:
+            v = float(park)
+        except (TypeError, ValueError):
+            log.warning("%s: bad setpoint park %r (want max|min|<number>)", device_id, park)
+            return None
+        if lo is not None:
+            v = max(v, float(lo))
+        if hi is not None:
+            v = min(v, float(hi))
+        return v
+
+    def _apply_setpoint_park(self, conn, device_id, res, st, now, dry_run):
+        """Park/restore the setpoint around a manual override — the other half of a graceful 'off'.
+
+        Evaluated EVERY tick from the resolved state rather than only on transitions, so it is idempotent
+        and self-heals: a controller restart mid-pause, or a park command that failed to land, is fixed on
+        the next tick instead of leaving the device parked forever. The pre-park setpoint lives in
+        control.db (store.get_park), so restore survives a restart and rides the standby snapshot."""
+        target = self._park_value(device_id)
+        if target is None:
+            return                                     # device hasn't opted into parking
+        saved = store.get_park(conn, device_id)
+        want_park = res.source == "override" and not res.running
+        cur = st.get("target")
+        if want_park:
+            if saved is None:
+                if cur is None:
+                    return                             # no reading of the current setpoint — try next tick
+                if float(cur) == target:
+                    return                             # already at the park value; nothing to remember
+                if not dry_run:
+                    store.set_park(conn, device_id, float(cur), now)
+                saved = float(cur)
+            desired = target
+        else:
+            if saved is None:
+                return                                 # not parked, nothing to restore
+            desired = float(saved)
+        if cur is not None and float(cur) == desired:
+            if not want_park and not dry_run:
+                store.clear_park(conn, device_id)      # restore already true — drop the row
+            return
+        if dry_run:
+            log.info("%s: setpoint park %s -> %s (dry-run)", device_id, cur, desired)
+            return
+        r = self.issuer.issue(device_id=device_id, trait="setpoint", action="set",
+                              args={"value": desired})
+        log.info("%s: setpoint %s -> %s (%s) status=%s", device_id, cur, desired,
+                 "park" if want_park else "restore", r.status)
+        if r.status == "ok" and not want_park:
+            store.clear_park(conn, device_id)          # only forget the original once it is back on
+
     def _tick_device(self, conn, device_id, pol, now, tod, scene, dry_run):
         drv = self.drivers.get(device_id)
         if drv is not None:
@@ -288,6 +361,10 @@ class Controller:
             self._emit(device_id, transport, ev.from_issue_status(result.status), res.reason)
         elif res.act and dry_run:
             status = "dry-run"
+        # The other half of a graceful off: idle MODE alone leaves the appliance self-regulating to its
+        # old target, so a manual override also parks the setpoint at its inert end (and restores it when
+        # the override ends). Runs every tick, not just on a transition — see _apply_setpoint_park.
+        self._apply_setpoint_park(conn, device_id, res, st, now, dry_run)
         store.append_log(conn, device_id, res.running, res.source, reason, res.act, status)
         log.info("%s -> %s | %s | act=%s status=%s%s", device_id,
                  (f"speed {res.level}" if res.level is not None else ("ON" if res.running else "OFF")),

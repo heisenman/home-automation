@@ -54,6 +54,32 @@ def test_bad_action_and_duration():
     assert C.handle_override(c, DEV, {"action": "off", "duration_min": True}, NOW, {DEV})[0] == 400
 
 
+def test_duration_may_run_for_days():
+    """A pause is expressed in minutes/hours/days, not just hours — 'blow the house out all weekend'
+    used to be impossible against the old 24h ceiling."""
+    c = _conn()
+    code, body = C.handle_override(c, DEV, {"action": "off", "duration_min": 3 * 1440}, NOW, {DEV})
+    assert code == 200 and body["override"]["expiry"] == NOW + 3 * 1440 * 60, body
+    assert store.get_override(c, DEV, NOW + 2 * 1440 * 60) == ("off", NOW + 3 * 1440 * 60)
+
+
+def test_duration_cap_still_bounds_it():
+    """The cap moved, but an override is still a TIMEOUT — it must never become a permanent mode."""
+    c = _conn()
+    assert C.handle_override(c, DEV, {"action": "off", "duration_min": C.MAX_OVERRIDE_MIN},
+                             NOW, {DEV})[0] == 200
+    code, body = C.handle_override(c, DEV, {"action": "off", "duration_min": C.MAX_OVERRIDE_MIN + 1},
+                                   NOW, {DEV})
+    assert code == 400 and "cap" in body["reason"], body
+
+
+def test_units_multiply_into_the_cap():
+    """The UI's unit multipliers are the server's, so 'N days' can never exceed what the API accepts."""
+    by_key = {u["key"]: u["mult"] for u in C.OVERRIDE_UNITS}
+    assert by_key == {"min": 1, "hour": 60, "day": 1440}
+    assert C.MAX_OVERRIDE_MIN % by_key["day"] == 0        # the cap is a whole number of days
+
+
 def test_unknown_device():
     c = _conn()
     code, body = C.handle_override(c, "nope", {"action": "clear"}, NOW, {DEV})

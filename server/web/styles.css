@@ -124,6 +124,17 @@ body {
   border-radius: 8px; padding: 7px 9px; font-size: 14px; appearance: none; cursor: pointer;
 }
 .field select:focus { border-color: var(--accent); outline: none; }
+/* arbitrary-duration override entry: number + unit + action, inline with the presets above it */
+.dur-row { align-items: center; gap: 8px; }
+.dur-row input[type=number] {
+  width: 68px; background: var(--bg); border: 1px solid var(--line); color: var(--txt);
+  border-radius: 8px; padding: 6px 8px; font-size: 14px;
+}
+.dur-row select {
+  background: var(--bg); border: 1px solid var(--line); color: var(--txt);
+  border-radius: 8px; padding: 6px 8px; font-size: 14px; cursor: pointer;
+}
+.dur-row input:focus, .dur-row select:focus { border-color: var(--accent); outline: none; }
 .switch { display: inline-flex; align-items: center; gap: 8px; cursor: pointer; }
 .note { color: var(--muted); font-size: 12px; }
 .err { color: var(--bad); font-size: 13px; margin-top: 8px; }

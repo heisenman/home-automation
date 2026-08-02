@@ -55,6 +55,13 @@ CREATE TABLE IF NOT EXISTS house_scene (
 -- config {enabled, window}). Single row per key; rides the standby snapshot like house_scene.
 CREATE TABLE IF NOT EXISTS house_setting (
     key TEXT PRIMARY KEY, json TEXT NOT NULL, set_ts TEXT);
+-- setpoint_park: the setpoint a device had BEFORE a manual override parked it (graceful off — see
+-- controller._apply_setpoint_park). A row exists only while a park is in effect; the controller restores
+-- `setpoint` and deletes the row when the override ends. On disk (not in memory) so a controller restart
+-- mid-pause still knows what to restore, and it rides the sync-standby snapshot so a dictator failover
+-- does not strand the device at its parked value.
+CREATE TABLE IF NOT EXISTS setpoint_park (
+    device_id TEXT PRIMARY KEY, setpoint REAL NOT NULL, parked_ts REAL);
 """
 
 
@@ -136,6 +143,26 @@ def set_override(conn, device_id: str, action: str, expiry: float | None) -> Non
 
 def clear_override(conn, device_id: str) -> None:
     conn.execute("DELETE FROM override WHERE device_id=?", (device_id,))
+    conn.commit()
+
+
+# ── setpoint park (graceful off) ─────────────────────────────────────────────────
+def get_park(conn, device_id: str) -> float | None:
+    """The setpoint saved before a park, or None if this device is not currently parked."""
+    r = conn.execute("SELECT setpoint FROM setpoint_park WHERE device_id=?", (device_id,)).fetchone()
+    return r[0] if r else None
+
+
+def set_park(conn, device_id: str, setpoint: float, ts: float) -> None:
+    """Remember the pre-park setpoint. Deliberately does NOT overwrite an existing row: a second park
+    while already parked must not save the PARKED value as the thing to restore."""
+    conn.execute("INSERT OR IGNORE INTO setpoint_park(device_id, setpoint, parked_ts) VALUES(?,?,?)",
+                 (device_id, float(setpoint), ts))
+    conn.commit()
+
+
+def clear_park(conn, device_id: str) -> None:
+    conn.execute("DELETE FROM setpoint_park WHERE device_id=?", (device_id,))
     conn.commit()
 
 

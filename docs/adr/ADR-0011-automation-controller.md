@@ -98,3 +98,42 @@ matching profile into the effective policy via the pure `automation.apply_scene(
 - This delivers the deferred "schedule windows with profiles / a UI for overrides" item above. Time-of-day
   **auto-scene** switching (a house schedule writing `house_scene`) is a clean future extension — the row
   is already the single write point; deferred to avoid manual-vs-auto pin arbitration with one actuator.
+
+## Addendum — a pause is a duration, and "off" has to mean off, 2026-08-02
+Two gaps surfaced together while trying to hold the dehumidifier off for an evening of open windows: the
+outside was better than inside, but the control sensor sat at RH 44.0 against `on_above: 44`, so the rule
+kept re-asserting ON.
+
+**1. The override is a duration, not a fixed hour.** The API always accepted an arbitrary `duration_min`
+— only the *presets* were hardcoded to 60. The UI now offers **one number + one unit (minutes / hours /
+days)** alongside the presets, authored server-side in the `controls` spec (`custom`, see
+`docs/design/shared-ui-spec.md`) so both renderers get it from one place, and posting the same
+`duration_min` the presets do — one endpoint, one validation path. `MAX_OVERRIDE_MIN` moved 24h → **7d**.
+The cap stays finite on purpose: an override is a **timeout**, never a permanent mode, so a forgotten
+pause self-clears instead of masquerading as a dead actuator. To park a device indefinitely, disable its
+automation (`enabled: false`) — that is the honest way to say "this is not being controlled".
+
+**2. Graceful off was only half-implemented.** The graceful path (addendum above / `idle_mode`) switches
+the appliance to its idle MODE rather than cutting power — right for compressor care during ordinary rule
+cycling. But mode alone leaves the appliance **self-regulating to whatever target it was left at**. The
+Midea's target was 35% (the floor of its range), so an "off" override put it in Set mode where it went
+right on running. The pause was real in the control log and invisible at the wall meter.
+
+So a **manual override** now also **parks the setpoint at its inert end**, and restores it when the
+override ends:
+- **Which end is inert is config, not code** — `setpoint: {..., park: max|min|<number>}` in
+  `instance/control.yaml`. A dehumidifier idles at the TOP of its range (nothing left to remove); a
+  humidifier or heater idles at the BOTTOM. Omitting `park` keeps the previous behaviour, so this is
+  opt-in per device and changes nothing for devices that don't declare it.
+- **Only a manual override parks.** Rule/scene/schedule-driven off keeps the plain `idle_mode` — parking
+  is the semantics of *a human saying stop*, not of the loop cycling.
+- **The pre-park setpoint lives in `control.db` (`setpoint_park`)**, not in memory, and is evaluated every
+  tick rather than only on transitions. So a controller restart mid-pause still restores the right target,
+  a failed park command self-heals on the next tick, and the row rides the `sync-standby` snapshot so a
+  dictator swap mid-pause doesn't strand the device at its parked value. `set_park` deliberately will not
+  overwrite an existing row — re-parking must never save the *parked* value as the thing to restore.
+
+**Lesson worth keeping:** "off" delegated to a device's own regulator is only as off as its setpoint. A
+control layer that reports OFF while the appliance keeps working is worse than one that reports honestly —
+the log said `override OFF (359m left)` the whole time. When handing control to an onboard loop, pin the
+input that loop regulates against, not just its mode.
