@@ -79,8 +79,15 @@ no NOx history. Re-tune after a few weeks. Recorded in ADR-0035 + `SENSOR-METHOD
    since 07-10. Only Hugh can move it offline.
 3. `ha-service-healer` on the air-gap standby — **deliberately excluded, an open decision, not an oversight**
    (it writes `.unfit` → changes live failover behaviour; wants its own drill).
-4. `os-idle-churn`'s **ctxt/s and CAL are NOT resolved** and were higher than filed — but they are dominated
-   by the interactive session itself. Re-measure on a genuinely idle box before concluding anything.
+4. ~~`os-idle-churn`'s **ctxt/s and CAL are NOT resolved** and were higher than filed — but they are dominated
+   by the interactive session itself. Re-measure on a genuinely idle box before concluding anything.~~
+   **CLOSED 2026-08-02** — re-measured over a ~75 min genuinely idle window: **178 CAL/s idle**, vs 199/s
+   filed and **472/s with the session active** (2.7×). It was the session, as suspected. Idle package power
+   **4.45 W / 98.2 % C2** — at or slightly below the filed ~5 W/98 % floor — corroborated independently by
+   the `plug_g11` wall meter (8.35 W idle vs 9.26 W active; deltas agree at ~0.8–0.9 W). Hugh's call:
+   **re-check in a month or two**, no action now. Caveat kept honest: n=5 package samples (15 min cadence),
+   tight (p95 4.46 vs mean 4.45) and backed by 158 wall samples, but a short window — not a multi-day
+   residency study.
 5. `ha-gas-quality-sampler` runs every 60s on **both** stacks (~3387 ctxt + 565 CAL per run). Cadence looks
    generous for a slow-moving banded value — a data-retention policy call, not a perf one.
 6. Board: `d1001-graph-p2c/d/e` chain, `standby-c6-ota-intake` (LOW/deferred).
