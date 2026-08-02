@@ -70,9 +70,11 @@ no NOx history. Re-tune after a few weeks. Recorded in ADR-0035 + `SENSOR-METHOD
 
 ## Open / next
 
-1. **Hugh: flash-update + intake the SGP41 node** into its real room. **Blocked on** deploying the SGP41
+1. ~~**Hugh: flash-update + intake the SGP41 node** into its real room. **Blocked on** deploying the SGP41
    *intake/flash surface* to ha-2 (`control.py`, `edge_discovery.py`, `app.js`, `edge_flash.py`) — wants its
-   own VIP-inhibit window. The server *banding* half (`gas_compensation.py`, `viewmodel.py`) is already there.
+   own VIP-inhibit window.~~ **UNBLOCKED 2026-08-02** — deployed under a VIP window, VIP held, gate verified
+   live on ha-2 ([airgap/HA2-DEPLOY-PENDING.md](airgap/HA2-DEPLOY-PENDING.md#-2026-08-02--sgp41-intakeflash-surface-deployed-to-ha-2-the-last-half-of-7c65a9f)).
+   `sgp41_mech` is online and is the sole intake candidate; **the adopt-to-room itself is Hugh's to run.**
 2. **Break-glass recovery key still on `.210`** — `/etc/ha-break-glass/recovery.key.MOVE-OFFLINE.pem`, open
    since 07-10. Only Hugh can move it offline.
 3. `ha-service-healer` on the air-gap standby — **deliberately excluded, an open decision, not an oversight**
