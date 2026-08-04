@@ -1,0 +1,25 @@
+[Unit]
+Description=Home Automation — Voluntary grid load-shed (ADR-0037, oneshot)
+Documentation=file:///home/visko/home_automation/docs/adr/ADR-0037-voluntary-load-shed.md
+# Runs on .210 ONLY: it is the one box that sees both the public internet (shed signal) and the
+# air-gapped control plane on 192.168.1.x (ha-2 holds the VIP and drives the actuators). ha-2 has no
+# internet route, so this cannot simply live next to the controller.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=visko
+Group=visko
+WorkingDirectory=/home/visko/home_automation
+# Config lives in instance/ (gitignored). The lane REFUSES TO RUN until HA_GRID_SOURCE is set, so
+# installing these units arms nothing — see config-examples/grid-shed.env.example.
+EnvironmentFile=-/home/visko/home_automation/instance/grid-shed.env
+EnvironmentFile=-/home/visko/home_automation/instance/weather.env
+ExecStart=/home/visko/home_automation/venv/bin/python3 -m server.grid --once
+
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectSystem=full
+ProtectHome=read-only
+ReadWritePaths=/home/visko/home_automation/instance

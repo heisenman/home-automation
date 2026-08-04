@@ -1,0 +1,14 @@
+[Unit]
+Description=Home Automation — voluntary grid load-shed schedule (every 5 min)
+
+[Timer]
+# 5 min is a deliberate trade: fast enough that the RH-ceiling abort reacts promptly mid-event, slow
+# enough that a re-asserted override is not churning the control plane. The shed itself is a TTL sized
+# to the window end, so this timer missing a run (or the whole box dying) never strands the house — the
+# override expires on its own.
+OnBootSec=3min
+OnUnitActiveSec=5min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

@@ -69,6 +69,7 @@ table above. Add a package → add its `# BREADCRUMB: server > … / # REUSE-WHE
 | `cluster` | you're doing heartbeat, VIP/dictator sensing, or failover coordination on the server side | 0016,0018 | [server/cluster/__init__.py](../server/cluster/__init__.py) |
 | `comms` | you're emitting an event or need a transport-agnostic resource — use the comms layer, not raw MQTT | 0012 | [server/comms/__init__.py](../server/comms/__init__.py) |
 | `control` | you're actuating a device or resolving a control policy/scene — go through the trait loop + signed issuer | 0002,0011,0014 | [server/control/__init__.py](../server/control/__init__.py) |
+| `grid` | you need to curtail devices on an external signal — extend a ShedSource, don't add a second control path | 0037 | [server/grid/__init__.py](../server/grid/__init__.py) |
 | `ingest` | you're turning device telemetry into canonical readings or adding a device family — reuse a bridge + the registry reloader | 0001,0023 | [server/ingest/__init__.py](../server/ingest/__init__.py) |
 | `maintenance` | you're renaming/relocating/retiring a device — reuse device_migrate/relocate/placement, never hand-edit a registry | 0016,0022,0026,0027 | [server/maintenance/__init__.py](../server/maintenance/__init__.py) |
 | `mesh` | you're assigning edge-relay coverage or reading mesh topology / reach census | 0015,0023 | [server/mesh/__init__.py](../server/mesh/__init__.py) |
