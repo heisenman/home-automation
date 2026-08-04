@@ -1,6 +1,6 @@
 # ADR-0037 — Voluntary grid load-shed
 
-**Date:** 2026-08-04  **Status:** Built, installed **disarmed** (no trigger source chosen yet).
+**Date:** 2026-08-04  **Status:** **ARMED on .210 with `source=nws`** (2026-08-04), timer live.
 **Owner:** dev.  **Related:** ADR-0011 (automation controller + manual override), ADR-0013 (BFF),
 ADR-0033 (air-gap relay).
 
@@ -105,13 +105,33 @@ points low while running), so it would happily certify a house that is not actua
 − `schedule` and `nws` are approximations of a PGE event, and are labelled as such in the logs and config
   rather than dressed up as the real signal.
 
+## Amendment — armed, and the timing bug the live feed exposed (2026-08-04)
+
+Armed with `source=nws` because a real Heat Advisory was in the feed (Aug 4 12:00 → Aug 5 23:00 PDT),
+giving a genuine end-to-end test before the travel window. `imap` remains the higher-fidelity target.
+
+Verifying against the live feed immediately caught a bug that unit tests on invented data would not have:
+**`/alerts/active` lists an alert the moment it is ISSUED, not when it takes effect.** At 20:30 PDT on
+Aug 3 the feed already carried the Heat Advisory whose onset was Aug 4 12:00 — and 20:30 is inside the
+17:00–21:00 peak window, so the lane would have curtailed the house that evening for a heat wave that had
+not started. A qualifying alert must now satisfy `onset <= now < ends`, and the shed window is **clipped
+to the alert's own end** so a shed cannot outlive the condition that justified it.
+
+Also live that day: three **Air Quality Alerts** with "Areas Of Smoke" in the forecast at 94–95 °F. That
+is the per-device PM2.5 guardrail's exact scenario, and it is why an Air Quality Alert is deliberately
+**not** in the qualifying-event list — smoke is not a grid event, and it is answered better by the
+purifier's own measured indoor PM2.5 than by an area-wide advisory.
+
 ## Open, and deliberately not guessed
 
-- **Which trigger.** Unanswered. The lane is installed **disarmed** — `HA_GRID_SOURCE` unset means it
-  refuses to run — so the units can exist before the question is settled.
-- **`imap` parsing** waits on a real forwarded PGE notification.
+- **`imap` parsing** waits on a real forwarded PGE notification — the only source that is the actual PGE
+  signal, with true start/stop times, rather than a proxy.
 - **The purifier's control policy has a dangling `source_sensor`** (`levoit_office`, which has *zero*
   rows ever recorded) while its PM2.5 actually arrives under `purifier_living_room` (1.0 µg/m³, fresh,
   authoritative). Its automation is `enabled: false`. Until that is repointed the purifier cannot be
   guardrailed and so will never shed. Not fixed here: repointing a control policy changes prod automation
   behaviour for a device that is deliberately disabled, which is Hugh's call, not a drive-by.
+  **Note this is worse than it first looks:** with `enabled: false` the controller skips the device
+  entirely, so an override written to the purifier is never even read. Until BOTH the source_sensor is
+  repointed and automation is enabled, the purifier cannot participate in a shed at all — the lane will
+  faithfully log HOLD for it forever.

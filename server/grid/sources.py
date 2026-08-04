@@ -65,6 +65,18 @@ def _zone(tz: str | None):
                          "refusing to interpret the peak window in the wrong zone")
 
 
+def _iso(s: str | None) -> float | None:
+    """NWS ISO-8601 with offset (e.g. '2026-08-04T12:00:00-07:00') -> epoch. None/unparseable -> None,
+    which callers read as 'unbounded on that side'."""
+    if not s:
+        return None
+    try:
+        return datetime.fromisoformat(s).timestamp()
+    except ValueError:
+        log.warning("unparseable NWS timestamp %r", s)
+        return None
+
+
 def _hhmm(s: str) -> tuple[int, int]:
     h, m = s.strip().split(":")
     return int(h), int(m)
@@ -133,28 +145,56 @@ class NwsAlertSource(ShedSource):
     timeout_s: float = 10.0
     name = "nws"
 
-    def _active_alerts(self) -> list[str]:
+    def _alerts(self) -> list[tuple[str, float | None, float | None]]:
+        """[(event, onset_epoch, ends_epoch)] for the point. `/alerts/active` includes alerts that are
+        ISSUED BUT NOT YET IN EFFECT, so the times are not optional detail — see `window`."""
         url = f"https://api.weather.gov/alerts/active?point={self.lat:.4f},{self.lon:.4f}"
         req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT,
                                                    "Accept": "application/geo+json"})
         with urllib.request.urlopen(req, timeout=self.timeout_s) as r:
             data = json.loads(r.read().decode())
-        return [f.get("properties", {}).get("event", "") for f in data.get("features", [])]
+        out = []
+        for f in data.get("features", []):
+            p = f.get("properties", {}) or {}
+            out.append((p.get("event", ""), _iso(p.get("onset") or p.get("effective")),
+                        _iso(p.get("ends") or p.get("expires"))))
+        return out
 
     def window(self, now: float) -> ShedWindow | None:
         start, end = _local_window(now, self.window_spec, self.tz)
         if not (start <= now < end):
             return None                    # outside the peak window; no need to call out at all
         try:
-            alerts = self._active_alerts()
+            alerts = self._alerts()
         except Exception as e:             # network/API trouble -> no shed, never an exception upward
             log.warning("NWS alert fetch failed (%s) — not shedding", e)
             return None
-        hit = next((a for a in alerts if a in self.events), None)
-        if hit is None:
-            log.info("no qualifying heat alert (active: %s) — not shedding", alerts or "none")
+
+        # An alert must be IN EFFECT NOW, not merely published. `/alerts/active` lists alerts the moment
+        # they are issued: on 2026-08-03 at 20:30 PDT the feed already carried a Heat Advisory whose onset
+        # was 2026-08-04 12:00 — shedding on that would have curtailed the house for a heat wave that had
+        # not started. A missing onset means "already in effect"; a missing end means open-ended.
+        live = [(e, o, x) for (e, o, x) in alerts
+                if e in self.events and (o is None or o <= now) and (x is None or now < x)]
+        if not live:
+            # in the UTILITY's zone, not the box's — .210 is UTC, and "Heat Advisory@19:00" for a noon
+            # PDT onset is exactly the sort of log line that sends someone chasing a phantom bug.
+            z = _zone(self.tz)
+            pending = [f"{e}@{datetime.fromtimestamp(o, z).strftime('%m-%d %H:%M %Z')}"
+                       for (e, o, x) in alerts if e in self.events and o is not None and o > now]
+            log.info("no qualifying heat alert in effect (%s) — not shedding",
+                     f"not yet: {', '.join(pending)}" if pending else
+                     f"active: {[a for a, _, _ in alerts] or 'none'}")
             return None
-        return ShedWindow(start, end, f"{hit} + peak window {self.window_spec}", self.name)
+
+        # Clip the peak window to the alert's own end, so a shed cannot outlive the condition that
+        # justified it (an advisory ending at 18:00 must not curtail through 21:00).
+        event, _, ends = min(live, key=lambda t: (t[2] is None, t[2]))
+        if ends is not None and ends < end:
+            end = ends
+        if end <= now:
+            return None
+        return ShedWindow(start, end, f"{event} + peak window {self.window_spec}", self.name)
 
 
 # ── registry ─────────────────────────────────────────────────────────────────────

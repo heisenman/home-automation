@@ -255,10 +255,16 @@ class Controller:
         saved = store.get_park(conn, device_id)
         want_park = res.source == "override" and not res.running
         cur = st.get("target")
+        # No setpoint in this status sample -> we cannot tell whether the park already landed, so we
+        # cannot act without re-commanding blindly. Observed live: the Midea intermittently omits
+        # `target`, and re-issuing on every such tick produced a stream of
+        # "setpoint None -> 85.0 (park) status=mismatch" and pointless repeat commands to the appliance.
+        # Wait for a sample we can actually compare against; the next tick is 45s away and the park/
+        # restore is idempotent, so nothing is lost by skipping.
+        if cur is None:
+            return
         if want_park:
             if saved is None:
-                if cur is None:
-                    return                             # no reading of the current setpoint — try next tick
                 if float(cur) == target:
                     return                             # already at the park value; nothing to remember
                 if not dry_run:
@@ -269,7 +275,7 @@ class Controller:
             if saved is None:
                 return                                 # not parked, nothing to restore
             desired = float(saved)
-        if cur is not None and float(cur) == desired:
+        if float(cur) == desired:
             if not want_park and not dry_run:
                 store.clear_park(conn, device_id)      # restore already true — drop the row
             return

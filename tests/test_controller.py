@@ -358,6 +358,23 @@ def test_device_without_park_config_is_unchanged():
         assert store.get_park(sqlite3.connect(db), "dehumidifier_office") is None
 
 
+def test_status_without_a_setpoint_does_not_re_command_blindly():
+    """Observed live: the Midea intermittently omits `target` from a status sample. With no value to
+    compare, the park cannot tell whether it already landed — re-issuing produced a stream of
+    'setpoint None -> 85.0 (park) status=mismatch' and pointless repeat commands to the appliance."""
+    with tempfile.TemporaryDirectory() as tmp:
+        no_target = STATUS_MODE_CONT.replace("  target% = 35\n", "")
+        ctrl, iss, db = _make_park(tmp, no_target, PARK_MAX_CFG, override="off")
+        conn = sqlite3.connect(db)
+        store.set_park(conn, "dehumidifier_office", 35.0, NOW - 60)   # a park already in flight
+        conn.close()
+        ctrl.inject_reading("meter_pro_living_room", 60.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        ctrl.tick(now=NOW + 60)
+        assert _setpoints(iss) == []                                   # waits for a comparable sample
+        assert store.get_park(sqlite3.connect(db), "dehumidifier_office") == 35.0   # original intact
+
+
 def test_park_is_dry_run_safe():
     with tempfile.TemporaryDirectory() as tmp:
         ctrl, iss, db = _make_park(tmp, STATUS_MODE_CONT, PARK_MAX_CFG, override="off")

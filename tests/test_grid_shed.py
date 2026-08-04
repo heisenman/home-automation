@@ -8,7 +8,8 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from server.grid import shed as law  # noqa: E402
-from server.grid.sources import ScheduleSource, _in_season, _local_window, build_source  # noqa: E402
+from server.grid.sources import (NwsAlertSource, ScheduleSource, _in_season, _local_window,  # noqa: E402
+                                  build_source)
 from tests._harness import run_module  # noqa: E402
 
 NOW = 1_800_000_000.0
@@ -153,6 +154,70 @@ def test_season_bounds_wrap_the_new_year():
 def test_window_spec_wrapping_midnight_lands_on_the_next_day():
     start, end = _local_window(time.time(), "22:00-02:00")
     assert end > start and 3.9 * 3600 < (end - start) < 4.1 * 3600
+
+
+# ── NWS alerts must be IN EFFECT, not merely published ────────────────────────────
+class _FakeNws(NwsAlertSource):
+    """NwsAlertSource with the network stubbed — alerts as (event, onset, ends) epochs."""
+    def __init__(self, alerts, **kw):
+        super().__init__(lat=45.5, lon=-122.6, **kw)
+        self._fake = alerts
+
+    def _alerts(self):
+        return self._fake
+
+
+def _at(hour):
+    """Epoch for today at `hour` local to the utility tz — inside the default 17:00-21:00 window."""
+    from zoneinfo import ZoneInfo
+    from datetime import datetime as _dt
+    z = ZoneInfo("America/Los_Angeles")
+    return _dt.now(z).replace(hour=hour, minute=0, second=0, microsecond=0).timestamp()
+
+
+def test_alert_issued_but_not_yet_started_does_not_shed():
+    """The live bug: api.weather.gov/alerts/active lists an alert the moment it is ISSUED. On 2026-08-03
+    at 20:30 PDT the feed already carried a Heat Advisory with onset 2026-08-04 12:00 — shedding on that
+    would have curtailed the house for a heat wave that had not begun."""
+    now = _at(18)
+    s = _FakeNws([("Heat Advisory", now + 16 * 3600, now + 40 * 3600)])
+    assert s.window(now) is None
+
+
+def test_alert_in_effect_sheds():
+    now = _at(18)
+    s = _FakeNws([("Heat Advisory", now - 3600, now + 6 * 3600)])
+    w = s.window(now)
+    assert w is not None and "Heat Advisory" in w.reason
+
+
+def test_expired_alert_does_not_shed():
+    now = _at(18)
+    s = _FakeNws([("Heat Advisory", now - 40 * 3600, now - 3600)])
+    assert s.window(now) is None
+
+
+def test_shed_cannot_outlive_the_alert_that_justified_it():
+    """An advisory ending at 18:00 must not curtail through the 21:00 window end."""
+    now = _at(17)
+    ends = now + 1800
+    s = _FakeNws([("Heat Advisory", now - 3600, ends)])
+    w = s.window(now)
+    assert w is not None and abs(w.end - ends) < 1
+
+
+def test_non_heat_alerts_are_ignored():
+    """An Air Quality Alert is not a grid event — smoke is handled by the purifier's PM2.5 guardrail,
+    which reads measured indoor air rather than an area-wide advisory."""
+    now = _at(18)
+    s = _FakeNws([("Air Quality Alert", now - 3600, now + 3600)])
+    assert s.window(now) is None
+
+
+def test_alert_with_no_onset_counts_as_already_in_effect():
+    now = _at(18)
+    s = _FakeNws([("Excessive Heat Warning", None, now + 3600)])
+    assert s.window(now) is not None
 
 
 def test_unimplemented_sources_fail_loudly_rather_than_silently_doing_nothing():
