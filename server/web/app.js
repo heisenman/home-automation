@@ -556,29 +556,44 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
 
   const sel = AIR_QUALITY_METRICS.find((m) => m.key === metric) || AIR_QUALITY_METRICS[0];
 
-  // candidate sources = sensors actually reporting the selected metric. Same rule as the dehumidifier's
-  // humidity picker, just parameterised by metric. The current source is kept in the list even if it is
-  // momentarily absent, so opening the editor and saving never silently drops it.
-  const sensorReports = (id, key) =>
-    (sensors || []).some((s) => s.device_id === id && s.metrics && s.metrics[key] != null);
+  // The cascade is SENSOR FIRST, then measure. Picking the measure first pre-filters the sensor list to
+  // whatever reports it, which reads as a broken dropdown: the stored metric is PM2.5 and the purifier is
+  // the only PM2.5 reporter in the house, so the list showed exactly one device. You choose a place to
+  // watch, then what to watch there — and the second list can only offer what that sensor actually has.
+  const metricsOf = (s) =>
+    AIR_QUALITY_METRICS.filter((m) => s.metrics && s.metrics[m.key] != null).map((m) => m.key);
 
-  // switching the control metric resets the cutoffs AND the speed ladder to that metric's defaults —
+  // every sensor reporting ANY selectable control metric. The current source is kept even when it is
+  // absent from the payload, so opening the editor and saving never silently drops the binding.
+  const sensorOpts = (sensors || [])
+    .filter((s) => metricsOf(s).length)
+    .map((s) => ({ id: s.device_id, metrics: metricsOf(s),
+                   label: `${prettyName(s.device_id)} · ${prettyArea(s.area)}` }));
+  if (source && !sensorOpts.some((o) => o.id === source)) {
+    sensorOpts.unshift({ id: source, metrics: [metric],
+                         label: `${prettyName(source)} (current — not reporting)` });
+  }
+
+  // the measures this sensor can actually drive. A gas node offers only the unified index; the purifier
+  // offers its own PM2.5/AQI. Nothing selectable is ever a binding that cannot produce a reading.
+  const metricOpts = AIR_QUALITY_METRICS.filter((m) =>
+    ((sensorOpts.find((o) => o.id === source) || {}).metrics || []).includes(m.key));
+
+  // switching the measure resets the cutoffs AND the speed ladder to that measure's defaults —
   // PM2.5 µg/m³ ≠ AQI 1-5 ≠ air_quality 0-100, and air_quality also runs the opposite direction.
   const changeMetric = (key) => {
     setMetric(key);
     const m = AIR_QUALITY_METRICS.find((x) => x.key === key);
     if (m) { setCuts(m.cuts.slice()); setSpeeds(m.levels.slice()); }
-    // the old source almost certainly doesn't report the new metric; make the user re-pick rather than
-    // silently saving a binding that can never produce a reading.
-    setSource((cur) => (sensorReports(cur, key) ? cur : ""));
   };
 
-  const opts = (sensors || [])
-    .filter((s) => s.metrics && s.metrics[metric] != null)
-    .map((s) => ({ id: s.device_id, label: `${prettyName(s.device_id)} · ${prettyArea(s.area)}` }));
-  if (source && !opts.some((o) => o.id === source)) {
-    opts.unshift({ id: source, label: `${prettyName(source)} (current — not reporting)` });
-  }
+  // switching sensor keeps the measure when the new sensor also reports it (re-pointing PM2.5 from one
+  // purifier to another shouldn't rewrite the bands); otherwise fall to that sensor's first measure.
+  const changeSource = (id) => {
+    setSource(id);
+    const avail = (sensorOpts.find((o) => o.id === id) || {}).metrics || [];
+    if (avail.length && !avail.includes(metric)) changeMetric(avail[0]);
+  };
   const setCut = (i, v) => setCuts((cs) => cs.map((x, j) => (j === i ? v : x)));
   const issue = () => {
     if (!source) return "pick a sensor to follow";
@@ -614,17 +629,22 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
         <input type="checkbox" checked=${enabled} onChange=${(e) => setEnabled(e.target.checked)} />
         Automation enabled (fan speed follows air quality)
       </label>
-      <div class="field"><label>Measure</label>
-        <select value=${metric} onChange=${(e) => changeMetric(e.target.value)}>
-          ${AIR_QUALITY_METRICS.map((m) => html`<option value=${m.key}>${m.label}${m.unit ? ` (${m.unit})` : ""}</option>`)}
-        </select>
-        ${sel.hint && html`<p class="note">${sel.hint}</p>`}</div>
       <div class="field"><label>Sensor to follow</label>
-        <select value=${source} onChange=${(e) => setSource(e.target.value)}>
+        <select value=${source} onChange=${(e) => changeSource(e.target.value)}>
           <option value="">— pick a sensor —</option>
-          ${opts.map((o) => html`<option value=${o.id}>${o.label}</option>`)}
+          ${sensorOpts.map((o) => html`<option value=${o.id}>${o.label}</option>`)}
         </select>
-        ${!opts.length && html`<p class="note">No sensor is reporting ${sel.label} right now.</p>`}</div>
+        ${!sensorOpts.length && html`<p class="note">No sensor on this server is reporting an
+          air-quality measure right now.</p>`}</div>
+      <div class="field"><label>Measure</label>
+        <select value=${metric} disabled=${!source}
+                onChange=${(e) => changeMetric(e.target.value)}>
+          ${!source && html`<option value="">— pick a sensor first —</option>`}
+          ${metricOpts.map((m) => html`<option value=${m.key}>${m.label}${m.unit ? ` (${m.unit})` : ""}</option>`)}
+        </select>
+        ${source && metricOpts.length === 1 && html`<p class="note">${prettyName(source)} reports only
+          ${metricOpts[0].label}.</p>`}
+        ${sel.hint && source && html`<p class="note">${sel.hint}</p>`}</div>
       <div class="field"><label>Fan speed by ${sel.label}</label>
         ${cuts.map((v, i) => html`
           <div class="controls" key=${i}>
