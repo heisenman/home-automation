@@ -384,5 +384,96 @@ def test_park_is_dry_run_safe():
         assert store.get_park(sqlite3.connect(db), "dehumidifier_office") is None
 
 
+# ── derived control metrics (air_quality) ───────────────────────────────────────────
+# air_quality is computed server-side and NEVER published on MQTT, so it can only reach the control loop
+# through the stored series. These lock that path: without it, binding a purifier to a gas node saves
+# fine and then silently never actuates, because "no reading" looks exactly like "sensor offline".
+HOT_DDL = ("CREATE TABLE readings (id INTEGER PRIMARY KEY AUTOINCREMENT, ts TEXT NOT NULL, "
+           "device_id TEXT NOT NULL, device_type TEXT NOT NULL, area TEXT NOT NULL, "
+           "transport TEXT NOT NULL, metric TEXT NOT NULL, value REAL NOT NULL, unit TEXT NOT NULL, "
+           "schema_v INTEGER NOT NULL DEFAULT 1, authoritative INTEGER NOT NULL DEFAULT 1)")
+
+
+def _hot_db(tmp, rows):
+    """rows = [(device_id, metric, value, epoch_ts)] -> a hot.db written with ISO-UTC timestamps."""
+    import time as _t
+    path = os.path.join(tmp, "hot.db")
+    conn = sqlite3.connect(path)
+    conn.execute(HOT_DDL)
+    for did, metric, value, ts in rows:
+        conn.execute("INSERT INTO readings (ts, device_id, device_type, area, transport, metric, value, "
+                     "unit, schema_v, authoritative) VALUES (?,?,?,?,?,?,?,?,1,1)",
+                     (_t.strftime("%Y-%m-%dT%H:%M:%SZ", _t.gmtime(ts)), did, "gas", "kitchen",
+                      "derived", metric, float(value), ""))
+    conn.commit()
+    conn.close()
+    return path
+
+
+AQ_POLICY = {"enabled": True, "source_sensor": "gas_kitchen", "sensor_stale_min": 15,
+             "control": {"strategy": "threshold_ranged", "metric": "air_quality",
+                         "bands": [{"max": 20, "level": 4}, {"max": 40, "level": 3},
+                                   {"max": 60, "level": 2}, {"max": None, "level": 1}]}}
+
+
+def test_derived_metric_resolves_from_stored_series():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, _, _ = _make(tmp, STATUS_ON)
+        ctrl.hot_db = _hot_db(tmp, [("gas_kitchen", "air_quality", 34.5, NOW - 60)])
+        r, used, via_fb = ctrl._pick_source(AQ_POLICY, 900.0, NOW)
+        assert used == "gas_kitchen" and via_fb is False
+        assert r.value == 34.5 and r.ts == NOW - 60      # the STORED ts, not "now"
+
+
+def test_derived_metric_goes_stale_when_the_sampler_stops():
+    """A frozen sampler must make the source go stale (fail safe), not present an old point as live."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, _, _ = _make(tmp, STATUS_ON)
+        ctrl.hot_db = _hot_db(tmp, [("gas_kitchen", "air_quality", 34.5, NOW - 1800)])
+        r, used, _ = ctrl._pick_source(AQ_POLICY, 900.0, NOW)   # 30 min old vs 15 min tolerance
+        assert used == "gas_kitchen" and r.ts == NOW - 1800     # returned, but the caller sees it stale
+        assert (NOW - r.ts) > 900.0
+
+
+def test_derived_metric_absent_when_no_hot_db_configured():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, _, _ = _make(tmp, STATUS_ON)
+        ctrl.hot_db = None
+        assert ctrl._pick_source(AQ_POLICY, 900.0, NOW) == (None, None, False)
+
+
+def test_derived_lookup_ignores_ancient_points():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, _, _ = _make(tmp, STATUS_ON)
+        ctrl.hot_db = _hot_db(tmp, [("gas_kitchen", "air_quality", 34.5, NOW - 7200)])
+        assert ctrl._pick_source(AQ_POLICY, 900.0, NOW)[0] is None      # beyond _DERIVED_MAX_AGE_S
+
+
+def test_derived_lookup_survives_a_missing_hot_db():
+    """A missing/locked readings store must never take down a tick — it degrades to 'no reading'."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, _, _ = _make(tmp, STATUS_ON)
+        ctrl.hot_db = os.path.join(tmp, "does-not-exist.db")
+        assert ctrl._pick_source(AQ_POLICY, 900.0, NOW) == (None, None, False)
+
+
+def test_derived_metric_falls_back_to_a_second_gas_node():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, _, _ = _make(tmp, STATUS_ON)
+        ctrl.hot_db = _hot_db(tmp, [("gas_kitchen", "air_quality", 90.0, NOW - 1800),   # STALE
+                                    ("gas_c_office", "air_quality", 30.0, NOW - 30)])   # FRESH
+        pol = {**AQ_POLICY, "fallback_sensors": ["gas_c_office"]}
+        r, used, via_fb = ctrl._pick_source(pol, 900.0, NOW)
+        assert (used, via_fb, r.value) == ("gas_c_office", True, 30.0)
+
+
+def test_non_derived_metric_never_reads_the_stored_series():
+    """RH still comes from MQTT only — the hot.db path must not become a back door for live metrics."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, _, _ = _make(tmp, STATUS_ON)
+        ctrl.hot_db = _hot_db(tmp, [("meter_pro_living_room", "humidity_pct", 60.0, NOW - 30)])
+        assert ctrl._pick_source(C.DEFAULT_POLICY, 900.0, NOW) == (None, None, False)
+
+
 if __name__ == "__main__":
     run_module(globals())

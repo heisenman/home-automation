@@ -206,7 +206,17 @@ def _validate_scenes(sc, bad):
 _ALLOWED_STRATEGIES = ("hysteresis", "setpoint", "threshold_ranged")
 # Sensor metrics a control loop may drive on. Expandable — add a metric here (+ a UI entry in
 # app.js AIR_QUALITY_METRICS + a writer._UNITS entry) to offer it as a selectable control source.
-_ALLOWED_CONTROL_METRICS = ("humidity_pct", "pm25_ugm3", "aqi")
+#
+# DIRECTION IS NOT UNIFORM. pm25_ugm3/aqi rise as the air gets WORSE; `air_quality` is the unified
+# ADR-0035 cleanliness score, which rises as the air gets BETTER (100 = clean). Bands are still
+# validated as ascending `max` cutoffs either way — what flips is the LEVEL ladder attached to them
+# (see app.js AIR_QUALITY_METRICS[].levels). A ladder built for PM2.5 and re-pointed at air_quality
+# without flipping runs the fan flat-out in clean air, so the two always travel together.
+#
+# air_quality is a DERIVED metric (computed by the viewmodel fusion, persisted every 60s by
+# ha-gas-quality-sampler). It never appears on MQTT, so the controller resolves it out of hot.db —
+# see Controller._pick_source.
+_ALLOWED_CONTROL_METRICS = ("humidity_pct", "pm25_ugm3", "aqi", "air_quality")
 _WINDOW_RE = re.compile(r"^\d{1,2}:\d{2}-\d{1,2}:\d{2}$")
 
 

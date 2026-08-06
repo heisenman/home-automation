@@ -9,6 +9,7 @@ stale/unreachable. The decision logic is automation.resolve(); this is its plumb
 from __future__ import annotations
 
 import argparse
+import calendar
 import json
 import logging
 import os
@@ -58,6 +59,17 @@ LEVOIT_POLICY = {
 _DEFAULT_METRIC_BY_STRATEGY = {"threshold_ranged": "pm25_ugm3"}
 DEFAULT_CONTROL_METRIC = "humidity_pct"
 
+# Metrics that are DERIVED server-side and therefore never appear in an MQTT /state payload. The
+# controller's reading cache is fed exclusively by on_message, so a policy driving on one of these would
+# find nothing there and fail safe to its default forever — silently, since "no reading" is
+# indistinguishable from "sensor offline". These are resolved out of hot.db instead, where the sampler
+# stores them (ha-gas-quality-sampler, every 60s, with its own frozen-input freshness gate).
+#
+# The stored row's OWN ts is used, so the normal sensor_stale_min logic still governs: if the sampler
+# stops writing, the source goes stale and the resolver fails safe exactly as it would for a dead radio.
+DERIVED_METRICS = frozenset({"air_quality"})
+_DERIVED_MAX_AGE_S = 3600.0      # ignore stored points older than this outright (cheap query bound)
+
 
 def control_metric(pol: dict) -> str:
     c = (pol or {}).get("control", {}) or {}
@@ -65,12 +77,14 @@ def control_metric(pol: dict) -> str:
 
 
 class Controller:
-    def __init__(self, issuer, drivers: dict, registry: dict, db: str, mqtt_client=None):
+    def __init__(self, issuer, drivers: dict, registry: dict, db: str, mqtt_client=None,
+                 hot_db: str | None = None):
         self.issuer = issuer
         self.drivers = drivers                 # device_id -> MideaDriver
         self.registry = registry               # device_id -> DeviceCtl
         self._registry_reloader = None         # optional live control.yaml reload (attach_registry_reloader)
         self.db = db
+        self.hot_db = hot_db                   # readings store, for DERIVED_METRICS (None = MQTT only)
         self.mqtt = mqtt_client
         self.readings: dict[str, Reading] = {}  # sensor device_id -> latest control Reading
         self.telemetry: dict[str, dict] = {}    # device_id -> {running, fan, ts} for driverless MQTT devices
@@ -114,26 +128,66 @@ class Controller:
         with self._lock:
             self.readings[sensor_id] = {"m": {metric: value}, "ts": ts}
 
+    def _latest_stored(self, sensor_id: str, metric: str, now: float):
+        """Newest stored reading of `metric` for `sensor_id` from hot.db, as {"m": {...}, "ts": epoch} —
+        the same shape on_message caches, so _pick_source treats both identically. Only used for
+        DERIVED_METRICS, which never reach MQTT. Returns None if absent, unparseable, or older than
+        _DERIVED_MAX_AGE_S. Read-only and best-effort: a missing/locked hot.db must never kill a tick."""
+        if not self.hot_db:
+            return None
+        try:
+            conn = sqlite3.connect(f"file:{self.hot_db}?mode=ro", uri=True, timeout=2.0)
+            try:
+                row = conn.execute(
+                    "SELECT value, ts FROM readings WHERE device_id=? AND metric=? "
+                    "ORDER BY ts DESC LIMIT 1", (sensor_id, metric)).fetchone()
+            finally:
+                conn.close()
+        except Exception:
+            log.debug("hot.db lookup failed for %s/%s", sensor_id, metric, exc_info=True)
+            return None
+        if not row or row[0] is None:
+            return None
+        # readings.ts is ISO-8601 UTC ('...Z'). timegm, NOT mktime — mktime reads the tuple as LOCAL
+        # time, which silently shifts the age by the box's UTC offset and would make a fresh point look
+        # hours stale (or a stale one fresh) the moment this runs anywhere but a UTC box.
+        try:
+            ts = calendar.timegm(time.strptime(str(row[1]), "%Y-%m-%dT%H:%M:%SZ"))
+        except Exception:
+            return None
+        if now - ts > _DERIVED_MAX_AGE_S:
+            return None
+        return {"m": {metric: float(row[0])}, "ts": float(ts)}
+
     def _pick_source(self, pol, stale_s, now):
         """Pick the control input: the FIRST FRESH reading of the policy's control metric across
         [source_sensor] + fallback_sensors. If none are fresh, return the first one seen (possibly stale)
-        so the resolver fail-safes to default. Returns (Reading|None, used_id|None, via_fallback)."""
+        so the resolver fail-safes to default. Returns (Reading|None, used_id|None, via_fallback).
+
+        Sources are resolved from the MQTT cache, EXCEPT for DERIVED_METRICS (air_quality), which are
+        computed server-side and never published — those come from hot.db carrying their stored ts, so
+        freshness is judged the same way for both."""
         metric = control_metric(pol)
+        derived = metric in DERIVED_METRICS
         primary = pol.get("source_sensor")
         order = [primary, *(pol.get("fallback_sensors") or [])]
         first = None
         with self._lock:
-            for sid in order:
-                if not sid:
-                    continue
-                rec = self.readings.get(sid)
-                if rec is None or metric not in rec["m"]:
-                    continue                              # this source doesn't carry the control metric
-                r = Reading(rec["m"][metric], rec["ts"])
-                if first is None:
-                    first = (r, sid)
-                if (now - rec["ts"]) <= stale_s:
-                    return r, sid, sid != primary
+            live = dict(self.readings) if not derived else {}
+        for sid in order:
+            if not sid:
+                continue
+            rec = live.get(sid)
+            if rec is None or metric not in rec["m"]:
+                # derived metrics are never in the cache; go to the stored series instead
+                rec = self._latest_stored(sid, metric, now) if derived else None
+            if rec is None or metric not in rec["m"]:
+                continue                                  # this source doesn't carry the control metric
+            r = Reading(rec["m"][metric], rec["ts"])
+            if first is None:
+                first = (r, sid)
+            if (now - rec["ts"]) <= stale_s:
+                return r, sid, sid != primary
         if first:
             return first[0], first[1], first[1] != primary
         return None, None, False
@@ -423,18 +477,19 @@ class Controller:
     def run(self, broker, port, tick_s=45, dry_run=False):
         import paho.mqtt.client as mqtt
         from server.util.mqtt_creds import apply_credentials
-        conn = self._conn()
-        sources = {p.get("source_sensor") for p in store.all_policies(conn).values()
-                   if p.get("source_sensor")}
-        conn.close()
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         apply_credentials(c)
         c.on_message = self.on_message
 
+        # Subscribe to EVERY device's state, not to the set of source_sensors read at startup. That set
+        # was computed once and never recomputed, which meant (a) fallback_sensors were never subscribed
+        # at all, so a failover chain could not fail over, and (b) re-pointing a device's source from the
+        # PWA did nothing until someone restarted ha-controller — the edit saved, the card kept reading
+        # "stale", and nothing said why. on_message already keys the cache by the payload's device_id and
+        # ignores anything a policy isn't asking for, so the wildcard costs one dict entry per device.
         def on_connect(cl, u, f, rc, props=None):
-            for s in sources:
-                cl.subscribe(f"home/+/{s}/state", qos=0)
-            log.info("subscribed to %d source sensor(s): %s", len(sources), sorted(sources))
+            cl.subscribe("home/+/+/state", qos=0)
+            log.info("subscribed to home/+/+/state (all devices; sources resolve per-tick from policy)")
         c.on_connect = on_connect
         self.mqtt = c
         c.connect(broker, port, 60)
@@ -454,6 +509,8 @@ def main():
     ap.add_argument("--once", action="store_true", help="run a single tick then exit (waits for a sensor)")
     ap.add_argument("--tick-s", type=int, default=int(os.environ.get("HA_CONTROL_TICK_S", "45")))
     ap.add_argument("--db", default=os.environ.get("HA_CONTROL_DB", "instance/db/control.db"))
+    ap.add_argument("--hot-db", default=os.environ.get("HA_HOT_DB", "instance/db/hot.db"),
+                    help="readings store, read-only — resolves DERIVED_METRICS (air_quality)")
     a = ap.parse_args()
     logging.basicConfig(level=logging.INFO, stream=__import__("sys").stdout,
                         format="%(asctime)s %(levelname)s %(name)s — %(message)s")
@@ -483,7 +540,7 @@ def main():
     if levoit_id:                                    # only seed if the purifier is registered on this box
         store.seed_policy(conn, levoit_id, {**LEVOIT_POLICY, "source_sensor": levoit_id})
     conn.close()
-    ctrl = Controller(issuer, drivers, registry, a.db)
+    ctrl = Controller(issuer, drivers, registry, a.db, hot_db=a.hot_db)
     # live-reload control.yaml so an actuator relocate (area edit) takes effect without a controller
     # restart — the control-plane sibling of the ingest bridges' devices.yaml reload.
     ctrl.attach_registry_reloader(RegistryReloader(Path("instance/control.yaml"),
@@ -494,9 +551,7 @@ def main():
         c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         apply_credentials(c)
         c.on_message = ctrl.on_message
-        srcs = {p.get("source_sensor") for p in store.all_policies(sqlite3.connect(a.db)).values()
-                if p.get("source_sensor")}
-        c.on_connect = lambda cl, u, f, rc, props=None: [cl.subscribe(f"home/+/{s}/state") for s in srcs]
+        c.on_connect = lambda cl, u, f, rc, props=None: cl.subscribe("home/+/+/state")
         ctrl.mqtt = c
         c.connect(broker, port, 60)
         c.loop_start()

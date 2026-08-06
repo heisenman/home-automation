@@ -520,39 +520,68 @@ const CTRL_METRIC = {
   humidity_pct: { unit: "%", label: "control RH", round: 1 },
   pm25_ugm3: { unit: "µg/m³", label: "PM2.5", round: 0 },
   aqi: { unit: "", label: "AQI", round: 0 },
+  air_quality: { unit: "", label: "air quality", round: 0 },
 };
 
 // Selectable air-quality control sources for threshold_ranged devices. EXPANDABLE: add an entry here
 // (+ server _ALLOWED_CONTROL_METRICS + writer._UNITS) to offer a new metric. `cuts` = sensible default
 // band cutoffs in that metric's units (speeds stay 1..N); switching metric resets cutoffs to these.
+// `levels` is the fan-speed ladder that goes WITH `cuts` (one per cut, plus the catch-all above the last
+// cut taking the final entry). It is per-metric because DIRECTION IS NOT UNIFORM: PM2.5/AQI climb as the
+// air gets worse, so speed climbs with them; `air_quality` is the ADR-0035 cleanliness score where 100 is
+// clean, so its ladder DESCENDS. Switching metric must reset cuts AND levels together — reusing a PM2.5
+// ladder on air_quality would run the fan flat-out in clean air and idle it in smoke.
 const AIR_QUALITY_METRICS = [
-  { key: "pm25_ugm3", label: "PM2.5", unit: "µg/m³", cuts: [12, 35, 55] },
-  { key: "aqi", label: "AQI", unit: "", cuts: [2, 3, 4] },
+  { key: "pm25_ugm3", label: "PM2.5", unit: "µg/m³", cuts: [12, 35, 55], levels: [1, 2, 3, 4] },
+  { key: "aqi", label: "AQI", unit: "", cuts: [2, 3, 4], levels: [1, 2, 3, 4] },
+  // cuts sit on the ADR-0035 band edges: <20 Very Poor, <40 Poor, <60 Fair, >=60 Good/Excellent.
+  { key: "air_quality", label: "Air quality", unit: "/100", cuts: [20, 40, 60], levels: [4, 3, 2, 1],
+    hint: "0–100 unified index — higher is cleaner, so the fan slows as the score rises" },
 ];
 
 // automation editor for threshold_ranged devices (purifier): pick the air-quality source + edit the
 // sensor->speed band cutoffs + enable/disable.
-function RangedSettings({ vm, isAdmin, onChange, onNeedAdmin }) {
+function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
   const c = vm.control || {};
   const bands = c.bands || [];
-  const speeds = bands.map((b) => b.level);
   const [open, setOpen] = useState(false);
   const [enabled, setEnabled] = useState(c.enabled !== false);
   const [metric, setMetric] = useState(c.metric || "pm25_ugm3");
+  const [source, setSource] = useState(c.source_sensor || "");
   const [cuts, setCuts] = useState(bands.filter((b) => b.max != null).map((b) => b.max));
+  const [speeds, setSpeeds] = useState(bands.map((b) => b.level));
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [flash, setFlash] = useState("");
 
   const sel = AIR_QUALITY_METRICS.find((m) => m.key === metric) || AIR_QUALITY_METRICS[0];
-  // switching the control source resets the cutoffs to that metric's defaults (PM2.5 µg/m³ ≠ AQI 1-5).
+
+  // candidate sources = sensors actually reporting the selected metric. Same rule as the dehumidifier's
+  // humidity picker, just parameterised by metric. The current source is kept in the list even if it is
+  // momentarily absent, so opening the editor and saving never silently drops it.
+  const sensorReports = (id, key) =>
+    (sensors || []).some((s) => s.device_id === id && s.metrics && s.metrics[key] != null);
+
+  // switching the control metric resets the cutoffs AND the speed ladder to that metric's defaults —
+  // PM2.5 µg/m³ ≠ AQI 1-5 ≠ air_quality 0-100, and air_quality also runs the opposite direction.
   const changeMetric = (key) => {
     setMetric(key);
     const m = AIR_QUALITY_METRICS.find((x) => x.key === key);
-    if (m) setCuts(m.cuts.slice());
+    if (m) { setCuts(m.cuts.slice()); setSpeeds(m.levels.slice()); }
+    // the old source almost certainly doesn't report the new metric; make the user re-pick rather than
+    // silently saving a binding that can never produce a reading.
+    setSource((cur) => (sensorReports(cur, key) ? cur : ""));
   };
+
+  const opts = (sensors || [])
+    .filter((s) => s.metrics && s.metrics[metric] != null)
+    .map((s) => ({ id: s.device_id, label: `${prettyName(s.device_id)} · ${prettyArea(s.area)}` }));
+  if (source && !opts.some((o) => o.id === source)) {
+    opts.unshift({ id: source, label: `${prettyName(source)} (current — not reporting)` });
+  }
   const setCut = (i, v) => setCuts((cs) => cs.map((x, j) => (j === i ? v : x)));
   const issue = () => {
+    if (!source) return "pick a sensor to follow";
     for (let i = 0; i < cuts.length; i++) {
       if (cuts[i] === "" || !Number.isFinite(Number(cuts[i]))) return "enter all thresholds";
       if (i && Number(cuts[i]) <= Number(cuts[i - 1])) return "thresholds must increase";
@@ -567,7 +596,8 @@ function RangedSettings({ vm, isAdmin, onChange, onNeedAdmin }) {
     setBusy(true); setErr(""); setFlash("");
     try {
       await adminSend("PUT", `/control/${vm.device_id}/policy`,
-        { enabled, control: { strategy: "threshold_ranged", metric, bands: newBands } });
+        { enabled, source_sensor: source,
+          control: { strategy: "threshold_ranged", metric, bands: newBands } });
       setFlash("saved"); await onChange();
     } catch (e) { setErr(String(e.message)); }
     setBusy(false);
@@ -584,10 +614,17 @@ function RangedSettings({ vm, isAdmin, onChange, onNeedAdmin }) {
         <input type="checkbox" checked=${enabled} onChange=${(e) => setEnabled(e.target.checked)} />
         Automation enabled (fan speed follows air quality)
       </label>
-      <div class="field"><label>Control source</label>
+      <div class="field"><label>Measure</label>
         <select value=${metric} onChange=${(e) => changeMetric(e.target.value)}>
           ${AIR_QUALITY_METRICS.map((m) => html`<option value=${m.key}>${m.label}${m.unit ? ` (${m.unit})` : ""}</option>`)}
-        </select></div>
+        </select>
+        ${sel.hint && html`<p class="note">${sel.hint}</p>`}</div>
+      <div class="field"><label>Sensor to follow</label>
+        <select value=${source} onChange=${(e) => setSource(e.target.value)}>
+          <option value="">— pick a sensor —</option>
+          ${opts.map((o) => html`<option value=${o.id}>${o.label}</option>`)}
+        </select>
+        ${!opts.length && html`<p class="note">No sensor is reporting ${sel.label} right now.</p>`}</div>
       <div class="field"><label>Fan speed by ${sel.label}</label>
         ${cuts.map((v, i) => html`
           <div class="controls" key=${i}>
@@ -667,7 +704,8 @@ function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit, onClo
         onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
       <${ManualControl} vm=${vm} isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
       ${ranged
-        ? html`<${RangedSettings} vm=${vm} isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} />`
+        ? html`<${RangedSettings} vm=${vm} sensors=${sensors} isAdmin=${isAdmin}
+                 onChange=${onChange} onNeedAdmin=${onNeedAdmin} />`
         : html`<${SettingsPanel} vm=${vm} sensors=${sensors} isAdmin=${isAdmin}
             onChange=${onChange} onNeedAdmin=${onNeedAdmin} />`}
     </div>`;

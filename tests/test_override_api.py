@@ -132,6 +132,23 @@ def test_policy_set_source_sensor():
     assert C.handle_policy_update(c, DEV, {"source_sensor": ""}, {DEV})[0] == 400
 
 
+def test_policy_accepts_air_quality_as_a_control_metric():
+    """The unified ADR-0035 index is selectable, so a purifier can follow a gas node in another room."""
+    c = _conn()
+    code, _ = C.handle_policy_update(c, DEV, {"source_sensor": "gas_kitchen", "control": {
+        "strategy": "threshold_ranged", "metric": "air_quality",
+        "bands": [{"max": 20, "level": 4}, {"max": 40, "level": 3},
+                  {"max": 60, "level": 2}, {"max": None, "level": 1}]}}, {DEV})
+    assert code == 200
+    pol = store.get_policy(c, DEV)
+    assert pol["control"]["metric"] == "air_quality" and pol["source_sensor"] == "gas_kitchen"
+    # a descending ladder is legal — direction lives in the levels, not the cutoffs
+    assert [b["level"] for b in pol["control"]["bands"]] == [4, 3, 2, 1]
+    # unknown metrics still rejected
+    assert C.handle_policy_update(c, DEV, {"control": {"strategy": "threshold_ranged",
+                                                       "metric": "voc_index"}}, {DEV})[0] == 400
+
+
 def test_policy_fallback_sensors():
     c = _conn()
     code, _ = C.handle_policy_update(c, DEV, {"fallback_sensors": ["meter_a", "meter_b"]}, {DEV})

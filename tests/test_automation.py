@@ -5,7 +5,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from server.control.automation import (  # noqa: E402
     Policy, Reading, DeviceState, Override, resolve, in_window, schedule_off_now,
-    apply_scene, HOUSE_SCENES, DEFAULT_SCENE)
+    apply_scene, HOUSE_SCENES, DEFAULT_SCENE, _level_for)
 from tests._harness import run_module  # noqa: E402
 
 NOW = 1_000_000.0
@@ -204,6 +204,40 @@ def test_away_relaxation_changes_decision_vs_home():
     away = resolve(away_pol, NOW, fresh(57), _state(False))
     assert home.running is True and home.source == "rule"
     assert away.running is False and "deadband" in away.reason
+
+
+# ── band ladders run in BOTH directions ─────────────────────────────────────────────
+# PM2.5/AQI rise as the air gets worse (speed rises with them); the ADR-0035 `air_quality` score rises as
+# the air gets CLEANER, so its ladder descends. _level_for only requires ascending `max` cutoffs — the
+# levels attached to them carry the direction. These lock that, because getting it backwards is silent:
+# the purifier would sit at speed 4 in clean air and idle in smoke, with nothing in the log looking wrong.
+PM25_BANDS = [{"max": 12, "level": 1}, {"max": 35, "level": 2},
+              {"max": 55, "level": 3}, {"max": None, "level": 4}]
+AQ_BANDS = [{"max": 20, "level": 4}, {"max": 40, "level": 3},
+            {"max": 60, "level": 2}, {"max": None, "level": 1}]
+
+
+def test_rising_ladder_speeds_up_as_pm25_climbs():
+    got = [_level_for(v, PM25_BANDS) for v in (2, 20, 45, 120)]
+    assert got == [1, 2, 3, 4]
+
+
+def test_descending_ladder_slows_down_as_air_quality_improves():
+    # 10 = Very Poor -> full speed; 95 = Excellent -> idle. The INVERSE of the PM2.5 case.
+    got = [_level_for(v, AQ_BANDS) for v in (10, 30, 50, 95)]
+    assert got == [4, 3, 2, 1]
+
+
+def test_air_quality_ladder_matches_the_adr_0035_band_edges():
+    # boundaries are exclusive-below: a value exactly on an edge belongs to the band ABOVE it.
+    assert _level_for(19.9, AQ_BANDS) == 4 and _level_for(20.0, AQ_BANDS) == 3
+    assert _level_for(59.9, AQ_BANDS) == 2 and _level_for(60.0, AQ_BANDS) == 1
+
+
+def test_a_pm25_ladder_pointed_at_air_quality_is_inverted():
+    """Documents the failure the UI prevents by resetting cuts AND levels together."""
+    assert _level_for(95, PM25_BANDS) == 4       # pristine air, full fan — the bug, if levels don't flip
+    assert _level_for(95, AQ_BANDS) == 1         # correct ladder: pristine air, idle
 
 
 if __name__ == "__main__":

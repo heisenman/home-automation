@@ -137,3 +137,50 @@ override ends:
 control layer that reports OFF while the appliance keeps working is worse than one that reports honestly —
 the log said `override OFF (359m left)` the whole time. When handing control to an onboard loop, pin the
 input that loop regulates against, not just its mode.
+
+## Addendum — actuators may follow a DERIVED metric, in either direction, 2026-08-06
+
+An air purifier should be able to run off any air-quality sensor in the house, the same way the
+dehumidifier binds to an external humidity meter. Three things were in the way, and only one of them was
+the obvious one.
+
+**1. The control loop and the storage layer are different readers.** `ha-controller` is its own process
+whose only input is MQTT: `Controller.readings` is filled exclusively by `on_message`, and the controller
+never opened `hot.db` at all. The unified `air_quality` score (ADR-0035) is *derived* — computed in the
+read path by the viewmodel fusion and persisted every 60 s by `ha-gas-quality-sampler` — so it appears in
+no `/state` payload. Binding a purifier to a gas node would therefore have saved cleanly and then
+**silently never actuated**: `_pick_source` would find nothing, and "source produced no reading" is
+indistinguishable from "sensor offline", so the resolver would fail safe to the device default forever.
+
+The fix is a narrow seam, not a second fusion implementation. `DERIVED_METRICS` names the metrics that
+never reach MQTT; for those, `_pick_source` reads the newest stored point from `hot.db` (read-only,
+best-effort — a missing or locked readings store degrades to "no reading" and can never kill a tick).
+Crucially it carries the row's **own** timestamp, so `sensor_stale_min` governs derived and live sources
+identically: if the sampler stops writing, the source goes stale and the device fails safe exactly as it
+would for a dead radio. Re-deriving the score inside the control loop was rejected — it would have
+duplicated the auto-reference-picking fusion and let the control view drift from the displayed view.
+
+**2. Direction is not uniform.** PM2.5 and AQI *rise* as air gets worse. `air_quality` is a
+**cleanliness score** — 100 is clean — so it rises as air gets *better*. `_level_for` only requires
+ascending `max` cutoffs; the direction lives in the **levels** attached to them, so an `air_quality`
+ladder descends (`<20 → speed 4 … ≥60 → speed 1`, cutoffs on the ADR-0035 band edges). This is a silent
+failure mode: a PM2.5 ladder re-pointed at `air_quality` runs the fan flat-out in pristine air and idles
+it in smoke, with nothing in the log looking wrong. So the UI resets cutoffs **and** the speed ladder
+together whenever the metric changes, and `test_a_pm25_ladder_pointed_at_air_quality_is_inverted` pins the
+hazard in place.
+
+**3. The MQTT subscription set was computed once at startup**, from `source_sensor` only. Two consequences
+nobody had hit yet: `fallback_sensors` were never subscribed at all (so a failover chain could not fail
+over), and re-pointing a device's source from the PWA did nothing until someone restarted the controller —
+the edit saved, the card kept reading "stale", and nothing said why. The controller now subscribes to
+`home/+/+/state` and resolves sources per tick from policy; `on_message` already keys by the payload's
+`device_id`, so the wildcard costs one dict entry per device.
+
+**Ghost sources.** `purifier_living_room` was found pointing at `levoit_office` — an id retired in the
+rename to `purifier_living_room`, with **zero rows ever recorded** — with automation disabled on top. The
+root cause is structural: `device_relocate` / `apply_rename_worksheet` rewrite the registry and migrate
+history, but `automation_policy.source_sensor` is free-text they never touched. `tools/repair_control_source.py`
+audits every policy for a source that has *never* produced its control metric and repairs the unambiguous
+case (a self-sourcing device points at itself); anything else it reports for a human to choose rather than
+guessing. See also the lesson from the pause addendum: a control layer that looks healthy while doing
+nothing is worse than one that fails loudly.
