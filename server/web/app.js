@@ -119,6 +119,13 @@ function fmtClock(ms, spanH) {
   const d = new Date(ms), p = (n) => String(n).padStart(2, "0");
   return spanH <= 48 ? `${p(d.getHours())}:${p(d.getMinutes())}` : `${d.getMonth() + 1}/${d.getDate()}`;
 }
+// "8/6 14:32" — the hover readout needs the date; the x-axis labels get by without it.
+function fmtStamp(ms) {
+  const d = new Date(ms), p = (n) => String(n).padStart(2, "0");
+  return `${d.getMonth() + 1}/${d.getDate()} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+const fmtHM = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, "0");
+  return `${p(d.getHours())}:${p(d.getMinutes())}`; };
 const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
 const steps = (a, b, step) => { const o = []; for (let v = a; v <= b; v += step) o.push(v); return o; };
 const isoNoMs = (d) => d.toISOString().replace(/\.\d+Z$/, "Z");
@@ -134,7 +141,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v51 Flash new hardware — network PROFILES (ssid+broker as one choice)";
+const BUILD = "v52 Graphs — hover a plot for a per-point readout of every trace";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -1008,53 +1015,137 @@ function RangeControl({ onRange }) {
     </div>`;
 }
 
+// nearest sample to time t, in a series ascending by t. Binary search because this runs per pointer move.
+function nearestPoint(pts, t) {
+  let lo = 0, hi = pts.length - 1;
+  while (lo < hi) { const mid = (lo + hi) >> 1; if (pts[mid].t < t) lo = mid + 1; else hi = mid; }
+  const a = pts[lo], b = lo > 0 ? pts[lo - 1] : null;
+  return b && Math.abs(b.t - t) <= Math.abs(a.t - t) ? b : a;
+}
+// median sample interval — the basis for "is this trace's nearest sample close enough to report?"
+function medianGap(pts) {
+  const g = [];
+  for (let i = 1; i < pts.length; i++) g.push(pts[i].t - pts[i - 1].t);
+  g.sort((a, b) => a - b);
+  return g[g.length >> 1] || 0;
+}
+
 // overlay traces on one chart. Same unit → shared scale (real values); mixed units → per-trace
 // normalized (trend comparison), each trace's real range shown in the legend. Temp converted to pref.
+// Hovering the plot snaps a crosshair to the nearest sample and reads every trace out at that instant —
+// in normalized mode that readout is the ONLY place the real values appear.
 function AdaptiveChart({ traces }) {
   const unit = useTemp();
-  const series = traces.map((t) => prepSeries(t, unit)).filter((t) => t.points.length >= 2);
-  if (!series.length) return html`<div class="note">no data in range</div>`;
+  const svgRef = useRef(null);
+  const [hover, setHover] = useState(null);
   const W = 320, H = 150, pad = 8;
-  const allT = series.flatMap((t) => t.points.map((p) => p.t));
-  const tMin = Math.min(...allT), tMax = Math.max(...allT);
-  const spanH = (tMax - tMin) / 3600000;
-  const x = (t) => pad + ((t - tMin) / (tMax - tMin || 1)) * (W - 2 * pad);
-  const units = [...new Set(series.map((t) => t.unit))];
-  const shared = units.length === 1;
 
-  let yOf, yLabels;
-  if (shared) {
-    const allV = series.flatMap((t) => t.points.map((p) => p.v));
-    let mn = Math.min(...allV), mx = Math.max(...allV); if (mn === mx) { mn -= 1; mx += 1; }
-    yOf = series.map(() => (v) => pad + (1 - (v - mn) / (mx - mn)) * (H - 2 * pad));
-    const u = units[0];
-    yLabels = [`${round1(mx)}${u}`, `${round1((mn + mx) / 2)}${u}`, `${round1(mn)}${u}`];
-  } else {
-    yOf = series.map((t) => {
-      let mn = Math.min(...t.points.map((p) => p.v)), mx = Math.max(...t.points.map((p) => p.v));
-      if (mn === mx) { mn -= 1; mx += 1; }
-      t._mn = mn; t._mx = mx;
-      return (v) => pad + (1 - (v - mn) / (mx - mn)) * (H - 2 * pad);
+  // Memoized: a pointer move re-renders this component, and without the memo every move would re-scan
+  // every point of every trace (min/max/normalize) just to move one dot. Keyed on trace CONTENT, not on
+  // the `traces` array identity — the sensor-card charts build that array inline, so an identity dep
+  // would miss on every routine poll and blink the readout away mid-hover.
+  const key = traces.map((t) => {
+    const p = t.points || [];
+    return `${t.label}|${t.unit}|${t.color}|${p.length}|${p.length ? `${p[0].t}-${p[p.length - 1].t}` : ""}`;
+  }).join(";");
+  const geo = useMemo(() => {
+    const series = traces.map((t) => prepSeries(t, unit)).filter((t) => t.points.length >= 2);
+    if (!series.length) return null;
+    const allT = series.flatMap((t) => t.points.map((p) => p.t));
+    const tMin = Math.min(...allT), tMax = Math.max(...allT);
+    const x = (t) => pad + ((t - tMin) / (tMax - tMin || 1)) * (W - 2 * pad);
+    const units = [...new Set(series.map((t) => t.unit))];
+    const shared = units.length === 1;
+
+    let yOf, yLabels;
+    if (shared) {
+      const allV = series.flatMap((t) => t.points.map((p) => p.v));
+      let mn = Math.min(...allV), mx = Math.max(...allV); if (mn === mx) { mn -= 1; mx += 1; }
+      yOf = series.map(() => (v) => pad + (1 - (v - mn) / (mx - mn)) * (H - 2 * pad));
+      const u = units[0];
+      yLabels = [`${round1(mx)}${u}`, `${round1((mn + mx) / 2)}${u}`, `${round1(mn)}${u}`];
+    } else {
+      yOf = series.map((t) => {
+        let mn = Math.min(...t.points.map((p) => p.v)), mx = Math.max(...t.points.map((p) => p.v));
+        if (mn === mx) { mn -= 1; mx += 1; }
+        t._mn = mn; t._mx = mx;
+        return (v) => pad + (1 - (v - mn) / (mx - mn)) * (H - 2 * pad);
+      });
+      yLabels = ["100%", "50%", "0%"];                 // mixed units → each trace normalized to its range
+    }
+    // A trace only reads out where it actually HAS a sample — else a sensor that went quiet mid-window
+    // would keep reporting its last value across the rest of the chart as if it were still live.
+    const tol = series.map((t) => Math.max(3 * medianGap(t.points), (tMax - tMin) * 0.005));
+    return { series, tMin, tMax, spanH: (tMax - tMin) / 3600000, x, yOf, yLabels, shared, tol };
+  }, [key, unit]);
+
+  useEffect(() => setHover(null), [geo]);              // new traces/range → the old readout is stale
+
+  const onMove = useCallback((e) => {
+    const svg = svgRef.current;
+    if (!geo || !svg) return;
+    const r = svg.getBoundingClientRect();
+    const w = svg.clientWidth, h = svg.clientHeight;   // content box: the viewBox maps onto THIS, not the border box
+    if (!w || !h) return;
+    const bw = (r.width - w) / 2;                      // the svg's own border, so the overlay lines up with the plot
+    const px = e.clientX - r.left - bw, py = e.clientY - r.top - bw;
+    const cx = Math.min(Math.max(px * W / w, pad), W - pad);
+    const t = geo.tMin + ((cx - pad) / (W - 2 * pad)) * (geo.tMax - geo.tMin);
+
+    const rows = []; let anchor = null;
+    geo.series.forEach((s, i) => {
+      const p = nearestPoint(s.points, t), dt = Math.abs(p.t - t);
+      if (dt > geo.tol[i]) return;
+      const dotX = bw + geo.x(p.t) * w / W;
+      rows.push({ label: s.label, color: s.color, unit: s.unit, v: p.v, t: p.t,
+                  cx: dotX, cy: bw + geo.yOf[i](p.v) * h / H });
+      if (!anchor || dt < anchor.dt) anchor = { dt, t: p.t, cx: dotX };
     });
-    yLabels = ["100%", "50%", "0%"];                   // mixed units → each trace normalized to its range
-  }
+    setHover(rows.length ? { rows, at: anchor.t, cx: anchor.cx, py, w: r.width, h: r.height } : null);
+  }, [geo]);
+  const clear = useCallback(() => setHover(null), []);
+  // a mouse keeps its readout after a click; a touch drag ends the readout (it also scrolls the page).
+  const clearTouch = useCallback((e) => { if (e.pointerType !== "mouse") setHover(null); }, []);
+
+  if (!geo) return html`<div class="note">no data in range</div>`;
+  const { series, tMin, tMax, spanH, x, yOf, yLabels, shared } = geo;
   const gridY = [pad, H / 2, H - pad];
+  const tipPos = hover && {
+    ...(hover.cx < hover.w / 2 ? { left: `${hover.cx + 12}px` } : { right: `${hover.w - hover.cx + 12}px` }),
+    ...(hover.py < hover.h / 2 ? { bottom: "6px" } : { top: "6px" }),
+  };
   return html`
     <div class="chart2">
       <div class="chart2-row">
         <div class="yax">${yLabels.map((l) => html`<span>${l}</span>`)}</div>
-        <svg viewBox="0 0 ${W} ${H}" class="chart" preserveAspectRatio="none">
-          ${gridY.map((yy) => html`<line x1="0" y1=${yy} x2=${W} y2=${yy} class="grid" />`)}
-          ${series.map((t, i) => html`<path fill="none" stroke=${t.color} stroke-width="1.5"
-            d=${t.points.map((p, j) => `${j ? "L" : "M"}${x(p.t).toFixed(1)} ${yOf[i](p.v).toFixed(1)}`).join(" ")} />`)}
-        </svg>
+        <div class="plot" onPointerMove=${onMove} onPointerDown=${onMove}
+             onPointerLeave=${clear} onPointerCancel=${clear} onPointerUp=${clearTouch}>
+          <svg ref=${svgRef} viewBox="0 0 ${W} ${H}" class="chart" preserveAspectRatio="none">
+            ${gridY.map((yy) => html`<line x1="0" y1=${yy} x2=${W} y2=${yy} class="grid" />`)}
+            ${series.map((t, i) => html`<path fill="none" stroke=${t.color} stroke-width="1.5"
+              d=${t.points.map((p, j) => `${j ? "L" : "M"}${x(p.t).toFixed(1)} ${yOf[i](p.v).toFixed(1)}`).join(" ")} />`)}
+          </svg>
+          ${hover && html`
+            <div class="hair" style=${{ left: `${hover.cx}px` }}></div>
+            ${hover.rows.map((r) => html`<div class="hdot"
+              style=${{ left: `${r.cx}px`, top: `${r.cy}px`, background: r.color }}></div>`)}
+            <div class="tip" style=${tipPos}>
+              <div class="tip-t">${fmtStamp(hover.at)}</div>
+              ${hover.rows.map((r) => html`<div class="tip-row">
+                <svg class="sw" viewBox="0 0 12 12" width="12" height="12"><rect width="12" height="12" rx="2" fill=${r.color} /></svg>
+                <span class="tip-l">${r.label}</span>
+                ${Math.abs(r.t - hover.at) > 60000 && html`<span class="tip-at">@${fmtHM(r.t)}</span>`}
+                <b class="tip-v">${round1(r.v)}${r.unit}</b>
+              </div>`)}
+            </div>`}
+        </div>
       </div>
       <div class="xax">
         <span>${fmtClock(tMin, spanH)}</span>
         <span>${fmtClock((tMin + tMax) / 2, spanH)}</span>
         <span>${fmtClock(tMax, spanH)}</span>
       </div>
-      ${!shared && html`<div class="note ax-note">normalized · mixed units (each trace's real range below)</div>`}
+      ${!shared && html`<div class="note ax-note">normalized · mixed units (hover for real values)</div>`}
       <div class="legend">
         ${series.map((t) => html`<span class="leg">
           <svg class="sw" viewBox="0 0 12 12" width="12" height="12"><rect width="12" height="12" rx="2" fill=${t.color} /></svg>

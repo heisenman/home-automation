@@ -235,6 +235,26 @@ details > summary { cursor: pointer; }
 .xax { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); margin: 3px 0 0 52px; }
 .grid { stroke: var(--line); stroke-width: 1; opacity: .55; }
 .ax-note { margin-top: 4px; }
+
+/* per-point hover readout. The plot svg is stretched (preserveAspectRatio=none), so a circle drawn IN
+   it would come out an ellipse — the crosshair, dots and tooltip are HTML positioned over it instead. */
+.plot { position: relative; flex: 1; min-width: 0; cursor: crosshair; }
+.hair { position: absolute; top: 1px; bottom: 1px; width: 1px; background: var(--muted); opacity: .5; pointer-events: none; }
+.hdot {
+  position: absolute; width: 7px; height: 7px; margin: -3.5px 0 0 -3.5px;
+  border-radius: 50%; box-shadow: 0 0 0 1.5px var(--bg); pointer-events: none;
+}
+.tip {
+  position: absolute; z-index: 3; pointer-events: none; max-width: 260px;
+  background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+  padding: 6px 8px; font-size: 12px; color: var(--txt); white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, .45);
+}
+.tip-t { font-size: 10px; color: var(--muted); margin-bottom: 3px; font-variant-numeric: tabular-nums; }
+.tip-row { display: flex; align-items: center; gap: 6px; line-height: 1.6; }
+.tip-l { color: var(--muted); text-transform: capitalize; overflow: hidden; text-overflow: ellipsis; max-width: 150px; }
+.tip-at { color: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+.tip-v { margin-left: auto; font-variant-numeric: tabular-nums; }
 .sw { width: 12px; height: 12px; border-radius: 3px; display: inline-block; flex: none; }
 
 /* graph explorer */

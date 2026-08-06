@@ -19,6 +19,14 @@ Bring the PWA's **graph builder** (`server/web/app.js` `GraphBuilder`/`Panel`/`A
 - **Shared range control** — presets 6h/24h/7d/30d + custom window.
 - **Legend** with per-trace color + (mixed-unit) real range.
 
+**Not in the parity target: the PWA's per-point hover readout** (2026-08-06 — crosshair + tooltip
+reading every trace out at the nearest sample). It's a *pointer* affordance and the D1001 is a touch
+panel with no hover state, so porting it would mean inventing a different interaction (tap-to-inspect),
+not matching one. Worth noting because it carries real information on the PWA side: in mixed-unit
+**normalized** mode the readout is the only place the real values appear per-point, and the panel's
+equivalent is still the legend's per-trace range. If a panel tap-to-inspect is ever wanted, treat it as
+its own decision rather than parity work.
+
 ## 2. What already exists (build ON this, don't reinvent)
 
 - **Chart data plane** — `ui/ui_chart.c` `chart_worker`: off the LVGL/click stack, **local-SD rung
