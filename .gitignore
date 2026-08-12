@@ -33,6 +33,12 @@ Thumbs.db
 *.crt
 *.p12
 ca/
+# EXCEPTION (ADR-0038): the Android app pins the server certificate, so its bundled copy is a BUILD INPUT —
+# without it a fresh clone produces an app that trusts nothing and cannot reach the house at all. A server
+# certificate is public by construction (it is presented to every TLS client); the private half stays
+# ignored above. tests/test_android_cert_pin.py asserts this copy matches instance/tls/server.crt and
+# carries no key material.
+!app/android/app/src/main/res/raw/ha_server.crt
 
 # Logs
 *.log

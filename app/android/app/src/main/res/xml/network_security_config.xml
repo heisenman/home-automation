@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  Pinned trust for the house (ADR-0038).
+
+  The system serves a SELF-SIGNED cert (CN=ha-api, SANs 192.168.0.200 / 192.168.0.210). In a browser that
+  means a click-through interstitial and — per docs/decisions/air-gap-notify.md — a service worker that
+  REFUSES to register at all. Here we ship the cert as the trust anchor for exactly those two hosts, so the
+  WebView gets a genuine secure context with no per-device CA install.
+
+  `system` is deliberately NOT in the domain trust-anchors: for these hosts our cert is the ONLY acceptable
+  one. A different cert on that address must fail closed, which is what makes this a pin and not a
+  convenience. Everything else on the internet keeps ordinary system trust via base-config.
+
+  LIFECYCLE: this cert expires 2028-04-05 (the air-gap time-bomb ADR-0033 flags). Rotating it requires
+  re-bundling here and shipping a new APK — tests/test_android_cert_pin.py fails the suite the moment the
+  bundled copy and instance/tls/server.crt diverge, so the drift surfaces early rather than on the day.
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="system" />
+        </trust-anchors>
+    </base-config>
+
+    <domain-config>
+        <domain includeSubdomains="false">192.168.0.210</domain>
+        <domain includeSubdomains="false">192.168.0.200</domain>
+        <trust-anchors>
+            <certificates src="@raw/ha_server" />
+        </trust-anchors>
+    </domain-config>
+</network-security-config>

@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Lifted from the PWA (server/web/styles.css :root) so the shell and the page it hosts are one surface —
+     no flash of a differently-coloured chrome while the dashboard loads. -->
+<resources>
+    <color name="bg">#0f1720</color>
+    <color name="panel">#1a2330</color>
+    <color name="line">#2b3a4d</color>
+    <color name="txt">#e6edf5</color>
+    <color name="accent">#4aa3ff</color>
+    <color name="ok">#34d399</color>
+    <color name="ic_launcher_background">#0f1720</color>
+</resources>

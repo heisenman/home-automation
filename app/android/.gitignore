@@ -1,0 +1,9 @@
+# Build output and machine-specific config. Everything else under app/android/ IS committed —
+# the app must be reproducible from the repo (see docs/app/ANDROID.md).
+.gradle/
+build/
+app/build/
+local.properties
+*.apk
+*.keystore
+*.jks

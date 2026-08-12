@@ -1,0 +1,47 @@
+<resources>
+    <string name="app_name">Home Automation</string>
+    <string name="settings_title">Server settings</string>
+
+    <!-- Error screen -->
+    <string name="err_unreachable">Can\'t reach the house at %1$s.\n\nCheck you\'re on the home Wi-Fi.</string>
+    <string name="err_cert">%1$s presented an unexpected certificate, so the connection was refused.\n\nThis is the app protecting you — it only trusts the house\'s own certificate.</string>
+    <string name="retry">Retry</string>
+    <string name="settings">Settings</string>
+
+    <!-- Settings screen -->
+    <string name="endpoint_label">Server address</string>
+    <string name="endpoint_hint">https://192.168.0.210</string>
+    <string name="use_primary">Use bridge (.210)</string>
+    <string name="use_fallback">Use VIP (.200)</string>
+    <string name="test">Test</string>
+    <string name="save">Save</string>
+    <string name="alerts_label">Background alerts</string>
+    <string name="alerts_help">Keeps a connection to the house so alerts reach this phone when the app is closed. Home Wi-Fi only.</string>
+    <string name="settings_testing">Testing…</string>
+    <string name="settings_bad_url">That doesn\'t look like a server address.</string>
+    <string name="settings_reachable">Reachable — %1$s answered.</string>
+    <string name="settings_cert_rejected">%1$s answered but presented the wrong certificate. Refusing to trust it.</string>
+    <string name="settings_unreachable">No answer from %1$s.</string>
+
+    <!-- Foreground service -->
+    <string name="service_title">Home Automation</string>
+    <string name="service_connecting">Connecting…</string>
+    <string name="service_connected">Watching for alerts</string>
+    <string name="service_disconnected">Not connected — waiting for home Wi-Fi</string>
+    <string name="service_no_endpoint">No server configured</string>
+    <plurals name="service_active_alerts">
+        <item quantity="one">%d active alert</item>
+        <item quantity="other">%d active alerts</item>
+    </plurals>
+
+    <!-- Notification channels. These names are what the user sees in system notification settings, so
+         they are phrased for someone deciding what may wake them at 3am. -->
+    <string name="channel_critical">Critical alerts</string>
+    <string name="channel_critical_desc">Things needing attention now — tank full, sensor dead, battery critical.</string>
+    <string name="channel_warning">Warnings</string>
+    <string name="channel_warning_desc">Low battery, a sensor that has stopped reporting.</string>
+    <string name="channel_info">Notices</string>
+    <string name="channel_info_desc">Low-urgency information, such as an override about to expire.</string>
+    <string name="channel_service">Connection status</string>
+    <string name="channel_service_desc">The permanent notice Android requires while the app watches for alerts.</string>
+</resources>

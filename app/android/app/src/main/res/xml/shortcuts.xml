@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Long-press the launcher icon -> "Server settings". This is how settings stays reachable without the
+     dashboard paying for an app bar it would otherwise never use. -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut
+        android:shortcutId="settings"
+        android:enabled="true"
+        android:icon="@drawable/ic_stat_home"
+        android:shortcutShortLabel="@string/settings_title"
+        android:shortcutLongLabel="@string/settings_title">
+        <intent
+            android:action="android.intent.action.VIEW"
+            android:targetPackage="house.homeauto.app"
+            android:targetClass="house.homeauto.app.SettingsActivity" />
+    </shortcut>
+</shortcuts>

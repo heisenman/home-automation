@@ -11,6 +11,7 @@ exists before relying on it. Keep this updated when a new secret class appears.
 | **Broker creds** | `instance/mqtt.env` | `HA_MQTT_USER` (`dictator`) + `HA_MQTT_PASS` | Household + ha-2 brokers are `allow_anonymous true` on-LAN today; edge nodes still use per-node creds. |
 | **Air-gap router** | `instance/openwrt/airgap_router.env` | `WIFI_PSK` (`autohome_airgap`), regulatory, static-lease MACs (`HA2_MAC`, `BRIDGE_MAC`, `MIDEA_MAC`) | Substituted into `provisioning/openwrt/etc/config/*` by `router_reconcile.py`. |
 | **Midea dehumidifier** | `instance/midea-device.env` | `MIDEA_DEVICE_ID` / `KEY` / `TOKEN` / `IP` | LAN control creds (survive a WiFi change, NOT a factory reset). Synced to ha-2. |
+| **Android app signing** (ADR-0038) | `instance/android-release.keystore` + `instance/android-release.properties` (both `0600`) | release signing key (`ha-shell`, RSA-4096) + its passwords (= master pass) | **BACK THIS UP.** Android refuses to update an installed app whose signature changed, so losing the key forces every phone to uninstall — losing its settings — before it can take an update. v3 signing is enabled, which is the scheme that permits rotation if it ever comes to that. |
 | **Master passphrase** | `instance/.master_pass` | unlocks `node_secrets.enc` | Also `$HA_MASTER_PASSPHRASE`. Guard this — it gates the whole edge fleet. |
 
 **Rule (per project directive):** store each secret canonically in its class store above; when a new device/

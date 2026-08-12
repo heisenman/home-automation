@@ -1,0 +1,17 @@
+<!-- The PWA's icon (server/web/icon.svg), redrawn as a vector so the app on the home screen and the page
+     it opens are recognisably the same thing. Geometry is kept in the original 512 viewport; the drawn
+     content spans 110..402 which sits inside the adaptive-icon safe zone (85..427 of 512). -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="512"
+    android:viewportHeight="512">
+    <path
+        android:pathData="M256,104 L110,232 v176 h92 V304 h108 v104 h92 V232 z"
+        android:strokeColor="#4aa3ff"
+        android:strokeWidth="28"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="#34d399"
+        android:pathData="M256,322 m-34,0 a34,34 0 1,0 68,0 a34,34 0 1,0 -68,0" />
+</vector>
