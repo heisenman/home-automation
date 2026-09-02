@@ -98,6 +98,11 @@ roles:
       # boxes' brokers are NOT bridged, so running it on both would raise the same regression twice down two
       # separate notification paths. Reads ha-2's own store; no air-gap dependency. ADR-0039.
       - {unit: ha-power-watch.timer,       must: active}   # metered drift vs characterized baseline
+      # ROSTER-driven liveness: alerts when a registered device stops recording, and publishes a twice-daily
+      # all-clear digest. ha-gap-watcher cannot do this — it pairs consecutive readings, so a device that
+      # stops entirely leaves no pair and no gap (gas_hbed + gas_kitchen were dark 2 days across four "0
+      # gaps" runs). Same ha-2-only placement + same one-broker reasoning as ha-power-watch. ADR-0040.
+      - {unit: ha-recording-watch.timer,   must: active}   # every device still recording?
 
   # ── air-gap-gateway: .210's controlled internet pass-through for the air-gapped net ────
   air-gap-gateway:

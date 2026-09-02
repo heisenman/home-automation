@@ -1,0 +1,17 @@
+[Unit]
+Description=HA recording watch timer — check every device is still recording, every 30 min
+
+[Timer]
+# 30min tick against a 60min default staleness threshold => a stopped device is announced within ~1.5h,
+# against the 2 DAYS (and counting) it took a human to notice on 2026-08-31.
+# The twice-daily roster digest rides the same tick (digest_hours_utc in provisioning/recording-expectations.yaml)
+# so there is one schedule to reason about, not two.
+OnBootSec=5min
+OnUnitActiveSec=30min
+AccuracySec=1min
+# Persistent: after a box outage, run the missed check promptly — the digest is the "still alive" signal and
+# a skipped one is indistinguishable from a dead monitor.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

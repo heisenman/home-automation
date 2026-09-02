@@ -1,0 +1,27 @@
+[Unit]
+# Recording watch (ADR-0040) — is every registered device actually still recording?
+# Built after 2026-08-31, when a brownout knocked two gas nodes off the (then-hidden) SSID and gas_hbed +
+# gas_kitchen recorded NOTHING for two days while ha-gap-watcher reported "0 device(s) with gaps" on four
+# consecutive daily runs. That watcher pairs consecutive readings, so a device that stops entirely leaves no
+# pair and no gap — trailing silence is invisible to it. This asks the inverted question, driven by the
+# ROSTER rather than the data: is everything that SHOULD be reporting, reporting?
+# Runs on ha-2, where the registry and device_last_seen live. Oneshot on a ~30min timer.
+Description=HA recording watch — alert when a registered device stops recording (one check)
+Documentation=file:///home/visko/home_automation/docs/adr/ADR-0040-recording-watch.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=visko
+WorkingDirectory=/home/visko/home_automation
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+EnvironmentFile=-/home/visko/home_automation/instance/recording-watch.env
+ExecStart=/home/visko/home_automation/venv/bin/python3 -m server.maintenance.recording_watch
+# a non-recording device exits 1 — visible in `systemctl status`, must not fail the timer forever
+SuccessExitStatus=0 1
+Nice=19
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

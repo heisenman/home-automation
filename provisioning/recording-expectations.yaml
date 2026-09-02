@@ -1,0 +1,45 @@
+# Recording expectations — how long a device may stay quiet before it counts as NOT RECORDING (ADR-0040).
+#
+# Consumed by `server/maintenance/recording_watch.py` (ha-recording-watch.timer, ~30 min on ha-2).
+#
+# ── WHY THIS FILE EXISTS ──────────────────────────────────────────────────────────────────────────────
+# On 2026-08-31 a brownout knocked two gas nodes off the (then-hidden) SSID. `gas_hbed` and `gas_kitchen`
+# recorded nothing for TWO DAYS and no part of the system said a word — `ha-gap-watcher` reported
+# "0 device(s) with gaps" on four consecutive days, because it looks for gaps BETWEEN readings and a dead
+# device produces no later reading to pair with. Trailing silence was invisible.
+#
+# So the check is roster-driven: every device that SHOULD be reporting is asked about by name. Absence is
+# the alarm. This file is the "should" half.
+#
+# ── HOW THE THRESHOLDS WERE PICKED ────────────────────────────────────────────────────────────────────
+# Observed cadences on 2026-09-02 (from `device_last_seen` ages across the live fleet):
+#   gas nodes (i2c-local, home/<area>/<id>/state)  ~10 s
+#   SwitchBot meters via BLE relay                 ~10-60 s, occasionally a few minutes on a missed advert
+#   Tasmota energy meters                          ~30 s
+#   purifier / dehumidifier (polled actuators)     ~1-3 min
+# The default below is deliberately MUCH looser than any of those. This detector's job is catching a
+# device that has STOPPED, not policing jitter — a tight threshold buys minutes of detection speed and
+# pays for it in false alarms that train you to ignore it. One hour still turns a two-day outage into a
+# one-hour one.
+
+default_stale_min: 60          # quiet longer than this => NOT RECORDING (alert)
+dormant_after_days: 7          # quiet longer than this => "dormant", digest only, never alerted
+
+# Twice-daily roster digest (UTC hours). Published even when everything is healthy — a monitor that only
+# speaks on failure is indistinguishable from a monitor that has itself died, and silence is precisely
+# what failed us here. (Hugh, 2026-09-02: "a standing twice-a-day check that the system is fine".)
+digest_hours_utc: [8, 20]
+
+# Per-DEVICE-TYPE overrides (minutes). Only needed where a type is legitimately slower than the default.
+per_type_stale_min: {}
+
+# Per-DEVICE overrides (minutes) — wins over per_type.
+per_device_stale_min:
+  # Battery e-ink room panel. Last seen 2026-07-27 (~37 days as of 2026-09-02) — almost certainly just
+  # discharged, and it is a DISPLAY, not a sensor, so losing it costs no data. It lands in `dormant` and is
+  # reported in the digest rather than alerted. Give it a generous window if it is ever revived.
+  e1001_c_office: 1440         # 24h
+
+# Never reported on at all. Keep this list SHORT and justified — an entry here is a permanent blind spot,
+# which is the exact thing this tool exists to eliminate.
+ignore: []

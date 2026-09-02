@@ -67,11 +67,22 @@ A single box can hold several roles (`.210` holds three). "Required" = the union
 | Push alerts | `ha-ntfy-bridge` (direct ntfy) | `ha-relay-alert-egress` (via gateway) — **direct one absent** |
 | TLS web | `ha-api-tls` (HTTPS bridge `:8443`) | *(none — ha-2 serves plain `:8123`; the bridge does TLS)* |
 
-Also on the **air-gapped dictator only**: **`ha-power-watch.timer`** — metered-power drift vs the
-characterized baselines in `provisioning/power-baselines.yaml`, plus a stale-meter alarm (ADR-0039). It runs
-where the PMs live (they were migrated to ha-2 in 2026-07) and reads ha-2's own store, so it has no air-gap
-dependency. Deliberately **not** in `core`: the two boxes' brokers are not bridged, so running it on both
-would raise the same regression twice down two separate notification paths.
+Also on the **air-gapped dictator only** — both for the same reason, and deliberately **not** in `core`:
+the two boxes' brokers are not bridged, so running either on both would raise every alert twice down two
+separate notification paths.
+
+- **`ha-power-watch.timer`** — metered-power drift vs the characterized baselines in
+  `provisioning/power-baselines.yaml`, plus a stale-meter alarm (ADR-0039). Runs where the PMs live (they
+  were migrated to ha-2 in 2026-07) and reads ha-2's own store, so it has no air-gap dependency.
+- **`ha-recording-watch.timer`** — roster-driven liveness: alerts when a registered device **stops
+  recording**, and publishes a twice-daily all-clear digest (ADR-0040).
+
+> **`ha-recording-watch` is not a duplicate of `ha-gap-watcher`.** `gap_watcher` pairs *consecutive
+> readings* to find interior gaps and dispatch history backfills. A device that stops entirely produces no
+> later reading, so there is no pair and no gap — trailing silence is invisible to it. `gas_hbed` and
+> `gas_kitchen` were dark for two days across four consecutive "0 device(s) with gaps" runs. The recording
+> watch asks the inverted question, from the roster: *is everything that should be reporting, reporting?*
+> Keep both — one recovers recoverable history, the other notices loss.
 
 ## E. Air-gap gateway (`.210` only)  ·  must=active
 `ha-relay`, `ha-relay-broker`, `ha-relay-forwarder`, `ha-airgap-bridge` (pass-through), `ha-cert-monitor.timer`,
