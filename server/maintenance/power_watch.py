@@ -273,11 +273,34 @@ def read_api(device_id: str, since: float, until: float | None = None) -> list[t
     return out
 
 
+# How far short of `since` a local read may fall and still count as covering the window. One rollup-ish
+# slack period, not a free pass.
+COVERAGE_SLACK_S = float(os.environ.get("HA_POWER_COVERAGE_SLACK_S", "900"))
+
+
 def read_samples(device_id: str, since: float) -> tuple[list[tuple[float, float]], str]:
-    """Local DB first (ha-2), API fallback (.210). Returns (samples, source)."""
+    """Local DB when it actually COVERS the window, else the API. Returns (samples, source).
+
+    "Has rows" is not the same as "has the window". `hot.db` is pruned daily by the compactor, so on ha-2 it
+    holds roughly today-so-far — a few hours after midnight, and less right after a compaction. Preferring
+    it on mere non-emptiness would silently evaluate a 6h window against 2h of data, and would let
+    `--characterize` print a confident 7-day baseline computed from an afternoon. Same silent-partial-data
+    failure as the API's 10k-row truncation, so it gets the same treatment: detect it, say so, use the
+    source that actually has the range.
+    """
     rows = read_sqlite(device_id, since)
-    if rows:
+    if rows and min(ts for ts, _ in rows) <= since + COVERAGE_SLACK_S:
         return rows, "sqlite"
+    if rows:
+        oldest = min(ts for ts, _ in rows)
+        short_h = (oldest - since) / 3600
+        api_rows = read_api(device_id, since)
+        if api_rows:
+            return api_rows, "api(local-db short by %.1fh)" % short_h
+        # API unavailable too — use what we have, but never let the shortfall pass unremarked.
+        _log(f"WARNING {device_id}: local DB covers only from {short_h:.1f}h after the requested start and "
+             f"the API is unreachable — evaluating on PARTIAL history")
+        return rows, "sqlite(partial)"
     return read_api(device_id, since), "api"
 
 

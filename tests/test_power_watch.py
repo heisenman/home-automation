@@ -212,6 +212,61 @@ def test_defaults_are_applied_and_overridable():
     p.unlink()
 
 
+# ── source selection: "has rows" is not "has the window" ───────────────────────────────────────────
+# hot.db is pruned daily, so on ha-2 it holds ~today-so-far. Preferring it on mere non-emptiness would
+# evaluate a 6h window against 2h of data and characterize a 7d baseline from an afternoon.
+def _patch(monkey: dict):
+    """Swap the two readers for canned results; returns a restore callable."""
+    orig = (pw.read_sqlite, pw.read_api)
+    pw.read_sqlite = monkey["sqlite"]
+    pw.read_api = monkey["api"]
+    return lambda: (setattr(pw, "read_sqlite", orig[0]), setattr(pw, "read_api", orig[1]))
+
+
+def test_sqlite_used_when_it_covers_the_window():
+    restore = _patch({"sqlite": lambda d, s: [(s, 1.0), (s + 10, 1.0)],
+                      "api": lambda d, s: [(s, 9.9)]})
+    try:
+        rows, src = pw.read_samples("m1", NOW - 6 * HOUR)
+        assert src == "sqlite" and rows[0][1] == 1.0
+    finally:
+        restore()
+
+
+def test_api_used_when_local_db_is_short():
+    """The local DB has data, just not far enough back — must NOT be silently preferred."""
+    since = NOW - 7 * 86400
+    restore = _patch({"sqlite": lambda d, s: [(NOW - HOUR, 1.0)],          # only the last hour
+                      "api": lambda d, s: [(s, 9.9), (NOW, 9.9)]})
+    try:
+        rows, src = pw.read_samples("m1", since)
+        assert src.startswith("api"), f"expected api, got {src}"
+        assert "short by" in src                                          # and it says how short
+        assert rows[0][1] == 9.9
+    finally:
+        restore()
+
+
+def test_partial_local_db_used_only_when_api_is_also_down():
+    """Degrade to partial history rather than no verdict — but the source must say so."""
+    since = NOW - 7 * 86400
+    restore = _patch({"sqlite": lambda d, s: [(NOW - HOUR, 1.0)], "api": lambda d, s: []})
+    try:
+        rows, src = pw.read_samples("m1", since)
+        assert src == "sqlite(partial)" and rows
+    finally:
+        restore()
+
+
+def test_empty_local_db_falls_straight_to_api():
+    restore = _patch({"sqlite": lambda d, s: [], "api": lambda d, s: [(s, 5.0)]})
+    try:
+        rows, src = pw.read_samples("m1", NOW - 6 * HOUR)
+        assert src == "api" and rows[0][1] == 5.0
+    finally:
+        restore()
+
+
 if __name__ == "__main__":
     from tests._harness import run_module
     raise SystemExit(run_module(globals()))

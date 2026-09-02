@@ -85,10 +85,6 @@ roles:
       - {unit: ha-api-tls.service,         must: active}   # HTTPS :8443 web bridge
       - {unit: ha-weather.timer,           must: active}   # DIRECT open-meteo (internet host only)
       - {unit: ha-ntfy-bridge.service,     must: active}   # DIRECT ntfy push (internet host only)
-      # Placed by WHERE IT RUNS, not by what it watches: the PMs were migrated to ha-2 (2026-07-08) so the
-      # watcher reads them over ha-2's API from here. It is source-agnostic (local hot.db first), so if it
-      # ever moves onto ha-2 it belongs in `core` and this line goes away. ADR-0039.
-      - {unit: ha-power-watch.timer,       must: active}   # metered drift vs characterized baseline
 
   # ── air-gap-dictator: ha-2's air-gap-side relay CLIENTS (replace direct internet) ──────
   air-gap-dictator:
@@ -98,6 +94,10 @@ roles:
       - {unit: ha-cert-monitor.timer,      must: active, source: airgap}
       - {unit: ha-sneakernet-nag.timer,    must: active, source: airgap}
       - {unit: ha-router-reconcile.timer,  must: active}
+      # Watches the PMs where they LIVE. Deliberately in this ha-2-only role rather than `core`: the two
+      # boxes' brokers are NOT bridged, so running it on both would raise the same regression twice down two
+      # separate notification paths. Reads ha-2's own store; no air-gap dependency. ADR-0039.
+      - {unit: ha-power-watch.timer,       must: active}   # metered drift vs characterized baseline
 
   # ── air-gap-gateway: .210's controlled internet pass-through for the air-gapped net ────
   air-gap-gateway:

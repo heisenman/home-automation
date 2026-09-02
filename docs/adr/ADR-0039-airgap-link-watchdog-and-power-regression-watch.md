@@ -143,14 +143,34 @@ ADR-0032: `airgap_router_pm` and `failover_pm` were migrated .210 → ha-2, land
 telemetry silently dropped for ~23 h. So `power_meter_stale` fires when a meter stops reporting, and
 `power_meter_ok` clears it.
 
-### Source-agnostic reader
+### Where it runs, and why not both
 
-Local `hot.db` first (ha-2, the record of record), ha-2's HTTP API as fallback (.210, where it runs now —
-the PMs were migrated away). Same code either way; relocating it to ha-2 is a systemd change.
+**On ha-2 only** (`air-gap-dictator` role), where the PMs live. Deliberately **not** in `core`: the two
+boxes' brokers are not bridged, so running it on both would raise the same regression twice down two
+separate notification paths (.210's `ha-ntfy-bridge` and ha-2's `relay-alert-egress`). It briefly ran on
+.210 during development and was moved on deployment.
+
+### Source-agnostic reader, and "has rows" ≠ "has the window"
+
+Local `hot.db` first, HTTP API otherwise. But the first cut preferred sqlite whenever it returned *any*
+rows, and that is wrong on ha-2: **`hot.db` is pruned daily by the compactor**, so it holds roughly
+today-so-far — four hours at 04:00 UTC, less right after a compaction. Non-emptiness would have silently
+evaluated a 6 h window against 2 h of data, and let `--characterize` print a confident 7-day baseline
+computed from an afternoon.
+
+So the reader now checks **coverage**, not emptiness: sqlite is used only if its oldest row reaches back to
+the requested start (within `COVERAGE_SLACK_S`); otherwise the API serves the range, and the source string
+says so — `api(local-db short by 8.0h)`. If both are short it degrades to partial history but logs a
+warning rather than reporting a clean verdict. On ha-2, `HA_POWER_API` points at `127.0.0.1:8123`
+(`instance/power-watch.env`) so both paths are local and complete either way.
 
 API reads are **paged** (`API_SLICE_S`, default 2 days). The endpoint truncates silently at 10 000 rows
 with only a `truncated: true` in the body — a 7-day characterization would otherwise have been computed
 from partial history and nobody would have known. A truncated slice now logs a **warning**.
+
+Both of these are the same failure shape, and it is worth naming: **a data source that quietly returns less
+than you asked for produces a confident wrong answer.** Detect the shortfall, say so, and use the source
+that has the range.
 
 ---
 
@@ -173,17 +193,24 @@ from partial history and nobody would have known. A truncated slice now logs a *
 - The 2026-09-02 failure mode now self-heals in ~90 s with no human.
 - A fault the watchdog *cannot* fix is escalated once and then left alone, with the reason stated.
 - Power drift and dead meters are continuously watched rather than noticed.
-- Two more oneshot timers on .210. Both are `Nice`d/idle-scheduled where it matters; the linkwatch tick is
-  two pings and (only when needed) one TCP connect.
-- **Not yet deployed to ha-2.** Both units are .210-scoped today. If the power watch moves to ha-2 it
-  belongs in the `core` role and reads the local DB with no code change.
+- One oneshot timer per box: `ha-airgap-linkwatch` on .210 (the leg is .210's), `ha-power-watch` on ha-2
+  (the meters are ha-2's). Both `Nice`d/idle-scheduled where it matters; the linkwatch tick is two pings and
+  (only when needed) one TCP connect.
+- ha-2 gained a unit by scp, per the air-gap deploy protocol — `git-committed ≠ deployed-on-ha-2`. The
+  manifest diff was reviewed before overwriting prod's copy: only the two new timers, nothing dropped.
+- No VIP inhibit was needed: adding a new oneshot timer restarts nothing existing.
 
 ## Verification
 
 - `tests/test_linkwatch.py` — 18 tests over the pure decision core: hysteresis, the gateway/peer
   discrimination, cooldown, escalation-then-silence, flap guard, edge-triggered alerts, missed-tick latch,
   maintenance inhibit.
-- `tests/test_power_watch.py` — 22 tests: drift hysteresis, window boundaries, mean-not-max, staleness and
-  its recovery, `window_means` bucketing, and a guard that the **shipped** baselines file parses with every
-  ceiling above its baseline.
-- Live dry-runs on .210 against the real air-gap leg and ha-2's real meter history.
+- `tests/test_power_watch.py` — 26 tests: drift hysteresis, window boundaries, mean-not-max, staleness and
+  its recovery, `window_means` bucketing, source selection under a short local DB, and a guard that the
+  **shipped** baselines file parses with every ceiling above its baseline.
+- Two live fault-injection drills of the linkwatch on .210 against a scratch state file
+  (`HA_LINKWATCH_STATE`): blackhole probes drove hysteresis → reassociate → cooldown and surfaced
+  `airgap_reassociate_failed`; a healthy gateway with a dead peer alerted once and never touched the radio.
+- On ha-2: all five deployed files checksum-verified against .210, 26/26 tests pass **on ha-2**, one real
+  systemd run, retained beacon confirmed on ha-2's bus, timer enabled.
+- Supervisors after deployment: **.210 ok=41 warn=0 GAP=0**, **ha-2 ok=27 warn=0 GAP=0**.

@@ -67,10 +67,11 @@ A single box can hold several roles (`.210` holds three). "Required" = the union
 | Push alerts | `ha-ntfy-bridge` (direct ntfy) | `ha-relay-alert-egress` (via gateway) — **direct one absent** |
 | TLS web | `ha-api-tls` (HTTPS bridge `:8443`) | *(none — ha-2 serves plain `:8123`; the bridge does TLS)* |
 
-Also on the internet-connected host only: **`ha-power-watch.timer`** — metered-power drift vs the
-characterized baselines in `provisioning/power-baselines.yaml` (ADR-0039). Placed by *where it runs*, not
-what it watches: the PMs were migrated to ha-2, so it reads them over ha-2's API. It is source-agnostic
-(local `hot.db` first), so if it ever moves onto ha-2 it belongs in `core` instead.
+Also on the **air-gapped dictator only**: **`ha-power-watch.timer`** — metered-power drift vs the
+characterized baselines in `provisioning/power-baselines.yaml`, plus a stale-meter alarm (ADR-0039). It runs
+where the PMs live (they were migrated to ha-2 in 2026-07) and reads ha-2's own store, so it has no air-gap
+dependency. Deliberately **not** in `core`: the two boxes' brokers are not bridged, so running it on both
+would raise the same regression twice down two separate notification paths.
 
 ## E. Air-gap gateway (`.210` only)  ·  must=active
 `ha-relay`, `ha-relay-broker`, `ha-relay-forwarder`, `ha-airgap-bridge` (pass-through), `ha-cert-monitor.timer`,
