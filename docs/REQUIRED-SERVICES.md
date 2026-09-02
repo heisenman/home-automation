@@ -67,10 +67,25 @@ A single box can hold several roles (`.210` holds three). "Required" = the union
 | Push alerts | `ha-ntfy-bridge` (direct ntfy) | `ha-relay-alert-egress` (via gateway) — **direct one absent** |
 | TLS web | `ha-api-tls` (HTTPS bridge `:8443`) | *(none — ha-2 serves plain `:8123`; the bridge does TLS)* |
 
+Also on the internet-connected host only: **`ha-power-watch.timer`** — metered-power drift vs the
+characterized baselines in `provisioning/power-baselines.yaml` (ADR-0039). Placed by *where it runs*, not
+what it watches: the PMs were migrated to ha-2, so it reads them over ha-2's API. It is source-agnostic
+(local `hot.db` first), so if it ever moves onto ha-2 it belongs in `core` instead.
+
 ## E. Air-gap gateway (`.210` only)  ·  must=active
 `ha-relay`, `ha-relay-broker`, `ha-relay-forwarder`, `ha-airgap-bridge` (pass-through), `ha-cert-monitor.timer`,
-`ha-sneakernet-nag.timer`. Oneshots (apply-then-exit, so `inactive` is normal): `ha-airgap-firewall` (nftables
-default-deny), `ha-break-glass@` (USB recovery, template). Defs live in `provisioning/airgap/`, **not** `systemd/`.
+`ha-sneakernet-nag.timer`, **`ha-airgap-linkwatch.timer`**. Oneshots (apply-then-exit, so `inactive` is normal):
+`ha-airgap-firewall` (nftables default-deny), `ha-break-glass@` (USB recovery, template). Defs live in
+`provisioning/airgap/`, **not** `systemd/` — except `ha-airgap-bridge` and `ha-airgap-linkwatch`, which are in
+`systemd/`.
+
+> **`ha-airgap-linkwatch`** (ADR-0039) probes the air-gap leg every 30s and reassociates `ha-airgap-bridge`
+> when the radio is associated but the link carries nothing — the 2026-09-02 failure, where signal was
+> -33 dBm with `beacon loss: 0` and the AP still ACKing while ARP failed for the entire `/24`. Radio state
+> cannot detect this, so it probes L3. It reassociates **only** when *nothing* on the air-gap net answers;
+> if the gateway answers but ha-2 doesn't, that's ha-2's fault and bouncing our radio can't fix it, so it
+> alerts instead. Deliberately **not** `on_fail: failover` — a dead leg is shared-fate, and moving the VIP
+> re-associates no radios.
 
 ## F. Failover-standby stack (`.210` `~/ha-airgap-standby`, `ha-ag-*`)  ·  must=active
 `ha-ag-mosquitto`, `ha-ag-writer`, `ha-ag-api`, `ha-ag-edge-mapper`, `ha-ag-edge-history`, `ha-ag-tasmota-bridge`,

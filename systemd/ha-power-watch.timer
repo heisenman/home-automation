@@ -1,0 +1,13 @@
+[Unit]
+Description=HA power regression watch timer — check the metered boxes every 30 min
+
+[Timer]
+# Power drift is slow and the statistic is a 6h mean, so a fast tick buys nothing but load. 30min x
+# consecutive=2 => ~1h from a genuine regression to an alert, which is far inside "slow".
+OnBootSec=10min
+OnUnitActiveSec=30min
+AccuracySec=1min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

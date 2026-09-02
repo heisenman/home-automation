@@ -1,0 +1,24 @@
+[Unit]
+# Air-gap WiFi link watchdog (ADR-0039). Probes L3 across the air-gap leg and reassociates the bridge when
+# the radio is associated but the link carries nothing — the 2026-09-02 failure, where every WiFi metric
+# read healthy (signal -33 dBm, beacon loss 0, AP still ACKing) while ARP failed for the whole /24 and
+# nginx served 502 to the household until a human noticed.
+# Driven by ha-airgap-linkwatch.timer (~30s). Oneshot: systemd won't overlap ticks while one is running.
+# NOT VIP-gated — the bridge leg always runs on .210 regardless of cluster role, and so must its watchdog.
+Description=HA air-gap link watchdog — detect a live-but-dead WiFi leg, reassociate (one tick)
+Documentation=file:///home/visko/home_automation/docs/adr/ADR-0039-airgap-link-watchdog-and-power-regression-watch.md
+After=network-online.target ha-airgap-bridge.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=visko
+WorkingDirectory=/home/visko/home_automation
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+EnvironmentFile=-/home/visko/home_automation/instance/airgap.env
+ExecStart=/home/visko/home_automation/venv/bin/python3 -m server.cluster.linkwatch
+# a degraded link exits 1 — surface it in `systemctl status` without failing the timer forever
+SuccessExitStatus=0 1
+
+[Install]
+WantedBy=multi-user.target

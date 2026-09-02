@@ -1,0 +1,14 @@
+[Unit]
+Description=HA air-gap link watchdog timer — probe the air-gap leg every 30s
+
+[Timer]
+# 30s tick x FAIL_TICKS=3 => worst case ~90s from a dead link to a reassociation. The 2026-09-02 outage
+# ran ~9 minutes and ended only because Hugh noticed a 502 on the wall panel.
+OnBootSec=90s
+OnUnitActiveSec=30s
+AccuracySec=5s
+# don't stack a backlog of missed ticks after a sleep/outage — one catch-up is enough
+Persistent=false
+
+[Install]
+WantedBy=timers.target

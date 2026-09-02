@@ -85,6 +85,10 @@ roles:
       - {unit: ha-api-tls.service,         must: active}   # HTTPS :8443 web bridge
       - {unit: ha-weather.timer,           must: active}   # DIRECT open-meteo (internet host only)
       - {unit: ha-ntfy-bridge.service,     must: active}   # DIRECT ntfy push (internet host only)
+      # Placed by WHERE IT RUNS, not by what it watches: the PMs were migrated to ha-2 (2026-07-08) so the
+      # watcher reads them over ha-2's API from here. It is source-agnostic (local hot.db first), so if it
+      # ever moves onto ha-2 it belongs in `core` and this line goes away. ADR-0039.
+      - {unit: ha-power-watch.timer,       must: active}   # metered drift vs characterized baseline
 
   # ── air-gap-dictator: ha-2's air-gap-side relay CLIENTS (replace direct internet) ──────
   air-gap-dictator:
@@ -104,6 +108,10 @@ roles:
       - {unit: ha-airgap-bridge.service,   must: active}                   # failover pass-through
       - {unit: ha-airgap-firewall.service, must: oneshot, source: airgap}  # nftables default-deny
       - {unit: ha-cert-monitor.timer,      must: active, source: airgap}
+      # Watchdog for the leg above. NOT on_fail: failover — a dead air-gap leg is precisely a SHARED-FATE
+      # signal (the peer reaches this box the same way), and moving the VIP cannot re-associate a radio.
+      # It heals the fault directly instead, and screams when it can't. ADR-0039.
+      - {unit: ha-airgap-linkwatch.timer,  must: active}   # live-but-dead WiFi leg -> reassociate
 
   # ── failover-standby: the ha-ag-* warm mirror (box-local straddle on .210) ─────────────
   failover-standby:

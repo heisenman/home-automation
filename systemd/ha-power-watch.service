@@ -1,0 +1,29 @@
+[Unit]
+# Power regression watch (ADR-0039). Compares each metered box's rolling window mean against the
+# characterized baseline in provisioning/power-baselines.yaml, and alerts on sustained drift OR on a meter
+# that has stopped reporting (the ADR-0032 silent-drop mode). Answers "is power still okay?" continuously
+# instead of when a human happens to look at a wall panel.
+# Driven by ha-power-watch.timer (~30min). Oneshot: no overlap, crash-safe hysteresis in the state file.
+#
+# SOURCE-AGNOSTIC: reads the local hot.db when the meters live there (ha-2), else falls back to ha-2's HTTP
+# API (which is the case on .210, where the PMs were migrated away 2026-07-08). Moving this to ha-2 later
+# is a unit change, not a code change.
+Description=HA power regression watch — window mean vs characterized baseline (one check)
+Documentation=file:///home/visko/home_automation/docs/adr/ADR-0039-airgap-link-watchdog-and-power-regression-watch.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=visko
+WorkingDirectory=/home/visko/home_automation
+EnvironmentFile=-/home/visko/home_automation/instance/mqtt.env
+EnvironmentFile=-/home/visko/home_automation/instance/power-watch.env
+ExecStart=/home/visko/home_automation/venv/bin/python3 -m server.maintenance.power_watch
+# a drifting or stale meter exits 1 — visible in `systemctl status`, must not fail the timer forever
+SuccessExitStatus=0 1
+Nice=19
+IOSchedulingClass=idle
+
+[Install]
+WantedBy=multi-user.target

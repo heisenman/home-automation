@@ -1,0 +1,56 @@
+# Power baselines — the characterized "normal" each metered box is watched against (ADR-0039).
+#
+# Consumed by `server/maintenance/power_watch.py` (ha-power-watch.timer). Every ~30 min it compares each
+# meter's rolling WINDOW MEAN against `baseline_w + tolerance_w` and alerts on sustained drift, plus alerts
+# if a meter stops reporting at all.
+#
+# ── THESE NUMBERS ARE MEASURED, AND DELIBERATELY NOT SELF-UPDATING ────────────────────────────────────
+# A baseline that re-learns itself absorbs the exact slow regression this file exists to catch — it would
+# quietly ratify any creep as the new normal. Re-characterizing is therefore a human act:
+#
+#     venv/bin/python3 -m server.maintenance.power_watch --characterize 7
+#
+# ...which prints a block like this one from real history. Read it, sanity-check it, commit it. Do that
+# after a deliberate hardware or workload change (a new disk, a service moved onto the box), NOT because
+# an alert fired — an alert firing is the tool working.
+#
+# ── HOW tolerance_w IS DERIVED ────────────────────────────────────────────────────────────────────────
+# From the spread of WINDOW MEANS, not of individual samples. The check tests a 6h mean, which is much
+# smoother than raw 30s readings, so sizing tolerance from instantaneous spread produces a ceiling nothing
+# could ever reach (measured: it put failover_pm's ceiling at ~2x its baseline — a detector that cannot
+# fire). Tolerance covers the worst full window actually observed, plus a small margin. Read it as:
+# "no window in the measured history would have alerted."
+#
+# Baselines below measured 2026-09-02 over 7 days (~20.2k samples/meter, 27 x 6h windows each).
+# Cross-check: docs/reviews/2026-07-04-power-optimization-day9.md put plug_g11 wall power at ~10 W against
+# RAPL package ~4.8 W. Today's 8.73 W mean is BELOW that reference — no regression since the campaign.
+
+defaults:
+  window_h: 6          # rolling window the mean is taken over
+  stale_after_h: 2     # no readings for this long => the meter itself is the fault (ADR-0032)
+  consecutive: 2       # consecutive breaching checks before alerting (~1h at a 30min timer)
+  tolerance_w: 2.0     # overridden per meter below
+
+meters:
+  - device_id: plug_g11
+    label: "G11 / ha-dev (.210) — dev platform + household web bridge, wall power"
+    baseline_w: 8.73
+    tolerance_w: 1.9
+    # 27x6h windows: mean=8.73 worst=10.09 best=7.84 | raw n=20158 min=7.0 max=26.0 => ceiling 10.63 W
+
+  - device_id: failover_pm
+    label: "failover box — wall power"
+    baseline_w: 7.15
+    tolerance_w: 2.5
+    # 27x6h windows: mean=7.15 worst=9.16 best=5.72 | raw n=20153 min=4.0 max=35.0 => ceiling 9.65 W
+    # NOTE: deployed 2026-07-08 from s31_spare1 (MAC 8c:4f:00:40:c8:c0). instance/tasmota-devices.yaml
+    # records the deploy but NOT which chassis it feeds — the label follows the deploy name. Worth
+    # confirming physically before anyone reasons hard about this meter's absolute value.
+
+  - device_id: airgap_router_pm
+    label: "air-gap router (autohome_airgap AP) — wall power"
+    baseline_w: 7.23
+    tolerance_w: 1.0
+    # 27x6h windows: mean=7.23 worst=7.76 best=7.10 | raw n=20156 min=6.0 max=15.0 => ceiling 8.23 W
+    # The steadiest of the three, which is what made it diagnostic on 2026-09-02: a flat 7.0 W across the
+    # entire air-gap link outage ruled the router out and pinned the fault on .210's radio (ADR-0039).
