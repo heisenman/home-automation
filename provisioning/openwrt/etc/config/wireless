@@ -1,5 +1,22 @@
 # OpenWRT /etc/config/wireless — R7800 (2 radios: 2.4GHz + 5GHz) for the AIR-GAP net.
-# SSID = `autohome_airgap`, HIDDEN, on both bands. This is a NEW SSID (not the household `CTWap_*`) —
+#
+# SSID = `autohome_airgap`, **BROADCAST** (hidden '0') on both bands since 2026-09-02.
+#
+# IT USED TO BE HIDDEN, AND THAT COST US TWO SENSORS FOR TWO DAYS. A brownout on 2026-08-31 ~04:16Z
+# cold-booted the whole edge fleet. ESP32 does not reliably rejoin a hidden SSID (it needs a directed
+# probe and the retry behaviour is flaky), so recovery became a lottery: most nodes won it, `hbed_c6`
+# (gas_hbed, h_bed) and `s3-crawlspace` (gas_kitchen) lost and never came back. Reflashing would not have
+# fixed that — it would only have re-entered them in the same lottery at the next power blip.
+#
+# The provisioning profile in `instance/edge-provision.yaml` already carried the warning ("un-hide it for
+# the duration of provisioning, then re-hide"), which is the tell: if a setting has to be turned OFF to
+# provision reliably, it is not survivable across an unattended reboot either.
+#
+# Hiding an SSID buys no security — it is trivially discoverable from any associated client's traffic, and
+# this radio is on an already air-gapped network whose real protection is WPA2-PSK + the default-deny
+# firewall. It was pure uptime cost. Do NOT set `hidden '1'` again.
+#
+# This is a NEW SSID (not the household `CTWap_*`) —
 # every wifi device (edge nodes, panels, Tasmota) is repointed onto it during the migration (Phase 4),
 # so there is no "match the old SSID for zero-reconfig" here; the migration re-provisions each device.
 #
@@ -25,7 +42,7 @@ config wifi-iface 'wifinet0'
 	option mode 'ap'
 	option network 'lan'               # bridged -> VIP reachable from wifi
 	option ssid 'autohome_airgap'
-	option hidden '1'                  # hidden SSID (both bands)
+	option hidden '0'                  # BROADCAST — see header; hiding it stranded 2 nodes after a brownout
 	option encryption 'psk2'
 	option key '__WIFI_PSK__'          # SECRET — from instance/openwrt/airgap_router.env, never commit
 	option isolate '0'                 # AP isolation OFF (required for VIP-from-wifi)
@@ -44,7 +61,7 @@ config wifi-iface 'wifinet1'
 	option mode 'ap'
 	option network 'lan'
 	option ssid 'autohome_airgap'
-	option hidden '1'
+	option hidden '0'
 	option encryption 'psk2'
 	option key '__WIFI_PSK__'
 	option isolate '0'

@@ -56,10 +56,16 @@ def invariants(env):
         ("dhcp.wan.ignore", "1"),
         ("system.@system[0].hostname", "ha-router-airgap"),
         ("wireless.default_radio0.ssid", "autohome_airgap"),
-        ("wireless.default_radio0.hidden", "1"),
+        # hidden '0' = BROADCAST. Was '1' until 2026-09-02, when a brownout cold-booted the fleet and two
+        # nodes (hbed_c6/gas_hbed, s3-crawlspace/gas_kitchen) never rejoined — ESP32 does not reliably
+        # re-associate to a hidden SSID after a cold boot. They were dark for 2 days. Un-hiding brought
+        # hbed_c6 back with no reflash, on its own, within seconds. Hiding buys no security on an
+        # already-air-gapped WPA2 network; it only costs sensor uptime. DO NOT set this back to '1' —
+        # this file is `apply`ed on a timer, so flipping it here silently re-breaks the fleet.
+        ("wireless.default_radio0.hidden", "0"),
         ("wireless.default_radio0.isolate", "0"),
         ("wireless.default_radio1.ssid", "autohome_airgap"),
-        ("wireless.default_radio1.hidden", "1"),
+        ("wireless.default_radio1.hidden", "0"),
         ("wireless.default_radio1.isolate", "0"),
     ]
 
