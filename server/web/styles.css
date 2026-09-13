@@ -182,6 +182,24 @@ details > summary { cursor: pointer; }
 .empty { color: var(--muted); text-align: center; padding: 40px 0; }
 .age-fresh { color: var(--ok); } .age-stale { color: var(--stale); }
 
+/* ── stalled data ────────────────────────────────────────────
+   When the client's OWN freshness clock says the data has stopped moving, everything on screen is history
+   rather than state, and it has to stop looking like state. Two jobs:
+     1. dim the readings, so a glance from across the room reads "don't trust this";
+     2. kill the "fresh" age colouring — `age_s` rides inside the frozen payload, so those green "12s ago"
+        labels keep insisting the data is seconds old. That green is the lie; recolour it.
+   Scoped by :not() on the wrap's direct children rather than by naming inner regions, so a new section
+   added to the dashboard later is dimmed by default instead of silently opting out of the warning. */
+.wrap.data-stale > *:not(.topbar):not(.staleness):not(.modal-bg) {
+  opacity: .45; filter: saturate(.3); transition: opacity .25s ease, filter .25s ease;
+}
+.wrap.data-stale .age-fresh { color: var(--stale); }
+.staleness {
+  margin: 0 0 14px; padding: 9px 12px; border-radius: 10px; font-size: 14px;
+  background: rgba(251,191,36,.12); border: 1px solid var(--stale); color: var(--txt);
+}
+.dot.stale { background: var(--stale); box-shadow: 0 0 0 3px rgba(251,191,36,.18); }
+
 /* ── sections + sensors ──────────────────────────────────── */
 .section {
   font-size: 13px; text-transform: uppercase; letter-spacing: 1px; color: var(--muted);

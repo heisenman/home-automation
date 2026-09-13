@@ -90,21 +90,64 @@ async function deriveToken(master) {
 }
 
 // ── api helpers ──────────────────────────────────────────────────────────────
-async function getJSON(path) {
-  const r = await fetch(path, { cache: "no-store" });
-  if (!r.ok) throw new Error(`${r.status}`);
-  return r.json();
+// EVERY REQUEST GETS A DEADLINE. Without one, a hung TCP connection — the shape a stalled upstream or a
+// half-dead network leg actually produces — leaves the promise neither resolved nor rejected. The caller's
+// catch never runs, so a dashboard that has stopped receiving data goes on believing it is live. A stalled
+// request has to become a FAILED request or nothing downstream can notice. (Observed 2026-09-13: the app
+// sat on frozen readings showing a green "live" dot.)
+const FETCH_TIMEOUT_MS = 12000;      // reads: generous, because history/graph queries can span months
+const POLL_TIMEOUT_MS = 6000;        // the 5s dashboard poll: three tiny endpoints on a LAN (<100ms healthy)
+const ADMIN_TIMEOUT_MS = 60000;      // writes: long jobs already return a poll handle, but must still be bounded
+
+// Returns {ok, status, body} where `body` is {d: <parsed>} or null when the payload was not JSON —
+// the wrapper keeps that distinction so callers can treat "bad JSON" and "empty object" differently.
+async function fetchJSON(path, opts, timeoutMs) {
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(), timeoutMs);
+  try {
+    const r = await fetch(path, { ...opts, signal: ac.signal });
+    // Read the body INSIDE the deadline. Headers can arrive promptly while the body never finishes; if
+    // the caller parsed it after we cleared the timer, a hung read would be unbounded all over again.
+    const body = await r.json().then((d) => ({ d }), () => null);
+    return { ok: r.ok, status: r.status, body };
+  } catch (e) {
+    if (e.name === "AbortError") throw new Error(`timeout after ${Math.round(timeoutMs / 1000)}s`);
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+async function getJSON(path, { timeoutMs = FETCH_TIMEOUT_MS } = {}) {
+  const { ok, status, body } = await fetchJSON(path, { cache: "no-store" }, timeoutMs);
+  if (!ok) throw new Error(`${status}`);
+  if (!body) throw new Error("malformed response");
+  return body.d;
 }
 async function adminSend(method, path, body) {
-  const r = await fetch(path, {
+  const res = await fetchJSON(path, {
     method,
     headers: { "Content-Type": "application/json", Authorization: "Bearer " + getToken() },
     body: JSON.stringify(body),
-  });
-  const data = await r.json().catch(() => ({}));
-  if (!r.ok) throw new Error(data.reason || data.detail || `HTTP ${r.status}`);
+  }, ADMIN_TIMEOUT_MS);
+  const data = (res.body && res.body.d) || {};
+  if (!res.ok) throw new Error(data.reason || data.detail || `HTTP ${res.status}`);
   return data;
 }
+
+// ── freshness decision core ──────────────────────────────────────────────────
+// Pure, and deliberately module-level rather than inline in App, so it can be tested without a DOM the
+// way linkwatch's hysteresis is (ADR-0039). The rule it encodes: freshness is measured against the
+// BROWSER's clock, never read out of the payload — `age_s` ships inside the data and freezes with it.
+const STALE_AFTER_S = 30;      // six missed polls: one slow response can't flap it, a wedge shows in ~30s
+
+const dataAge = (lastOk, now) => (lastOk == null ? null : Math.max(0, (now - lastOk) / 1000));
+const isStale = (ageS) => ageS != null && ageS > STALE_AFTER_S;
+// RED = requests actively failing. AMBER = nothing failed but the data aged anyway — a backgrounded tab
+// or a resumed-from-sleep laptop, where browsers throttle timers hard. Amber used to render GREEN: the
+// last attempt HAD succeeded, so `status` still said "live" while the readings quietly went stale.
+const statusDot = (status, stale) =>
+  (status === "down" ? "down" : stale ? "stale" : status === "live" ? "live" : "");
 
 // ── small format helpers ─────────────────────────────────────────────────────
 function fmtAge(s) {
@@ -141,7 +184,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v52 Graphs — hover a plot for a per-point readout of every trace";
+const BUILD = "v53 Freshness — the dashboard now measures its own data age and says when it stalls";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -869,11 +912,11 @@ function BatteryRefresh({ deviceId }) {
     e.stopPropagation();
     setSt("busy");
     try {
-      const r = await fetch("/control/battery/refresh", {
+      const { ok } = await fetchJSON("/control/battery/refresh", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ device_id: deviceId }),
-      });
-      setSt(r.ok ? "ok" : "err");
+      }, FETCH_TIMEOUT_MS);
+      setSt(ok ? "ok" : "err");
     } catch { setSt("err"); }
     setTimeout(() => setSt(""), 9000);
   };
@@ -1485,12 +1528,12 @@ function LiveConfirm({ deviceId, onDone }) {
     const poll = async () => {
       tries += 1;
       try {
-        const r = await fetch(`/devices/${deviceId}/last`);
-        if (r.ok) {
-          const d = await r.json();
-          if (alive) { setReadings(d.readings || []); setState("live"); }
-          return true;
-        }
+        // deadline matters doubly here: this polls every 2s, so a hung request would both wedge the
+        // intake dialog on "waiting for a reading" and pile sockets up behind it.
+        const d = await getJSON(`/devices/${encodeURIComponent(deviceId)}/last`,
+                                { timeoutMs: POLL_TIMEOUT_MS });
+        if (alive) { setReadings(d.readings || []); setState("live"); }
+        return true;
       } catch (e) { /* not reporting yet */ }
       if (tries >= 12 && alive) setState("slow");   // ~24s with no reading
       return false;
@@ -1847,8 +1890,11 @@ function AdminModal({ onClose, onUnlock }) {
     // VERIFY against the server before accepting — auth/check 200s only for a valid bearer.
     try {
       const tok = await deriveToken(pw);
-      const r = await fetch("/control/auth/check", { headers: { Authorization: "Bearer " + tok } });
-      if (r.ok) { setToken(tok); onUnlock(); onClose(); return; }
+      // the deadline is what makes the promise above actually true — a hung request reaches neither
+      // branch nor the catch, and the dialog sits on "Checking…" forever
+      const { ok } = await fetchJSON("/control/auth/check",
+        { headers: { Authorization: "Bearer " + tok } }, FETCH_TIMEOUT_MS);
+      if (ok) { setToken(tok); onUnlock(); onClose(); return; }
       setErr("Incorrect password");
     } catch (e) {
       setErr("Login error: " + (e && e.message ? e.message : String(e)));
@@ -2225,7 +2271,16 @@ function App() {
   const [selRoom, setSelRoom] = useState(null);     // {id,name} filtering the Sensors list, or null
   const [alerts, setAlerts] = useState([]);
   const [weather, setWeather] = useState(null);
-  const [status, setStatus] = useState("init");      // init | live | down
+  const [status, setStatus] = useState("init");      // init | live | down — the LAST ATTEMPT's outcome
+  // ── client-side freshness ──────────────────────────────────────────────────────────────────────────
+  // `lastOk` is the one clock a stalled fetch cannot freeze. The per-tile "12s ago" is the server-computed
+  // `age_s`, which travels INSIDE the payload and therefore freezes along with the data it describes — a
+  // wedged dashboard went on rendering "12s ago" indefinitely, next to a ticking wall clock and a green
+  // dot. Freshness has to be measured HERE, against the browser's own clock, or the UI can only ever
+  // report what the last good payload claimed about itself.
+  const [lastOk, setLastOk] = useState(null);        // ms epoch of the last COMPLETE successful refresh
+  const [now, setNow] = useState(() => Date.now());  // advanced by the poll tick, fetches or no fetches
+  const inFlight = useRef(false);                    // guards against overlapping polls (see refresh)
   const [isAdmin, setIsAdmin] = useState(!!getToken());
   const [showAdmin, setShowAdmin] = useState(false);
   const [tempUnit, setTempUnit] = useState(tempPref());
@@ -2240,37 +2295,67 @@ function App() {
   });
 
   const refresh = useCallback(async () => {
+    // NEVER let polls stack. The tick is 5s but a stalled request can outlive several ticks, and at three
+    // requests per tick a hung upstream saturates the browser's ~6-connection-per-host cap within two of
+    // them — after which even a RECOVERED server cannot get a request through until the OS reaps the
+    // sockets, turning a blip into a wedge that outlasts the fault.
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
+      // Tight deadline on the poll specifically. It sets how fast a stall is NOTICED, and — because the
+      // in-flight guard skips ticks while a request is outstanding — also how fast recovery is picked up
+      // once the server comes back. A slack deadline here would leave the app sulking after the fault
+      // had already cleared.
       const [disp, sens, alr] = await Promise.all([
-        getJSON("/api/v1/displays"),
-        getJSON("/api/v1/sensors"),
-        getJSON("/api/v1/alerts"),
+        getJSON("/api/v1/displays", { timeoutMs: POLL_TIMEOUT_MS }),
+        getJSON("/api/v1/sensors", { timeoutMs: POLL_TIMEOUT_MS }),
+        getJSON("/api/v1/alerts", { timeoutMs: POLL_TIMEOUT_MS }),
       ]);
       setDevices(disp.devices || []);
       setSensors(sens.sensors || []);
       setAlerts(alr.alerts || []);
+      setLastOk(Date.now());
       setStatus("live");
       // house map is additive — fetch out-of-band so an older server (no /api/v1/rooms) can't break the dashboard
       getJSON("/api/v1/rooms").then(setRooms).catch(() => setRooms(null));
     } catch {
       setStatus("down");
+    } finally {
+      inFlight.current = false;
     }
   }, []);
 
   useEffect(() => {
     refresh();
-    const t = setInterval(refresh, 5000);
+    // The same tick advances `now` and kicks the poll. Advancing `now` unconditionally is the point: if
+    // every request is hanging, nothing else re-renders, and a staleness check that only runs on a
+    // successful fetch can never fire during the outage it exists to report.
+    const t = setInterval(() => { setNow(Date.now()); refresh(); }, 5000);
     return () => clearInterval(t);
+  }, [refresh]);
+
+  // Browsers throttle a hidden tab's timers to as little as once a minute, and suspend them outright when
+  // the machine sleeps — so coming back to the app would otherwise mean staring at aged data until the
+  // next throttled tick. Re-poll the instant we're visible again, and re-stamp `now` so the freshness
+  // banner reflects the real gap rather than whenever the last throttled tick happened to land.
+  useEffect(() => {
+    const onVisible = () => { if (!document.hidden) { setNow(Date.now()); refresh(); } };
+    document.addEventListener("visibilitychange", onVisible);
+    return () => document.removeEventListener("visibilitychange", onVisible);
   }, [refresh]);
 
   const lock = () => { setToken(""); setIsAdmin(false); };
 
+  const dataAgeS = dataAge(lastOk, now);
+  const dataStale = isStale(dataAgeS);
+  const dotClass = statusDot(status, dataStale);
+
   return html`
     <${UnitsCtx.Provider} value=${tempUnit}>
-    <div class="wrap">
+    <div class="wrap ${dataStale ? "data-stale" : ""}">
       <div class="topbar">
         <div class="topbar-row">
-          <div class="dot ${status === "live" ? "live" : status === "down" ? "down" : ""}" title=${"build " + BUILD}></div>
+          <div class="dot ${dotClass}" title=${"build " + BUILD}></div>
           <div class="spacer"></div>
           <${Clock} />
           <${SceneSelector} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} onChange=${refresh} />
@@ -2286,6 +2371,12 @@ function App() {
             : html`<button class="btn sm" onClick=${() => setShowAdmin(true)}>🔒 Admin</button>`}
         </div>
       </div>
+
+      ${(dataStale || (status === "down" && lastOk == null)) && (lastOk == null
+        ? html`<p class="staleness">⚠ Can't reach the server — no data loaded yet. Retrying…</p>`
+        : html`<p class="staleness">⚠ Everything below last updated <b>${fmtAge(dataAgeS)}</b>${" "}
+            (${fmtHM(lastOk)}). ${status === "down" ? "The server isn't answering." : "Updates had paused."}${" "}
+            Retrying…</p>`)}
 
       <${AlertsBanner} alerts=${alerts} />
 
@@ -2306,7 +2397,8 @@ function App() {
         roomFilter=${selRoom} onClearRoom=${() => setSelRoom(null)} />
       <${GraphBuilder} sensors=${sensors} weather=${weather} />
 
-      ${status === "down" && html`<p class="note">⚠ Can't reach the server — showing last known state.</p>`}
+      ${status === "down" && !dataStale && lastOk != null
+        && html`<p class="note">⚠ Last refresh failed — retrying.</p>`}
 
       ${showAdmin && html`<${AdminModal} onClose=${() => setShowAdmin(false)}
         onUnlock=${() => setIsAdmin(true)} />`}
