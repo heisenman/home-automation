@@ -33,9 +33,35 @@ caught by the byte-exact vectors below.
 
 ## What is here
 
-`ha_broan_frame.c` is the **pure codec** — framing, checksum, register encode/decode, TLV walking. No ESP
-deps, no transport, so it is provable on the host. The transport-bound state machine (token handling,
-heartbeat scheduling, poll cadence) layers on top of `ha_rs485` and is not written yet.
+Two layers, **both pure** — no ESP deps, no UART, so the whole thing is provable on the host:
+
+| File | What |
+|---|---|
+| `ha_broan_frame.c` | the wire codec — framing, checksum, register encode/decode, TLV walking |
+| `ha_broan.c` | the session state machine — token handshake, ping/pong, heartbeat, chunked polling, field cache |
+
+The state machine takes **bytes in and produces bytes out**. It never touches `ha_rs485`; the node glue
+wires the two together. That is deliberate: it means the entire token conversation is driven against a
+**simulated ERV** in the test suite rather than discovered on a live bus where a mistake shuts down a
+ventilator.
+
+### Session behaviour worth knowing
+
+- **The heartbeat outranks user writes and polling** inside a token hold. E50 shuts the unit down; a
+  backlog of queued writes must never be the reason we go quiet. Tested explicitly.
+- **The first heartbeat goes out as soon as we hold the bus**, not `heartbeat_ms` later. We have just
+  taken the wall control's slot and the control timeout is *shorter* than the heartbeat interval, so
+  waiting a full interval to first assert liveness would be a gratuitous window on an E50. (The reference
+  implementation waits; this does not.)
+- **A write ack invalidates the cached register**, so the next sweep re-reads instead of reporting the
+  pre-write value as current.
+- **`ha_broan_e50_exposure_ms()`** reports how long since our last heartbeat landed, so a caller can alarm
+  *before* the unit faults rather than discovering it afterwards.
+- **A reply that never arrives does not wedge the hold** — it times out and the state machine makes
+  progress, rather than idling until the next token offer.
+- **Listen-only still harvests telemetry.** Register responses are cached regardless of which controller
+  they were addressed to, so a listen-only build parked beside the real wall control validates the whole
+  register map before we ever take the bus.
 
 Values are extracted with explicit shifts rather than a union punt, so the codec is correct on a big-endian
 host too — which is what makes the host test meaningful rather than accidentally passing.
@@ -65,9 +91,20 @@ parts list and wiring diagram show only thermistors.
 firmware/components/ha_broan/test/run.sh    # plain cc, no IDF
 ```
 
-Byte-exact vectors for the canonical heartbeat frame (`01 10 12 01 04 40 00 50 00 49 04`, checksum derived
+`run.sh` runs **two** suites — the codec and the state machine.
+
+**Codec:** byte-exact vectors for the canonical heartbeat frame (`01 10 12 01 04 40 00 50 00 49 04`, checksum derived
 by hand in the test comments), round-trip encode/decode, decoder robustness (partial frames, leading junk
 resync, corrupt checksum, corrupt payload, bad alignment, bad footer), read/write encodings in all three
 widths, TLV walking including truncated and stub runs, buffer-capacity guards, and the OVR refusal.
 
+**State machine:** driven against a simulated ERV that pings, offers and reclaims the token, answers
+reads from a register table, and acks writes. Covers ping/pong, the `0x04`/`0x05` handshake, heartbeat
+cadence and its priority over queued writes, 13-register polling chunked into 10 + 3, token release when
+idle, the field cache and value ages, write-ack invalidation, queue overflow accounting, E50 exposure,
+the ERV refusing to yield the token, a swallowed reply, listen-only silence across every trigger,
+cross-controller telemetry harvesting, split-frame reassembly, junk-then-frame resync, corrupt checksums,
+and millisecond wraparound.
+
 Register constants are additionally cross-checked against the design doc's wire-opcode table.
+Compile-verified against ESP-IDF for esp32c6 with zero warnings.
