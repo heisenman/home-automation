@@ -501,13 +501,26 @@ with: Lutron, Savant, Control4, Crestron"*:
 **The "36" is series-3, 6-channel.** Governing manual: Gaposa doc `QCT3SD_QCT36SD_I_ML_0614`, shipped by
 the distributor as the QCTZ36SDU instructions.
 
-| Spec | Value |
+| Spec | Value | Source |
+|---|---|---|
+| Supply | **120 V~ 60 Hz ±10 %**, hard-wired, **cord not included** | manual + label |
+| Fuse | 315 mA | manual |
+| RF | 434 MHz integrated multi-channel transmitter, ~100 ft | manual + label |
+| IP | IP44 | catalogue |
+| Enclosure | 8.94″ × 7.63″ × 3.38″, ~2.1 lb, 6 grommeted cable ports | distributor |
+
+**Unit in hand, read off the board 2026-09-20 (photos in `~/uploads/qct/` on ha-dev):**
+
+| Field | Value |
 |---|---|
-| Supply | **120 V~ 60 Hz ±10 %**, hard-wired, **cord not included** |
-| Fuse | 315 mA |
-| RF | 434.15 MHz integrated multi-channel transmitter, ~100 ft |
-| IP | IP44 |
-| Enclosure | 8.94″ × 7.63″ × 3.38″, ~2.1 lb, 6 grommeted cable ports |
+| Label part | `QCTZ6SDU - E616USASC` |
+| Label description | "Control unit dry contacts — **6ch** 434 MHz 120V~60Hz" |
+| Firmware | **Firm. 13 soft. USA**, lot 0326 |
+| PCB | `G2016SMC REV.01`, made in Italy |
+| MCU | Atmel QFP44 |
+
+The label's explicit "6ch" **CONFIRMS** the part-number decode in the table above — the `3` is a series
+digit and the `6` is the channel count. This is not a 36-channel unit.
 
 **It needs its own 120 VAC feed and offers no low-voltage auxiliary output. Do not tap it for node power.**
 
@@ -573,28 +586,43 @@ LEDs on, transmission stops.**
 **UNKNOWN and blocking: how the "all LEDs ON" error clears** — release, or power cycle? Must be
 determined on the bench so the recovery path lives in firmware rather than in a phone call.
 
-### 3.5 ⚠️ Contact type is the dangerous unknown
+### 3.5 Contact type — RESOLVED by inspection 2026-09-20
 
-Every Gaposa document says "dry contacts" / "contatto pulito" / "contact libre de potentiel". **That is a
-statement about what *we* must provide** — a voltage-free closure. It says nothing about what the
-QCTZ36SDU puts on those terminals.
+**Every dry-contact input is opto-isolated by its own PC817A.** Eighteen of them (6 channels × Up/St/Dw),
+read directly off the board — marking `817A4 / V148 / 25`. Photos in `~/uploads/qct/` on ha-dev.
 
-**Not documented anywhere:**
+This closes what was the one genuinely dangerous unknown here. Consequences:
 
-- Open-circuit voltage at `Up`/`St`/`Dw` vs `com` — **UNKNOWN**
-- Polarity (is `com` source or return?) — **UNKNOWN**
-- Short-circuit current — **UNKNOWN**
-- **Galvanic isolation from the 120 VAC supply — UNKNOWN.** The board is mains-fed with a 315 mA fuse;
-  whether the logic supply is transformer-isolated or transformerless cannot be inferred from the diagram.
-- Whether the six `com` terminals are internally bonded — **UNKNOWN**, and it decides whether one common
-  rail serves all 18 outputs.
+- **The inputs are galvanically isolated from the board logic and from the mains side.** Mounting our node
+  inside the enclosure is electrically fine. This was previously gating that decision; it no longer is.
+- **The input presents an LED, not a switch contact.** The board current-limits it; a "dry contact" closure
+  simply completes the LED circuit. Typical PC817 drive is ~5–20 mA.
+- **Polarity therefore matters** for any semiconductor output. A mechanical relay contact is
+  polarity-agnostic and works regardless.
 
-**This gates the plan to mount the node inside the enclosure.** If the input section is mains-referenced,
-the node does not go in that box.
+#### The relay may be unnecessary
 
-**Until measured: mechanical relays or AC-capable (bidirectional) optically-isolated PhotoMOS only.** Do
-**not** use a bare MOSFET or ULN2003 open-drain array — those assume a known polarity and a shared ground
-we have not confirmed.
+Because the input *is* an optocoupler, a relay shorting that loop duplicates what the PC817 is already
+there to do. Driving the LEDs directly from the node — 18 channels off two MCP23017 expanders — is
+simpler, silent, has no contact wear, and keeps the isolation (the PC817 still separates our node from the
+QCT's MCU; we just sit on its input side instead of a contact).
+
+It also avoids a real mismatch in the relay path: **~5–20 mA is well under the minimum recommended contact
+load for a 10 A power relay.** Contacts specified for switching amps can build an oxide film when they
+never carry meaningful current — the dry-circuit problem. They would work; they are not the durable
+choice.
+
+#### Still to measure (quick, lid already off)
+
+1. **DC volts `Up`→`com`, both meter polarities** — drive voltage, and whether `com` is LED anode-common
+   or cathode-common.
+2. **Close `Up`→`com` through 1 kΩ and measure current** — confirms the on-board series resistor and the
+   actual LED drive.
+3. **Continuity between `com` on CH1 and CH2–CH6** (powered off) — if bonded, one expander ground
+   reference serves the whole box.
+
+Neither outcome changes `ha_gaposa`: it emits per-channel assertions and `ha_dout` applies them, whether
+that lands on a relay coil or an expander pin. That is what the capability seam bought.
 
 ### 3.6 Pairing
 
@@ -853,7 +881,7 @@ conductive resting on the enclosure.
 
 | # | Question | Blocks | Owner |
 |---|---|---|---|
-| 1 | QCT `com`→earth: is the input section mains-referenced? | Node-inside-enclosure mounting; output device choice | bench |
+| 1 | ~~QCT `com`→earth: mains-referenced?~~ **RESOLVED 2026-09-20** — every input is opto-isolated (18× PC817A). Node-inside-enclosure is fine. | — | done |
 | 2 | How does the QCT "all LEDs ON" error clear? | `ha_gaposa` recovery path | bench |
 | 3 | QCT minimum recognized pulse width | `ha_gaposa` pulse constant | bench |
 | 4 | Does a ~3 s `St` hold recall the intermediate position? | Third position datum | bench |
@@ -866,6 +894,8 @@ conductive resting on the enclosure.
 | 11 | Aprilaire `NC\|NO` switch present on E070? | Fail-safe direction | bench |
 | 12 | Per-shade full travel time (both directions) | Position model | post-install |
 | 13 | **linkIT vs QCTZ36SDU** | `ha_gaposa` transport | **Hugh — open decision** |
+| 15 | `Up`→`com` drive voltage, polarity, and LED current | relay vs direct expander drive | bench |
+| 16 | Are the six `com` terminals bonded? | one ground reference or six | bench |
 | 14 | Broan `08 E0`/`09 E0` — real humidity or artifact? | Whether we can read RH from the ERV | bench, low priority |
 
 ---
