@@ -812,9 +812,13 @@ unrelated. Do not collide with it.
 
 ### Node builds
 
-`ha-hvac` = `ha_broan` + `ha_aprilaire_dehum`. `ha-shades` = `ha_gaposa`, mounted at the controller.
-If `ha-hvac` later splits into `ha-broan` and `ha-aprilaire`, both link the **same unchanged modules** — a
-column in [MATRIX.md](../../edge/MATRIX.md), not a fork.
+**Decided 2026-09-20:** `ha-shades` = a dedicated **ESP32-S3 N16R8** inside the QCT enclosure (chosen for
+pin count — 18 channels direct, no expander); `ha-hvac` = a shared **ESP32-C6** carrying both
+`ha_broan` and `ha_aprilaire_dehum`.
+
+⚠️ **S3 N16R8 octal PSRAM consumes GPIO 33–37**; GPIO 26–32 are the SPI flash. Safe outputs: GPIO 1, 2,
+4–18, 21, 39–42, 47, 48. Strapping pins 0/3/45/46 must never drive a shade contact.
+⚠️ **C6 strapping pins are 4, 5, 8, 9, 15**; GPIO 24–30 flash, 12/13 USB, 16/17 UART0.
 
 **`ha_modbus` is explicitly not being built.** Nothing in this set speaks Modbus; building it would be
 speculative.

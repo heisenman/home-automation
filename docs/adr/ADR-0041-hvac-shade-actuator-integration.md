@@ -103,14 +103,29 @@ is the argument for capability seams stated as a fact rather than a preference.
 ⚠️ **Naming:** the existing `ha_relay` is the **BLE advert relay-coverage filter** (ADR-0015), entirely
 unrelated. The new module is `ha_dout` specifically to avoid that collision.
 
-### 2. The hosting decision is deferred by construction
+### 2. The hosting decision was deferred by construction — and DECIDED 2026-09-20
 
 `ha-hvac` = `ha_broan` + `ha_aprilaire_dehum`; `ha-shades` = `ha_gaposa`, mounted at the controller.
 
-If `ha-hvac` later splits into `ha-broan` and `ha-aprilaire`, both link the **same unchanged modules** —
-a column in [MATRIX.md](../../edge/MATRIX.md), not a fork. The physical-layout and redundancy arguments
-that decide one-node-vs-two do not need to be settled before the modules are written, and deferring costs
-nothing.
+**Hugh's call, 2026-09-20 — two nodes, split by location rather than by appliance:**
+
+| Node | Silicon | Carries | Sits |
+|---|---|---|---|
+| `ha-shades` | **ESP32-S3 N16R8** (dedicated) | `ha_gaposa` | inside the QCT enclosure |
+| `ha-hvac` | **ESP32-C6** (shared) | `ha_broan` + `ha_aprilaire_dehum` | mechanical room |
+
+The S3 is deliberate overkill on compute, chosen for **pin count**: 18 QCT channels wire directly with no
+expander, so the hardware does not have to change later. ⚠️ N16R8 has **octal** PSRAM, which permanently
+consumes GPIO 33–37 (GPIO 26–32 are already the SPI flash). Safe outputs are GPIO 1, 2, 4–18, 21, 39–42,
+47, 48. Strapping pins 0/3/45/46 must not drive a shade contact — a reset glitch there is a shade command
+on every boot and every OTA, which is exactly what `ha_dout`'s non-strapping requirement exists for.
+
+On the C6 the strapping set is different — GPIO 4, 5, 8, 9, 15 — with GPIO 24–30 on flash, 12/13 on
+USB-Serial-JTAG and 16/17 on UART0.
+
+**The decomposition did not change to accommodate any of this**, which was the point. Had the split gone
+the other way, both nodes would link the same unchanged modules — a column in
+[MATRIX.md](../../edge/MATRIX.md), not a fork.
 
 ### 3. `ha_modbus` is not built
 
