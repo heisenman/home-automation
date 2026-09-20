@@ -123,6 +123,26 @@ on every boot and every OTA, which is exactly what `ha_dout`'s non-strapping req
 On the C6 the strapping set is different — GPIO 4, 5, 8, 9, 15 — with GPIO 24–30 on flash, 12/13 on
 USB-Serial-JTAG and 16/17 on UART0.
 
+**`ha-hvac` is a Seeed XIAO ESP32-C6**, which breaks out D0–D10 only. Conveniently **none of those are
+strapping pins**, so every header pin is safe to drive a contact from:
+
+| Function | XIAO pin | GPIO |
+|---|---|---|
+| RS-485 TX | D6 | 16 |
+| RS-485 RX | D7 | 17 |
+| RS-485 DE (reserved; unused with auto-direction adapters) | D3 | 21 |
+| Aprilaire `DH` relay | D1 | 1 |
+| Broan `OVR` failsafe relay | D2 | 2 |
+| spare | D0, D4, D5, D8, D9, D10 | 0, 22, 23, 19, 20, 18 |
+
+Console/flashing use USB-Serial-JTAG (GPIO 12/13), so D6/D7 are free for the RS-485 UART despite their
+TX/RX labels. GPIO 15 (user LED), 9 (boot button) and 14/3 (antenna switch) are onboard, not on the header.
+
+⚠️ **The XIAO C6 antenna switch is software-controlled** and defaults to the internal ceramic antenna. A
+node in a mechanical room full of ductwork probably wants the U.FL external antenna — which requires the
+firmware to drive **GPIO3 low and GPIO14 high**. Miss that and RF still goes to the ceramic antenna, which
+presents as an inexplicable placement problem rather than a config error.
+
 **The decomposition did not change to accommodate any of this**, which was the point. Had the split gone
 the other way, both nodes would link the same unchanged modules — a column in
 [MATRIX.md](../../edge/MATRIX.md), not a fork.
