@@ -642,10 +642,14 @@ Implied LED current, working back through a ~1.2 V forward drop: 1 kΩ → ~15 m
 Margins are large: 40 V Vceo against 16.55 V, ~15 mA against a 200 mA rating, ~3 mW dissipation, and
 2.6 mA of base drive for a required gain under 6. Any small-signal NPN works.
 
-**Powering the node:** the 16.55 V rail can feed a small buck module → 5 V, keeping one mains feed and one
-enclosure, with S3 ground landing on `com` naturally. ⚠️ Check the transformer VA first — an S3 at ~200 mA
-on 5 V draws ~70 mA from the 16.5 V rail, on top of the LEDs. A 2–3 VA transformer means use a separate
-supply instead. **Do NOT power the S3 from the board's regulated 5 V rail**: that rail is sized for an
+**Powering the node — BUILT 2026-09-21:** a separate 5 V wall-wart supply is wire-nutted in parallel off
+the QCT's F/N feed. One mains feed, one enclosure, and **zero load on the QCT transformer** — which
+retires the VA question entirely. The wall wart's output floats (isolated SMPS), so **its negative must
+tie to `com`**; that node is also S3 GND and the return for all 18 NPN emitters. Without that tie nothing
+switches.
+
+(The alternative considered and not taken: a buck module off the 16.55 V rail. Same topology, but it puts
+the S3's ~70 mA on a transformer sized for an ATmega and the RF stage.) **Do NOT power the S3 from the board's regulated 5 V rail**: that rail is sized for an
 ATmega plus the RF transmitter, and its ground is on the MCU side of the optos — referencing it while
 driving LEDs against `com` would bridge the two domains.
 
@@ -938,7 +942,7 @@ conductive resting on the enclosure.
 | 13 | **linkIT vs QCTZ36SDU** | `ha_gaposa` transport | **Hugh — open decision** |
 | 15 | ~~`Up`→`com` drive voltage and polarity~~ **RESOLVED 2026-09-21: 16.55 V, `com` = rail negative.** Direct GPIO drive is out; NPN low-side switch per channel. | — | done |
 | 16 | ~~Are the six `com` terminals bonded?~~ **RESOLVED 2026-09-21: yes, all shorted.** One ground wire. | — | done |
-| 17 | Transformer VA rating | whether the S3 can run off a buck on the 16.55 V rail | bench |
+| 17 | ~~Transformer VA rating~~ **MOOT 2026-09-21** — a separate 5 V wall-wart supply is wire-nutted in parallel off F/N, so the S3 does not load the QCT transformer at all. Its floating negative ties to `com`, which is also S3 GND. | — | done |
 | 18 | Series resistor value (macro photo or in-circuit read) | exact LED current; confirms rail sag margin | bench, low priority |
 | 14 | Broan `08 E0`/`09 E0` — real humidity or artifact? | Whether we can read RH from the ERV | bench, low priority |
 
