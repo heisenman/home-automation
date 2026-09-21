@@ -612,14 +612,48 @@ load for a 10 A power relay.** Contacts specified for switching amps can build a
 never carry meaningful current — the dry-circuit problem. They would work; they are not the durable
 choice.
 
-#### Still to measure (quick, lid already off)
+#### MEASURED 2026-09-21 — drive method settled
 
-1. **DC volts `Up`→`com`, both meter polarities** — drive voltage, and whether `com` is LED anode-common
-   or cathode-common.
-2. **Close `Up`→`com` through 1 kΩ and measure current** — confirms the on-board series resistor and the
-   actual LED drive.
-3. **Continuity between `com` on CH1 and CH2–CH6** (powered off) — if bonded, one expander ground
-   reference serves the whole box.
+| Measurement | Result | Consequence |
+|---|---|---|
+| All six `com` terminals | **shorted together** | one ground wire serves all 18 channels |
+| `Up`→`com`, powered, open circuit | **16.55 V** | `com` is the rail NEGATIVE; low-side switching is correct |
+| Series resistors | present, in series with each LED | board sets the LED current |
+
+**Direct GPIO drive is OUT.** 16.55 V on a 3.3 V pin destroys it. The reading also disproves the earlier
+"floating LED pair" reading — the opto input side does connect to a board rail; that was a tracing
+artefact. ~16.5 V reads as an unregulated rectified secondary (a 12 VAC winding lands near 17 V unloaded)
+and will sag under load.
+
+Implied LED current, working back through a ~1.2 V forward drop: 1 kΩ → ~15 mA, 1.5 kΩ → ~10 mA,
+2.2 kΩ → ~7 mA. All healthy for a PC817A.
+
+**Per-channel interface — NPN low-side switch:**
+
+```
+  S3 GPIO ──[ 1 kΩ ]──┬── base
+                      │
+              2N3904  │ collector ── QCT `Up` / `St` / `Dw`
+                      │
+                      └── emitter ─── QCT `com` ──┬── S3 GND
+                                                  └── (all six COMs already shorted)
+```
+
+Margins are large: 40 V Vceo against 16.55 V, ~15 mA against a 200 mA rating, ~3 mW dissipation, and
+2.6 mA of base drive for a required gain under 6. Any small-signal NPN works.
+
+**Powering the node:** the 16.55 V rail can feed a small buck module → 5 V, keeping one mains feed and one
+enclosure, with S3 ground landing on `com` naturally. ⚠️ Check the transformer VA first — an S3 at ~200 mA
+on 5 V draws ~70 mA from the 16.5 V rail, on top of the LEDs. A 2–3 VA transformer means use a separate
+supply instead. **Do NOT power the S3 from the board's regulated 5 V rail**: that rail is sized for an
+ATmega plus the RF transmitter, and its ground is on the MCU side of the optos — referencing it while
+driving LEDs against `com` would bridge the two domains.
+
+⚠️ **Earthing:** the board has F and N only and no earth terminal — the signature of a **Class II /
+double-insulated** design. There is nothing to bond earth to, and adding one is not a sanctioned
+modification. The secondary is transformer-isolated, so an earth bond there provides no breaker fault path
+regardless. If better fault protection is wanted, a **GFCI/RCD upstream** is the correct answer — it works
+without an equipment ground, which is precisely how Class II equipment is meant to be protected.
 
 Neither outcome changes `ha_gaposa`: it emits per-channel assertions and `ha_dout` applies them, whether
 that lands on a relay coil or an expander pin. That is what the capability seam bought.
@@ -902,8 +936,10 @@ conductive resting on the enclosure.
 | 11 | Aprilaire `NC\|NO` switch present on E070? | Fail-safe direction | bench |
 | 12 | Per-shade full travel time (both directions) | Position model | post-install |
 | 13 | **linkIT vs QCTZ36SDU** | `ha_gaposa` transport | **Hugh — open decision** |
-| 15 | `Up`→`com` drive voltage, polarity, and LED current | relay vs direct expander drive | bench |
-| 16 | Are the six `com` terminals bonded? | one ground reference or six | bench |
+| 15 | ~~`Up`→`com` drive voltage and polarity~~ **RESOLVED 2026-09-21: 16.55 V, `com` = rail negative.** Direct GPIO drive is out; NPN low-side switch per channel. | — | done |
+| 16 | ~~Are the six `com` terminals bonded?~~ **RESOLVED 2026-09-21: yes, all shorted.** One ground wire. | — | done |
+| 17 | Transformer VA rating | whether the S3 can run off a buck on the 16.55 V rail | bench |
+| 18 | Series resistor value (macro photo or in-circuit read) | exact LED current; confirms rail sag margin | bench, low priority |
 | 14 | Broan `08 E0`/`09 E0` — real humidity or artifact? | Whether we can read RH from the ERV | bench, low priority |
 
 ---
