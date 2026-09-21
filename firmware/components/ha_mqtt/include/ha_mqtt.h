@@ -3,6 +3,7 @@
 // REUSE-WHEN: any edge node needs the signed-command/relay/OTA control plane + the canonical home/edge/<node>/* publish topics. Don't re-implement the HMAC verify + anti-replay + dispatch.
 #pragma once
 #include <stdbool.h>
+#include "cJSON.h"
 #include "switchbot_decode.h"
 
 // Board seam: per-node secrets (app_main reads the board-local secrets.h and passes them — the component
@@ -17,6 +18,16 @@ typedef struct {
     const char *abilities;     // ADR-0036 intake: comma-list of device_types this node offers (e.g.
                                // "bme680_gas"); emitted as a JSON array in the retained hello. NULL/"" ⇒ [].
     bool enable_reach;         // ADR-0023 mesh reach census — false on nodes that don't wire ha_reach
+
+    // Board-specific command ops. Called ONLY for ops this component does not itself handle, and only
+    // AFTER the full ADR-0010 gate has passed (signature verified, fresh, (ts,seq) strictly newer). Return
+    // true if the op was handled; false falls through to the "unknown cmd" log.
+    //
+    // This hook exists because the verify path CANNOT be duplicated: ha_cmd's monotonic (ts,seq)
+    // high-water mark lives in one NVS namespace shared across ops, so a second independent subscriber
+    // verifying its own topic would advance that counter and make the two reject each other's commands.
+    // A board that needs its own op extends dispatch here rather than standing up a parallel verifier.
+    bool (*on_cmd)(const cJSON *cmd, void *user);
     void (*on_connected)(void *user);      // MQTT connected (S3: LED = OK). NULL ⇒ no-op.
     void (*on_disconnected)(void *user);   // MQTT dropped   (S3: LED = MQTT_DOWN). NULL ⇒ no-op.
     void (*ota_on_fail)(void *user);       // OTA reject/fail (S3: LED = OTA_FAIL). NULL ⇒ no-op.

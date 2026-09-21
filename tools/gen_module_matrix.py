@@ -36,6 +36,7 @@ BUILDS = [
     ("esp32c3", "edge/esp32c3/main/CMakeLists.txt"),
     ("esp32c6", "edge/esp32c6/main/CMakeLists.txt"),
     ("esp32s3-eth", "edge/esp32s3-eth/main/CMakeLists.txt"),
+    ("s3-shades", "edge/esp32s3-shades/main/CMakeLists.txt"),
     ("d1001-panel", "provisioning/reterminal/beachhead/main/CMakeLists.txt"),
 ]
 
@@ -44,6 +45,10 @@ BUILDS = [
 # matches an entry in REQUIRES and takes precedence (shared beats fork).
 MODULES = [
     ("app_main", {"sources": ["app_main.c", "beachhead_main.c"], "component": None}),
+    # ADR-0041. ha_rs485 + ha_broan are deliberately NOT catalogued yet: no build links them until
+    # ha-hvac exists, and the drift guard correctly refuses a catalog row nothing consumes.
+    ("ha_dout", {"sources": [], "component": "ha_dout"}),        # ADR-0041 dry-contact output
+    ("ha_gaposa", {"sources": [], "component": "ha_gaposa"}),    # ADR-0041 shade planner
     ("ha_config", {"sources": ["ha_config.c"], "component": "ha_config"}),
     ("ha_wifi", {"sources": ["ha_wifi.c"], "component": "ha_wifi"}),   # ADR-0020: promoted fork -> shared component
     ("ha_eth", {"sources": ["ha_eth.c"], "component": "ha_eth"}),

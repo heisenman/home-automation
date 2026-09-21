@@ -1,0 +1,18 @@
+menu "ha_mqtt (edge control plane)"
+
+config HA_MQTT_NO_BLE
+    bool "Build ha_mqtt without BLE (contact-driving nodes)"
+    default n
+    help
+      Drop ha_mqtt's BLE dependencies (ha_gatt, ha_gatt_exec, ha_ble_scan — all of which REQUIRE `bt`)
+      and compile out the BLE-only command ops (history, gatt, batt_refresh) plus the OTA radio-pause
+      seam.
+
+      Enable this on a node that drives contacts rather than scanning — ADR-0041's ha-shades and ha-hvac.
+      Such a node still needs this component's signed-command gate (ADR-0010), OTA path and publish
+      topics, but linking the whole NimBLE stack for a radio role it does not have is both wasteful and
+      a lie about what the node is.
+
+      Deliberately default n, so every existing BLE relay build is byte-identical.
+
+endmenu

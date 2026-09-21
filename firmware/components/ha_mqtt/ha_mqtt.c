@@ -5,8 +5,10 @@
 // internally here (they call this component's own publish/log), so they're no longer per-board.
 #include "ha_mqtt.h"
 #include "ha_sntp.h"
+#ifndef CONFIG_HA_MQTT_NO_BLE
 #include "ha_gatt.h"
 #include "ha_gatt_exec.h"
+#endif
 #include "ha_ota.h"
 #include "ha_relay.h"
 #include "ha_reach.h"
@@ -23,7 +25,9 @@
 #include <time.h>
 #include "mbedtls/md.h"
 #include "nvs.h"
+#ifndef CONFIG_HA_MQTT_NO_BLE
 #include "ha_ble_scan.h"        // ha_ble_scan_pause/resume — wired into the shared ha_ota radio seam
+#endif
 
 static const char *TAG = "ha_mqtt";
 static ha_mqtt_cfg_t s_cfg;     // board seam (secrets, flags, hooks) — installed by ha_mqtt_init
@@ -104,6 +108,7 @@ static void dispatch_cmd(const cJSON *cmd) {
     const cJSON *op = cJSON_GetObjectItem(cmd, "op");
     const cJSON *mac = cJSON_GetObjectItem(cmd, "mac");
     const cJSON *prof = cJSON_GetObjectItem(cmd, "profile");
+#ifndef CONFIG_HA_MQTT_NO_BLE
     if (cJSON_IsString(op) && strcmp(op->valuestring, "history") == 0 && cJSON_IsString(mac)) {
         const char *profile = cJSON_IsString(prof) ? prof->valuestring : "outdoor";
         const cJSON *win = cJSON_GetObjectItem(cmd, "window");   // optional: records back from the write ptr
@@ -122,7 +127,9 @@ static void dispatch_cmd(const cJSON *cmd) {
         if (ha_gatt_busy() || ha_gatt_exec_busy()) ESP_LOGW(TAG, "central busy; dropping gatt exec");
         else if (steps_json) ha_gatt_exec_run(rid, mac->valuestring, steps_json);
         if (steps_json) cJSON_free(steps_json);
-    } else if (cJSON_IsString(op) && strcmp(op->valuestring, "ota") == 0) {
+    } else
+#endif
+    if (cJSON_IsString(op) && strcmp(op->valuestring, "ota") == 0) {
         // Firmware OTA: {"op":"ota","url":"http://<server>:<port>/ha-edge-<board>.bin"}
         const cJSON *url = cJSON_GetObjectItem(cmd, "url");
         const cJSON *sha = cJSON_GetObjectItem(cmd, "sha256");
@@ -154,7 +161,14 @@ static void dispatch_cmd(const cJSON *cmd) {
         const cJSON *win = cJSON_GetObjectItem(cmd, "window_s");
         int secs = cJSON_IsNumber(win) ? (int)win->valuedouble : 8;
         ESP_LOGI(TAG, "cmd: batt_refresh window=%ds", secs);
+#ifndef CONFIG_HA_MQTT_NO_BLE
         ha_ble_scan_active_window(secs);
+#else
+        (void)secs;   /* no radio on this board — nothing to widen */
+#endif
+    } else if (s_cfg.on_cmd && s_cfg.on_cmd(cmd, s_cfg.user)) {
+        // Board-specific op, handled by the node (e.g. the shade controller's "shade"). Reached only
+        // after the full ADR-0010 gate above, so a board hook never sees an unverified directive.
     } else {
         ESP_LOGW(TAG, "unknown/!malformed cmd");
     }
@@ -343,16 +357,20 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
 
 // ha_gatt platform seams: relay -> the canonical history topic; diagnostics -> ha_mqtt_log. (The shared
 // component was ported FROM this node's gatt_history.c, so these forward to the exact same sinks it used.)
+#ifndef CONFIG_HA_MQTT_NO_BLE
 static void edge_gatt_publish(const char *mac, const char *json, void *user) { (void)user; ha_mqtt_publish_history(mac, json); }
-static void edge_gatt_log(const char *msg, void *user) { (void)user; ha_mqtt_log("%s", msg); }
 // ha_gatt_exec reply seam: reply lines -> home/edge/<node>/<reqid>/reply (was ha_mqtt_publish_reply direct).
 static void edge_exec_reply(const char *reqid, const char *json, void *user) { (void)user; ha_mqtt_publish_reply(reqid, json); }
+#endif
+static void edge_gatt_log(const char *msg, void *user) { (void)user; ha_mqtt_log("%s", msg); }
 
 // ha_ota platform seams: self-test = broker reachable; radio pause/resume = the single-radio BLE scanner;
 // on_fail forwards to the board hook (e.g. the S3 operability LED) if one was installed.
 static bool edge_ota_healthy(void *user) { (void)user; return ha_mqtt_is_connected(); }
+#ifndef CONFIG_HA_MQTT_NO_BLE
 static void edge_ota_radio_pause(void *user) { (void)user; ha_ble_scan_pause(); }
 static void edge_ota_radio_resume(void *user) { (void)user; ha_ble_scan_resume(); }
+#endif
 static void edge_ota_on_fail(void *user) { if (s_cfg.ota_on_fail) s_cfg.ota_on_fail(s_cfg.user); }
 
 // ADR-0036 intake: map the runtime chip model to the target string the server keys on.
@@ -406,11 +424,20 @@ static void build_hello(const esp_partition_t *run) {
 }
 
 void ha_mqtt_start(const char *broker_uri, const char *node_id) {
+#ifndef CONFIG_HA_MQTT_NO_BLE
     ha_gatt_init(&(ha_gatt_cfg_t){ .publish = edge_gatt_publish, .log = edge_gatt_log });
     ha_gatt_exec_init(&(ha_gatt_exec_cfg_t){ .publish_reply = edge_exec_reply, .log = edge_gatt_log });
+#endif
     ha_ota_init(&(ha_ota_cfg_t){ .node_id = node_id, .ota_host = s_cfg.ota_host, .log = edge_gatt_log,
                                  .is_healthy = edge_ota_healthy, .on_fail = edge_ota_on_fail,
-                                 .radio_pause = edge_ota_radio_pause, .radio_resume = edge_ota_radio_resume });
+#ifndef CONFIG_HA_MQTT_NO_BLE
+                                 .radio_pause = edge_ota_radio_pause, .radio_resume = edge_ota_radio_resume
+#else
+                                 // No radio to quiet: a contact-driving node has no BLE scanner competing
+                                 // with the OTA download for the 2.4 GHz front end.
+                                 .radio_pause = NULL, .radio_resume = NULL
+#endif
+                                 });
     snprintf(s_node, sizeof(s_node), "%s", node_id);
     snprintf(s_status_topic, sizeof(s_status_topic), "home/edge/%s/status", s_node);
     snprintf(s_cmd_topic, sizeof(s_cmd_topic), "home/edge/%s/cmd", s_node);

@@ -1,0 +1,10 @@
+# Name,     Type, SubType, Offset,   Size,     Flags
+# A/B OTA layout for the 16 MB ESP32-S3-N16R8. Two app slots so an update writes the INACTIVE slot and
+# the bootloader can roll back to the last-good one. Slots are generous because the flash is 16 MB —
+# there is no reason to squeeze them the way the 4 MB C6 build has to.
+nvs,        data, nvs,     0x9000,   0x4000,
+otadata,    data, ota,     0xd000,   0x2000,
+phy_init,   data, phy,     0xf000,   0x1000,
+ota_0,      app,  ota_0,   0x10000,  0x400000,
+ota_1,      app,  ota_1,   0x410000, 0x400000,
+# 0x810000..0x1000000 (~7.9 MB) unallocated — room for a storage/coredump partition later.
