@@ -642,6 +642,54 @@ Implied LED current, working back through a ~1.2 V forward drop: 1 kΩ → ~15 m
 Margins are large: 40 V Vceo against 16.55 V, ~15 mA against a 200 mA rating, ~3 mW dissipation, and
 2.6 mA of base drive for a required gain under 6. Any small-signal NPN works.
 
+#### Build spec — 3 × ULN2803A, two shade channels per chip
+
+The per-channel discrete NPN is implemented as three **ULN2803A** Darlington arrays (8 channels each,
+18 used, 6 spare). The ~1 V Darlington saturation drop costs ~7% of LED current on a 16.55 V rail —
+negligible. (It would NOT have been negligible on a 5 V rail; the measurement is what made this part
+viable.)
+
+⚠️ **The outputs run in reverse.** Input pin *N* pairs with output pin *19−N* — IN1 (pin 1) drives OUT1
+(pin **18**), directly across the package. Wiring it left-to-right mismatches every channel. This is the
+classic error with this part.
+
+```
+  IN1  1 ┤●        ├ 18  OUT1
+  IN2  2 ┤         ├ 17  OUT2
+  IN3  3 ┤         ├ 16  OUT3
+  IN4  4 ┤ ULN2803 ├ 15  OUT4
+  IN5  5 ┤         ├ 14  OUT5
+  IN6  6 ┤         ├ 13  OUT6
+  IN7  7 ┤         ├ 12  OUT7
+  IN8  8 ┤         ├ 11  OUT8
+  GND  9 ┤         ├ 10  COM  (leave unconnected — flyback common, no inductive load here)
+```
+
+Allocated **two shade channels per chip** rather than packing 8-6-4, so a wiring error stays local and a
+chip can be swapped without re-landing unrelated channels:
+
+| Chip | Shade | Function | S3 GPIO | IN pin | OUT pin |
+|---|---|---|---|---|---|
+| U1 | CH1 | Up / St / Dw | 1 / 2 / 4 | 1 / 2 / 3 | 18 / 17 / 16 |
+| U1 | CH2 | Up / St / Dw | 5 / 6 / 7 | 4 / 5 / 6 | 15 / 14 / 13 |
+| U2 | CH3 | Up / St / Dw | 8 / 9 / 10 | 1 / 2 / 3 | 18 / 17 / 16 |
+| U2 | CH4 | Up / St / Dw | 11 / 12 / 13 | 4 / 5 / 6 | 15 / 14 / 13 |
+| U3 | CH5 | Up / St / Dw | 14 / 15 / 16 | 1 / 2 / 3 | 18 / 17 / 16 |
+| U3 | CH6 | Up / St / Dw | 17 / 18 / 21 | 4 / 5 / 6 | 15 / 14 / 13 |
+
+Pin 9 on all three chips ties to the common node: QCT `com` + S3 GND + wall-wart negative.
+
+**It is a sinking, inverting driver** — input HIGH pulls the output down to `com`, which is the low-side
+switch we want. GPIO HIGH = command asserted, so `ha_dout` is configured `active_high = true`. No polarity
+surprise.
+
+**3.3 V drive is fine** despite the 2.7 kΩ input resistor being nominally specified for 5 V logic: 3.3 V
+gives ~0.7 mA of base current into a Darlington with gain over 1000. We need 15 mA out.
+
+Build notes: use **DIP-18 sockets** so a dead chip swaps without desoldering 18 legs, and put a 0.1 µF
+decoupling cap across pin 9 and the 5 V rail at each chip — not required for LED loads, but free, and
+this is 18 switched lines sharing an enclosure with a 434 MHz transmitter.
+
 **Powering the node — BUILT 2026-09-21:** a separate 5 V wall-wart supply is wire-nutted in parallel off
 the QCT's F/N feed. One mains feed, one enclosure, and **zero load on the QCT transformer** — which
 retires the VA question entirely. The wall wart's output floats (isolated SMPS), so **its negative must
