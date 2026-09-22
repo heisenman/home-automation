@@ -126,13 +126,13 @@ USB-Serial-JTAG and 16/17 on UART0.
 **`ha-hvac` is a Seeed XIAO ESP32-C6**, which breaks out D0–D10 only. Conveniently **none of those are
 strapping pins**, so every header pin is safe to drive a contact from:
 
-| Function | XIAO pin | GPIO |
-|---|---|---|
-| RS-485 TX (`UART_NUM_1`) | D10 | 18 |
-| RS-485 RX (`UART_NUM_1`) | D9 | 20 |
-| Aprilaire `DH` relay | D1 | 1 |
-| Broan `OVR` failsafe relay | D2 | 2 |
-| spare | D0, D3, D4, D5, D6, D7, D8 | 0, 21, 22, 23, 16, 17, 19 |
+| Function | XIAO pin | GPIO | Status |
+|---|---|---|---|
+| RS-485 TX (`UART_NUM_1`) | D10 | 18 | **built 2026-09-22** |
+| RS-485 RX (`UART_NUM_1`) | D9 | 20 | **built 2026-09-22** |
+| Broan `OVR` failsafe relay | D8 | 19 | module soldered; contact **not** landed on J9 |
+| Aprilaire `DH` relay | D1 | 1 | module to be added; contact **not** landed on `DH` |
+| spare | D0, D2, D3, D4, D5, D6, D7 | 0, 2, 21, 22, 23, 16, 17 | |
 
 GPIO 15 (user LED), 9 (boot button) and 14/3 (antenna switch) are onboard, not on the header.
 
@@ -158,6 +158,41 @@ component for a future module that exposes the pin; it simply isn't wired on thi
 
 *Prompted by a wiring question from Hugh on 2026-09-22 — D10/D9 were proposed purely because they made the
 harness easier to trace. The console conflict was found while checking whether the swap was safe.*
+
+#### Relay outputs — polarity is a failsafe decision, not a wiring preference
+
+**Relay module characterized on the bench 2026-09-22: ACTIVE-HIGH.** Verified directly — `IN` floating
+leaves NO–COM open; biasing `IN` high shorts NO–COM. Two consequences, both load-bearing:
+
+**1. Use the NO contact on both relays, never NC.** The question to ask of any contact on this node is
+*"which state is safe when the node is dead?"* — and for both appliances that is **open**:
+
+| Appliance | Contact closed means | Safe-when-dead | Contact |
+|---|---|---|---|
+| Broan `OVR` (short `OVR`→`12V`, §1.9) | hard override that **beats the serial bus** | open — ERV follows its wall control | **NO** |
+| Aprilaire `DH` (External mode) | call for dehumidification | open — unit inert | **NO** |
+
+⛔ NC inverts this into the dangerous direction: a dead, unpowered or rebooting node would hold the `OVR`
+override asserted, or leave the dehumidifier **called on indefinitely** — a failure that presents as "the
+dehumidifier never stops" rather than as a node fault. NC also inverts the duty cycle, since the *normal*
+(no-call) state would need the coil energized continuously; coils fail open, so a coil failure would latch
+the call **on**. Both arguments point the same way. NC is the right tool when the safe state is closed;
+neither of these is.
+
+⛔ **One relay must not serve both appliances** via NO + NC. That welds two unrelated systems to one GPIO
+in opposite senses, so no state leaves both inert — asserting `OVR` would simultaneously drop the
+dehumidify call. Independent appliances get independent bits and independent modules.
+
+**2. Fit a 10 kΩ pull-DOWN to GND on each relay `IN`, and drive the pin to its de-energized level as the
+first statement in `app_main`** — before WiFi, MQTT or `ha_rs485` init. The GPIO floats as an input from
+reset until firmware configures it. The bench test confirms floating is *nominally* the de-energized
+state, so this is noise immunity on an undriven high-impedance input rather than a fix for a guaranteed
+boot trip — but the lead runs through a mechanical room beside contactors and a furnace, and the
+consequence on `OVR` (an override that beats the bus we are trying to own) is asymmetric. External
+resistor covers the pre-firmware window; the early drive covers everything after.
+
+The contact side stays **dry** — it switches the ERV's own 12 V across J9, galvanically separate from the
+node — so the relays do not compromise the isolated-transceiver barrier.
 
 ⚠️ **The XIAO C6 antenna switch is software-controlled** and defaults to the internal ceramic antenna. A
 node in a mechanical room full of ductwork probably wants the U.FL external antenna — which requires the

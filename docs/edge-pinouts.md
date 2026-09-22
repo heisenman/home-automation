@@ -41,6 +41,11 @@ new `edge/esp32c3/main/ha_gas.c` (or similar) and update the row above.
   boot log onto the downstream bus at every reset. `uart_set_pin()` drags the console with it, so choosing
   `UART_NUM_0` re-creates the hazard on any pins. Full transceiver wiring (Waveshare TTL TO RS485 (C),
   isolated — do **not** bond grounds): `docs/design/hvac-shade-device-integration.md` §"Node builds".
+- **Relay outputs (`ha-hvac`):** Broan `OVR` = `GPIO19` (silk **D8**), Aprilaire `DH` = `GPIO1` (silk
+  **D1**). Modules are **active-HIGH** (bench-verified). ⚠️ Use the **NO** contact on both, fit a **10 kΩ
+  pull-down to GND** on each `IN`, and drive each pin de-energized as the *first* statement in `app_main`
+  — the pin floats from reset until firmware configures it. Rationale and the NC failure mode: ADR-0041
+  §"Relay outputs".
 
 ### XIAO ESP32-C3 (Seeed) — `edge/esp32c3`
 - BLE scanner / GATT-history node; **no I²C sensor lane defined yet.** When adding one, use the XIAO-C3 I²C

@@ -906,8 +906,9 @@ pin count — 18 channels direct, no expander); `ha-hvac` = a shared **ESP32-C6*
 4–18, 21, 39–42, 47, 48. Strapping pins 0/3/45/46 must never drive a shade contact.
 ⚠️ **C6 strapping pins are 4, 5, 8, 9, 15**; GPIO 24–30 flash, 12/13 USB, 16/17 UART0. `ha-hvac` is a
 **XIAO ESP32-C6**, which breaks out D0–D10 — none of them strapping. Pinout: RS-485 TX/RX = **D10/D9
-(GPIO18/GPIO20)** on **`UART_NUM_1`**, Aprilaire relay D1 (GPIO1), Broan OVR relay D2 (GPIO2). No DE pin
-— see the transceiver table below.
+(GPIO18/GPIO20)** on **`UART_NUM_1`**, Broan `OVR` relay **D8 (GPIO19)**, Aprilaire `DH` relay **D1
+(GPIO1)**. No DE pin — see the transceiver table below. Relay polarity, NO-vs-NC and the pull-down
+requirement are an ADR-0041 decision, not a wiring preference — see "Relay outputs" there.
 ⚠️ Its antenna switch is **software-controlled**, defaulting to the internal ceramic antenna; an external
 U.FL antenna needs GPIO3 low + GPIO14 high in firmware.
 
