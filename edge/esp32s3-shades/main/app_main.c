@@ -340,8 +340,12 @@ void app_main(void) {
         .pulse_ms        = 500,      // ⚠️ UNVERIFIED — the panel's minimum recognised width is
                                      // undocumented. Sweep from ~100 ms on the bench and set the real
                                      // value here (docs/design §3.3).
-        .interim_hold_ms = 3000,     // ⚠️ LIKELY — hold St ~3 s to recall the stored interim position.
-                                     // Inferred from the handheld remote, not documented. Verify.
+        .interim_hold_ms = 3000,     // Hold St ~3 s to recall the stored interim position. The GESTURE
+                                     // (press-and-hold STOP) and the 3 s threshold are each documented —
+                                     // XS30/40/50 programming guide and the Emitto Smart Line manual
+                                     // respectively. ⚠️ What is still inferred is only that a maintained
+                                     // St->com closure reproduces a handheld's held STOP. Verify on the
+                                     // bench; see docs/design §4.
         .gap_ms          = 250,
     };
     cal_load(&gcfg);

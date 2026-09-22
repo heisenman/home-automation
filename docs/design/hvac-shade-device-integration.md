@@ -717,28 +717,61 @@ that lands on a relay coil or an expander pin. That is what the capability seam 
 > "Select the channel (1-6) you would like to program with the **SEL** button. Press **ProgTx** on the
 > motor's master remote and press **UP or DOWN on QCT36SD** according to the shade's movement."
 
-Each of the 6 channels carries its own transmitter identity and enrolls like any other Gaposa transmitter:
+Each of the 6 channels carries its own transmitter identity and enrolls like any other Gaposa transmitter.
 
-1. Press and **hold SYNC** on a remote **already paired** to that motor until the motor starts moving.
-2. Note the rotation direction; release SYNC (motor stops).
-3. **Within 5 seconds**, on the QCTZ36SDU: select the channel with `SEL`, then press the matching direction
-   button — `UP` if the motor turned upward, `DOWN` if downward.
+> ⛔ **CORRECTED 2026-09-22.** This section previously asserted *"Pairing therefore requires an existing
+> paired remote"* and concluded the node could never self-enroll. **That was wrong.** It conflated two
+> distinct procedures in the XS30/40/50 programming guide: **Step 1 "Pair a remote control channel to the
+> Motor"**, whose Option 1 is explicitly headed *"(Using only the remote control)"*, and the separate
+> later section **"Add a Remote or Channel to Control the Same Shade"**, which is the one that needs the
+> transmitter that *currently* controls the shade. First pairing needs no pre-paired transmitter.
+> Caught when Hugh said his XS40 did not ship with a remote and the stated procedure implied he was stuck.
 
-⚠️ **The XS40 has no program button on the motor head.** Every other Gaposa motor offers a motor-head
-pairing route; the XS40 does not. **Pairing therefore requires an existing paired remote.** If that remote
-is lost, the fallback is a power-cycle reset (power OFF→ON, then within 8 s hold SYNC+STOP on any Gaposa
-transmitter until a long jog), after which limits survive but **every** transmitter must be re-enrolled.
+**First pairing — the QCT can enrol itself, no handheld required.** Guide Step 1, Option 1, verbatim:
 
-**The dry contacts cannot be used for pairing** — it needs the panel's physical `SEL`/`UP`/`DOWN` buttons.
-A one-time human step at install, but it means the node **cannot self-enroll or recover a lost pairing**.
+> 1-1-B) *"Observe the direction of rotation closely during this step! The motor will move briefly in one
+> direction! **Press and Hold** the **SYNC** button on the remote control until the motor moves."*
+> 1-1-C) *"Within 5 seconds, Press the corresponding direction on the selected remote control."*
 
-Other procedures, all remote-button-only:
-- **Reverse direction:** hold SYNC until motor moves, press STOP → jog. **Must be done *before* limit setting.**
-- **Set limits (UP first):** hold LIMIT until jog → dead-man UP to top → STOP records → dead-man DOWN to
-  bottom → STOP records.
-- **Intermediate position:** park the shade, press UP+DOWN together until jog.
-- **Delete this transmitter:** hold SYNC+STOP until brief jog.
-- **Erase all transmitters:** hold SYNC+STOP ≥ 15 s. **Limits are not erased.**
+Both steps are on **the transmitter being paired**. Translated to the QCTZ36SDU:
+
+1. `SEL` → select the channel. Do this **first**, so the 5-second window holds only one press.
+2. Press and **hold `SYNC`** on the panel until the motor moves. **Watch which way it turns.**
+3. **Within 5 s**, press `UP` if it turned upward, `DOWN` if downward.
+4. Test. *"The motor may only respond to one direction initially but will respond to the second direction
+   after the first direction is activated."*
+
+⚠️ **"Only apply power to the motor being programmed!"** — the guide's own emphasis. Pairing is broadcast
+RF: any powered, unpaired motor in range can enrol itself to the channel. With six shades this means
+**energising one motor at a time**, which is an install-sequencing constraint, not a detail.
+
+⚠️ **The XS40 has no program button on the motor head** — Step 1 Option 2 (motor-head route) is marked
+*"Not applicable to the XS40 motor"*, and Option 2 of the erase procedure is likewise unavailable. Option 1
+covers both, so nothing is lost; it only means every procedure runs through a transmitter.
+
+**Adding the QCT to a shade that already works** is the other procedure, and that one *does* need the
+currently-controlling transmitter: hold `SYNC` on it → within 5 s press the direction on the channel being
+added. *"The motor does not provide feedback (i.e.: no jog) when this step is performed correctly or
+incorrectly"* — the only confirmation is testing the channel.
+
+**The dry contacts cannot be used for any of this** — it needs the panel's physical buttons. A one-time
+human step at install. The node cannot re-pair itself if a pairing is ever lost, but a human with the
+panel alone can, which is the part that was previously mis-stated.
+
+Other procedures, all transmitter-button-only:
+- **Reverse direction:** hold SYNC until motor moves, brief STOP → jog. **Must be done *before* limits.**
+- **Set limits — lower first for tension, upper recorded first:** run the shade *down* to the lower limit
+  before starting (*"ensures the material is under proper tension"*), hold `LIMIT` until jog, dead-man UP
+  to the top → brief `STOP` records **upper**, dead-man DOWN → brief `STOP` records **lower**. A brief
+  second `LIMIT` press toggles incremental-step mode instead of dead-man.
+- **Adjust one limit later:** hold `LIMIT`+`UP` (or `LIMIT`+`DOWN`) until jog, reposition, brief `STOP`.
+  ⚠️ **Adjusting either limit ERASES the intermediate position** — re-set it afterwards (see §4).
+- **Intermediate position:** park the shade, hold UP+DOWN together until jog.
+- **Delete this transmitter:** hold SYNC+STOP until a jog.
+- **Erase all transmitters:** hold SYNC+STOP until **two** jogs with a pause between. **Limits survive.**
+- **Erase all, no working transmitter:** power OFF→ON, then **within 8 s** hold SYNC+STOP on a channel
+  **not** paired to the motor until it jogs. AC/DC motors only. **Limits survive.**
+- **Limit reset:** hold `LIMIT` until jog; limits erase after ~2 min of inactivity.
 
 ### 3.7 Feedback — there is none
 
@@ -782,10 +815,19 @@ Re-datum to a limit periodically.
   tail at each end — calibrate between limits, not from a stopwatch on a partial run. Expect asymmetry
   (gravity assists DOWN).
 - Limits and the intermediate position are stored **in the motor** and survive power loss.
-- **Intermediate-position recall from a dry contact:** on a handheld remote this is *press and hold STOP
-  for ≥ 3 s*. A held `St`→`com` closure of ~3 s should reproduce it, since the panel supports maintained
-  closures up to 30 s. **LIKELY — inference, not documented. Verify.** Worth verifying: it is a third
-  reliable absolute datum for free.
+- ⚠️ **Adjusting either limit ERASES the intermediate position** — XS programming guide, *"Your
+  intermediate stopping position will be erased (if already programmed) when you adjust either the Upper
+  or Lower limit positions."* Anyone who re-tensions a shade silently invalidates our third datum, and
+  `ha_gaposa` has no way to detect it. Re-set the intermediate position after any limit adjustment, and
+  treat an unexplained interim miss as "someone touched the limits" before suspecting firmware.
+- **Intermediate-position recall from a dry contact:** the recall gesture is *press and hold STOP*
+  (XS30/40/50 guide), and the Emitto Smart Line manual puts the threshold at **≥ 3 s** — so the gesture
+  and the duration are each documented, by two independent Gaposa sources. What remains **inferred** is
+  only that a maintained `St`→`com` closure reproduces a handheld's held STOP; that is plausible because
+  the panel supports maintained closures up to 30 s, but it is the one link untested. Worth verifying
+  early: it is a third reliable absolute datum for free.
+  ⚠️ The guide notes hold-STOP *"does not work if your remote control has a **PRESET** button"* — the
+  QCTZ36SDU has no PRESET, so the hold-STOP path is the applicable one here.
 
 ### Bench-testing the XS40
 
