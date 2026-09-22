@@ -128,15 +128,36 @@ strapping pins**, so every header pin is safe to drive a contact from:
 
 | Function | XIAO pin | GPIO |
 |---|---|---|
-| RS-485 TX | D6 | 16 |
-| RS-485 RX | D7 | 17 |
-| RS-485 DE (reserved; unused with auto-direction adapters) | D3 | 21 |
+| RS-485 TX (`UART_NUM_1`) | D10 | 18 |
+| RS-485 RX (`UART_NUM_1`) | D9 | 20 |
 | Aprilaire `DH` relay | D1 | 1 |
 | Broan `OVR` failsafe relay | D2 | 2 |
-| spare | D0, D4, D5, D8, D9, D10 | 0, 22, 23, 19, 20, 18 |
+| spare | D0, D3, D4, D5, D6, D7, D8 | 0, 21, 22, 23, 16, 17, 19 |
 
-Console/flashing use USB-Serial-JTAG (GPIO 12/13), so D6/D7 are free for the RS-485 UART despite their
-TX/RX labels. GPIO 15 (user LED), 9 (boot button) and 14/3 (antenna switch) are onboard, not on the header.
+GPIO 15 (user LED), 9 (boot button) and 14/3 (antenna switch) are onboard, not on the header.
+
+⛔ **AMENDED 2026-09-22 — RS-485 moved off D6/D7 to D10/D9, and pinned to `UART_NUM_1`.** This ADR
+originally read *"Console/flashing use USB-Serial-JTAG (GPIO 12/13), so D6/D7 are free for the RS-485 UART
+despite their TX/RX labels."* **That premise is false for this tree.** `edge/esp32c6/sdkconfig` sets
+`CONFIG_ESP_CONSOLE_UART_DEFAULT=y` with `CONFIG_ESP_CONSOLE_UART_NUM=0` and USB-Serial-JTAG as merely
+`CONFIG_ESP_CONSOLE_SECONDARY_*` — the primary console is UART0, i.e. GPIO16/17, i.e. D6/D7. A transceiver
+landed there would emit the ROM-bootloader banner and the full IDF boot log at 115200 baud onto the ERV's
+live bus at every reset, alongside a working wall control.
+
+This is a **safety** amendment, not an ergonomic one. §1.12 bring-up rests on `LISTEN_ONLY` guaranteeing
+zero bus writes, and both gates (`ha_rs485` transport, `ha_broan` protocol) are application-layer — they
+cannot exist yet when the ROM bootloader is talking. D6/D7 would have made the headline guarantee of this
+ADR unenforceable during the exact window that matters most.
+
+The port pin matters as much as the GPIO pins: `uart_set_pin()` relocates the console along with UART0, so
+configuring `ha_rs485` with `UART_NUM_0` re-creates the identical hazard on *any* GPIOs. Use `UART_NUM_1`.
+
+D3/GPIO21 is no longer reserved for DE — the transceiver on hand (Waveshare TTL TO RS485 (C), already
+named at `ha_rs485.h:24-26`) is auto-direction, so `de_gpio = -1`. The DE path stays supported in the
+component for a future module that exposes the pin; it simply isn't wired on this build.
+
+*Prompted by a wiring question from Hugh on 2026-09-22 — D10/D9 were proposed purely because they made the
+harness easier to trace. The console conflict was found while checking whether the swap was safe.*
 
 ⚠️ **The XIAO C6 antenna switch is software-controlled** and defaults to the internal ceramic antenna. A
 node in a mechanical room full of ductwork probably wants the U.FL external antenna — which requires the
@@ -215,7 +236,9 @@ the unit's own RH, and the prior art is literally an ESP32-C6 with a MAX485. Rej
 **mutually exclusive** with the relay path (External and Remote are different control sources), so it
 trades two independent paths for one richer one. Also undocumented by the vendor, and the prior art does
 not establish whether the transceiver ground may safely bond to the unit. Kept as a documented future
-upgrade.
+upgrade. *(2026-09-22: the ground-bonding objection is weaker than when written — the transceiver we
+actually bought is galvanically isolated, so the question becomes moot rather than unanswered. The
+mutual-exclusivity objection is the load-bearing one and is unchanged.)*
 
 **Solid-state / optoMOS output for the Aprilaire.** Rejected by the vendor's own wording: *"normally open
 (NO), dry contact (i.e. **not a triac or other semiconductor**) relay."* A triac cannot pass the DC sense

@@ -905,10 +905,60 @@ pin count — 18 channels direct, no expander); `ha-hvac` = a shared **ESP32-C6*
 ⚠️ **S3 N16R8 octal PSRAM consumes GPIO 33–37**; GPIO 26–32 are the SPI flash. Safe outputs: GPIO 1, 2,
 4–18, 21, 39–42, 47, 48. Strapping pins 0/3/45/46 must never drive a shade contact.
 ⚠️ **C6 strapping pins are 4, 5, 8, 9, 15**; GPIO 24–30 flash, 12/13 USB, 16/17 UART0. `ha-hvac` is a
-**XIAO ESP32-C6**, which breaks out D0–D10 — none of them strapping. Pinout: RS-485 TX/RX = D6/D7
-(GPIO16/17), DE reserved on D3 (GPIO21), Aprilaire relay D1 (GPIO1), Broan OVR relay D2 (GPIO2).
+**XIAO ESP32-C6**, which breaks out D0–D10 — none of them strapping. Pinout: RS-485 TX/RX = **D10/D9
+(GPIO18/GPIO20)** on **`UART_NUM_1`**, Aprilaire relay D1 (GPIO1), Broan OVR relay D2 (GPIO2). No DE pin
+— see the transceiver table below.
 ⚠️ Its antenna switch is **software-controlled**, defaulting to the internal ceramic antenna; an external
 U.FL antenna needs GPIO3 low + GPIO14 high in firmware.
+
+⛔ **Do not put RS-485 on D6/D7 (GPIO16/17), and do not give `ha_rs485` `UART_NUM_0`.** *(Corrected
+2026-09-22 — this doc previously specified D6/D7.)* GPIO16/17 are UART0, and `edge/esp32c6/sdkconfig`
+sets `CONFIG_ESP_CONSOLE_UART_DEFAULT=y` with `CONFIG_ESP_CONSOLE_UART_NUM=0`, USB-Serial-JTAG only as the
+**secondary** console. A transceiver on those pins means every reset dumps the ROM-bootloader banner and
+the whole IDF boot log at 115200 baud onto the ERV's live bus, in parallel with a working wall control.
+The `LISTEN_ONLY` gates in `ha_rs485` and `ha_broan` are application-layer and **cannot** stop the ROM
+bootloader — the one guarantee bring-up depends on is exactly the one they can't make there. Picking
+`UART_NUM_0` re-creates the same hazard on any pins, because `uart_set_pin()` drags the console along with
+it. D10/D9 on UART1 are clear of strapping, flash and USB, and leave the console on its own pins.
+⚠️ If `ha-hvac` gets its own build dir rather than reusing `edge/esp32c6`, **re-check the console config
+there** — the hazard travels with any sdkconfig copied from that tree.
+
+#### RS-485 transceiver — Waveshare **TTL TO RS485 (C)**, isolated
+
+On hand 2026-09-22. Already named as auto-direction in `ha_rs485.h:24-26`.
+
+| Board pad | Goes to | Note |
+|---|---|---|
+| `VCC` | XIAO **3V3** | silk offers 3.3 V/5 V — **3V3 only**, C6 GPIOs are not 5 V tolerant |
+| `GND` | XIAO `GND` | TTL side only |
+| `RXD` | **D10 (GPIO18)** — C6 TX | crossover; see the swap test below |
+| `TXD` | **D9 (GPIO20)** — C6 RX | |
+| `A+` | Broan J9 **`D-`** | ⚠️ `D+`→`B-`, `D-`→`A+`. Counterintuitive but correct; backwards is non-destructive and just logs `Alignment: Unexpected XX` |
+| `B-` | Broan J9 **`D+`** | |
+| `PE` | Broan J9 `GND` | Waveshare wiki calls `PE` *"RS485 Signal Ground"* — the **isolated**-side reference, not a chassis/shield terminal |
+
+- ⛔ **Galvanically isolated — do not bond XIAO `GND` to Broan `GND`.** Digital isolator plus an onboard
+  isolated DC-DC. TTL-side `GND` serves the XIAO, `PE` serves the ERV, and the two never meet. (Earlier
+  bring-up notes said "bond grounds"; that was written for a *non-isolated* adapter, where it is required.
+  With this part it throws the isolation away for nothing.)
+- **Auto-direction, `de_gpio = -1`.** The TTL side is only `GND/RXD/TXD/VCC` — no DE/RE — so the module
+  keys the driver off the `TXD` line itself (`ha_rs485.c:45` auto-direction path). **D3/GPIO21 is
+  therefore free**; the DE reservation this doc used to carry does not apply to this board.
+- **Fit a 10 kΩ pull-up from the C6 TX line to 3V3.** GPIO18 floats as an input from reset until
+  `uart_set_pin()` runs, and on an auto-direction module a low `TXD` turns the driver *on* — that would
+  put us on a live bus during precisely the window where firmware has no say. The pull-up parks the line
+  at mark (driver off) from power-on. Alternatively, for the `LISTEN_ONLY` phase, simply don't land the TX
+  wire at all: only the board's data-out is needed to sniff. (`ha_rs485` still rejects `tx_gpio < 0` at
+  `ha_rs485.c:37`, so configure D10 either way and leave the wire off the header.)
+- **Onboard 120 Ω is "enabled via soldering"** — open from the factory. ✅ **Verified 2026-09-22:** `A+`↔`B-`
+  measures **10 kΩ** on our board, so the jumper is open; that reading is the fail-safe bias network and
+  the transceiver's own ≥12 kΩ input load. ~120 Ω would have meant a bridged jumper and a third terminator
+  on an already-terminated working bus — see the bench checklist.
+- **`RXD`/`TXD` orientation is not stated unambiguously** by the wiki (`TXD` = *"TTL Signal Transmitting
+  Pin"*, which reads either way). Crossover — MCU TX → board `RXD` — is the standard convention and the
+  likelier reading, so try it first. For a listen-only sniff only **one** wire actually matters, the
+  board's data-out into the C6 RX; if the log stays silent, move that single wire to the other pad.
+  Non-destructive, two positions.
 
 **`ha_modbus` is explicitly not being built.** Nothing in this set speaks Modbus; building it would be
 speculative.
@@ -947,14 +997,20 @@ conductive resting on the enclosure.
 ### 7.2 Broan ERV
 
 1. **Meter J9 `12V`→`GND` before landing anything.** Confirm 12 VDC and that you are not on J13.
-2. **LISTEN_ONLY build with the wall control still attached.** Validates wiring, polarity, baud, checksum
+2. ~~**Meter the transceiver `A+`↔`B-`, unpowered and off the bus.**~~ ✅ **DONE 2026-09-22 — 10 kΩ**, so
+   the onboard 120 Ω jumper is open. Re-run this on any *replacement* board: ~120 Ω means the jumper is
+   bridged, and hanging a third terminator on an already-terminated working bus is how you turn it
+   marginal.
+3. **Confirm XIAO `GND` and Broan `GND` are *not* bonded.** The converter is isolated; a stray bond
+   defeats it silently and everything still appears to work.
+4. **LISTEN_ONLY build with the wall control still attached.** Validates wiring, polarity, baud, checksum
    at zero risk.
-3. Read-only active; confirm `02 60` → model string.
-4. **Determine E50 recovery behaviour** — drop the bus > 5 s deliberately and observe whether the unit
+5. Read-only active; confirm `02 60` → model string.
+6. **Determine E50 recovery behaviour** — drop the bus > 5 s deliberately and observe whether the unit
    recovers on reconnect or needs a power cycle. ⛔ Blocking for the OTA story.
-5. Confirm temperature units (°C or °F) against a known reference — the component publishes the raw float
+7. Confirm temperature units (°C or °F) against a known reference — the component publishes the raw float
    with no conversion and no document states which.
-6. Confirm whether the recirculation damper (J6) is fitted before trusting mode `0x06`.
+8. Confirm whether the recirculation damper (J6) is fitted before trusting mode `0x06`.
 
 ### 7.3 Aprilaire E070
 
