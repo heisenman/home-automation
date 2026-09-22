@@ -1,0 +1,51 @@
+# Defaults applied on first `idf.py set-target esp32c6`. Edit sdkconfig (not this) for local tweaks.
+# XIAO ESP32-C6 HVAC node (ADR-0041) — Broan ERV over RS-485.
+
+CONFIG_IDF_TARGET="esp32c6"
+
+# ── Console: UART0 primary, USB-Serial-JTAG secondary ──────────────────────────
+# ⛔ THIS IS WHY RS-485 IS NOT ON D6/D7. UART0 is GPIO16/17 = XIAO D6/D7, and with
+# CONFIG_ESP_CONSOLE_UART_DEFAULT the ROM bootloader banner and the whole IDF log go out there at every
+# reset. A transceiver on those pins would push all of it onto a live ERV bus running beside a working
+# wall control — and the listen-only gates are application-layer, so they cannot stop the ROM bootloader.
+# app_main.c puts ha_rs485 on UART_NUM_1 / GPIO18 / GPIO20 instead. Note that UART_NUM_0 would re-create
+# the hazard on any pins, because uart_set_pin() relocates the console along with the port.
+#
+# Left as the IDF default ON PURPOSE rather than switching the console to USB-Serial-JTAG: keeping the
+# boot log on its own dedicated pins means the RS-485 lane cannot inherit it by accident later.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+
+# ── Bluetooth: enabled so ha_mqtt's (unconditional) BLE dependencies COMPILE, but NimBLE is never
+#    initialised and never called — CONFIG_HA_MQTT_NO_BLE below compiles out every use, including the OTA
+#    radio-pause seam. This node is wired, not wireless-sensing. See ha_mqtt/CMakeLists.txt for why the
+#    dependency cannot simply be dropped (IDF expands REQUIRES before sdkconfig exists).
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+
+# ── Flash: ESP32-C6FH4 has 4MB embedded flash (needed for two 1.75MB OTA slots) ──
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# ── Partition table: custom A/B OTA layout ─────────────────────────────────────
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ── OTA rollback: the bootloader auto-reverts to the last-good slot if a freshly-OTA'd app fails its
+#    self-test. Matters here because an OTA is a reboot, and a reboot on a node that has TAKEN the Broan
+#    bus is an E50 window (ADR-0041 §1.8). It costs nothing on a listen-only build and is already correct
+#    for the day the gate is cleared.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+
+# ── ha_mqtt without BLE ────────────────────────────────────────────────────────
+# Drops ha_gatt/ha_gatt_exec/ha_ble_scan (which REQUIRE `bt`) and compiles out the BLE-only ops, rather
+# than linking the whole NimBLE stack for a radio we never use. Signed commands, OTA and publish are
+# unaffected.
+CONFIG_HA_MQTT_NO_BLE=y
+
+# ── Misc ───────────────────────────────────────────────────────────────────────
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144

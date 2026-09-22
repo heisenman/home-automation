@@ -37,6 +37,7 @@ BUILDS = [
     ("esp32c6", "edge/esp32c6/main/CMakeLists.txt"),
     ("esp32s3-eth", "edge/esp32s3-eth/main/CMakeLists.txt"),
     ("s3-shades", "edge/esp32s3-shades/main/CMakeLists.txt"),
+    ("c6-hvac", "edge/esp32c6-hvac/main/CMakeLists.txt"),
     ("d1001-panel", "provisioning/reterminal/beachhead/main/CMakeLists.txt"),
 ]
 
@@ -45,8 +46,10 @@ BUILDS = [
 # matches an entry in REQUIRES and takes precedence (shared beats fork).
 MODULES = [
     ("app_main", {"sources": ["app_main.c", "beachhead_main.c"], "component": None}),
-    # ADR-0041. ha_rs485 + ha_broan are deliberately NOT catalogued yet: no build links them until
-    # ha-hvac exists, and the drift guard correctly refuses a catalog row nothing consumes.
+    # ADR-0041. Catalogued as of the c6-hvac build (2026-09-22) — until then nothing linked them and the
+    # drift guard correctly refused a catalog row nothing consumes.
+    ("ha_rs485", {"sources": [], "component": "ha_rs485"}),      # ADR-0041 half-duplex RS-485 transport
+    ("ha_broan", {"sources": [], "component": "ha_broan"}),      # ADR-0041 Broan ERV session + codec
     ("ha_dout", {"sources": [], "component": "ha_dout"}),        # ADR-0041 dry-contact output
     ("ha_gaposa", {"sources": [], "component": "ha_gaposa"}),    # ADR-0041 shade planner
     ("ha_config", {"sources": ["ha_config.c"], "component": "ha_config"}),
