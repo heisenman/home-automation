@@ -50,6 +50,7 @@
 #include "ha_rs485.h"
 #include "ha_sntp.h"
 #include "ha_wifi.h"
+#include "jsonbuf.h"
 
 #if __has_include("secrets.h")
 #include "secrets.h"
@@ -116,36 +117,17 @@ static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 // a register that has never arrived must not be published as 0 (that is fabricated data in the system of
 // record), and BROAN_REG_TEMP_EXHAUST reads NaN on units without the second thermistor — "nan" is not
 // valid JSON and would poison the whole payload, not just that field.
-typedef struct { char *buf; size_t cap; size_t off; bool any; } jb_t;
-
-static void jb_init(jb_t *j, char *buf, size_t cap) {
-    j->buf = buf; j->cap = cap; j->off = 0; j->any = false;
-    if (cap) buf[0] = '\0';
-}
-
-static void jb_add(jb_t *j, const char *fmt, ...) {
-    if (j->off >= j->cap) return;
-    if (j->any && j->off + 1 < j->cap) j->buf[j->off++] = ',';
-    va_list ap;
-    va_start(ap, fmt);
-    int n = vsnprintf(j->buf + j->off, j->cap - j->off, fmt, ap);
-    va_end(ap);
-    if (n < 0 || (size_t)n >= j->cap - j->off) { j->buf[j->off] = '\0'; return; }  // drop, never truncate
-    j->off += (size_t)n;
-    j->any = true;
-}
-
-static void jb_f32(jb_t *j, const char *name, uint16_t reg) {
+static void jb_f32(jsonbuf_t *j, const char *name, uint16_t reg) {
     float v;
     if (!ha_broan_get_f32(&s_erv, reg, &v)) return;
     if (isnan(v) || isinf(v)) return;      // no 2nd thermistor, or a register we misread
-    jb_add(j, "\"%s\":%.2f", name, v);
+    jsonbuf_add(j, "\"%s\":%.2f", name, v);
 }
 
-static void jb_i32(jb_t *j, const char *name, uint16_t reg) {
+static void jb_i32(jsonbuf_t *j, const char *name, uint16_t reg) {
     int32_t v;
     if (!ha_broan_get_i32(&s_erv, reg, &v)) return;
-    jb_add(j, "\"%s\":%ld", name, (long)v);
+    jsonbuf_add(j, "\"%s\":%ld", name, (long)v);
 }
 
 static const char *fan_mode_name(uint8_t m) {
@@ -176,13 +158,13 @@ static const char *fan_mode_name(uint8_t m) {
 // settles the units is a deliberate one-time cost, taken while this node is still on the bench.
 static void publish_erv(void) {
     char metrics[512], reg[96];
-    jb_t j;
-    jb_init(&j, metrics, sizeof metrics);
+    jsonbuf_t j;
+    jsonbuf_init(&j, metrics, sizeof metrics);
 
     uint8_t mode;
     if (ha_broan_get_u8(&s_erv, BROAN_REG_FAN_MODE, &mode)) {
-        jb_add(&j, "\"fan_mode\":%u", (unsigned)mode);
-        jb_add(&j, "\"fan_mode_name\":\"%s\"", fan_mode_name(mode));
+        jsonbuf_add(&j, "\"fan_mode\":%u", (unsigned)mode);
+        jsonbuf_add(&j, "\"fan_mode_name\":\"%s\"", fan_mode_name(mode));
     }
     jb_i32(&j, "active_mode",     BROAN_REG_ACTIVE_MODE);
     jb_f32(&j, "power_w",         BROAN_REG_POWER_W);
@@ -199,20 +181,26 @@ static void publish_erv(void) {
     // never has to know that -1 is the good value.
     int32_t code;
     if (ha_broan_get_i32(&s_erv, BROAN_REG_FAULT, &code)) {
-        jb_add(&j, "\"fault_code\":%ld", (long)code);
-        jb_add(&j, "\"fault_ok\":%s", broan_code_is_ok(code) ? "true" : "false");
+        jsonbuf_add(&j, "\"fault_code\":%ld", (long)code);
+        jsonbuf_add(&j, "\"fault_ok\":%s", broan_code_is_ok(code) ? "true" : "false");
     }
     if (ha_broan_get_i32(&s_erv, BROAN_REG_WARNING, &code)) {
-        jb_add(&j, "\"warning_code\":%ld", (long)code);
-        jb_add(&j, "\"warning_ok\":%s", broan_code_is_ok(code) ? "true" : "false");
+        jsonbuf_add(&j, "\"warning_code\":%ld", (long)code);
+        jsonbuf_add(&j, "\"warning_ok\":%s", broan_code_is_ok(code) ? "true" : "false");
     }
 
-    jb_add(&j, "\"online\":%s", ha_broan_online(&s_erv, now_ms()) ? "true" : "false");
-    // Published so a consumer can tell harvested-from-the-wall-control data apart from data we polled
-    // for ourselves, without having to know which firmware is on the node.
-    jb_add(&j, "\"listen_only\":%s", ha_rs485_is_listen_only(&s_bus) ? "true" : "false");
+    // Checked BEFORE the always-present annotations below, so it actually means "no ERV data yet"
+    // rather than never firing. Until the transceiver is on the bus this node has nothing to report,
+    // and minting a `<node>-erv` device record with no measurement in it would put an empty reading in
+    // the system of record. Liveness already lives on .../status and the sniff line on .../log.
+    if (!jsonbuf_any(&j)) return;
 
-    if (!j.any) return;    // nothing harvested yet — publishing an empty object would read as a live zero
+    jsonbuf_add(&j, "\"online\":%s", ha_broan_online(&s_erv, now_ms()) ? "true" : "false");
+    // Lets a consumer tell data harvested from the wall control apart from data we polled for
+    // ourselves, without having to know which firmware is on the node.
+    jsonbuf_add(&j, "\"listen_only\":%s", ha_rs485_is_listen_only(&s_bus) ? "true" : "false");
+
+    if (!jsonbuf_finish(&j)) return;
 
     snprintf(reg, sizeof reg, "%s-erv", s_cfg.node_id);
     ha_mqtt_publish_node_sensor("erv", reg, "erv", metrics);

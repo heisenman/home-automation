@@ -41,8 +41,9 @@ def test_manifest_loads_and_is_wellformed():
 
 
 def test_all_board_manifests_valid():
-    """Every board's nodes.yaml loads + validates (c6 + s3-eth today)."""
-    boards = [ROOT / "edge/esp32c6/nodes.yaml", ROOT / "edge/esp32s3-eth/nodes.yaml"]
+    """Every board's nodes.yaml loads + validates (c6 + s3-eth + c6-hvac today)."""
+    boards = [ROOT / "edge/esp32c6/nodes.yaml", ROOT / "edge/esp32s3-eth/nodes.yaml",
+              ROOT / "edge/esp32c6-hvac/nodes.yaml"]
     for mp in boards:
         nodes = EN.load(mp)
         assert nodes, f"{mp} is empty"
@@ -67,6 +68,9 @@ def test_sensor_define_mapping():
     assert EN.sensor_define("sgp40") is None          # SGP40 is the firmware default (no define)
     assert "HA_GAS_SGP41" in EN.sensor_define("sgp41")
     assert "HA_GAS_BME680" in EN.sensor_define("bme680")
+    # "none" = board has no gas lane (ADR-0041 RS-485 nodes). Distinct from sgp40's None, which means
+    # "the default driver, no define needed" — same emit, different claim about the hardware.
+    assert EN.sensor_define("none") is None
     with raises(ValueError):                          # an unknown chip must never silently pick a driver
         EN.sensor_define("nope")
 

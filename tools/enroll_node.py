@@ -154,8 +154,15 @@ def main() -> None:
             # PROJECT_VER identity: IDF reads <project>/version.txt into app_desc.version. Brand it
             # "<node_id>@<fw>" so the OTA node-id gate (ha_ota.c) can refuse a mis-targeted image.
             proj = a.out.parent.parent                        # a.out = <proj>/main/secrets.h
-            mqttc = proj / "main" / "ha_mqtt.c"
-            fw = _define(mqttc.read_text(), "HA_FW_VERSION", "dev") if mqttc.exists() else "dev"
+            # HA_FW_VERSION lives in main/ha_mqtt.c on the FORK-era builds and in main/app_main.c on the
+            # ones that link the shared ha_mqtt component (ADR-0020). Check both, or every shared-component
+            # node gets branded "@dev" and app_desc.version states something the build does not.
+            fw = "dev"
+            for cand in (proj / "main" / "ha_mqtt.c", proj / "main" / "app_main.c"):
+                if cand.exists():
+                    fw = _define(cand.read_text(), "HA_FW_VERSION", "dev")
+                    if fw != "dev":
+                        break
             (proj / "version.txt").write_text(f"{a.node_id}@{fw}\n")
             print(f"  wrote {proj/'version.txt'} = {a.node_id}@{fw}  (app_desc identity for the OTA gate)")
         else:

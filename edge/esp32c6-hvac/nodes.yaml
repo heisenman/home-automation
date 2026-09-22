@@ -1,0 +1,33 @@
+# Per-node build/flash manifest for the ESP32-C6 HVAC node (ADR-0020 / ADR-0026 / ADR-0041).
+#
+# SOURCE OF TRUTH for node identity + board wiring. A firmware image is branded for exactly one node_id
+# (secrets.h + version.txt), and this file is what enroll_node and the OTA/flash identity gate check so
+# an image built for one node can never land on another.
+#
+# Board-local rather than folded into edge/esp32c6/nodes.yaml: that manifest is the GAS fleet (every
+# entry carries a `sensor:` chip select), and this node has no I2C sensor lane at all. enroll_node
+# resolves the manifest next to --out's board dir, so the split costs nothing.
+#
+# node_id -> :
+#   mac       chip eFuse BASE MAC (`esptool.py read_mac`) — the physical-device binding for the flash gate
+#   target    idf target (esp32c6)
+#   sensor    gas chip, or "none" for a board with no I2C sensor lane (this one). Stating it is
+#             MANDATORY even when the answer is none — an omitted line must stay an error, or the gas
+#             fleet loses the cross-provisioning guard this manifest exists for.
+#   area      room / area id (cross-checks instance/devices.yaml)
+#   broker    MQTT broker URI baked into secrets.h — the air-gap failover VIP
+#   ota_host  HTTP host the node pins for OTA pulls. ⚠️ Edge C6 OTA MUST originate from ha-2; .1.210 is
+#             ha-2's air-gap leg. (.210-the-dev-box is 192.168.1.245 on this network — do not confuse
+#             the two just because the last octet looks familiar.)
+#
+# Materialize this node's firmware with zero hand-editing:
+#   python3 tools/enroll_node.py --node-id hvac_c6 --from-manifest --reuse \
+#       --out edge/esp32c6-hvac/main/secrets.h
+nodes:
+  hvac_c6:
+    mac: "10:BD:A3:A0:04:E8"
+    target: esp32c6
+    sensor: "none"           # quoted: bare none is not a YAML null, but do not make a reader wonder
+    area: staging            # bench today; relocate via the device_relocate tool once it is installed
+    broker: "mqtt://192.168.1.200:1883"
+    ota_host: "192.168.1.210"

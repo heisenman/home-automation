@@ -19,12 +19,18 @@ DEFAULT_MANIFEST = REPO / "edge" / "esp32c6" / "nodes.yaml"
 # eCO2+TVOC / VOC-index / VOC+NOx-index / BME680 (T·RH·P·gas-Ω) — compile-time select. NB the SGP40 and
 # SGP41 share I2C address 0x59, so this manifest line is a human's claim about the board, not something
 # the flasher can verify; the firmware re-checks it against the part on the bus at boot.
-SENSORS = ("sgp30", "sgp40", "sgp41", "bme680")
+#
+# "none" means THIS BOARD HAS NO GAS LANE — e.g. the ADR-0041 RS-485 nodes, which carry no I2C sensor at
+# all. It is a value you must write, not a field you may omit: `sensor` stays in REQUIRED so that a gas
+# node with a forgotten line still fails loudly, which is the entire reason this manifest exists.
+SENSORS = ("sgp30", "sgp40", "sgp41", "bme680", "none")
 REQUIRED = ("mac", "target", "sensor", "area", "broker", "ota_host")
 
 
 def sensor_define(sensor: str) -> str | None:
     """The secrets.h line that selects the gas driver. SGP40 is the firmware default (no define)."""
+    if sensor == "none":
+        return None                     # no gas lane on this board (ADR-0041 RS-485 nodes)
     if sensor == "sgp30":
         return "#define HA_GAS_SGP30            // Sensirion SGP30 (eCO2 + TVOC)"
     if sensor == "sgp40":
