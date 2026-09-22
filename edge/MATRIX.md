@@ -13,34 +13,34 @@ Which module each **real firmware build** links. Pairs with [MODULES.md](MODULES
 
 <!-- GENERATED:module-matrix (tools/gen_module_matrix.py --write) — do not edit by hand -->
 
-| Module | esp32c3 | esp32c6 | esp32s3-eth | s3-shades | c6-hvac | d1001-panel |
-|--------|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|
-| `app_main` | fork | fork | fork | fork | fork | fork |
-| `ha_rs485` | — | — | — | — | shared | — |
-| `ha_broan` | — | — | — | — | shared | — |
-| `ha_dout` | — | — | — | shared | — | — |
-| `ha_gaposa` | — | — | — | shared | — | — |
-| `ha_config` | shared | shared | shared | shared | shared | shared |
-| `ha_wifi` | shared | shared | shared | shared | shared | — |
-| `ha_eth` | — | — | shared | — | — | — |
-| `ha_sntp` | shared | shared | shared | shared | shared | — |
-| `ha_mqtt` | shared | shared | shared | shared | shared | — |
-| `ble_scan` | shared | shared | shared | — | — | shared |
-| `switchbot_decode` | shared | shared | shared | — | — | shared |
-| `ha_reach` | — | shared | shared | — | — | shared |
-| `gatt_history` | shared | shared | shared | — | — | shared |
-| `gatt_exec` | shared | shared | shared | — | — | — |
-| `ha_ota` | shared | shared | shared | shared | shared | shared |
-| `ha_led` | — | — | shared | — | — | — |
-| `ha_relay` | shared | shared | shared | — | — | — |
-| `display` | — | — | — | — | — | fork |
-| `ha_sdcard` | — | — | — | — | — | shared |
-| `fs_ops` | — | — | — | — | — | shared |
-| `bat_profile` | — | — | — | — | — | fork |
-| `ha_battery` | — | — | — | — | — | shared |
-| `ha_gas` | — | shared | shared | — | — | — |
-| `sgp40` | — | shared | shared | — | — | — |
-| `sensirion_gas_index` | — | shared | shared | — | — | — |
+| Module | esp32c3 | esp32c6 | esp32s3-eth | s3-shades | c6-hvac | c6-dehum | d1001-panel |
+|--------|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|
+| `app_main` | fork | fork | fork | fork | fork | fork | fork |
+| `ha_rs485` | — | — | — | — | shared | — | — |
+| `ha_broan` | — | — | — | — | shared | — | — |
+| `ha_dout` | — | — | — | shared | — | — | — |
+| `ha_gaposa` | — | — | — | shared | — | — | — |
+| `ha_config` | shared | shared | shared | shared | shared | shared | shared |
+| `ha_wifi` | shared | shared | shared | shared | shared | shared | — |
+| `ha_eth` | — | — | shared | — | — | — | — |
+| `ha_sntp` | shared | shared | shared | shared | shared | shared | — |
+| `ha_mqtt` | shared | shared | shared | shared | shared | shared | — |
+| `ble_scan` | shared | shared | shared | — | — | — | shared |
+| `switchbot_decode` | shared | shared | shared | — | — | — | shared |
+| `ha_reach` | — | shared | shared | — | — | — | shared |
+| `gatt_history` | shared | shared | shared | — | — | — | shared |
+| `gatt_exec` | shared | shared | shared | — | — | — | — |
+| `ha_ota` | shared | shared | shared | shared | shared | shared | shared |
+| `ha_led` | — | — | shared | — | — | — | — |
+| `ha_relay` | shared | shared | shared | — | — | — | — |
+| `display` | — | — | — | — | — | — | fork |
+| `ha_sdcard` | — | — | — | — | — | — | shared |
+| `fs_ops` | — | — | — | — | — | — | shared |
+| `bat_profile` | — | — | — | — | — | — | fork |
+| `ha_battery` | — | — | — | — | — | — | shared |
+| `ha_gas` | — | shared | shared | — | — | — | — |
+| `sgp40` | — | shared | shared | — | — | — | — |
+| `sensirion_gas_index` | — | shared | shared | — | — | — | — |
 
 <!-- /GENERATED:module-matrix -->
 

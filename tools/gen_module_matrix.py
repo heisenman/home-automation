@@ -38,6 +38,7 @@ BUILDS = [
     ("esp32s3-eth", "edge/esp32s3-eth/main/CMakeLists.txt"),
     ("s3-shades", "edge/esp32s3-shades/main/CMakeLists.txt"),
     ("c6-hvac", "edge/esp32c6-hvac/main/CMakeLists.txt"),
+    ("c6-dehum", "edge/esp32c6-dehum/main/CMakeLists.txt"),
     ("d1001-panel", "provisioning/reterminal/beachhead/main/CMakeLists.txt"),
 ]
 

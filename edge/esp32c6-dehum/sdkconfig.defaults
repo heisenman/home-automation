@@ -1,0 +1,46 @@
+# Defaults applied on first `idf.py set-target esp32c6`. Edit sdkconfig (not this) for local tweaks.
+# XIAO ESP32-C6 dehumidifier node (ADR-0041) — Aprilaire E070 dry contact.
+
+CONFIG_IDF_TARGET="esp32c6"
+
+# ── Console: UART0 primary, USB-Serial-JTAG secondary ──────────────────────────
+# Inherited from the hvac build for fleet consistency. This node has no serial peripheral of its own,
+# so there is no bus for the boot log to leak onto — but keeping every C6 build's console on the same
+# pins means a future RS-485 or UART lane here starts from the safe default rather than rediscovering
+# the hazard. See ADR-0041.
+CONFIG_ESP_CONSOLE_UART_DEFAULT=y
+CONFIG_ESP_CONSOLE_SECONDARY_USB_SERIAL_JTAG=y
+
+# ── Bluetooth: enabled so ha_mqtt's (unconditional) BLE dependencies COMPILE, but NimBLE is never
+#    initialised and never called — CONFIG_HA_MQTT_NO_BLE below compiles out every use, including the OTA
+#    radio-pause seam. This node is wired, not wireless-sensing. See ha_mqtt/CMakeLists.txt for why the
+#    dependency cannot simply be dropped (IDF expands REQUIRES before sdkconfig exists).
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+
+# ── Flash: ESP32-C6FH4 has 4MB embedded flash (needed for two 1.75MB OTA slots) ──
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+
+# ── Partition table: custom A/B OTA layout ─────────────────────────────────────
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ── OTA rollback: the bootloader auto-reverts to the last-good slot if a freshly-OTA'd app fails its
+#    self-test. Matters here because an OTA is a reboot, and a reboot on a node that has TAKEN the Broan
+#    bus is an E50 window (ADR-0041 §1.8). It costs nothing on a listen-only build and is already correct
+#    for the day the gate is cleared.
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+
+# ── ha_mqtt without BLE ────────────────────────────────────────────────────────
+# Drops ha_gatt/ha_gatt_exec/ha_ble_scan (which REQUIRE `bt`) and compiles out the BLE-only ops, rather
+# than linking the whole NimBLE stack for a radio we never use. Signed commands, OTA and publish are
+# unaffected.
+CONFIG_HA_MQTT_NO_BLE=y
+
+# ── Misc ───────────────────────────────────────────────────────────────────────
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144

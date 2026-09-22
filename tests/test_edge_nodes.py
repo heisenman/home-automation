@@ -41,9 +41,10 @@ def test_manifest_loads_and_is_wellformed():
 
 
 def test_all_board_manifests_valid():
-    """Every board's nodes.yaml loads + validates (c6 + s3-eth + c6-hvac today)."""
+    """Every board's nodes.yaml loads + validates (c6 + s3-eth + c6-hvac + c6-dehum today)."""
     boards = [ROOT / "edge/esp32c6/nodes.yaml", ROOT / "edge/esp32s3-eth/nodes.yaml",
-              ROOT / "edge/esp32c6-hvac/nodes.yaml"]
+              ROOT / "edge/esp32c6-hvac/nodes.yaml",
+              ROOT / "edge/esp32c6-dehum/nodes.yaml"]
     for mp in boards:
         nodes = EN.load(mp)
         assert nodes, f"{mp} is empty"
