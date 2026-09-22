@@ -898,9 +898,19 @@ unrelated. Do not collide with it.
 
 ### Node builds
 
-**Decided 2026-09-20:** `ha-shades` = a dedicated **ESP32-S3 N16R8** inside the QCT enclosure (chosen for
-pin count — 18 channels direct, no expander); `ha-hvac` = a shared **ESP32-C6** carrying both
-`ha_broan` and `ha_aprilaire_dehum`.
+**Decided 2026-09-20, revised 2026-09-22 — THREE dedicated nodes, each at the thing it controls:**
+
+| Node | Build | Silicon | Carries | Sits |
+|---|---|---|---|---|
+| `ha-shades` | `edge/esp32s3-shades` | ESP32-S3 N16R8 | `ha_gaposa` | inside the QCT enclosure |
+| `ha-hvac` (`hvac_c6`) | `edge/esp32c6-hvac` | XIAO ESP32-C6 | `ha_broan` | at the Broan ERV |
+| `ha-dehum` (`dehum_c6`) | `edge/esp32c6-dehum` | XIAO ESP32-C6 | `ha_aprilaire_dehum` *(not yet written)* | at the Aprilaire E070 |
+
+The S3 is deliberate overkill on compute, chosen for **pin count** — 18 channels direct, no expander.
+
+⚠️ `ha-hvac` no longer carries the Aprilaire. It originally did, on the assumption the two appliances
+shared a location; they do not. Rationale for the split — physical wire-run risk, and decoupling the
+dehumidifier from the ERV's E50 reboot exposure — is in ADR-0041 §2.
 
 ⚠️ **S3 N16R8 octal PSRAM consumes GPIO 33–37**; GPIO 26–32 are the SPI flash. Safe outputs: GPIO 1, 2,
 4–18, 21, 39–42, 47, 48. Strapping pins 0/3/45/46 must never drive a shade contact.

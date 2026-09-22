@@ -136,6 +136,6 @@ inexplicable placement problem rather than a config error.
 - **Bench, before landing on J9:** design doc §7.2 — meter J9 `12V`→`GND` (confirm you are not on J13),
   and confirm XIAO and Broan grounds are not bonded.
 - **Blocking for controller mode:** does E50 self-clear, or need a power cycle? (§7.2 step 6.)
-- **Node split:** ADR-0041 currently has `ha-hvac` carrying both the ERV and the Aprilaire. That is under
-  reconsideration — the two appliances are not necessarily near each other — and this build is already
-  Broan-only, so a split costs nothing here.
+- ~~**Node split**~~ **RESOLVED 2026-09-22** — the ERV and the Aprilaire get separate nodes (ADR-0041 §2,
+  revised). This build was already Broan-only, so nothing changed here; the dehumidifier lives on
+  `dehum_c6` (`edge/esp32c6-dehum`).

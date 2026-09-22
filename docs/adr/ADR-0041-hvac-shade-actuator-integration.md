@@ -103,16 +103,48 @@ is the argument for capability seams stated as a fact rather than a preference.
 ⚠️ **Naming:** the existing `ha_relay` is the **BLE advert relay-coverage filter** (ADR-0015), entirely
 unrelated. The new module is `ha_dout` specifically to avoid that collision.
 
-### 2. The hosting decision was deferred by construction — and DECIDED 2026-09-20
+### 2. The hosting decision was deferred by construction — DECIDED 2026-09-20, REVISED 2026-09-22
 
-`ha-hvac` = `ha_broan` + `ha_aprilaire_dehum`; `ha-shades` = `ha_gaposa`, mounted at the controller.
+*The shape originally sketched, kept for the record:* `ha-hvac` = `ha_broan` + `ha_aprilaire_dehum`;
+`ha-shades` = `ha_gaposa`, mounted at the controller. **Superseded — see the 2026-09-22 revision below.**
 
 **Hugh's call, 2026-09-20 — two nodes, split by location rather than by appliance:**
 
 | Node | Silicon | Carries | Sits |
 |---|---|---|---|
 | `ha-shades` | **ESP32-S3 N16R8** (dedicated) | `ha_gaposa` | inside the QCT enclosure |
-| `ha-hvac` | **ESP32-C6** (shared) | `ha_broan` + `ha_aprilaire_dehum` | mechanical room |
+| ~~`ha-hvac`~~ | ~~**ESP32-C6** (shared)~~ | ~~`ha_broan` + `ha_aprilaire_dehum`~~ | ~~mechanical room~~ |
+
+**REVISED 2026-09-22 — Hugh's call: the ERV and the dehumidifier get their own nodes.**
+
+| Node | Silicon | Carries | Sits |
+|---|---|---|---|
+| `ha-shades` | **ESP32-S3 N16R8** (dedicated) | `ha_gaposa` | inside the QCT enclosure |
+| `ha-hvac` | **XIAO ESP32-C6** (dedicated) | `ha_broan` | at the Broan ERV |
+| `ha-dehum` | **XIAO ESP32-C6** (dedicated) | `ha_aprilaire_dehum` | at the Aprilaire E070 |
+
+**Why the revision.** The 2026-09-20 split was *by location*, on the assumption that the ERV and the
+E070 shared one. They do not — they are far enough apart that a single node means a long, taggable run
+of low-voltage wire between an appliance and the box that controls it. That is a physical failure mode
+(a tugged or pinched lead) standing in for a saving that was only ever a board and a power supply. The
+same reasoning that put `ha-shades` inside the QCT enclosure applies here: **put the node at the thing
+it controls.**
+
+It also removes an availability coupling the original table quietly created. Sharing a node means an
+OTA, a crash or a power cut takes the ERV *and* the dehumidifier out together, and — worse — it means
+the day `ha-hvac` takes the Broan bus, any reboot needed for the dehumidifier's sake becomes an **E50
+window on the ventilator** (§1.8). Two nodes make those failure domains independent, which matters most
+on precisely the node whose §1.8 recovery behaviour is still unknown.
+
+**Cost of the revision: near zero, and that is the point.** ADR-0020's capability seams meant the
+decomposition never encoded the hosting choice — the modules did not change, only which `main/` links
+them. The builds had in fact already been created separately (`edge/esp32c6-hvac` is Broan-only;
+`edge/esp32c6-dehum` links neither RS-485 nor Broan), so this revision is the document catching up with
+what the code already was, not a migration. That is the §2 claim below ("the decomposition did not
+change to accommodate any of this") being exercised in earnest rather than asserted.
+
+Both nodes are enrolled and flashed as of 2026-09-22 — see
+[RESUME-2026-09-22](../RESUME-2026-09-22-hvac-dehum-nodes.md).
 
 The S3 is deliberate overkill on compute, chosen for **pin count**: 18 QCT channels wire directly with no
 expander, so the hardware does not have to change later. ⚠️ N16R8 has **octal** PSRAM, which permanently

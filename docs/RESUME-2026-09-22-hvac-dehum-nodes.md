@@ -44,10 +44,8 @@ powered with the relay disconnected, AC *and* DC, and to chassis. Above ~30 V me
 
 ## Open items
 
-- **Node split, undecided.** ADR-0041 still says `ha-hvac` is one C6 carrying both the ERV and the
-  Aprilaire. Hugh is reconsidering — the appliances are not near each other and a single node means a
-  wire run that can get tugged. The builds are already separate, so the ADR text is all that needs
-  amending. Ask before rewriting the decision.
+- ~~**Node split, undecided.**~~ **RESOLVED 2026-09-22** — Hugh's call: three dedicated nodes, each at
+  the thing it controls. ADR-0041 §2 revised; the builds were already separate so nothing moved in code.
 - **Server-side, untouched:** `abilities="erv"` and device_type `erv` are new. Intake may read the node
   as relay-only, and metrics will not chart until `METRIC_CATALOG` knows them — a catalog edit needs
   **both** `ha-api` and `ha-api-tls` restarted.
