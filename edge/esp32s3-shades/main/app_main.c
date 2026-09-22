@@ -28,6 +28,7 @@
 #include "ha_config.h"
 #include "ha_dout.h"
 #include "ha_gaposa.h"
+#include "ha_led.h"
 #include "ha_mqtt.h"
 #include "ha_ota.h"
 #include "ha_sntp.h"
@@ -319,6 +320,22 @@ void app_main(void) {
     // Outputs safe before anything else can take time — this node's idle state is "no contact closed",
     // and every path that fails should land there.
     gpio_init_safe();
+
+    // Darken the dev board's onboard RGB. This node uses no status LED — it lives inside the QCT
+    // enclosure, where a lit LED is heat and nothing else — but a WS2812 LATCHES, so the colour left by
+    // whatever shipped on the board stays lit forever at up to ~60 mA even though nothing drives it.
+    //
+    // Both candidates are blanked because the pin differs across S3 dev boards (GPIO48 on most, GPIO38 on
+    // some DevKitC revisions) and ours is not confirmed. Blanking a pin with no LED on it just clocks
+    // three bytes into nothing. Both are clear of the SPI flash (26–32), the octal PSRAM (33–37), the
+    // strapping set (0/3/45/46) and all eighteen shade contacts above — see ADR-0041 §2.
+    //
+    // ⚠️ Do NOT add GPIO21 here: it is CH6's `Dw` contact on this board, and it is only the *Waveshare*
+    // S3-ETH that has its WS2812 there (ha_led.c:15).
+    for (int led_pin = 0; led_pin < 2; led_pin++) {
+        static const int kCandidate[2] = { 48, 38 };
+        ha_led_blank(kCandidate[led_pin]);
+    }
 
     // STATIC, not stack: app_main() returns, but ha_ota's identity gate holds a pointer into cfg and
     // dereferences it later. A stack cfg dangles and the OTA gate reads a garbage node_id.

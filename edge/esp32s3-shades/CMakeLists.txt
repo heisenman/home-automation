@@ -16,6 +16,7 @@ set(EXTRA_COMPONENT_DIRS
     "${_shared}/switchbot_decode"
     "${_shared}/ha_dout"
     "${_shared}/ha_gaposa"
+    "${_shared}/ha_led"
     # Linked but NEVER CALLED: CONFIG_HA_MQTT_NO_BLE compiles every use out of ha_mqtt, including the OTA
     # radio hooks (ha_ble_scan_resume() would otherwise drive an uninitialised NimBLE stack on this node).
     # They appear here only because IDF expands REQUIRES before sdkconfig exists, so ha_mqtt's dependency

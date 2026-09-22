@@ -5,6 +5,7 @@
 #include "ha_led.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/gpio.h"
 #include "driver/rmt_tx.h"
 #include "esp_log.h"
 
@@ -59,24 +60,66 @@ static void led_task(void *arg) {
     }
 }
 
-void ha_led_init(void) {
-    rmt_tx_channel_config_t cc = {
-        .clk_src = RMT_CLK_SRC_DEFAULT,
-        .gpio_num = LED_GPIO,
-        .mem_block_symbols = 64,
-        .resolution_hz = RMT_RES_HZ,
-        .trans_queue_depth = 4,
-    };
-    if (rmt_new_tx_channel(&cc, &s_chan) != ESP_OK) {
-        ESP_LOGW(TAG, "RMT channel init failed — operability LED disabled (node still relays)");
-        return;
-    }
+// WS2812 bit timings, shared by the persistent LED and the one-shot blank so the two cannot drift.
+static esp_err_t make_ws2812_encoder(rmt_encoder_handle_t *out) {
     rmt_bytes_encoder_config_t ec = {
         .bit0 = { .level0 = 1, .duration0 = 3, .level1 = 0, .duration1 = 9 },   // 0.3 us H / 0.9 us L
         .bit1 = { .level0 = 1, .duration0 = 9, .level1 = 0, .duration1 = 3 },   // 0.9 us H / 0.3 us L
         .flags = { .msb_first = 1 },
     };
-    if (rmt_new_bytes_encoder(&ec, &s_enc) != ESP_OK) {
+    return rmt_new_bytes_encoder(&ec, out);
+}
+
+static rmt_tx_channel_config_t ws2812_chan_cfg(int gpio) {
+    return (rmt_tx_channel_config_t){
+        .clk_src = RMT_CLK_SRC_DEFAULT,
+        .gpio_num = gpio,
+        .mem_block_symbols = 64,
+        .resolution_hz = RMT_RES_HZ,
+        .trans_queue_depth = 4,
+    };
+}
+
+bool ha_led_blank(int gpio) {
+    rmt_channel_handle_t ch = NULL;
+    rmt_encoder_handle_t en = NULL;
+    rmt_tx_channel_config_t cc = ws2812_chan_cfg(gpio);
+
+    if (rmt_new_tx_channel(&cc, &ch) != ESP_OK) {
+        ESP_LOGW(TAG, "blank GPIO%d: RMT channel unavailable", gpio);
+        return false;
+    }
+    if (make_ws2812_encoder(&en) != ESP_OK) {
+        rmt_del_channel(ch);
+        return false;
+    }
+    rmt_enable(ch);
+    uint8_t grb[3] = { 0, 0, 0 };
+    rmt_transmit_config_t tx = { .loop_count = 0 };
+    rmt_transmit(ch, en, grb, sizeof(grb), &tx);
+    rmt_tx_wait_all_done(ch, 100);
+
+    rmt_disable(ch);
+    rmt_del_encoder(en);
+    rmt_del_channel(ch);
+
+    // Park the data line driven LOW rather than releasing it. A floating WS2812 data pin is exactly how a
+    // stale colour gets clocked in — leaving it released would let the LED relight from noise later.
+    gpio_reset_pin((gpio_num_t)gpio);
+    gpio_set_direction((gpio_num_t)gpio, GPIO_MODE_OUTPUT);
+    gpio_set_level((gpio_num_t)gpio, 0);
+
+    ESP_LOGI(TAG, "blanked WS2812 on GPIO%d (data line parked low)", gpio);
+    return true;
+}
+
+void ha_led_init(void) {
+    rmt_tx_channel_config_t cc = ws2812_chan_cfg(LED_GPIO);
+    if (rmt_new_tx_channel(&cc, &s_chan) != ESP_OK) {
+        ESP_LOGW(TAG, "RMT channel init failed — operability LED disabled (node still relays)");
+        return;
+    }
+    if (make_ws2812_encoder(&s_enc) != ESP_OK) {
         ESP_LOGW(TAG, "RMT encoder init failed — operability LED disabled");
         return;
     }
