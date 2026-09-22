@@ -1,0 +1,25 @@
+# Per-node build/flash manifest for the ESP32-S3 shade node (ADR-0020 / ADR-0026 / ADR-0041).
+#
+# Board-local, like the other ADR-0041 nodes: edge/esp32c6/nodes.yaml is the GAS fleet (every entry
+# carries a `sensor:` chip select) and this board has no I2C lane — it drives 18 dry contacts.
+#
+#   mac       chip eFuse BASE MAC (`esptool.py read_mac`) — the physical-device binding for the flash gate
+#   target    esp32s3 (N16R8: 16MB quad flash + 8MB OCTAL PSRAM)
+#   sensor    "none" — MANDATORY to state even when the answer is none, so a gas node with a forgotten
+#             line still fails loudly (the 2026-07-05 cbed_c6 <- coffice_c6 mixup)
+#   ota_host  ha-2's air-gap leg. NB the dev box is 192.168.1.245 on this network.
+#
+# ⚠️ This board enumerates through a CH340 bridge (1a86:7522) on /dev/ttyUSB0, NOT the ESP32's native
+# USB-Serial-JTAG. The port therefore survives anything the firmware does — it cannot vanish on a crash,
+# a sleep or a boot loop the way the XIAO C6s can.
+#
+#   python3 tools/enroll_node.py --node-id shades_s3 --from-manifest --reuse \
+#       --out edge/esp32s3-shades/main/secrets.h
+nodes:
+  shades_s3:
+    mac: "AC:A7:04:2D:F3:60"
+    target: esp32s3
+    sensor: "none"
+    area: staging            # bench today; relocate via device_relocate once it is in the QCT enclosure
+    broker: "mqtt://192.168.1.200:1883"
+    ota_host: "192.168.1.210"
