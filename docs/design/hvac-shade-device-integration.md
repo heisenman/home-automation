@@ -1209,7 +1209,7 @@ conductive resting on the enclosure.
 | 11 | Aprilaire `NC\|NO` switch present on E070? | Fail-safe direction | bench |
 | 12 | Per-shade full travel time (both directions) | Position model | post-install |
 | 13 | **linkIT vs QCTZ36SDU** | `ha_gaposa` transport | **Hugh — open decision** |
-| 15 | ~~`Up`→`com` drive voltage and polarity~~ **RESOLVED 2026-09-21: 16.55 V, `com` = rail negative.** Direct GPIO drive is out; NPN low-side switch per channel. | — | done |
+| 15 | ~~`Up`→`com` polarity~~ ⛔ **REOPENED AND CORRECTED 2026-09-23: `com` is the rail POSITIVE.** The 2026-09-21 entry recorded the sign backwards, and everything built on it — "low-side switching is correct", the NPN/ULN2803A choice, the whole §"Build spec" — followed from that one flipped sign. **The QCT input is SOURCING.** Confirmed by meter both directions after three wiring configurations all contradicted the old entry and all fitted the new one. | drive topology | **CORRECTED** |
 | 16 | ~~Are the six `com` terminals bonded?~~ **RESOLVED 2026-09-21: yes, all shorted.** One ground wire. | — | done |
 | 17 | ~~Transformer VA rating~~ **MOOT 2026-09-21** — a separate 5 V wall-wart supply is wire-nutted in parallel off F/N, so the S3 does not load the QCT transformer at all. Its floating negative ties to `com`, which is also S3 GND. | — | done |
 | 18 | Series resistor value (macro photo or in-circuit read) | exact LED current; confirms rail sag margin | bench, low priority |
