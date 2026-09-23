@@ -742,6 +742,14 @@ mosquitto_sub -h 192.168.1.200 -v -t 'home/edge/shades_s3/log'    # in another t
 under the panel's 30 s latch. `again` re-asserts. Exactly one line is ever driven, which also avoids the
 panel's other lockout (two channels given different commands at once).
 
+✅ **RUN 2026-09-23: 18/18 lines asserted in the correct order**, verified against the breakout outputs.
+That closes the map, the solder job and the `nB`→`nC` routing in one pass. Each energized output measured
+**~0.55 V** unloaded — consistent with a saturated Darlington, and uniform across all eighteen.
+
+⚠️ Expect that number to CHANGE under load, and do not read the change as a fault: sinking ~15 mA through
+a QCT opto LED puts the Darlington at its rated **~0.9–1.1 V** saturation. That is the ~1 V already
+budgeted above, and the reason the 16.55 V rail makes this part viable where a 5 V rail would not.
+
 **The ground tie — nothing switches without it.** The breakout's **`GND`** pad (silk may read `E`, for the
 common emitters, IC pin 9) on all three boards ties to one node: **QCT `com` + S3 GND + wall-wart
 negative**. The wall wart is an isolated SMPS whose output floats until that tie is made. All six QCT
