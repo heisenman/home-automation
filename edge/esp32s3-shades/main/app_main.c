@@ -76,13 +76,28 @@ static const char *TAG = "ha_shades";
 // Pads are the ULN2803AG breakout's silkscreen names (datasheet nomenclature: B = base/input,
 // C = collector/output). On the breakout, input `nB` drives output `nC` — match numbers. The bare DIP's
 // across-the-package reversal (IN pin N -> OUT pin 19-N) is handled by the PCB.
+// ⚠️ ORDERED BY PHYSICAL HEADER POSITION, NOT BY GPIO NUMBER. Re-cut 2026-09-23 once the real header
+// layout was known: each chip's six inputs are six PHYSICALLY ADJACENT pins, and they run straight
+// across into pads 1B..6B in the same order, so each chip takes one six-wire ribbon with no crossing.
+// The previous map was numerically tidy (1,2,4,5,6,7,...) and a soldering nightmare — the pins were
+// scattered across both rows.
+//
+//   U1 <- row B positions 1-6    [14 13 12 11 10 9]
+//   U2 <- row B positions 10-15  [18 17 16 15 7 6]
+//   U3 <- row A positions 16-11  [2 42 41 40 39 38]   (runs right-to-left; that is how it seats)
+//
+// Spare at the header: row B GPIO 8/5/4, row A GPIO 21/47. Deliberately NOT used: 19/20 (USB D-/D+ —
+// this board has a separate native-USB port and the build enables USB-Serial-JTAG, so the PHY owns
+// them), 0/3/45/46 (strapping — a reset glitch there is a shade command on every boot and every OTA),
+// 26-32 (SPI flash), 33-37 (consumed by the N16R8's octal PSRAM: broken out on the header but DEAD),
+// and 48 (the onboard WS2812, silkscreened RGB@IO48, blanked at boot above).
 static const gpio_num_t kPin[HA_GAPOSA_MAX_CH][3] = {
-    { GPIO_NUM_1,  GPIO_NUM_2,  GPIO_NUM_4  },   // CH1  — U1 1B/2B/3B -> 1C/2C/3C
-    { GPIO_NUM_5,  GPIO_NUM_6,  GPIO_NUM_7  },   // CH2  — U1 4B/5B/6B -> 4C/5C/6C
-    { GPIO_NUM_8,  GPIO_NUM_9,  GPIO_NUM_10 },   // CH3  — U2 1B/2B/3B -> 1C/2C/3C
-    { GPIO_NUM_11, GPIO_NUM_12, GPIO_NUM_13 },   // CH4  — U2 4B/5B/6B -> 4C/5C/6C
-    { GPIO_NUM_14, GPIO_NUM_15, GPIO_NUM_16 },   // CH5  — U3 1B/2B/3B -> 1C/2C/3C
-    { GPIO_NUM_17, GPIO_NUM_18, GPIO_NUM_21 },   // CH6  — U3 4B/5B/6B -> 4C/5C/6C
+    { GPIO_NUM_14, GPIO_NUM_13, GPIO_NUM_12 },   // CH1  — U1 1B/2B/3B -> 1C/2C/3C
+    { GPIO_NUM_11, GPIO_NUM_10, GPIO_NUM_9  },   // CH2  — U1 4B/5B/6B -> 4C/5C/6C
+    { GPIO_NUM_18, GPIO_NUM_17, GPIO_NUM_16 },   // CH3  — U2 1B/2B/3B -> 1C/2C/3C
+    { GPIO_NUM_15, GPIO_NUM_7,  GPIO_NUM_6  },   // CH4  — U2 4B/5B/6B -> 4C/5C/6C
+    { GPIO_NUM_2,  GPIO_NUM_42, GPIO_NUM_41 },   // CH5  — U3 1B/2B/3B -> 1C/2C/3C
+    { GPIO_NUM_40, GPIO_NUM_39, GPIO_NUM_38 },   // CH6  — U3 4B/5B/6B -> 4C/5C/6C
 };
 
 #define SHADE_CHANNELS   6
@@ -93,11 +108,57 @@ static const gpio_num_t kPin[HA_GAPOSA_MAX_CH][3] = {
 // above the 3 s interim hold, so it can only ever fire when something upstream has actually wedged.
 #define LINE_MAX_ON_MS 6000
 
+// ── pin-test mode (bring-up only) ────────────────────────────────────────────
+// Walks the 18 lines ONE AT A TIME, holding each asserted until told to advance, so a human with a meter
+// can verify the map at human speed. Built because the meter probe is the slow step — a timed walk makes
+// the operator race the firmware, which is backwards.
+//
+// ⛔ THE PANEL LATCHES (all LEDs on, transmission stops) IF A CONTACT IS HELD PAST 30 s. So "hold until
+// told" is bounded, not indefinite: we self-release at PINTEST_HOLD_MS and ha_dout independently caps at
+// PINTEST_CAP_MS. Both sit well under 30 s, and the two layers stay independent exactly as in normal
+// operation — the test raises ha_dout's ceiling, it does not bypass it.
+//
+// ⛔ EXACTLY ONE LINE IS EVER ASSERTED. That also sidesteps the panel's other lockout: two channels driven
+// with DIFFERENT commands at the same instant.
+#define PINTEST_COUNT     (SHADE_CHANNELS * 3)
+#define PINTEST_HOLD_MS   18000     // our own release deadline
+#define PINTEST_CAP_MS    20000     // ha_dout's backstop during the test
+
+static volatile int      s_test_idx = -1;       // -1 = not testing; else 0..17
+static volatile uint32_t s_test_since;
+static volatile bool     s_test_announced_expiry;
+
+// idx -> which chip/pad/channel that line is, so the operator reads the same names that are on the
+// silkscreen in front of them rather than translating from a GPIO number.
+static const char *kFnName[3] = { "Up", "St", "Dw" };
+static inline int test_chip(int i) { return (i / 3) / 2 + 1; }          // U1..U3
+static inline int test_pad(int i)  { return ((i / 3) % 2) * 3 + (i % 3) + 1; }   // 1..6 -> nB/nC
+
+
+static void test_describe(int i, char *out, size_t cap) {
+    int ch = i / 3, fn = i % 3;
+    snprintf(out, cap, "step %d/%d: U%d pad %dB->%dC | CH%d %s | GPIO%d",
+             i + 1, PINTEST_COUNT, test_chip(i), test_pad(i), test_pad(i),
+             ch + 1, kFnName[fn], (int)kPin[ch][fn]);
+}
+
 static ha_gaposa_t s_planner;
 static ha_dout_t   s_line[HA_GAPOSA_MAX_CH][3];
 static ha_config_t s_cfg;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
+
+// One ha_dout per physical line. active_high because the ULN2803 is a sinking INVERTING driver: input
+// HIGH pulls the QCT terminal down to `com`, which is the asserted state. `cap_ms` is the hard ceiling on
+// a continuous ON — LINE_MAX_ON_MS normally, raised to PINTEST_CAP_MS for the duration of a pin test so
+// the operator gets a workable probing window. It is RAISED, never bypassed: the two independent layers
+// (planner bound + ha_dout ceiling) stay intact in both modes.
+static void lines_init(uint32_t cap_ms, uint32_t t) {
+    for (int ch = 0; ch < SHADE_CHANNELS; ch++)
+        for (int fn = 0; fn < 3; fn++)
+            ha_dout_init(&s_line[ch][fn], &(ha_dout_cfg_t){
+                .active_high = true, .max_on_ms = cap_ms }, t);
+}
 
 // ── calibration (travel times) ────────────────────────────────────────────────
 // Per-shade full-travel times are a property of the installation, not the firmware, and they differ per
@@ -192,6 +253,50 @@ static bool on_cmd(const cJSON *cmd, void *user) {
         return true;
     }
 
+    // ── pin test ─────────────────────────────────────────────────────────────
+    //   {"op":"pintest","cmd":"start"|"next"|"prev"|"again"|"stop"}
+    //
+    // Holds ONE line asserted and waits for you, because the meter probe is the slow step — a timed walk
+    // would make the operator race the firmware. Bounded, not indefinite: the panel latches (all LEDs on,
+    // transmission stops) if a contact is held past 30 s, so a step self-releases at PINTEST_HOLD_MS and
+    // ha_dout independently caps at PINTEST_CAP_MS. "again" re-asserts after an expiry.
+    if (strcmp(op->valuestring, "pintest") == 0) {
+        const cJSON *jc = cJSON_GetObjectItem(cmd, "cmd");
+        const char *c = cJSON_IsString(jc) ? jc->valuestring : "";
+        int idx = s_test_idx;
+
+        if (strcmp(c, "stop") == 0) {
+            s_test_idx = -1;
+            lines_init(LINE_MAX_ON_MS, now_ms());     // back to the normal, tighter ceiling
+            ha_mqtt_log("pintest: STOPPED — all lines off, planner back in control");
+            return true;
+        }
+        if (strcmp(c, "start") == 0) {
+            lines_init(PINTEST_CAP_MS, now_ms());     // raise ha_dout's ceiling for the test only
+            idx = 0;
+        } else if (strcmp(c, "next") == 0) {
+            if (idx < 0) { ha_mqtt_log("pintest: not started — send cmd:\"start\""); return true; }
+            idx = (idx + 1) % PINTEST_COUNT;
+        } else if (strcmp(c, "prev") == 0) {
+            if (idx < 0) { ha_mqtt_log("pintest: not started — send cmd:\"start\""); return true; }
+            idx = (idx + PINTEST_COUNT - 1) % PINTEST_COUNT;
+        } else if (strcmp(c, "again") != 0) {
+            ha_mqtt_log("pintest: bad cmd %s (start|next|prev|again|stop)", c);
+            return true;
+        } else if (idx < 0) {
+            ha_mqtt_log("pintest: not started — send cmd:\"start\"");
+            return true;
+        }
+
+        char what[112];
+        test_describe(idx, what, sizeof what);
+        s_test_since = now_ms();
+        s_test_announced_expiry = false;
+        s_test_idx = idx;                             // last: control_task may read it on the next tick
+        ha_mqtt_log("pintest: ASSERTED %s (holds %u s)", what, (unsigned)(PINTEST_HOLD_MS / 1000));
+        return true;
+    }
+
     return false;   // not ours — let ha_mqtt log it as unknown
 }
 
@@ -205,6 +310,20 @@ static void control_task(void *arg) {
         uint32_t t = now_ms();
         ha_gaposa_tick(&s_planner, t, &out);
 
+        // Pin-test overrides the planner entirely. Read once per tick so the index cannot change
+        // mid-sweep and assert two lines in the same pass.
+        const int test = s_test_idx;
+        bool test_expired = false;
+        if (test >= 0) {
+            test_expired = (uint32_t)(t - s_test_since) >= PINTEST_HOLD_MS;
+            if (test_expired && !s_test_announced_expiry) {
+                s_test_announced_expiry = true;
+                ha_mqtt_log("pintest: hold expired on step %d — line released. "
+                            "Send {\"op\":\"pintest\",\"cmd\":\"again\"} to re-assert, or \"next\".",
+                            test + 1);
+            }
+        }
+
         for (int ch = 0; ch < SHADE_CHANNELS; ch++) {
             ha_gaposa_cmd_t a = out.assert_ch[ch];
             for (int fn = 0; fn < 3; fn++) {
@@ -213,6 +332,9 @@ static void control_task(void *arg) {
                          // STOP and INTERIM both assert the St contact; the planner owns the difference
                          // in duration and batches them separately so they can never overlap.
                          || (fn == SHADE_ST && (a == HA_GAPOSA_CMD_STOP || a == HA_GAPOSA_CMD_INTERIM));
+
+                // Exactly one line asserted during a test, and never a stale planner command.
+                if (test >= 0) want = !test_expired && (test == ch * 3 + fn);
 
                 ha_dout_t *d = &s_line[ch][fn];
                 ha_dout_set(d, want, t);
@@ -328,17 +450,12 @@ void app_main(void) {
     // enclosure, where a lit LED is heat and nothing else — but a WS2812 LATCHES, so the colour left by
     // whatever shipped on the board stays lit forever at up to ~60 mA even though nothing drives it.
     //
-    // Both candidates are blanked because the pin differs across S3 dev boards (GPIO48 on most, GPIO38 on
-    // some DevKitC revisions) and ours is not confirmed. Blanking a pin with no LED on it just clocks
-    // three bytes into nothing. Both are clear of the SPI flash (26–32), the octal PSRAM (33–37), the
-    // strapping set (0/3/45/46) and all eighteen shade contacts above — see ADR-0041 §2.
+    // GPIO48 CONFIRMED 2026-09-23 from the board's own silkscreen: "RGB@IO48". That is why GPIO38 is
+    // free for CH6 `Dw` above — it was previously blanked too, only because the pin was unconfirmed.
     //
-    // ⚠️ Do NOT add GPIO21 here: it is CH6's `Dw` contact on this board, and it is only the *Waveshare*
-    // S3-ETH that has its WS2812 there (ha_led.c:15).
-    for (int led_pin = 0; led_pin < 2; led_pin++) {
-        static const int kCandidate[2] = { 48, 38 };
-        ha_led_blank(kCandidate[led_pin]);
-    }
+    // ⚠️ Do NOT blank GPIO38 here any more, and never GPIO21 (the *Waveshare* S3-ETH's LED pin,
+    // ha_led.c:15) — both would fight a shade contact.
+    ha_led_blank(48);
 
     // STATIC, not stack: app_main() returns, but ha_ota's identity gate holds a pointer into cfg and
     // dereferences it later. A stack cfg dangles and the OTA gate reads a garbage node_id.
@@ -374,16 +491,7 @@ void app_main(void) {
         while (1) vTaskDelay(pdMS_TO_TICKS(10000));
     }
 
-    // One ha_dout per physical line. active_high because the ULN2803 is a sinking INVERTING driver:
-    // input HIGH pulls the QCT terminal down to `com`, which is the asserted state.
-    for (int ch = 0; ch < SHADE_CHANNELS; ch++) {
-        for (int fn = 0; fn < 3; fn++) {
-            ha_dout_init(&s_line[ch][fn], &(ha_dout_cfg_t){
-                .active_high = true,
-                .max_on_ms   = LINE_MAX_ON_MS,   // independent of the planner, on purpose
-            }, now_ms());
-        }
-    }
+    lines_init(LINE_MAX_ON_MS, now_ms());
 
     if (ha_wifi_connect(s_cfg.wifi_ssid, s_cfg.wifi_psk, 30000) != ESP_OK) {
         ESP_LOGE(TAG, "Wi-Fi connect failed — restarting in 10s");

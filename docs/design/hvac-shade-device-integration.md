@@ -677,17 +677,70 @@ package. Wiring left-to-right mismatches every channel; this is the classic erro
 Allocated **two shade channels per chip** rather than packing 8-6-4, so a wiring error stays local and a
 chip can be swapped without re-landing unrelated channels:
 
+##### Pin assignment — RE-CUT 2026-09-23 for solderability
+
+The original assignment was numerically tidy (`1,2,4,5,6,7,…`) and a **soldering nightmare**: it was
+chosen from the electrical safe-set before the board was in hand, and those GPIOs turn out to be
+scattered across both headers — eighteen individually-routed jumpers.
+
+Actual header layout of the N16R8 dev board, read off the board 2026-09-23:
+
+```
+row A:  19  20 │ 21  47 │ 48  45   0  35  36  37  38 │ 39  40  41  42   2   1
+        ✗USB   │ ✓  ✓   │ LED ✗strap  ✗───PSRAM───✗  LED│ ✓───────── 6 adjacent ────────✓
+row B:  14  13  12  11  10   9 │ 46   3 │  8  18  17  16  15   7 │  6   5   4
+        ✓────── 6 adjacent ───✓│ ✗strap │ ✓────── 6 adjacent ───✓│ ✓ spare
+```
+
+⚠️ **GPIO 35/36/37 are broken out on the header but DEAD** — the N16R8's octal PSRAM consumes them.
+⚠️ **GPIO 19/20 are USB D−/D+**, and **0/3/45/46 are strapping** — a reset glitch on a strapping pin is a
+shade command on every boot and every OTA, which is the failure `ha_dout`'s non-strapping rule exists for.
+
+Each chip now takes **six physically adjacent pins**, running straight across into pads `1B`..`6B` in the
+same order — one six-wire ribbon per chip, no crossing:
+
 | Chip | Shade | Function | S3 GPIO → | input pad | output pad → | QCT terminal |
 |---|---|---|---|---|---|---|
-| U1 | CH1 | Up / St / Dw | 1 / 2 / 4 | `1B` / `2B` / `3B` | `1C` / `2C` / `3C` | CH1 `Up` / `St` / `Dw` |
-| U1 | CH2 | Up / St / Dw | 5 / 6 / 7 | `4B` / `5B` / `6B` | `4C` / `5C` / `6C` | CH2 `Up` / `St` / `Dw` |
-| U2 | CH3 | Up / St / Dw | 8 / 9 / 10 | `1B` / `2B` / `3B` | `1C` / `2C` / `3C` | CH3 `Up` / `St` / `Dw` |
-| U2 | CH4 | Up / St / Dw | 11 / 12 / 13 | `4B` / `5B` / `6B` | `4C` / `5C` / `6C` | CH4 `Up` / `St` / `Dw` |
-| U3 | CH5 | Up / St / Dw | 14 / 15 / 16 | `1B` / `2B` / `3B` | `1C` / `2C` / `3C` | CH5 `Up` / `St` / `Dw` |
-| U3 | CH6 | Up / St / Dw | 17 / 18 / 21 | `4B` / `5B` / `6B` | `4C` / `5C` / `6C` | CH6 `Up` / `St` / `Dw` |
+| U1 | CH1 | Up / St / Dw | 14 / 13 / 12 | `1B` / `2B` / `3B` | `1C` / `2C` / `3C` | CH1 `Up` / `St` / `Dw` |
+| U1 | CH2 | Up / St / Dw | 11 / 10 / 9 | `4B` / `5B` / `6B` | `4C` / `5C` / `6C` | CH2 `Up` / `St` / `Dw` |
+| U2 | CH3 | Up / St / Dw | 18 / 17 / 16 | `1B` / `2B` / `3B` | `1C` / `2C` / `3C` | CH3 `Up` / `St` / `Dw` |
+| U2 | CH4 | Up / St / Dw | 15 / 7 / 6 | `4B` / `5B` / `6B` | `4C` / `5C` / `6C` | CH4 `Up` / `St` / `Dw` |
+| U3 | CH5 | Up / St / Dw | 2 / 42 / 41 | `1B` / `2B` / `3B` | `1C` / `2C` / `3C` | CH5 `Up` / `St` / `Dw` |
+| U3 | CH6 | Up / St / Dw | 40 / 39 / 38 | `4B` / `5B` / `6B` | `4C` / `5C` / `6C` | CH6 `Up` / `St` / `Dw` |
 
-`7B`/`8B` and `7C`/`8C` are spare on every chip. **Note the deliberate gap in the GPIO column: no 19 or
-20** — those are USB D−/D+ on the S3, which is why the run jumps 18 → 21. Do not "tidy" it.
+**Seated 2026-09-23 to Hugh's physical fit** — U1 on row B positions 1-6, U2 on 10-15, U3 on row A
+positions 16→11 (right-to-left, which is how the breakout lands). `7B`/`8B` and `7C`/`8C` are spare on
+every chip; **GPIO 8/5/4 (row B) and 21/47 (row A) are spare** at the header.
+
+✅ **The WS2812 is GPIO48 — confirmed from the board's own silkscreen, `RGB@IO48`.** That frees GPIO38 for
+CH6 `Dw`; only 48 is blanked at boot now.
+
+⛔ **GPIO19/20 are NOT usable** even though they appear on the header. They are USB D−/D+, this board has
+a separate native-USB port beside the CH340 UART port, and the build sets
+`CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG_ENABLED=y` — the USB PHY owns them.
+
+⚠️ **The module is an ESP32-S3-WROOM-1U: no PCB antenna, U.FL only.** It will associate at bench range on
+stray coupling and look fine, then fail in the enclosure. An antenna is not optional. Fitted 2026-09-23;
+RSSI went to −25 dBm. U.FL is rated for only ~30 mating cycles, so plan flashes to avoid re-seating it.
+
+Source of truth for the assignment is `edge/esp32s3-shades/main/app_main.c` `kPin[]`, and the node will
+tell you the mapping itself — see the pin test below.
+
+##### Verifying the solder job — `tools/shade_cmd.py pintest`
+
+Silkscreens are hard to read and a mis-landed wire here means "CH3 Up" is really "CH4 Down" on a panel
+that latches. So the node walks its own map: one line asserted at a time, **held until you advance**,
+announcing on `home/edge/<node>/log` exactly which chip, pad, channel and function it believes it is
+driving. Probe the matching `nC` pad and confirm.
+
+```sh
+python3 tools/shade_cmd.py pintest        # interactive: Enter = next, p = prev, a = again, q = quit
+mosquitto_sub -h 192.168.1.200 -v -t 'home/edge/shades_s3/log'    # in another terminal
+```
+
+⛔ Bounded on purpose: a step self-releases after 18 s and `ha_dout` independently caps at 20 s, both
+under the panel's 30 s latch. `again` re-asserts. Exactly one line is ever driven, which also avoids the
+panel's other lockout (two channels given different commands at once).
 
 **The ground tie — nothing switches without it.** The breakout's **`GND`** pad (silk may read `E`, for the
 common emitters, IC pin 9) on all three boards ties to one node: **QCT `com` + S3 GND + wall-wart
