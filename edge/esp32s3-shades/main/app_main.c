@@ -86,18 +86,29 @@ static const char *TAG = "ha_shades";
 //   U2 <- row B positions 10-15  [18 17 16 15 7 6]
 //   U3 <- row A positions 16-11  [2 42 41 40 39 38]   (runs right-to-left; that is how it seats)
 //
+// ⚠️ HARNESSED 2026-09-23 — the QCT-side order below is NOT U1,U2,U3 and NOT Up,St,Dw. Hugh wired for
+// physical fit, which is the right priority: copper is expensive to redo, this array is one edit. The
+// QCT terminal silk reads `Com Dw St Up` per channel, so the 18 terminals in board order
+// (CH1 Dw,St,Up ... CH6 Dw,St,Up) land on ULN output pads in the sequence:
+//
+//       U2 pads 6->1,  U1 pads 6->1,  U3 pads 1->6
+//
+// which is what produces the apparently-scrambled GPIO table below. It is not scrambled; it is the
+// straightest possible harness. Verify with `tools/shade_cmd.py pintest`, never by reading this comment.
+//
 // Spare at the header: row B GPIO 8/5/4, row A GPIO 21/47. Deliberately NOT used: 19/20 (USB D-/D+ —
 // this board has a separate native-USB port and the build enables USB-Serial-JTAG, so the PHY owns
 // them), 0/3/45/46 (strapping — a reset glitch there is a shade command on every boot and every OTA),
 // 26-32 (SPI flash), 33-37 (consumed by the N16R8's octal PSRAM: broken out on the header but DEAD),
 // and 48 (the onboard WS2812, silkscreened RGB@IO48, blanked at boot above).
+// [channel][Up, St, Dw] — the array order is FUNCTION order; the harness order is the comment column.
 static const gpio_num_t kPin[HA_GAPOSA_MAX_CH][3] = {
-    { GPIO_NUM_14, GPIO_NUM_13, GPIO_NUM_12 },   // CH1  — U1 1B/2B/3B -> 1C/2C/3C
-    { GPIO_NUM_11, GPIO_NUM_10, GPIO_NUM_9  },   // CH2  — U1 4B/5B/6B -> 4C/5C/6C
-    { GPIO_NUM_18, GPIO_NUM_17, GPIO_NUM_16 },   // CH3  — U2 1B/2B/3B -> 1C/2C/3C
-    { GPIO_NUM_15, GPIO_NUM_7,  GPIO_NUM_6  },   // CH4  — U2 4B/5B/6B -> 4C/5C/6C
-    { GPIO_NUM_2,  GPIO_NUM_42, GPIO_NUM_41 },   // CH5  — U3 1B/2B/3B -> 1C/2C/3C
-    { GPIO_NUM_40, GPIO_NUM_39, GPIO_NUM_38 },   // CH6  — U3 4B/5B/6B -> 4C/5C/6C
+    { GPIO_NUM_15, GPIO_NUM_7,  GPIO_NUM_6  },   // CH1  Up/St/Dw <- U2 4C/5C/6C
+    { GPIO_NUM_18, GPIO_NUM_17, GPIO_NUM_16 },   // CH2  Up/St/Dw <- U2 1C/2C/3C
+    { GPIO_NUM_11, GPIO_NUM_10, GPIO_NUM_9  },   // CH3  Up/St/Dw <- U1 4C/5C/6C
+    { GPIO_NUM_14, GPIO_NUM_13, GPIO_NUM_12 },   // CH4  Up/St/Dw <- U1 1C/2C/3C
+    { GPIO_NUM_41, GPIO_NUM_42, GPIO_NUM_2  },   // CH5  Up/St/Dw <- U3 3C/2C/1C
+    { GPIO_NUM_38, GPIO_NUM_39, GPIO_NUM_40 },   // CH6  Up/St/Dw <- U3 6C/5C/4C
 };
 
 #define SHADE_CHANNELS   6
@@ -128,18 +139,29 @@ static volatile int      s_test_idx = -1;       // -1 = not testing; else 0..17
 static volatile uint32_t s_test_since;
 static volatile bool     s_test_announced_expiry;
 
-// idx -> which chip/pad/channel that line is, so the operator reads the same names that are on the
-// silkscreen in front of them rather than translating from a GPIO number.
+// Which chip/pad each line actually lands on, so the pin test announces the names on the silkscreen in
+// front of the operator rather than a GPIO number.
+//
+// ⚠️ A TABLE, NOT A FORMULA, AND IT MUST TRACK kPin[] ABOVE ROW FOR ROW. This was computed from the
+// index until 2026-09-23, which silently assumed chips ran U1,U2,U3 with pads ascending. Hugh's harness
+// does neither (U2,U1,U3; CH1 and CH5/CH6 run their pads backwards), so the formula would have named the
+// wrong chip and pad — while the operator was trusting it to verify the wiring. Wrong labels on a
+// verification tool are worse than no tool.
 static const char *kFnName[3] = { "Up", "St", "Dw" };
-static inline int test_chip(int i) { return (i / 3) / 2 + 1; }          // U1..U3
-static inline int test_pad(int i)  { return ((i / 3) % 2) * 3 + (i % 3) + 1; }   // 1..6 -> nB/nC
+static const char *kHarness[HA_GAPOSA_MAX_CH][3] = {
+    { "U2 4C", "U2 5C", "U2 6C" },   // CH1  Up/St/Dw
+    { "U2 1C", "U2 2C", "U2 3C" },   // CH2
+    { "U1 4C", "U1 5C", "U1 6C" },   // CH3
+    { "U1 1C", "U1 2C", "U1 3C" },   // CH4
+    { "U3 3C", "U3 2C", "U3 1C" },   // CH5
+    { "U3 6C", "U3 5C", "U3 4C" },   // CH6
+};
 
 
 static void test_describe(int i, char *out, size_t cap) {
     int ch = i / 3, fn = i % 3;
-    snprintf(out, cap, "step %d/%d: U%d pad %dB->%dC | CH%d %s | GPIO%d",
-             i + 1, PINTEST_COUNT, test_chip(i), test_pad(i), test_pad(i),
-             ch + 1, kFnName[fn], (int)kPin[ch][fn]);
+    snprintf(out, cap, "step %d/%d: %s | CH%d %s | GPIO%d  (terminal should DROP ~16.2V -> ~1V)",
+             i + 1, PINTEST_COUNT, kHarness[ch][fn], ch + 1, kFnName[fn], (int)kPin[ch][fn]);
 }
 
 static ha_gaposa_t s_planner;
