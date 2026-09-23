@@ -73,13 +73,16 @@ static const char *TAG = "ha_shades";
 #define SHADE_UP  0
 #define SHADE_ST  1
 #define SHADE_DW  2
+// Pads are the ULN2803AG breakout's silkscreen names (datasheet nomenclature: B = base/input,
+// C = collector/output). On the breakout, input `nB` drives output `nC` — match numbers. The bare DIP's
+// across-the-package reversal (IN pin N -> OUT pin 19-N) is handled by the PCB.
 static const gpio_num_t kPin[HA_GAPOSA_MAX_CH][3] = {
-    { GPIO_NUM_1,  GPIO_NUM_2,  GPIO_NUM_4  },   // CH1  — U1 IN1..IN3
-    { GPIO_NUM_5,  GPIO_NUM_6,  GPIO_NUM_7  },   // CH2  — U1 IN4..IN6
-    { GPIO_NUM_8,  GPIO_NUM_9,  GPIO_NUM_10 },   // CH3  — U2 IN1..IN3
-    { GPIO_NUM_11, GPIO_NUM_12, GPIO_NUM_13 },   // CH4  — U2 IN4..IN6
-    { GPIO_NUM_14, GPIO_NUM_15, GPIO_NUM_16 },   // CH5  — U3 IN1..IN3
-    { GPIO_NUM_17, GPIO_NUM_18, GPIO_NUM_21 },   // CH6  — U3 IN4..IN6
+    { GPIO_NUM_1,  GPIO_NUM_2,  GPIO_NUM_4  },   // CH1  — U1 1B/2B/3B -> 1C/2C/3C
+    { GPIO_NUM_5,  GPIO_NUM_6,  GPIO_NUM_7  },   // CH2  — U1 4B/5B/6B -> 4C/5C/6C
+    { GPIO_NUM_8,  GPIO_NUM_9,  GPIO_NUM_10 },   // CH3  — U2 1B/2B/3B -> 1C/2C/3C
+    { GPIO_NUM_11, GPIO_NUM_12, GPIO_NUM_13 },   // CH4  — U2 4B/5B/6B -> 4C/5C/6C
+    { GPIO_NUM_14, GPIO_NUM_15, GPIO_NUM_16 },   // CH5  — U3 1B/2B/3B -> 1C/2C/3C
+    { GPIO_NUM_17, GPIO_NUM_18, GPIO_NUM_21 },   // CH6  — U3 4B/5B/6B -> 4C/5C/6C
 };
 
 #define SHADE_CHANNELS   6

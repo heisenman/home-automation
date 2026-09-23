@@ -649,35 +649,54 @@ The per-channel discrete NPN is implemented as three **ULN2803A** Darlington arr
 negligible. (It would NOT have been negligible on a 5 V rail; the measurement is what made this part
 viable.)
 
-⚠️ **The outputs run in reverse.** Input pin *N* pairs with output pin *19−N* — IN1 (pin 1) drives OUT1
-(pin **18**), directly across the package. Wiring it left-to-right mismatches every channel. This is the
-classic error with this part.
+**Parts in hand 2026-09-23: ULN2803AG on breakout PCBs.** The silkscreen is labelled `1B`–`8B` and
+`1C`–`8C` — the datasheet's own names, **B** = base (input), **C** = collector (output). Verified against
+the board: **IC pin 1 lands on silk `1B`**, which fixes the whole mapping.
+
+✅ **On these breakouts the pin-reversal trap does not apply — wire by matching NUMBERS.** `1B` drives
+`1C`, `2B` drives `2C`, and so on. The PCB carries the across-the-package routing for you.
+
+<details><summary>Bare-DIP pin numbers (only if you ever wire a chip without the breakout)</summary>
+
+Input pin *N* pairs with output pin *19−N* — IN1 (pin 1) drives OUT1 (pin **18**), straight across the
+package. Wiring left-to-right mismatches every channel; this is the classic error with this part.
 
 ```
-  IN1  1 ┤●        ├ 18  OUT1
-  IN2  2 ┤         ├ 17  OUT2
-  IN3  3 ┤         ├ 16  OUT3
-  IN4  4 ┤ ULN2803 ├ 15  OUT4
-  IN5  5 ┤         ├ 14  OUT5
-  IN6  6 ┤         ├ 13  OUT6
-  IN7  7 ┤         ├ 12  OUT7
-  IN8  8 ┤         ├ 11  OUT8
-  GND  9 ┤         ├ 10  COM  (leave unconnected — flyback common, no inductive load here)
+  1B   1 ┤●        ├ 18  1C
+  2B   2 ┤         ├ 17  2C
+  3B   3 ┤         ├ 16  3C
+  4B   4 ┤ ULN2803 ├ 15  4C
+  5B   5 ┤         ├ 14  5C
+  6B   6 ┤         ├ 13  6C
+  7B   7 ┤         ├ 12  7C
+  8B   8 ┤         ├ 11  8C
+  E/GND 9┤         ├ 10  COM
 ```
+</details>
 
 Allocated **two shade channels per chip** rather than packing 8-6-4, so a wiring error stays local and a
 chip can be swapped without re-landing unrelated channels:
 
-| Chip | Shade | Function | S3 GPIO | IN pin | OUT pin |
-|---|---|---|---|---|---|
-| U1 | CH1 | Up / St / Dw | 1 / 2 / 4 | 1 / 2 / 3 | 18 / 17 / 16 |
-| U1 | CH2 | Up / St / Dw | 5 / 6 / 7 | 4 / 5 / 6 | 15 / 14 / 13 |
-| U2 | CH3 | Up / St / Dw | 8 / 9 / 10 | 1 / 2 / 3 | 18 / 17 / 16 |
-| U2 | CH4 | Up / St / Dw | 11 / 12 / 13 | 4 / 5 / 6 | 15 / 14 / 13 |
-| U3 | CH5 | Up / St / Dw | 14 / 15 / 16 | 1 / 2 / 3 | 18 / 17 / 16 |
-| U3 | CH6 | Up / St / Dw | 17 / 18 / 21 | 4 / 5 / 6 | 15 / 14 / 13 |
+| Chip | Shade | Function | S3 GPIO → | input pad | output pad → | QCT terminal |
+|---|---|---|---|---|---|---|
+| U1 | CH1 | Up / St / Dw | 1 / 2 / 4 | `1B` / `2B` / `3B` | `1C` / `2C` / `3C` | CH1 `Up` / `St` / `Dw` |
+| U1 | CH2 | Up / St / Dw | 5 / 6 / 7 | `4B` / `5B` / `6B` | `4C` / `5C` / `6C` | CH2 `Up` / `St` / `Dw` |
+| U2 | CH3 | Up / St / Dw | 8 / 9 / 10 | `1B` / `2B` / `3B` | `1C` / `2C` / `3C` | CH3 `Up` / `St` / `Dw` |
+| U2 | CH4 | Up / St / Dw | 11 / 12 / 13 | `4B` / `5B` / `6B` | `4C` / `5C` / `6C` | CH4 `Up` / `St` / `Dw` |
+| U3 | CH5 | Up / St / Dw | 14 / 15 / 16 | `1B` / `2B` / `3B` | `1C` / `2C` / `3C` | CH5 `Up` / `St` / `Dw` |
+| U3 | CH6 | Up / St / Dw | 17 / 18 / 21 | `4B` / `5B` / `6B` | `4C` / `5C` / `6C` | CH6 `Up` / `St` / `Dw` |
 
-Pin 9 on all three chips ties to the common node: QCT `com` + S3 GND + wall-wart negative.
+`7B`/`8B` and `7C`/`8C` are spare on every chip. **Note the deliberate gap in the GPIO column: no 19 or
+20** — those are USB D−/D+ on the S3, which is why the run jumps 18 → 21. Do not "tidy" it.
+
+**The ground tie — nothing switches without it.** The breakout's **`GND`** pad (silk may read `E`, for the
+common emitters, IC pin 9) on all three boards ties to one node: **QCT `com` + S3 GND + wall-wart
+negative**. The wall wart is an isolated SMPS whose output floats until that tie is made. All six QCT
+`com` terminals are internally shorted (verified 2026-09-21), so one wire serves all eighteen channels.
+
+**Leave `COM` (IC pin 10) unconnected** — it is the flyback-diode common, and the load here is opto LEDs,
+not a coil. ⚠️ Do not confuse the breakout's `COM` pad with the QCT's `com` terminal: despite the name
+collision they are unrelated, and `COM` is the one pad on this board that should stay bare.
 
 **It is a sinking, inverting driver** — input HIGH pulls the output down to `com`, which is the low-side
 switch we want. GPIO HIGH = command asserted, so `ha_dout` is configured `active_high = true`. No polarity
