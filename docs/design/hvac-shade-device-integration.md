@@ -742,13 +742,28 @@ mosquitto_sub -h 192.168.1.200 -v -t 'home/edge/shades_s3/log'    # in another t
 under the panel's 30 s latch. `again` re-asserts. Exactly one line is ever driven, which also avoids the
 panel's other lockout (two channels given different commands at once).
 
-✅ **RUN 2026-09-23: 18/18 lines asserted in the correct order**, verified against the breakout outputs.
-That closes the map, the solder job and the `nB`→`nC` routing in one pass. Each energized output measured
-**~0.55 V** unloaded — consistent with a saturated Darlington, and uniform across all eighteen.
+✅ **RUN 2026-09-23: 18/18 lines asserted in the correct order**, verified at the breakout outputs
+(`1C`–`6C` on all three chips, DC volts, ULN `GND`/`E` bonded to the board's GND). That closes the pin
+map, the solder job and the `nB`→`nC` routing in one pass.
 
-⚠️ Expect that number to CHANGE under load, and do not read the change as a fault: sinking ~15 mA through
-a QCT opto LED puts the Darlington at its rated **~0.9–1.1 V** saturation. That is the ~1 V already
-budgeted above, and the reason the 16.55 V rail makes this part viable where a 5 V rail would not.
+**Each energized output measured ~0.55 V unloaded, uniform across all eighteen — and that is CORRECT.**
+
+A Darlington **cannot saturate below one base-emitter drop**, and this trips people up because it is not
+how a single BJT or a MOSFET behaves. Inside each ULN2803A channel the two collectors are tied together,
+so the output transistor's base is fed from the driver's emitter *through the output node itself*:
+
+```
+V(out) = V(Q1 emitter) + Vce(sat,Q1) = Vbe(Q2) + Vce(sat,Q1)
+```
+
+That floor is structural, not a load effect — it is there even with no current flowing. At the microamps
+a 10 MΩ meter draws, Vbe sits low on its curve and lands near 0.55 V. **Do not expect ~0 V here and do not
+treat 0.55 V as a failing output.**
+
+⚠️ Under a real ~15 mA opto-LED load, Vbe climbs and the output moves to the datasheet's **~0.9–1.1 V**.
+Same physics, further up the curve. That rise is the part working, not degrading — and it is precisely
+the ~1 V budgeted above, which is why the 16.55 V rail is what made this part viable where a 5 V rail
+would not have been.
 
 **The ground tie — nothing switches without it.** The breakout's **`GND`** pad (silk may read `E`, for the
 common emitters, IC pin 9) on all three boards ties to one node: **QCT `com` + S3 GND + wall-wart
