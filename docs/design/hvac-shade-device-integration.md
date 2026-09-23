@@ -642,6 +642,71 @@ Implied LED current, working back through a ~1.2 V forward drop: 1 kΩ → ~15 m
 Margins are large: 40 V Vceo against 16.55 V, ~15 mA against a 200 mA rating, ~3 mW dissipation, and
 2.6 mA of base drive for a required gain under 6. Any small-signal NPN works.
 
+#### DECIDED 2026-09-23 — drive the QCT's Atmel pins directly (opto bypass)
+
+**The 16.55 V input section is abandoned entirely.** Not worked around — bypassed. Every problem of the
+last two days lived in it: the polarity error, the CTR arithmetic, the photoMOS sourcing hunt, the
+isolation debate. None of it survives this decision.
+
+**What the QCT looks like inside** (measured 2026-09-23): an Atmel QFP44 on a **5 V** rail (4.8 V at the
+decoupling cap). Each of the 18 PC817A optos has its collector on an Atmel pin with a pull-up to 5 V, and
+its emitter at Atmel ground. **Every input is ACTIVE-LOW** — asserting means sinking that pin. The opto
+topology forces this: a collector-on-pin, emitter-at-ground transistor can only ever pull low.
+
+**The modification, per channel:** remove the opto and bridge its terminal-side LED-anode pad to its
+transistor-side collector pad. The screw terminal then lands directly on the Atmel pin.
+
+⛔ **AND CUT THE RAIL FEED TO `Com`, REPURPOSING `Com` AS GROUND.** This is not optional and it is not
+merely tidiness. After bridging, `Com` still carries **+16.55 V** sitting next to 5 V logic inputs — and
+the manual, the catalogue and §3.3 of this document all instruct the reader to *"make a momentary closure
+between UP and Com."* Following the documented procedure would put 16.55 V on an Atmel pin and kill the
+MCU with no warning. Tying `Com` to Atmel ground inverts that: the documented gesture becomes the
+*correct* one, asserting the channel exactly as a reader would expect. **Label the enclosure** —
+*"MODIFIED: optos removed, terminals are 5 V logic, Com = GND."*
+
+**Why this beats the alternatives**, all genuinely considered:
+
+| Option | Cash | Verdict |
+|---|---|---|
+| **Atmel direct** | **~$0** | chosen — reuses the ULNs and the whole harness unmoved |
+| photoMOS (`AQW212`-class) | ~$60 | works, but buys isolation we do not need |
+| linkIT-US24 (§5) | ~$270 | **materially better product**; loses the QCT as sunk cost |
+
+The isolation being discarded is **redundant, and it is not what protects against mains** — that is the
+QCT's transformer and the node's isolated SMPS, both of which stay. The QCT's optos exist to defend
+against an unknown third-party controller's ground; we own both sides. This is a reliability trade, not
+a safety one.
+
+**Three properties that make it low-risk:**
+- **Additive, not subtractive** — wires are added to existing nodes; pull them and the board is stock.
+- **Mechanically robust** — the interface stays the screw terminal block, not 18 wires on SOP-4 pads
+  inside a box that will be opened and poked at for years.
+- **Everything else on the panel is untouched** — front-panel buttons, `SEL`, the RF transmitter, §3.6
+  pairing, and the channel LEDs all keep working.
+
+**Wiring — the existing harness does not move:**
+
+```
+ULN output n  ──────  channel terminal n     (already wired)
+ULN pin 9     ──────  Com terminal → Atmel GND
+ULN COM       ──────  nothing, as always
+GPIO HIGH → ULN sinks → Atmel pin LOW → asserted
+```
+
+`active_high = true` survives, as do `kPin[]`, the harness, `ha_gaposa`, `ha_dout` and the pin test. At
+5 V logic the Darlington's ~0.7 V floor sits comfortably under the ATmega's 1.5 V V<sub>IL</sub>.
+
+**Before soldering channel 1**, verify pads with power off: **collector** reads a few kΩ to 5 V,
+**emitter** reads near 0 Ω to ground. Getting them backwards does nothing useful and loads the line.
+
+**Removal without hot air** (none on site): cut each SOP-4 package off with flush cutters, then clean the
+four leads off the pads individually. No part to salvage, lower risk than walking solder across four pins.
+
+**Pin-test expectation changes** from *"terminal drops 16.25 V → 1 V"* to **"Atmel pin drops 4.8 V →
+~0.7 V"**. `test_describe()` in `app_main.c` still says the old one — update it with the map flash.
+
+---
+
 #### ⛔ SUPERSEDED 2026-09-23 — Build spec — 3 × ULN2803A, two shade channels per chip
 
 > **DO NOT BUILD FROM THIS SECTION.** It rests on open question #15's original, WRONG sign: `com` is the
