@@ -642,7 +642,24 @@ Implied LED current, working back through a ~1.2 V forward drop: 1 kΩ → ~15 m
 Margins are large: 40 V Vceo against 16.55 V, ~15 mA against a 200 mA rating, ~3 mW dissipation, and
 2.6 mA of base drive for a required gain under 6. Any small-signal NPN works.
 
-#### Build spec — 3 × ULN2803A, two shade channels per chip
+#### ⛔ SUPERSEDED 2026-09-23 — Build spec — 3 × ULN2803A, two shade channels per chip
+
+> **DO NOT BUILD FROM THIS SECTION.** It rests on open question #15's original, WRONG sign: `com` is the
+> rail **POSITIVE** and the QCT input is **SOURCING**. A ULN2803A sinks toward its emitters and cannot
+> source, and bonding pin 9 to `com` forward-biases every channel's collector-substrate diode — which
+> lit all eighteen optos at once and put the panel into its error state on the bench.
+>
+> **The replacement must be an isolated two-terminal contact** (photoMOS / photorelay / opto output),
+> not a better transistor. The terminal block exposes only `Com` and the channel terminals; the QCT's
+> internal negative is not brought out, so no conductive switch can be referenced to the load's return.
+> High-side NMOS fails both ways (referenced to `Com` it cannot switch off; referenced to the negative
+> it cannot switch on), and a P-channel design works only by floating the node's logic supply to `com` —
+> which re-couples the domains and inverts `active_high`.
+>
+> Retained below for the harness, pin map and the ULN-to-S3 wiring, all of which stay valid: the ULN
+> boards can remain as LED drivers for the isolated contacts. Only the 18 terminal-side wires move.
+
+
 
 The per-channel discrete NPN is implemented as three **ULN2803A** Darlington arrays (8 channels each,
 18 used, 6 spare). The ~1 V Darlington saturation drop costs ~7% of LED current on a 16.55 V rail —
