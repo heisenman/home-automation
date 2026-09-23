@@ -765,6 +765,23 @@ Same physics, further up the curve. That rise is the part working, not degrading
 the ~1 V budgeted above, which is why the 16.55 V rail is what made this part viable where a 5 V rail
 would not have been.
 
+⛔ **GATE BEFORE FIRST LIVE COMMAND — the ground tie.** Deferred by Hugh 2026-09-23 ("not sure it's
+needed or how"); it IS needed, and it is one wire. Photographed 2026-09-23: the wall wart is an
+open-frame SMPS with a **USB-A socket**, and the S3 is powered from it over USB — so **wall-wart negative
+and S3 GND are already bonded through the USB cable's ground conductor**. The three-way node therefore
+collapses to a single connection:
+
+```
+any S3 / ULN GND pad  ──►  any QCT `Com` terminal     (all six Com are internally shorted)
+```
+
+Without it the ULN emitters have no return path through the QCT's opto LEDs, every output has nowhere to
+sink, and nothing switches — which presents as "the firmware is broken" rather than as a missing wire.
+
+⚠️ **The QCT terminal silk reads `Com  Dw  St  Up` per channel** — the REVERSE of `kPin[]`'s `Up/St/Dw`
+function order. Harness for physical convenience and re-cut `kPin[]` to match; the pin test above
+re-verifies the whole map in minutes. Never twist copper to match a source file.
+
 **The ground tie — nothing switches without it.** The breakout's **`GND`** pad (silk may read `E`, for the
 common emitters, IC pin 9) on all three boards ties to one node: **QCT `com` + S3 GND + wall-wart
 negative**. The wall wart is an isolated SMPS whose output floats until that tie is made. All six QCT
