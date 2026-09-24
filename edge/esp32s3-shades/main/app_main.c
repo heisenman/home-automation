@@ -160,7 +160,7 @@ static const char *kHarness[HA_GAPOSA_MAX_CH][3] = {
 
 static void test_describe(int i, char *out, size_t cap) {
     int ch = i / 3, fn = i % 3;
-    snprintf(out, cap, "step %d/%d: %s | CH%d %s | GPIO%d  (terminal should DROP ~16.2V -> ~1V)",
+    snprintf(out, cap, "step %d/%d: %s | CH%d %s | GPIO%d  (Atmel pin should DROP 4.8V -> ~0.7V)",
              i + 1, PINTEST_COUNT, kHarness[ch][fn], ch + 1, kFnName[fn], (int)kPin[ch][fn]);
 }
 

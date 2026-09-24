@@ -82,3 +82,40 @@ writes off the QCT).
   SIGTERM kills it before the flush. Produced two false "the node is dead" readings.
 - **Ask what the vendor intended.** The QCT's dry contacts are meant for a Lutron/Control4 *relay card*.
   Recognising that is what reframed the whole problem away from "better transistor".
+
+---
+
+## UPDATE 2026-09-24 — modification BUILT, map flashed, node live
+
+Hugh completed the Atmel-direct modification: **18 optos removed and bridged, `Com` rail feed cut and
+`Com` jumped to PCB GND.** Lines and continuity checked before power-up. The screw terminal block came
+off too — wires land directly on the board pads.
+
+**`shades_s3` now runs the harness-matched map.** That closes the "first job next session" item above.
+
+```
+home/edge/shades_s3/status  online ota_0 v1-shades
+pintest: ASSERTED step 1/18: U2 4C | CH1 Up | GPIO15  (Atmel pin should DROP 4.8V -> ~0.7V)
+pintest: ASSERTED step 2/18: U2 5C | CH1 St | GPIO7   ...
+```
+
+Grounds now one node: **S3 GND = ULN pin 9 = QCT PCB GND = QCT `Com` pads.**
+
+⛔ **ULN `COM` (pin 10) stays floating — asked and answered for the THIRD time.** The diodes are
+anode-at-output, cathode-at-`COM`, and the outputs now sit at 4.8 V pulled up to the Atmel rail. Tying
+`COM` to the ground node forward-biases all eighteen and clamps every Atmel pin to ~0.7 V — every channel
+permanently asserted, transistors idle. Same mechanism as the 16.55 V flashing-lights event. `COM` is not
+a ground and does not become one no matter what else is bonded. If ever connected, it goes to **+5 V**.
+
+### Next
+
+1. **Run the pin test against real hardware** — `python3 tools/shade_cmd.py pintest`, watch each Atmel
+   pin drop 4.8 V → ~0.7 V in the announced order. This is the first end-to-end confirmation of the
+   modification.
+2. **Label the enclosure** — nothing on the board matches its own silkscreen now.
+3. Pair the motors (§3.6, one motor powered at a time), then §3.3 pulse-width sweep.
+
+### Unchanged and still open
+
+`hvac_c6` (LISTEN_ONLY, awaiting J9) and `dehum_c6` (inert, awaiting §7.3) both healthy and untouched.
+Open #2 / #3 / #4 as recorded above.
