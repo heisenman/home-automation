@@ -91,10 +91,16 @@ static const char *TAG = "ha_shades";
 // QCT terminal silk reads `Com Dw St Up` per channel, so the 18 terminals in board order
 // (CH1 Dw,St,Up ... CH6 Dw,St,Up) land on ULN output pads in the sequence:
 //
-//       U2 pads 6->1,  U1 pads 6->1,  U3 pads 1->6
+//       U2 pads 6->1,  U1 pads 6->1,  U3 pads 6->1        (MEASURED 2026-09-27)
 //
 // which is what produces the apparently-scrambled GPIO table below. It is not scrambled; it is the
 // straightest possible harness. Verify with `tools/shade_cmd.py pintest`, never by reading this comment.
+//
+// ⚠️ U3 WAS RECORDED AS `1->6` UNTIL 2026-09-27. The pin test walked all 18 lines with a meter on the ULN
+// output pads and found U3 descending like the other two, so the harness is UNIFORM across all three
+// chips — pads 6C..1C per chip, chips in order U2, U1, U3. The `1->6` came from the same by-hand report
+// that got `com`'s polarity backwards; a measurement replaced it. Every kPin row below now reads
+// 4C/5C/6C then 1C/2C/3C, which is the tell that the table is self-consistent.
 //
 // Spare at the header: row B GPIO 8/5/4, row A GPIO 21/47. Deliberately NOT used: 19/20 (USB D-/D+ —
 // this board has a separate native-USB port and the build enables USB-Serial-JTAG, so the PHY owns
@@ -102,13 +108,23 @@ static const char *TAG = "ha_shades";
 // 26-32 (SPI flash), 33-37 (consumed by the N16R8's octal PSRAM: broken out on the header but DEAD),
 // and 48 (the onboard WS2812, silkscreened RGB@IO48, blanked at boot above).
 // [channel][Up, St, Dw] — the array order is FUNCTION order; the harness order is the comment column.
+//
+// ⛔ THE GPIO->PAD COLUMN IS MEASURED. THE CH/FUNCTION ASSIGNMENT IS NOT — IT IS STILL A BELIEF.
+// The 2026-09-27 pin test confirmed which ULN pad each GPIO drives (the column below). It also read the
+// QCT's own channel LEDs, and those did NOT follow this table: CH1 and CH6 matched, CH2/CH3/CH4/CH5 lit
+// the right CHANNEL but the wrong FUNCTION within it, and one step lit `6S` where `5S` was expected.
+// Cause not yet established — the 18 wires from ULN outputs to the Atmel pads were landed individually by
+// hand, so a per-wire swap is the leading candidate, but it has not been proven and `5S` may simply have
+// been misread. DO NOT trust Up/St/Dw here, and DO NOT issue real `shade` commands off it: a CH5 command
+// may actuate CH6. Deliberately left as-is at Hugh's direction so the pad sweep could be verified first;
+// resolving it is the next job. See docs/design/hvac-shade-device-integration.md, open question #19.
 static const gpio_num_t kPin[HA_GAPOSA_MAX_CH][3] = {
     { GPIO_NUM_15, GPIO_NUM_7,  GPIO_NUM_6  },   // CH1  Up/St/Dw <- U2 4C/5C/6C
     { GPIO_NUM_18, GPIO_NUM_17, GPIO_NUM_16 },   // CH2  Up/St/Dw <- U2 1C/2C/3C
     { GPIO_NUM_11, GPIO_NUM_10, GPIO_NUM_9  },   // CH3  Up/St/Dw <- U1 4C/5C/6C
     { GPIO_NUM_14, GPIO_NUM_13, GPIO_NUM_12 },   // CH4  Up/St/Dw <- U1 1C/2C/3C
-    { GPIO_NUM_41, GPIO_NUM_42, GPIO_NUM_2  },   // CH5  Up/St/Dw <- U3 3C/2C/1C
-    { GPIO_NUM_38, GPIO_NUM_39, GPIO_NUM_40 },   // CH6  Up/St/Dw <- U3 6C/5C/4C
+    { GPIO_NUM_41, GPIO_NUM_42, GPIO_NUM_2  },   // CH5  Up/St/Dw <- U3 4C/5C/6C   (pads corrected 09-27)
+    { GPIO_NUM_38, GPIO_NUM_39, GPIO_NUM_40 },   // CH6  Up/St/Dw <- U3 1C/2C/3C   (pads corrected 09-27)
 };
 
 #define SHADE_CHANNELS   6
@@ -144,24 +160,47 @@ static volatile bool     s_test_announced_expiry;
 //
 // ⚠️ A TABLE, NOT A FORMULA, AND IT MUST TRACK kPin[] ABOVE ROW FOR ROW. This was computed from the
 // index until 2026-09-23, which silently assumed chips ran U1,U2,U3 with pads ascending. Hugh's harness
-// does neither (U2,U1,U3; CH1 and CH5/CH6 run their pads backwards), so the formula would have named the
-// wrong chip and pad — while the operator was trusting it to verify the wiring. Wrong labels on a
-// verification tool are worse than no tool.
+// does neither (chips run U2,U1,U3 and every chip runs its pads backwards), so the formula would have
+// named the wrong chip and pad — while the operator was trusting it to verify the wiring. Wrong labels on
+// a verification tool are worse than no tool. MEASURED 2026-09-27, one meter reading per line.
 static const char *kFnName[3] = { "Up", "St", "Dw" };
 static const char *kHarness[HA_GAPOSA_MAX_CH][3] = {
     { "U2 4C", "U2 5C", "U2 6C" },   // CH1  Up/St/Dw
     { "U2 1C", "U2 2C", "U2 3C" },   // CH2
     { "U1 4C", "U1 5C", "U1 6C" },   // CH3
     { "U1 1C", "U1 2C", "U1 3C" },   // CH4
-    { "U3 3C", "U3 2C", "U3 1C" },   // CH5
-    { "U3 6C", "U3 5C", "U3 4C" },   // CH6
+    { "U3 4C", "U3 5C", "U3 6C" },   // CH5
+    { "U3 1C", "U3 2C", "U3 3C" },   // CH6
+};
+
+// The order the pin test WALKS, as {channel, function} pairs. Separate from kPin[] on purpose: kPin is
+// indexed by what a line MEANS, this is the order a human wants to be shown it.
+//
+// Sweeping in channel order hops around the boards (U2 4C,5C,6C then jumps back to U2 1C...), which makes
+// the operator chase the probe and makes an off-by-one indistinguishable from a wiring error. Walking the
+// PADS instead — 6C down to 1C on U2, then U1, then U3 — is one continuous left-to-right progression
+// across the three chips, so the expected next pad is always the one physically next to the probe. A
+// transposition then shows up as a break in an obvious sequence rather than as a number to cross-check.
+//
+// ⚠️ Derived from kHarness[] above; if either changes, both change. Pads per chip must read 6,5,4,3,2,1.
+static const uint8_t kWalk[PINTEST_COUNT][2] = {
+    {0, SHADE_DW}, {0, SHADE_ST}, {0, SHADE_UP},   // U2 6C 5C 4C   (GPIO 6, 7, 15)
+    {1, SHADE_DW}, {1, SHADE_ST}, {1, SHADE_UP},   // U2 3C 2C 1C   (GPIO 16, 17, 18)
+    {2, SHADE_DW}, {2, SHADE_ST}, {2, SHADE_UP},   // U1 6C 5C 4C   (GPIO 9, 10, 11)
+    {3, SHADE_DW}, {3, SHADE_ST}, {3, SHADE_UP},   // U1 3C 2C 1C   (GPIO 12, 13, 14)
+    {4, SHADE_DW}, {4, SHADE_ST}, {4, SHADE_UP},   // U3 6C 5C 4C   (GPIO 2, 42, 41)
+    {5, SHADE_DW}, {5, SHADE_ST}, {5, SHADE_UP},   // U3 3C 2C 1C   (GPIO 40, 39, 38)
 };
 
 
+// The PAD is what this step proves, so it leads. The channel/function is the firmware's BELIEF about what
+// that pad drives, and 2026-09-27 showed the belief is wrong on four channels — so it is labelled as a
+// belief. A verification tool that states an unverified mapping as fact is how the last two mis-wirings
+// survived; whatever this line claims, the operator must be able to tell measurement from assumption.
 static void test_describe(int i, char *out, size_t cap) {
-    int ch = i / 3, fn = i % 3;
-    snprintf(out, cap, "step %d/%d: %s | CH%d %s | GPIO%d  (Atmel pin should DROP 4.8V -> ~0.7V)",
-             i + 1, PINTEST_COUNT, kHarness[ch][fn], ch + 1, kFnName[fn], (int)kPin[ch][fn]);
+    int ch = kWalk[i][0], fn = kWalk[i][1];
+    snprintf(out, cap, "step %d/%d: %s | GPIO%d  (Atmel pin should DROP 4.8V -> ~0.6V)  [believes CH%d %s]",
+             i + 1, PINTEST_COUNT, kHarness[ch][fn], (int)kPin[ch][fn], ch + 1, kFnName[fn]);
 }
 
 static ha_gaposa_t s_planner;
@@ -355,8 +394,10 @@ static void control_task(void *arg) {
                          // in duration and batches them separately so they can never overlap.
                          || (fn == SHADE_ST && (a == HA_GAPOSA_CMD_STOP || a == HA_GAPOSA_CMD_INTERIM));
 
-                // Exactly one line asserted during a test, and never a stale planner command.
-                if (test >= 0) want = !test_expired && (test == ch * 3 + fn);
+                // Exactly one line asserted during a test, and never a stale planner command. Compared
+                // against kWalk[], NOT `ch * 3 + fn` — the walk order is a table now, so a formula here
+                // would assert a different line than test_describe() just announced.
+                if (test >= 0) want = !test_expired && (ch == kWalk[test][0] && fn == kWalk[test][1]);
 
                 ha_dout_t *d = &s_line[ch][fn];
                 ha_dout_set(d, want, t);

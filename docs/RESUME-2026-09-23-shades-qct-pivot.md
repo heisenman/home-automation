@@ -119,3 +119,114 @@ a ground and does not become one no matter what else is bonded. If ever connecte
 
 `hvac_c6` (LISTEN_ONLY, awaiting J9) and `dehum_c6` (inert, awaiting §7.3) both healthy and untouched.
 Open #2 / #3 / #4 as recorded above.
+
+---
+
+## UPDATE 2026-09-27 — the modification WORKS. Firmware v2 written but NOT running (OTA rolled back)
+
+QCT and S3 reassembled, back on AC, smoke test passed. **Hugh ran the full 18-step pin test with a meter.**
+
+### ✅ The Atmel-direct modification is electrically PROVEN
+
+Every one of the 18 lines pulled its Atmel pad from 4.8 V down to **~0.6 V**, in the announced order. That
+is the end-to-end confirmation the last three sessions were building toward: 18 optos removed, 18 bridges,
+the `Com` rail cut and repurposed as ground — all of it good. **This question is closed.**
+
+### ⚠️ But two datasets disagree, and only one of them is about pads
+
+| What was measured | Result |
+|---|---|
+| **ULN output pads** (meter) | `U2 4,5,6,1,2,3` · `U1 4,5,6,1,2,3` · `U3 4,5,6,1,2,3` — in walk order |
+| **QCT channel LEDs** (eye) | `1U 1S 1D · 2S 2D 2U · 3D 3S 3U · 4S 4U 4D · 5D 6S 5U · 6U 6S 6D` |
+
+**The pad data corrected a mis-record and made the harness uniform.** U3 had been documented `1->6` since
+2026-09-23; it is actually `6->1` like the other two. Same provenance as the `com` polarity error — a
+by-hand report, replaced by a measurement. Every `kPin[]` row now reads `4C/5C/6C` then `1C/2C/3C`, which
+is the tell that the table is self-consistent.
+
+**The LED data says the pad→function mapping is wrong on four channels.** Right channel, wrong function
+inside it, per-channel permutations. And step 14 lit `6S` where `5S` was expected — `5S` never lit, `6S`
+lit twice, so that pair is either a misread or two wires on one pad. Leading candidate: per-wire
+transposition, since the 18 ULN→Atmel wires were landed individually by hand. **Logged as open question
+#19.** Hugh's call was to fix the pad sweep first and chase the QCT afterwards, which is the right order —
+one unknown at a time.
+
+⛔ **Do NOT issue real `shade` commands yet.** `kPin[]`'s Up/St/Dw columns are a belief; a CH5 command may
+actuate CH6. Motors are still unpaired so nothing can physically move, which is the only reason this is
+merely wrong and not dangerous.
+
+### Firmware v2 (committed, built, warning-free) — four changes
+
+1. **`kHarness[]` U3 rows corrected** to `4C/5C/6C` + `1C/2C/3C`.
+2. **New `kWalk[]` table — the pin test now sweeps PADS, not channels.** `U2 6C→1C, U1 6C→1C, U3 6C→1C`:
+   one continuous left-to-right progression across the three chips, so the next expected pad is always the
+   one physically beside the probe and a transposition shows up as a break in an obvious sequence. Walk
+   order is now *separate* from `kPin[]` — `kPin` is indexed by what a line means, `kWalk` by the order a
+   human wants to be shown it.
+3. **`test_describe()` leads with the pad and labels the channel/function `[believes CH5 St]`.** The pad is
+   measured, the function is not, and the operator must be able to tell them apart. Also `~0.7V` → `~0.6V`
+   to match the meter.
+4. **The control loop compares against `kWalk[]`, not `ch * 3 + fn`** — a formula there would assert a
+   different line than `test_describe()` just announced. Same class of bug as the 2026-09-23 label formula.
+
+### ⛔ HANDOFF STATE: the node is running v1-shades, NOT v2
+
+**The OTA rolled back.** `shades_s3` is on `ota_0 v1-shades` — the OLD pin map and the OLD U3 labels. If you
+run `pintest` right now you get the old walk order and the wrong U3 pad names.
+
+Yes, this node is OTA-capable and the recipe is the right one:
+
+```sh
+bash tools/ota_edge_node.sh shades_s3 esp32s3-shades v2-shades
+```
+
+What happened — it got **all the way through** and then reverted:
+
+```
+identity OK: image 'shades_s3@v2-shades' is built for 'shades_s3'
+OTA image hash verified
+OTA write OK — rebooting into ota_1 (pending verify)
+status: offline
+status: online ota_0 v1-shades
+✗ OTA ROLLED BACK — bad image failed self-test; node reverted (safe)
+```
+
+**Diagnosis is UNFINISHED.** What is established:
+
+- **Not a rejection.** Host pin, identity gate and signed hash all passed; the image was written.
+- **The self-test is `ha_mqtt_is_connected()` within ~15 s** (`ha_ota_confirm_if_pending`, 30 × 500 ms).
+  In `app_main` it is called *immediately* after `ha_mqtt_start()`, so the trial image gets ~15 s to join
+  WiFi's already-up radio and reach the broker.
+- **The trial boot cannot report why it failed.** `ota_log()` publishes over MQTT — the exact thing that
+  wasn't up. Absence of `ota_1` log lines is expected and is NOT evidence of a crash.
+- **Serial is no longer available** — the UART is unplugged now that the node is in the enclosure.
+- The v2 build is warning-free and the changes are static tables plus indexing, so a boot crash is
+  possible but not the obvious suspect. Untested either way.
+
+Candidates, in rough order: (a) 15 s is simply too tight on this net; (b) something before
+`ha_mqtt_start()` fails on a trial boot and restarts — `ha_wifi_connect` failure sleeps 10 s then
+`esp_restart()`s, and a reboot while `PENDING_VERIFY` makes the bootloader revert on the next boot, which
+would look exactly like this; (c) a real fault in v2.
+
+Cheapest way to separate them: **time the `offline`→`online` gap on a re-attempt.** ~20 s means the
+self-test ran its full wait and timed out; ~5–8 s means it restarted early, pointing at (b).
+
+### OTA facts worth not rediscovering
+
+- **The OTA must be served from ha-2.** `ota_host_pinned_ok()` enforces URL host == `192.168.1.210`; this
+  box is `192.168.1.245` on the air-gap leg, so serving locally is rejected node-side. `ota_edge_node.sh`
+  already does the scp-then-run-there dance.
+- ha-2 prerequisites all verified present: `~/ota-venv/bin/python3` (has paho), `~/ota-canary/`,
+  `~/home_automation/tools/edge_ota.py`.
+- `version.txt` is now `shades_s3@v2-shades` (gitignored). The identity gate wants `<node_id>@`, and
+  re-OTA of the same tag is fine — the gate is identity-only, not version-monotonic.
+
+### Next session, in order
+
+1. **Re-attempt the OTA and time the `offline`→`online` gap.** Decides (a)/(b) vs (c) without a cable.
+2. If it needs a cable: the UART goes back on, `idf.py -p /dev/ttyUSB0 flash monitor` shows the trial boot
+   directly — and a cable-flashed image is never `PENDING_VERIFY`, so it sidesteps the self-test entirely.
+3. **Re-run the pin test on v2** and check the LED order against the pad sweep. Expected now: one clean
+   progression. That is the measurement that resolves #19.
+4. Then pair the motors (§3.6, one at a time — broadcast RF) and only then issue real `shade` commands.
+5. Still waiting: label the enclosure; §3.3 pulse-width sweep; `hvac_c6` §7.2 J9; `dehum_c6` §7.3.
