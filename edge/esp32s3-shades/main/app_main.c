@@ -57,7 +57,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v1-shades"
+#define HA_FW_VERSION "v2-shades"
 #endif
 
 static const char *TAG = "ha_shades";

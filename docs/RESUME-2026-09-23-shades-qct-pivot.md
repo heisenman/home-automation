@@ -230,3 +230,30 @@ self-test ran its full wait and timed out; ~5–8 s means it restarted early, po
    progression. That is the measurement that resolves #19.
 4. Then pair the motors (§3.6, one at a time — broadcast RF) and only then issue real `shade` commands.
 5. Still waiting: label the enclosure; §3.3 pulse-width sweep; `hvac_c6` §7.2 J9; `dehum_c6` §7.3.
+
+---
+
+## UPDATE 2026-09-27 (later) — OTA root-caused and FIXED; `shades_s3` now runs v2
+
+```
+18:45:49Z  log     OTA write OK — rebooting into ota_1 (pending verify)
+18:46:08Z  status  online ota_1 v2-shades
+18:46:08Z  log     OTA self-test PASS — image confirmed valid on ota_1
+```
+
+**Root cause: the v2 image had EMPTY WiFi.** `tools/ota_edge_node.sh` regenerates `secrets.h` with
+`enroll_node.py --reuse`, whose default `--base-secrets` is `edge/esp32c6/main/secrets.h`. That base
+carries empty WiFi on purpose, because the gas fleet keeps WiFi in NVS. `shades_s3` (like `hvac_c6` and `dehum_c6`) was
+cable-flashed with WiFi **compiled in** and has none in NVS. So the trial image failed `ha_wifi_connect`
+(30 s), `esp_restart()`ed while `PENDING_VERIFY`, and the bootloader reverted. That is candidate (b) above. It was
+never the 15 s self-test and never v2's code.
+
+**Fixes:**
+- `ota_edge_node.sh` now uses the board's OWN `secrets.h` as the WiFi base when it has one, and
+  **refuses** to build an empty-WiFi image unless `WIFI_IN_NVS=1`. `hvac_c6`/`dehum_c6` would have hit
+  the same trap on their first OTA.
+- `HA_FW_VERSION` bumped to `v2-shades`. It still said `v1-shades`, so a good OTA would have misreported
+  itself. Only the gitignored `version.txt` had been bumped.
+
+**Next:** re-run `python3 tools/shade_cmd.py pintest` on v2 and compare the LED order to the pad sweep
+(open question #19). Then pair the motors. Still no real `shade` commands until #19 is resolved.

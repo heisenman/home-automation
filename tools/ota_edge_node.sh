@@ -4,6 +4,7 @@
 # generalized across boards (esp32c6 | esp32s3-eth). Node-side gate is IDENTITY-ONLY (ha_ota.c) so re-OTA of
 # the same tag is fine.  Steps: re-emit secrets.h (reuse the node's HMAC secret) -> brand version.txt
 # (<node>@<fw>) -> reconfigure+build -> scp to ha-2 ~/ota-canary -> signed edge_ota (serve .1.210, broker .1.200).
+# WiFi: taken from the board's own secrets.h when it has one; an empty-wifi build is refused unless WIFI_IN_NVS=1.
 set -euo pipefail
 NODE="${1:?usage: ota_edge_node.sh <node_id> <board_subdir> [fw_tag]}"
 BOARD="${2:?board_subdir, e.g. esp32c6 or esp32s3-eth}"
@@ -13,9 +14,30 @@ BDIR="$REPO/edge/$BOARD"
 cd "$REPO"
 LOG=$(mktemp "/tmp/ota-${NODE}.XXXXXX.log")   # build log (was a stale per-session scratchpad path)
 
+wifi_ssid() { grep -oP 'HA_WIFI_SSID\s+"\K[^"]*' "$1" 2>/dev/null || true; }
+
+# WiFi for the image comes from --base-secrets. enroll_node's default base (edge/esp32c6) carries EMPTY
+# wifi on purpose — the gas fleet keeps it in NVS. A board cable-flashed with wifi COMPILED IN (the ADR-0041
+# nodes) that gets an empty-wifi image can't join, restarts while PENDING_VERIFY, and the bootloader rolls
+# back: shades_s3 v2 on 2026-09-27, which read as "OTA self-test failed". So prefer the board's OWN
+# secrets.h (what it was flashed with) when it has wifi, and refuse an empty-wifi build unless the caller
+# asserts the node holds wifi in NVS (WIFI_IN_NVS=1).
+BASE_ARGS=()
+if [ -n "$(wifi_ssid "$BDIR/main/secrets.h")" ]; then
+  BASE_COPY=$(mktemp "/tmp/ota-${NODE}-base.XXXXXX.h")
+  cp "$BDIR/main/secrets.h" "$BASE_COPY"
+  BASE_ARGS=(--base-secrets "$BASE_COPY")
+fi
+
 echo "[$NODE] emit secrets + brand ${NODE}@${FW}"
 HA_MASTER_PASSPHRASE="$(cat instance/.master_pass)" venv/bin/python3 tools/enroll_node.py \
-  --node-id "$NODE" --from-manifest --reuse --out "$BDIR/main/secrets.h" >/dev/null 2>&1
+  --node-id "$NODE" --from-manifest --reuse "${BASE_ARGS[@]}" --out "$BDIR/main/secrets.h" >/dev/null 2>&1
+[ -n "${BASE_COPY:-}" ] && rm -f "$BASE_COPY"
+if [ -z "$(wifi_ssid "$BDIR/main/secrets.h")" ] && [ "${WIFI_IN_NVS:-0}" != 1 ]; then
+  echo "[$NODE] REFUSING: image would have EMPTY wifi. If $NODE keeps wifi in NVS, re-run with WIFI_IN_NVS=1;"
+  echo "         otherwise put its wifi in $BDIR/main/secrets.h (the board's own base) and re-run."
+  exit 1
+fi
 printf '%s@%s' "$NODE" "$FW" > "$BDIR/version.txt"
 
 echo "[$NODE] build (log -> $LOG)"
