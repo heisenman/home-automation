@@ -57,7 +57,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v2-shades"
+#define HA_FW_VERSION "v4-shades"
 #endif
 
 static const char *TAG = "ha_shades";
@@ -109,22 +109,23 @@ static const char *TAG = "ha_shades";
 // and 48 (the onboard WS2812, silkscreened RGB@IO48, blanked at boot above).
 // [channel][Up, St, Dw] — the array order is FUNCTION order; the harness order is the comment column.
 //
-// ⛔ THE GPIO->PAD COLUMN IS MEASURED. THE CH/FUNCTION ASSIGNMENT IS NOT — IT IS STILL A BELIEF.
-// The 2026-09-27 pin test confirmed which ULN pad each GPIO drives (the column below). It also read the
-// QCT's own channel LEDs, and those did NOT follow this table: CH1 and CH6 matched, CH2/CH3/CH4/CH5 lit
-// the right CHANNEL but the wrong FUNCTION within it, and one step lit `6S` where `5S` was expected.
-// Cause not yet established — the 18 wires from ULN outputs to the Atmel pads were landed individually by
-// hand, so a per-wire swap is the leading candidate, but it has not been proven and `5S` may simply have
-// been misread. DO NOT trust Up/St/Dw here, and DO NOT issue real `shade` commands off it: a CH5 command
-// may actuate CH6. Deliberately left as-is at Hugh's direction so the pad sweep could be verified first;
-// resolving it is the next job. See docs/design/hvac-shade-device-integration.md, open question #19.
+// BOTH COLUMNS ARE NOW MEASURED. GPIO->pad by meter on the ULN outputs; pad->CH/function by the QCT's
+// own channel LEDs, both 2026-09-27. The QCT does not lay its Atmel pads out per channel: CH1 and CH3 are
+// contiguous, CH2 is permuted inside its block, and CH4/CH5/CH6 interleave across U1 and U3. That is the
+// QCT's internal routing — our harness is a straight 6C->1C run per chip (kWalk below) — so the fix is
+// this table, NOT a rewire. See docs/design/hvac-shade-device-integration.md, open question #19.
+//
+// ⚠️ Four rows CONTRADICT the first (v1) LED run: GPIO13 (was read 4U, now 6U), GPIO2
+// (5U -> 4U), GPIO38 (6U -> 5U), GPIO39 (6S -> 5S). The first run was internally inconsistent (6S twice,
+// 5S never); the second was a clean bijection and Hugh REPEATED it with the same result, so it wins. The v4
+// channel-order pintest (predicted 1U 1S 1D ... 6D) is the final confirmation before any real `shade` command.
 static const gpio_num_t kPin[HA_GAPOSA_MAX_CH][3] = {
     { GPIO_NUM_15, GPIO_NUM_7,  GPIO_NUM_6  },   // CH1  Up/St/Dw <- U2 4C/5C/6C
-    { GPIO_NUM_18, GPIO_NUM_17, GPIO_NUM_16 },   // CH2  Up/St/Dw <- U2 1C/2C/3C
-    { GPIO_NUM_11, GPIO_NUM_10, GPIO_NUM_9  },   // CH3  Up/St/Dw <- U1 4C/5C/6C
-    { GPIO_NUM_14, GPIO_NUM_13, GPIO_NUM_12 },   // CH4  Up/St/Dw <- U1 1C/2C/3C
-    { GPIO_NUM_41, GPIO_NUM_42, GPIO_NUM_2  },   // CH5  Up/St/Dw <- U3 4C/5C/6C   (pads corrected 09-27)
-    { GPIO_NUM_38, GPIO_NUM_39, GPIO_NUM_40 },   // CH6  Up/St/Dw <- U3 1C/2C/3C   (pads corrected 09-27)
+    { GPIO_NUM_16, GPIO_NUM_18, GPIO_NUM_17 },   // CH2  Up/St/Dw <- U2 3C/1C/2C
+    { GPIO_NUM_9,  GPIO_NUM_10, GPIO_NUM_11 },   // CH3  Up/St/Dw <- U1 6C/5C/4C
+    { GPIO_NUM_2,  GPIO_NUM_14, GPIO_NUM_12 },   // CH4  Up/St/Dw <- U3 6C / U1 1C / U1 3C
+    { GPIO_NUM_38, GPIO_NUM_39, GPIO_NUM_41 },   // CH5  Up/St/Dw <- U3 1C/2C/4C
+    { GPIO_NUM_13, GPIO_NUM_42, GPIO_NUM_40 },   // CH6  Up/St/Dw <- U1 2C / U3 5C / U3 3C
 };
 
 #define SHADE_CHANNELS   6
@@ -166,30 +167,27 @@ static volatile bool     s_test_announced_expiry;
 static const char *kFnName[3] = { "Up", "St", "Dw" };
 static const char *kHarness[HA_GAPOSA_MAX_CH][3] = {
     { "U2 4C", "U2 5C", "U2 6C" },   // CH1  Up/St/Dw
-    { "U2 1C", "U2 2C", "U2 3C" },   // CH2
-    { "U1 4C", "U1 5C", "U1 6C" },   // CH3
-    { "U1 1C", "U1 2C", "U1 3C" },   // CH4
-    { "U3 4C", "U3 5C", "U3 6C" },   // CH5
-    { "U3 1C", "U3 2C", "U3 3C" },   // CH6
+    { "U2 3C", "U2 1C", "U2 2C" },   // CH2
+    { "U1 6C", "U1 5C", "U1 4C" },   // CH3
+    { "U3 6C", "U1 1C", "U1 3C" },   // CH4
+    { "U3 1C", "U3 2C", "U3 4C" },   // CH5
+    { "U1 2C", "U3 5C", "U3 3C" },   // CH6
 };
 
 // The order the pin test WALKS, as {channel, function} pairs. Separate from kPin[] on purpose: kPin is
 // indexed by what a line MEANS, this is the order a human wants to be shown it.
 //
-// Sweeping in channel order hops around the boards (U2 4C,5C,6C then jumps back to U2 1C...), which makes
-// the operator chase the probe and makes an off-by-one indistinguishable from a wiring error. Walking the
-// PADS instead — 6C down to 1C on U2, then U1, then U3 — is one continuous left-to-right progression
-// across the three chips, so the expected next pad is always the one physically next to the probe. A
-// transposition then shows up as a break in an obvious sequence rather than as a number to cross-check.
-//
-// ⚠️ Derived from kHarness[] above; if either changes, both change. Pads per chip must read 6,5,4,3,2,1.
+// CHANNEL ORDER (CH1..CH6, Up/St/Dw) since v4 — the QCT's LEDs are now what is being verified, so the walk
+// follows them: the predicted LED sequence is simply 1U 1S 1D 2U ... 6D, and any break in it is a mapping
+// error. v2/v3 walked PADS (U2 6C->1C, U1, U3) to verify the ULN side against a meter; that is done
+// (2026-09-27, twice), and the pad order is still announced on every step via kHarness.
 static const uint8_t kWalk[PINTEST_COUNT][2] = {
-    {0, SHADE_DW}, {0, SHADE_ST}, {0, SHADE_UP},   // U2 6C 5C 4C   (GPIO 6, 7, 15)
-    {1, SHADE_DW}, {1, SHADE_ST}, {1, SHADE_UP},   // U2 3C 2C 1C   (GPIO 16, 17, 18)
-    {2, SHADE_DW}, {2, SHADE_ST}, {2, SHADE_UP},   // U1 6C 5C 4C   (GPIO 9, 10, 11)
-    {3, SHADE_DW}, {3, SHADE_ST}, {3, SHADE_UP},   // U1 3C 2C 1C   (GPIO 12, 13, 14)
-    {4, SHADE_DW}, {4, SHADE_ST}, {4, SHADE_UP},   // U3 6C 5C 4C   (GPIO 2, 42, 41)
-    {5, SHADE_DW}, {5, SHADE_ST}, {5, SHADE_UP},   // U3 3C 2C 1C   (GPIO 40, 39, 38)
+    {0, SHADE_UP}, {0, SHADE_ST}, {0, SHADE_DW},
+    {1, SHADE_UP}, {1, SHADE_ST}, {1, SHADE_DW},
+    {2, SHADE_UP}, {2, SHADE_ST}, {2, SHADE_DW},
+    {3, SHADE_UP}, {3, SHADE_ST}, {3, SHADE_DW},
+    {4, SHADE_UP}, {4, SHADE_ST}, {4, SHADE_DW},
+    {5, SHADE_UP}, {5, SHADE_ST}, {5, SHADE_DW},
 };
 
 

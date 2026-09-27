@@ -257,3 +257,13 @@ never the 15 s self-test and never v2's code.
 
 **Next:** re-run `python3 tools/shade_cmd.py pintest` on v2 and compare the LED order to the pad sweep
 (open question #19). Then pair the motors. Still no real `shade` commands until #19 is resolved.
+
+## UPDATE 2026-09-27 (v3/v4) — QCT function map corrected from the LED run; pintest now walks CHANNELS
+
+Pad-order pintest on v2, run TWICE by Hugh with the same result, LED sequence:
+`1D 1S 1U · 2U 2D 2S · 3U 3S 3D · 4D 6U 4S · 4U 6S 5D · 6D 5S 5U` (pads U2 6C→1C, U1 6C→1C, U3 6C→1C).
+That's a clean bijection. The v1 run's duplicate `6S` was a misread. Open question #19 is answered: the ULN→Atmel
+harness is straight; the **QCT's own pad layout** is not per-channel. Fixed in `kPin[]`/`kHarness[]` (no
+rewire). v3 shipped that map; v4 makes the pintest walk CH1..CH6 Up/St/Dw, so the predicted LED sequence
+is `1U 1S 1D … 6U 6S 6D`. Both OTAs passed the self-test first time. **Awaiting Hugh's v4 channel-order run**
+before any real `shade` command, then motor pairing (§3.6, one at a time).
