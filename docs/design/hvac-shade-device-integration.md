@@ -1287,7 +1287,7 @@ conductive resting on the enclosure.
 |---|---|---|---|
 | 1 | ~~QCT `com`→earth: mains-referenced?~~ **RESOLVED 2026-09-20** — every input is opto-isolated (18× PC817A). Node-inside-enclosure is fine. | — | done |
 | 2 | How does the QCT error clear? **PARTIAL 2026-09-23: a POWER CYCLE clears it — observed.** The panel is recoverable, not brickable, which was the real risk. Still unknown whether it *also* clears on release; the error was induced accidentally and cleared with AC off, so the two are not distinguished. Answer deliberately once a working drive exists: hold ONE contact >30 s, release WITHOUT cutting power, observe. Power cycle is the known-good fallback. | `ha_gaposa` recovery path | bench |
-| 3 | QCT minimum recognized pulse width | `ha_gaposa` pulse constant | bench |
+| 3 | QCT minimum recognized pulse width. **PARTIAL 2026-09-27: 500 ms IS recognized** — `shade 1 up` from firmware (signed cmd → ULN → Atmel pad → QCT RF) moved the CH1-paired XS40 exactly as the panel's own `UP` tap does (motor pre-limits, so dead-man: a short turn then stop). That makes 500 ms a proven UPPER bound and closes the end-to-end path on CH1. The true minimum is still unmeasured. | `ha_gaposa` pulse constant | bench |
 | 4 | Does a ~3 s `St` hold recall the intermediate position? | Third position datum | bench |
 | 5 | **Does Broan E50 self-clear, or need a power cycle?** | **OTA story for `ha-hvac`** | bench |
 | 6 | Broan temperature units (°C/°F) | `ha_broan` scaling | bench |

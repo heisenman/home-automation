@@ -268,3 +268,19 @@ rewire). v3 shipped that map; v4 makes the pintest walk CH1..CH6 Up/St/Dw, so th
 is `1U 1S 1D … 6U 6S 6D`. Both OTAs passed the self-test first time. **CONFIRMED: Hugh's v4 channel-order run
 matched all 18 in order.** #19 closed; `kPin[]` trusted. Next: motor pairing (§3.6, ONE motor powered at a
 time), then the §3.3 pulse-width sweep.
+
+## UPDATE 2026-09-27 (evening) — CH1 motor paired; firmware drives it END TO END
+
+- **Pairing works from the panel alone.** The QCTZ36SDU labels its buttons `SEL` / `Prog/TX` / `Prog/FC`, not
+  SYNC / LIMIT. **`Prog/TX` = SYNC (CONFIRMED)**: SEL→CH1, hold Prog/TX → jog → UP → paired; UP+DOWN work.
+  `Prog/FC` = LIMIT is LIKELY (French *fin de course*), not yet exercised. Recorded in design §3.6.
+- **Firmware → motor proven on CH1.** `python3 tools/shade_cmd.py shade 1 up` → node logged `shade: ch1 <- up`
+  → the motor made the same short move as a panel tap. The motor is pre-limits, so it runs dead-man (moves only while
+  held). 500 ms is recognized, which gives an upper bound for #3; the minimum is still unmeasured.
+- The motor is loose on the floor. Per design §4 bench rules: **no direction/limits until it is mounted in the tube**.
+
+### Next
+1. Mount → set direction (Prog/TX-hold + brief ST) → set limits (Prog/FC). After that the firmware's taps become full runs.
+2. Pair CH2..CH6 as motors arrive — **one motor powered at a time** (broadcast RF).
+3. #3 min-pulse sweep (needs a runtime pulse knob; pulse_ms is compile-time 500 today) and #4 interim hold.
+4. Then per-shade travel calibration: `shade_cmd.py cal <ch> <up_ms> <down_ms>` (#12).
