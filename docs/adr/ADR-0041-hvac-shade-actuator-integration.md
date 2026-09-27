@@ -1,6 +1,12 @@
 # ADR-0041 — HVAC + shade actuators: capability seams over device seams
 
-**Status:** Proposed — research complete, hardware arriving late Sept / early Oct 2026, nothing built yet
+**Status:** Accepted — **shades IMPLEMENTED and verified end to end (2026-09-27)**; HVAC in progress.
+- **Shades — firmware complete.** `shades_s3` (`edge/esp32s3-shades`, `v4-shades`) drives the QCTZ36SDU via the
+  Atmel-direct modification; 18-line map verified by pintest; signed `shade` command moved a paired XS40.
+  Remaining work is install-side (mount, direction, limits, pair CH2–6, calibrate). See the node README.
+- **HVAC — built, parked.** `hvac_c6` (LISTEN_ONLY Broan sniffer) and `dehum_c6` (inert) were built and
+  enrolled 2026-09-22 and are **offline** (retained status, 2026-09-27). Broan control is gated on E50 recovery;
+  `ha_aprilaire_dehum` is gated on the §7.3 bench measurement. Next up after shades.
 **Relates to:** ADR-0020 (shared firmware core / module-first), ADR-0014 (device-control conventions),
 ADR-0034 (Node / Ability / Entity), ADR-0027 (actuator telemetry + area contract)
 **Reference:** [docs/design/hvac-shade-device-integration.md](../design/hvac-shade-device-integration.md)
@@ -324,9 +330,15 @@ the main wall control"* — it conflicts with the RS-485 takeover, and J13 carri
 
 ---
 
-## Open decision — Gaposa linkIT vs. QCTZ36SDU
+## ~~Open decision~~ RESOLVED — Gaposa linkIT vs. QCTZ36SDU
 
-**Not resolved. Hugh's call; it does not block module work**, because `ha_gaposa` would swap `ha_dout` for
+**RESOLVED 2026-09-23 → QCTZ36SDU, driven Atmel-direct** (design §3, *"DECIDED 2026-09-23"*). The linkIT was
+priced (~$270) and judged materially the better product, but it would have written off the owned QCT. The two
+weighted concerns below both dissolved in practice. (1) **Pairing needs no remote**: the panel's own `Prog/TX`
+is SYNC, proven 2026-09-27. (2) **Isolation**: the Atmel-direct modification removes the 16.55 V input section,
+and the node shares the Atmel's 5 V-logic ground by design. The analysis is kept below as the record.
+
+~~**Not resolved. Hugh's call; it does not block module work**~~, because `ha_gaposa` would swap `ha_dout` for
 `ha_rs485` underneath without changing its interface — which is itself a demonstration of why the seams
 are cut where they are.
 

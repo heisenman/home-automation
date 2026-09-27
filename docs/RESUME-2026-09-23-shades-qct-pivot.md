@@ -284,3 +284,29 @@ time), then the §3.3 pulse-width sweep.
 2. Pair CH2..CH6 as motors arrive — **one motor powered at a time** (broadcast RF).
 3. #3 min-pulse sweep (needs a runtime pulse knob; pulse_ms is compile-time 500 today) and #4 interim hold.
 4. Then per-shade travel calibration: `shade_cmd.py cal <ch> <up_ms> <down_ms>` (#12).
+
+---
+
+## ✅ CLOSEOUT 2026-09-27 — shades FIRMWARE COMPLETE (Hugh: "close out the firmware side")
+
+**Final state.** `shades_s3` is on `v4-shades` (OTA from ha-2, self-test PASS). The map is verified end to end (channel-order
+pintest, all 18 as predicted). CH1 motor is paired and firmware-driven. The node and QCT are **powered down** until the shade
+assembly is built, so the retained `status offline` is expected. **Nothing firmware-side is open.**
+
+**Where everything lives now:**
+- Node how-to (hardware, deploy, verify, what's unverified): [edge/esp32s3-shades/README.md](../edge/esp32s3-shades/README.md)
+- How to re-check the claims: [runbook Entry 2](runbook-device-verification.md#entry-2--shade-node-shades_s3-runs-the-verified-map-and-drives-the-qct)
+- Open items (install-side + optional tuning): [FOLLOWUPS](FOLLOWUPS.md) top entry · design §8 ledger (#2, #3, #4, #12, #20)
+- Decision record: ADR-0041 (Status updated; linkIT decision marked RESOLVED)
+
+**Resume point for the next shades session:** the install. Mount → direction → limits (`Prog/FC`, confirm #20) → pair
+CH2–6 one at a time → `cal`. Re-run runbook Entry 2 first: power the panel, then check that status reads `online … v4-shades`.
+
+**Lessons from this project worth carrying forward:**
+1. **A rollback is a symptom, not a diagnosis.** "Self-test failed" was really "image could not join WiFi", because the build
+   tooling silently swapped the board's secrets for a fleet base with empty WiFi. Check what the *image* contains
+   before theorising about the *device*.
+2. **Keep measurement and belief separate in verification tools.** The pintest announcing `[believes CHn fn]` next to the
+   measured pad is what caught four mis-mapped channels that the table had stated as fact.
+3. **One inconsistent reading is a misread until repeated.** The v1 LED run's duplicate `6S` sent us toward a
+   rewire hypothesis. The repeated pad sweep showed a clean bijection and that the harness was straight.

@@ -73,3 +73,36 @@ step 4 → `active`.
 - `hot.db.readings.ts` is a TEXT ISO-8601 string — `datetime(ts,'unixepoch')` / epoch subtraction gives
   nonsense (a ~56-year "age"). Compare ISO strings directly or via `strftime('%s', ts)`.
 - ha-2's `instance/hot.db` (no `/db/`) is a 0-byte decoy — the real store is **`instance/db/hot.db`**.
+
+---
+
+## Entry 2 — Shade node (`shades_s3`) runs the verified map and drives the QCT
+
+**Claim:** `shades_s3` (ESP32-S3 inside the Gaposa QCTZ36SDU enclosure, [edge/esp32s3-shades](../edge/esp32s3-shades/README.md))
+runs `v4-shades`, and its `kPin[]` map is correct end to end: each of the 18 lines asserts the QCT channel/function the firmware
+believes it does, and a signed `shade` command reaches a paired motor.
+
+**Verified (2026-09-27):** `v4-shades` confirmed on `ota_1` via OTA self-test PASS. Channel-order pintest: Hugh observed QCT LEDs
+`1U 1S 1D … 6U 6S 6D`, all 18 as predicted. `shade 1 up` → node log `shade: ch1 <- up` → CH1 XS40 moved like a panel tap.
+Node was then **powered down** (parked until install), so its retained status reads `offline`. That is expected.
+
+**How to verify** (from `.210`, repo root):
+```sh
+# 1) Alive + version (retained, arrives at once). -T drops `hello`, which carries the MAC (secret).
+timeout 5 mosquitto_sub -h 192.168.1.200 -t 'home/edge/shades_s3/#' -T 'home/edge/shades_s3/hello' -v
+# 2) Map: needs a human watching the panel LEDs (and a meter for pads, optional).
+python3 tools/shade_cmd.py pintest          # Enter = next; LEDs must read 1U 1S 1D ... 6U 6S 6D
+# 3) Path to a motor (ONLY with a paired motor someone is watching):
+python3 tools/shade_cmd.py shade 1 up       # node logs `shade: ch1 <- up`; motor moves
+python3 tools/shade_cmd.py shade 1 stop
+```
+
+**Expected:** (1) `status online ota_X v4-shades` (or later). (2) An unbroken LED sequence in channel order. (3) The node log line plus
+visible motion. Before limits are set, the motor is in dead-man mode, so a 500 ms pulse gives only a short turn and stop. That is correct.
+
+**Cadence & gotchas:**
+- **The pintest proves the map only as far as a human watched it.** The node cannot see the panel; there is no feedback path (design §3.7).
+- **`status offline` while the QCT is powered down is normal.** Check whether the panel is energised before calling it a fault.
+- **A `shade` command with no paired, powered motor does nothing visible.** The node log line proves only that the node acted, not the RF.
+- Don't pipe `mosquitto_sub` through `grep | head` under `timeout`: grep block-buffers and the kill loses the output, which reads as a dead node.
+- OTA "rolled back" on this node: check the image has WiFi first (`README` → Build + deploy). This node's WiFi is compiled in, not in NVS.

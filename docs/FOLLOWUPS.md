@@ -7,6 +7,24 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## ✅ 2026-09-27 — Shades (ADR-0041): FIRMWARE COMPLETE; install-side items OPEN
+
+`shades_s3` runs `v4-shades`. The 18-line map is verified by pintest, and a signed command moved a paired motor
+([node README](../edge/esp32s3-shades/README.md), [runbook Entry 2](runbook-device-verification.md#entry-2--shade-node-shades_s3-runs-the-verified-map-and-drives-the-qct)).
+The node is powered down until the shade assembly is built. **Nothing firmware-side is open.**
+
+**Open — install (Hugh, when the assembly is built):**
+- Mount each motor in its tube → set direction (`Prog/TX` hold + brief `ST`) → set limits (`Prog/FC`, design #20).
+- Pair CH2–CH6: **one motor powered at a time** (pairing is broadcast RF). CH1 is paired.
+- Label the QCT enclosure: `Com` is GROUND now, and the documented "short UP to Com" procedure is unsafe on this unit.
+- Per-shade travel times → `tools/shade_cmd.py cal <ch> <up_ms> <down_ms>` (design #12).
+
+**Open — optional tuning (dev, after install):** min pulse sweep (#3, needs a runtime pulse knob; 500 ms proven
+sufficient), `St`-hold interim recall (#4), panel error release-vs-power-cycle (#2). Server-side: a `shade`
+ability/UI is not yet built (no BFF/PWA surface consumes `shade<N>/adv`).
+
+**Next project:** Broan ERV (`hvac_c6`) + Aprilaire (`dehum_c6`). Both are built and parked offline; see ADR-0041 Status.
+
 ## ✅ 2026-07-26 — history RECOVERY (backfill) RESOLVED + LIVE (was gated 2026-07-23)
 
 Shipped `4531ef6`, deployed prod (`RECOVER_ENABLED=true`, `:443`). The 2026-07-23 "recover no-op" was a

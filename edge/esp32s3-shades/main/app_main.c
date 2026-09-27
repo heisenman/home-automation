@@ -191,10 +191,10 @@ static const uint8_t kWalk[PINTEST_COUNT][2] = {
 };
 
 
-// The PAD is what this step proves, so it leads. The channel/function is the firmware's BELIEF about what
-// that pad drives, and 2026-09-27 showed the belief is wrong on four channels — so it is labelled as a
-// belief. A verification tool that states an unverified mapping as fact is how the last two mis-wirings
-// survived; whatever this line claims, the operator must be able to tell measurement from assumption.
+// The PAD leads because the meter proves it; the channel/function follows as "[believes CHn fn]" because only
+// the QCT's LEDs can prove that. A verification tool must keep measurement and assumption apart. That
+// separation is how the 2026-09-27 run caught four mis-mapped channels which kPin[] had been stating as fact.
+// Since v4 the walk is channel order, so the belief IS the prediction: LEDs must read 1U 1S 1D ... 6D.
 static void test_describe(int i, char *out, size_t cap) {
     int ch = kWalk[i][0], fn = kWalk[i][1];
     snprintf(out, cap, "step %d/%d: %s | GPIO%d  (Atmel pin should DROP 4.8V -> ~0.6V)  [believes CH%d %s]",

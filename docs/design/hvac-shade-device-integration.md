@@ -1,6 +1,7 @@
 # HVAC + shade actuator integration — protocol reference & build spec (implements ADR-0041)
 
-**Date:** 2026-09-20  **Status:** Research complete, pending bench verification  **Owner:** dev.
+**Date:** 2026-09-20  **Status:** Shades **firmware complete + bench-verified 2026-09-27** (install-side items in §8);
+ERV / dehumidifier still pending bench verification  **Owner:** dev.
 Decision record: [ADR-0041](../adr/ADR-0041-hvac-shade-actuator-integration.md).
 Covers four devices arriving late Sept / early Oct 2026: a Broan ERV, an Aprilaire dehumidifier, a
 Gaposa shade controller, and a Gaposa tubular motor.
@@ -10,7 +11,7 @@ Gaposa shade controller, and a Gaposa tubular motor.
 > inference or single-operator bench report), **UNKNOWN** (not documented anywhere found).
 > This distinction is the most valuable thing in this document — a wrong register address that we
 > *write* can damage equipment, and a wrong assumption about terminal voltage can destroy a node or
-> injure someone. **Nothing here has been verified on our own bench yet.** Do not promote a LIKELY
+> injure someone. **Shade-side facts marked CONFIRMED were measured on our bench (Sept 2026); ERV/dehum facts largely were not.** Do not promote a LIKELY
 > to a CONFIRMED without a measurement.
 
 ---
@@ -1297,13 +1298,14 @@ conductive resting on the enclosure.
 | 10 | Does the plain E070 have an `EXTERNAL` screen? | Whether the relay path works at all | bench |
 | 11 | Aprilaire `NC\|NO` switch present on E070? | Fail-safe direction | bench |
 | 12 | Per-shade full travel time (both directions) | Position model | post-install |
-| 13 | **linkIT vs QCTZ36SDU** | `ha_gaposa` transport | **Hugh — open decision** |
+| 13 | ~~**linkIT vs QCTZ36SDU**~~ **RESOLVED 2026-09-23 → QCTZ36SDU, Atmel-direct** (§3 "DECIDED"; ADR-0041). | `ha_gaposa` transport | done |
 | 15 | ~~`Up`→`com` polarity~~ ⛔ **REOPENED AND CORRECTED 2026-09-23: `com` is the rail POSITIVE.** The 2026-09-21 entry recorded the sign backwards, and everything built on it — "low-side switching is correct", the NPN/ULN2803A choice, the whole §"Build spec" — followed from that one flipped sign. **The QCT input is SOURCING.** Confirmed by meter both directions after three wiring configurations all contradicted the old entry and all fitted the new one. | drive topology | **CORRECTED** |
 | 16 | ~~Are the six `com` terminals bonded?~~ **RESOLVED 2026-09-21: yes, all shorted.** One ground wire. | — | done |
 | 17 | ~~Transformer VA rating~~ **MOOT 2026-09-21** — a separate 5 V wall-wart supply is wire-nutted in parallel off F/N, so the S3 does not load the QCT transformer at all. Its floating negative ties to `com`, which is also S3 GND. | — | done |
 | 18 | Series resistor value (macro photo or in-circuit read) | exact LED current; confirms rail sag margin | bench, low priority |
 | 14 | Broan `08 E0`/`09 E0` — real humidity or artifact? | Whether we can read RH from the ERV | bench, low priority |
 | 19 | ~~Which Atmel pad does each ULN output land on, and which CH/function is it?~~ **RESOLVED 2026-09-27: both maps MEASURED, and the ULN harness is STRAIGHT.** GPIO→pad by meter (each pad 4.8 V → ~0.6 V). Pad→function by the QCT's channel LEDs on a pad-order sweep, run twice with identical results: `1D 1S 1U · 2U 2D 2S · 3U 3S 3D · 4D 6U 4S · 4U 6S 5D · 6D 5S 5U` for pads U2 6C→1C, U1 6C→1C, U3 6C→1C. The irregularity is the **QCT's own Atmel pad layout** (CH4–6 interleave across U1/U3), not the hand-landed wires, so it is fixed in `kPin[]`/`kHarness[]`, not by rewiring. The v1 run's duplicate `6S` / missing `5S` was a misread. **Final confirmation (v4):** a channel-order pintest predicted `1U 1S 1D … 6U 6S 6D` and Hugh observed all 18 in order. `kPin[]` is now trusted for real `shade` commands. | `kPin[]` function map | done |
+| 20 | Is `Prog/FC` the LIMIT button? **LIKELY** (French *fin de course* = end of travel; `Prog/TX` = SYNC is CONFIRMED, §3.6). Promote on the first real limit set. | limit-setting procedure at install | install |
 
 ---
 
