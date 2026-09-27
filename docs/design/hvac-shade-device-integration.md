@@ -935,6 +935,13 @@ Both steps are on **the transmitter being paired**. Translated to the QCTZ36SDU:
 4. Test. *"The motor may only respond to one direction initially but will respond to the second direction
    after the first direction is activated."*
 
+✅ **CONFIRMED 2026-09-27 on the real panel — the button names differ from the guide.** The QCTZ36SDU has
+no button labelled `SYNC`. Its programming buttons are `SEL`, `Prog/TX`, `Prog/FC` beside `UP`/`ST`/`DW`.
+**`Prog/TX` IS `SYNC`**: `SEL` → CH1, hold `Prog/TX` → the motor jogged → direction press → paired, with UP
+and DOWN both working from the panel. **`Prog/FC` is almost certainly `LIMIT`** (French *fin de course* =
+end-of-travel). That is LIKELY, not yet exercised, so promote it only when a limit set actually works through it.
+Wherever this section says `SYNC` or `LIMIT`, read `Prog/TX` or `Prog/FC` on this panel.
+
 ⚠️ **"Only apply power to the motor being programmed!"** — the guide's own emphasis. Pairing is broadcast
 RF: any powered, unpaired motor in range can enrol itself to the channel. With six shades this means
 **energising one motor at a time**, which is an install-sequencing constraint, not a detail.
