@@ -115,10 +115,10 @@ static const char *TAG = "ha_shades";
 // QCT's internal routing — our harness is a straight 6C->1C run per chip (kWalk below) — so the fix is
 // this table, NOT a rewire. See docs/design/hvac-shade-device-integration.md, open question #19.
 //
-// ⚠️ Four rows CONTRADICT the first (v1) LED run: GPIO13 (was read 4U, now 6U), GPIO2
-// (5U -> 4U), GPIO38 (6U -> 5U), GPIO39 (6S -> 5S). The first run was internally inconsistent (6S twice,
-// 5S never); the second was a clean bijection and Hugh REPEATED it with the same result, so it wins. The v4
-// channel-order pintest (predicted 1U 1S 1D ... 6D) is the final confirmation before any real `shade` command.
+// ✅ VERIFIED 2026-09-27 (v4): a channel-order pintest predicted 1U 1S 1D ... 6U 6S 6D off this table and
+// Hugh observed all 18 in order. (The v1 LED run disagreed on GPIO 13/2/38/39; it was a misread — it also
+// showed 6S twice and 5S never. The pad-order run that produced this table was repeated with identical
+// results.)
 static const gpio_num_t kPin[HA_GAPOSA_MAX_CH][3] = {
     { GPIO_NUM_15, GPIO_NUM_7,  GPIO_NUM_6  },   // CH1  Up/St/Dw <- U2 4C/5C/6C
     { GPIO_NUM_16, GPIO_NUM_18, GPIO_NUM_17 },   // CH2  Up/St/Dw <- U2 3C/1C/2C
