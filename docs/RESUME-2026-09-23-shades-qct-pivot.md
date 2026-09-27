@@ -265,5 +265,6 @@ Pad-order pintest on v2, run TWICE by Hugh with the same result, LED sequence:
 That's a clean bijection. The v1 run's duplicate `6S` was a misread. Open question #19 is answered: the ULN→Atmel
 harness is straight; the **QCT's own pad layout** is not per-channel. Fixed in `kPin[]`/`kHarness[]` (no
 rewire). v3 shipped that map; v4 makes the pintest walk CH1..CH6 Up/St/Dw, so the predicted LED sequence
-is `1U 1S 1D … 6U 6S 6D`. Both OTAs passed the self-test first time. **Awaiting Hugh's v4 channel-order run**
-before any real `shade` command, then motor pairing (§3.6, one at a time).
+is `1U 1S 1D … 6U 6S 6D`. Both OTAs passed the self-test first time. **CONFIRMED: Hugh's v4 channel-order run
+matched all 18 in order.** #19 closed; `kPin[]` trusted. Next: motor pairing (§3.6, ONE motor powered at a
+time), then the §3.3 pulse-width sweep.
