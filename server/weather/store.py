@@ -84,3 +84,25 @@ class WeatherStore:
             return conn.total_changes - before
         finally:
             conn.close()
+
+
+def latest_reading(conn: sqlite3.Connection, table: str = "weather", now_iso: str | None = None) -> dict | None:
+    """The most recent recorded weather snapshot (one timestamp, all its metrics) at or before `now_iso`
+    — the "current conditions" glance next to the indoor rooms. Rows AFTER now (a source that stores
+    forecast hours) are excluded so a forecast is never presented as a measurement. Index-backed
+    (idx_<table>_ts), so it's cheap enough for a 5s-polled endpoint.
+
+    Returns {ts, source, location, metrics:{metric: value}} or None when the lane is empty."""
+    q = f"SELECT MAX(ts) FROM {table}" + (" WHERE ts <= ?" if now_iso else "")
+    row = conn.execute(q, (now_iso,) if now_iso else ()).fetchone()
+    ts = row[0] if row else None
+    if not ts:
+        return None
+    rows = conn.execute(
+        f"SELECT source, location, metric, value FROM {table} WHERE ts = ? ORDER BY location, source",
+        (ts,)).fetchall()
+    if not rows:
+        return None
+    src, loc = rows[0][0], rows[0][1]          # one location per snapshot (first by name if several)
+    metrics = {m: v for s, l, m, v in rows if s == src and l == loc}
+    return {"ts": ts, "source": src, "location": loc, "metrics": metrics}

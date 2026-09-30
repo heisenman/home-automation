@@ -1048,7 +1048,9 @@ def rooms_list():
         if cc is not None:
             cc.close()
     ctl = set(ctl_reg)
-    return build_rooms(sensors, areas, geometry=geometry, placement=placement, controllable_ids=ctl)
+    out = build_rooms(sensors, areas, geometry=geometry, placement=placement, controllable_ids=ctl)
+    out["outdoor"] = _weather_latest()   # latest weather-lane snapshot, shown beside attic/crawlspace
+    return out
 
 
 def _build_current_alerts(now: float) -> list[dict]:
@@ -1736,6 +1738,40 @@ def _weather_conn() -> Optional[sqlite3.Connection]:
     conn = sqlite3.connect(str(WEATHER_DB), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     return conn
+
+
+def _weather_latest() -> Optional[dict]:
+    """Latest weather-lane snapshot + its age, or None (no DB / empty / unreadable). Never raises — the
+    rooms payload it rides on must not fail because the weather lane is missing."""
+    from datetime import datetime, timezone
+
+    from server.weather.store import latest_reading
+    conn = _weather_conn()
+    if conn is None:
+        return None
+    try:
+        now = datetime.now(timezone.utc)
+        snap = latest_reading(conn, WEATHER_TABLE, now.strftime("%Y-%m-%dT%H:%M:%SZ"))
+        if snap is None:
+            return None
+        try:
+            t = datetime.fromisoformat(snap["ts"].replace("Z", "+00:00"))
+            snap["age_s"] = max(0, int((now - t).total_seconds()))
+        except ValueError:
+            snap["age_s"] = None
+        return snap
+    except sqlite3.Error:
+        log.warning("weather latest read failed", exc_info=True)
+        return None
+    finally:
+        conn.close()
+
+
+@app.get("/weather/latest")
+def weather_latest():
+    """Most recent recorded weather snapshot (all metrics at the newest ts ≤ now) + age_s."""
+    snap = _weather_latest()
+    return {"available": snap is not None, **(snap or {})}
 
 
 @app.get("/weather/meta")

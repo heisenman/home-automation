@@ -1,7 +1,8 @@
 // House map (see ui_map.h). Renders /api/v1/rooms as the actual floor plan: each room's polygon
 // drawn as vector wall outlines (lv_line — no framebuffer, so the PSRAM draw budget is untouched),
 // with a compact live-reading label inside. House-space coords are scaled to the screen. Monolithic
-// rooms (attic/crawlspace — no polygon) render as chips in a bottom strip.
+// rooms (attic/crawlspace — no polygon) render as chips in a right-hand column, followed by an
+// Outdoor chip (latest recorded weather, /api/v1/rooms `outdoor`).
 #include "ui/ui_map.h"
 #include "ui/ui_format.h"   // ascii_fold (font is ASCII-only; drop non-ASCII glyphs)
 #include <string.h>
@@ -666,6 +667,49 @@ static lv_obj_t *map_make_layer(lv_obj_t *parent, int pw, int ph)
     return c;
 }
 
+// Outdoor glance for the right column, beneath attic/crawlspace: the weather lane's newest recorded
+// snapshot (/api/v1/rooms `outdoor` — the same series the PWA graph builder plots). Not a room, so
+// not tappable. Dimmed when older than 3h (hourly source). Returns false if there's nothing to show.
+#define OUTDOOR_STALE_S  (3 * 3600)
+static bool outdoor_chip(lv_obj_t *parent, cJSON *root, int cx, int cy, int w, int h)
+{
+    cJSON *o = cJSON_GetObjectItem(root, "outdoor");
+    cJSON *m = cJSON_IsObject(o) ? cJSON_GetObjectItem(o, "metrics") : NULL;
+    cJSON *jt = cJSON_IsObject(m) ? cJSON_GetObjectItem(m, "temperature_c") : NULL;
+    if (!cJSON_IsNumber(jt)) return false;
+    cJSON *jh = cJSON_GetObjectItem(m, "humidity_pct");
+    cJSON *ja = cJSON_GetObjectItem(o, "age_s");
+    bool stale = cJSON_IsNumber(ja) && ja->valuedouble > OUTDOOR_STALE_S;
+
+    char val[24];
+    int off = snprintf(val, sizeof val, "%.0fF", disp_val("C", jt->valuedouble));
+    if (cJSON_IsNumber(jh)) snprintf(val + off, sizeof val - off, " %.0f%%", jh->valuedouble);
+
+    lv_obj_t *box = lv_obj_create(parent);
+    lv_obj_set_size(box, w, h);
+    lv_obj_set_pos(box, cx - w / 2, cy - h / 2);
+    lv_obj_set_style_bg_color(box, lv_color_hex(0x0b1021), 0);
+    lv_obj_set_style_bg_opa(box, LV_OPA_COVER, 0);
+    lv_obj_set_style_border_width(box, 2, 0);
+    lv_obj_set_style_border_color(box, lv_color_hex(C_IDLE), 0);   // slate: outside, not a house room
+    lv_obj_set_style_radius(box, 6, 0);
+    lv_obj_set_style_pad_all(box, 3, 0);
+    lv_obj_set_style_pad_row(box, 1, 0);
+    lv_obj_set_flex_flow(box, LV_FLEX_FLOW_COLUMN);
+    lv_obj_set_flex_align(box, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER, LV_FLEX_ALIGN_CENTER);
+    lv_obj_clear_flag(box, LV_OBJ_FLAG_SCROLLABLE | LV_OBJ_FLAG_CLICKABLE);
+
+    lv_obj_t *t = lv_label_create(box);
+    lv_label_set_text(t, stale ? "Outdoor (old)" : "Outdoor");
+    lv_obj_set_style_text_font(t, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(t, lv_color_hex(0xffffff), 0);
+    lv_obj_t *v = lv_label_create(box);
+    lv_label_set_text(v, val);
+    lv_obj_set_style_text_font(v, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(v, lv_color_hex(stale ? C_IDLE : C_NORMAL), 0);
+    return true;
+}
+
 void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb, bool nav)
 {
     s_cb = cb;
@@ -782,6 +826,8 @@ void ui_map_render(cJSON *root, lv_obj_t *parent, ui_map_room_cb cb, bool nav)
             s_nreg++;
         }
     }
+    if (col_y + 30 <= ph - PAD && outdoor_chip(parent, root, pw - COL_W / 2, col_y, COL_W - 12, 58))
+        col_y += 58 + 12;
     ESP_LOGI(TAG, "rendered floor plan: %d rooms, %d wall rings (space=%d)", s_nreg, s_nring, have_space);
 }
 

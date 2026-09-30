@@ -184,7 +184,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v53 Freshness — the dashboard now measures its own data age and says when it stalls";
+const BUILD = "v54 Outdoor — latest recorded weather shown beside attic/crawlspace on the house map";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -2191,6 +2191,19 @@ function HouseMap({ data, selected, onSelect }) {
     return { x0, y0, W: x1 - x0, H: y1 - y0 };
   };
 
+  // Outdoor = the weather lane's newest recorded snapshot (the same series the graph builder plots),
+  // shown beside attic/crawlspace. Not a room, so not selectable. Hourly source → dim past 3h old.
+  const outdoor = (() => {
+    const o = data.outdoor, m = (o && o.metrics) || {};
+    if (typeof m.temperature_c !== "number") return null;
+    const parts = [`${Math.round(convT(m.temperature_c, unit))}°`];
+    if (typeof m.humidity_pct === "number") parts.push(`${Math.round(m.humidity_pct)}%`);
+    const stale = typeof o.age_s === "number" && o.age_s > 3 * 3600;
+    return { text: `Outdoor · ${parts.join(" · ")}${stale ? ` (${fmtAge(o.age_s)})` : ""}`, stale,
+             title: `weather ${o.location} (${o.source}) as of ${o.ts}` +
+                    (typeof m.pressure_msl_hpa === "number" ? ` · ${Math.round(m.pressure_msl_hpa)} hPa` : "") };
+  })();
+
   const hasPoly = (r) => r.geometry && (r.geometry.poly || r.geometry.polys);
   const placed = rooms.filter(hasPoly);
   const mono = rooms.filter((r) => !hasPoly(r) && (r.counts.sensors + r.counts.actuators) > 0);
@@ -2238,9 +2251,11 @@ function HouseMap({ data, selected, onSelect }) {
           </g>`;
         })}
       </svg>
-      ${mono.length > 0 && html`<div class="mono-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
+      ${(mono.length > 0 || outdoor) && html`<div class="mono-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
         ${mono.map((r) => html`<button class=${"btn sm" + (selected === r.id ? "" : " ghost")}
           onClick=${() => onSelect(r.id, r.name)}>${r.name}${roomGlance(r.devices) ? ` · ${roomGlance(r.devices)}` : ""}</button>`)}
+        ${outdoor && html`<span class="btn sm ghost" style=${"cursor:default" + (outdoor.stale ? ";opacity:.55" : "")}
+          title=${outdoor.title}>${outdoor.text}</span>`}
       </div>`}
       ${Array.isArray(data.air_quality_legend) && html`<div class="aq-legend"
         style="display:flex;gap:12px;flex-wrap:wrap;align-items:center;margin-top:10px;font-size:12px;color:#9fb0c3">
