@@ -53,7 +53,7 @@ compile → serial flash → verify `<name>/status online` on `192.168.1.200`. T
 kept **off-git** (restore image; may carry VeSync creds). Recovery: fallback AP `levoit-office-fallback`.
 
 ## MQTT topic map (for the canonical bridge — INTEGRATION TODO)
-Device name `levoit-office` (IP `192.168.0.252`, MAC `dc:1e:d5:3d:34:d0`). ESPHome publishes its **own**
+Device name `levoit-office` (IP `192.168.0.252`). ESPHome publishes its **own**
 layout — a bridge must map it into our canonical `home/<area>/<device_id>/state` (mirror
 `server/ingest/tasmota_bridge.py`). Availability: `levoit-office/status` = `online|offline`.
 
