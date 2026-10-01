@@ -15,12 +15,18 @@ the original bytes are restored. Appending — not safe_dump-rewriting — keeps
 (the design notes live there), and it means the writer never has to assume the file's layout matches this
 box's: ha-2's copy is checked by the same parse, not by a template. A failure at step N restores steps <N.
 
-Deliberately NOT done (docs/CONFORMANCE.md §B, ADR-0014 R2/R4): no automation policy is seeded. A purifier's
-own PM2.5 sensor is never an automatic control source — the operator picks the source in the automation
-editor. Manual control works immediately after the restart.
+Automation (docs/CONFORMANCE.md §B, ADR-0014 R2/R4): a purifier's own PM2.5 sensor is never an automatic
+control source. But the PWA lists a device as CONTROLLABLE only if it has a policy row (/api/v1/displays
+iterates control.db policies) — so with no row, an adopted purifier showed up as a sensor with no controls
+(found live 2026-10-01). Resolution: seed an INERT policy — enabled=False, source_sensor=None. The
+controller skips disabled policies, nothing is bound, and the card + automation editor appear; the operator
+picks the source and enables it.
 
 Taking effect needs ha-controller + ha-api + ha-api-tls restarted (the command plane and the Levoit
-transport are built at boot); the caller does that out-of-process via admin_job op 'restart_control'.
+transport are built at boot) AND ha-levoit-bridge: the unit published its retained state while it was
+still unregistered (-> quarantine), and only a fresh subscribe re-delivers it — without that the snapshot
+is just whatever the unit republishes on its own cadence (filter % only). The caller does all four
+out-of-process via admin_job op 'restart_control'.
 """
 from __future__ import annotations
 
@@ -41,7 +47,7 @@ PURIFIER_TRAITS: dict[str, dict] = {
     "ranged": {"min": 1, "max": 4, "step": 1},  # fan speed 1-4
     "indicator": {"safe_on": True},             # panel LED (ESPHome display switch); night mode turns it off
 }
-RESTART_SERVICES = ["ha-controller", "ha-api", "ha-api-tls"]
+RESTART_SERVICES = ["ha-levoit-bridge", "ha-controller", "ha-api", "ha-api-tls"]
 
 
 class IntakeError(Exception):
@@ -151,7 +157,8 @@ def handle_adopt_purifier(name: str, body: dict[str, Any], *, control_path: Path
     plan = {"node": name, "device_id": device_id, "area": area,
             "writes": [secrets_path.name, control_path.name, levoit_path.name],
             "restart": RESTART_SERVICES,
-            "automation": "none seeded — pick a source sensor in the automation editor (CONFORMANCE §B R2/R4)"}
+            "automation": "inert policy (disabled, no source) — pick a source + enable in the automation "
+                          "editor (CONFORMANCE §B R2/R4)"}
     if dry_run:
         return 200, {"status": "preview", "dry_run": True, **plan}
 
@@ -176,3 +183,24 @@ def handle_adopt_purifier(name: str, body: dict[str, Any], *, control_path: Path
         code = e.code if isinstance(e, IntakeError) else 500
         return code, {"status": "error", "node": name, "reason": str(e), "rolled_back": [p.name for p, _ in done]}
     return 201, {"status": "registered", **plan}
+
+
+def inert_policy() -> dict:
+    """The purifier policy shape with nothing bound and nothing running (see module docstring)."""
+    from server.control.controller import LEVOIT_POLICY
+    return {**LEVOIT_POLICY, "enabled": False, "source_sensor": None}
+
+
+def seed_inert_policy(control_db: Path, device_id: str) -> None:
+    """Insert-if-absent (an operator's edits always win). Separate from the registry writes: control.db is
+    runtime state, not a registry file, and a re-adopt must never reset a policy the operator set up."""
+    import sqlite3
+
+    from server.control import control_store as store
+    conn = sqlite3.connect(control_db)
+    try:
+        store.ensure_schema(conn)
+        store.seed_policy(conn, device_id, inert_policy())
+        conn.commit()
+    finally:
+        conn.close()

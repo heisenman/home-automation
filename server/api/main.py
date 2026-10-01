@@ -339,6 +339,7 @@ def _mount_control(app: FastAPI) -> None:
                                                  discovery_cache=DISCOVERY_CACHE,
                                                  edge_discovery_cache=EDGE_DISCOVERY_CACHE,
                                                  esphome_discovery_cache=ESPHOME_DISCOVERY_CACHE,
+                                                 control_db=CONTROL_DB,
                                                  broker=broker, port=port))  # add-device: BLE discover + standby-node intake (ADR-0036) + claim/enroll
         app.include_router(make_battery_router(master, NODE_SECRETS_LUT, broker=broker, port=port))  # on-demand SwitchBot battery refresh
         app.state.control_registry = registry      # device_id -> DeviceCtl (traits for manual-control UI)

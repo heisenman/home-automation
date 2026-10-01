@@ -836,7 +836,7 @@ def make_device_meta_router(api_authz, control_db, placement_path=None, devices_
 
 def make_registry_router(api_authz, devices_path, control_path=None, node_secrets_path=None, master=None,
                          discovery_cache=None, edge_discovery_cache=None, esphome_discovery_cache=None,
-                         broker="localhost", port=1883):
+                         control_db=None, broker="localhost", port=1883):
     """Admin-gated device registration (the add-device flow, ADR-0002 trait registry):
       GET  /api/v1/discover         -> unregistered BLE candidates heard nearby (the "see the filtered-out
                                        data" half of onboarding). Also returns edge_nodes[] (ADR-0036:
@@ -908,6 +908,12 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
                 name, body, control_path=Path(control_path), secrets_path=cdir / "control_secrets.yaml",
                 levoit_path=cdir / "levoit-devices.yaml", areas_path=cdir / "areas.yaml")
             if code == 201:
+                if control_db is not None:      # inert policy -> listed as controllable (esphome_intake.py)
+                    try:
+                        EI.seed_inert_policy(Path(control_db), payload["device_id"])
+                        payload["policy"] = "seeded-inert"
+                    except Exception as exc:   # noqa: BLE001 — registry is done; say so, don't fail it
+                        payload["policy"] = f"NOT seeded ({exc}) — device registered but not listed as controllable"
                 payload["job_id"] = admin_job.launch({"op": "restart_control",
                                                       "device_id": payload["device_id"]})
                 payload["poll"] = f"/api/v1/devices/jobs/{payload['job_id']}"

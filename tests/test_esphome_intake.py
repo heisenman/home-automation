@@ -118,11 +118,33 @@ def test_secret_never_returned_and_file_stays_private(tmp_path):
     assert os.stat(inst / "control_secrets.yaml").st_mode & 0o777 == 0o600
 
 
-def test_no_automation_is_seeded(tmp_path):
-    inst = _inst(tmp_path)
-    """CONFORMANCE §B R2/R4: a purifier's own sensor is never an automatic control source."""
-    _adopt(inst)
-    assert not (inst / "control_policy.yaml").exists()
+def test_seeded_policy_is_inert(tmp_path):
+    """CONFORMANCE §B R2/R4: nothing bound, nothing running — yet a policy row exists, because /displays
+    only lists devices with one (no row = 'sensor, no controls', found live 2026-10-01)."""
+    import sqlite3
+
+    from server.control import control_store as store
+    db = tmp_path / "control.db"
+    EI.seed_inert_policy(db, "purifier_c_office")
+    pol = store.get_policy(sqlite3.connect(db), "purifier_c_office")
+    assert pol["enabled"] is False and pol["source_sensor"] is None
+    assert pol["control"]["strategy"] == "threshold_ranged"
+
+
+def test_seed_never_overwrites_an_operator_policy(tmp_path):
+    import sqlite3
+
+    from server.control import control_store as store
+    db = tmp_path / "control.db"
+    c = sqlite3.connect(db); store.ensure_schema(c)
+    store.set_policy(c, "purifier_c_office", {"enabled": True, "source_sensor": "gas_c_office"}); c.commit()
+    EI.seed_inert_policy(db, "purifier_c_office")
+    assert store.get_policy(sqlite3.connect(db), "purifier_c_office")["source_sensor"] == "gas_c_office"
+
+
+def test_restart_includes_the_bridge():
+    """The bridge must resubscribe to re-receive the state the unit retained while unregistered."""
+    assert "ha-levoit-bridge" in EI.RESTART_SERVICES
 
 
 def test_second_purifier_in_a_room_gets_a_suffix(tmp_path):

@@ -209,9 +209,18 @@ air-gap broker and publishing, yet invisible to every intake surface, and its da
 - `levoit_bridge` now subscribes **by topic shape**: `+/status` plus `+/<entity>` for each mapped metric.
   Adopted units are bridged the moment the reloader sees them, and unknown purifiers reach quarantine.
 
-**Not done, deliberately:** no automation policy is seeded on adoption (CONFORMANCE §B, ADR-0014 R2/R4: a
-purifier's own sensor is never an automatic control source). Manual control works after the restart.
-The operator picks the PM2.5 source in the automation editor.
+**Automation: an INERT policy is seeded, not none (corrected the same day, after a live try).** The first
+cut seeded no policy, reading CONFORMANCE §B (ADR-0014 R2/R4: a purifier's own sensor is never an automatic
+control source) as "write nothing". But `/api/v1/displays` lists only devices that have a policy row, so the
+adopted purifier appeared as a **sensor with no controls**. Now adoption seeds `enabled=False,
+source_sensor=None`. The controller skips disabled policies and nothing is bound, so it still conforms, and
+the card and automation editor appear. The operator picks a source and enables it. Seeding is
+insert-if-absent, so an operator's policy is never reset.
+
+**Bridge restart is part of adoption (also found live).** The unit publishes its retained state while it is
+still unregistered, and that state goes to quarantine. ESPHome then republishes only on change. Without a
+fresh subscribe, the new device's snapshot was just filter %. `restart_control` therefore bounces
+`ha-levoit-bridge` too, and the resubscribe re-delivers the retained state.
 
 **Rejected:** a parallel "Add purifier" screen (a second intake UI to keep in sync with the first); adding
 ESPHome rows to `EdgeDiscoveryCache` (its placement truth is devices.yaml + edge manifests and its adopt is
