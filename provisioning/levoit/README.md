@@ -27,15 +27,29 @@ the other Vital/Core Levoits (different `model:` + board).
 # 1. BACK UP the OEM firmware first (4 MB):
 ~/.flashtools/bin/esptool --port /dev/ttyUSB0 read-flash 0x0 ALL levoit-oem-backup.bin
 # 2. build (Docker ESPHome; needs internet once):
-docker run --rm -v "$PWD":/config ghcr.io/esphome/esphome compile levoit-vital200s-c3.yaml
-# 3. first flash over serial (IO0 grounded at power-on; chip = ESP32-C3):
-~/.flashtools/bin/esptool --port /dev/ttyUSB0 --baud 460800 write-flash --erase-all 0x0 \
+docker run --rm -v "$PWD":/config ghcr.io/esphome/esphome compile levoit-<room>.yaml
+# 3. first flash over serial (chip = ESP32-C3). CP210x RTS auto-reset is NOT reliable (unit 2: worked for
+#    chip-id/backup, then 'No serial data received') -> hold IO0->GND, pulse EN, add `--before no-reset`:
+~/.flashtools/bin/esptool --port /dev/ttyUSB0 --before no-reset --baud 460800 write-flash --erase-all 0x0 \
     .esphome/build/<name>/.pioenvs/<name>/firmware.factory.bin
+#    then release IO0 + REAL power cycle (unplug programmer USB ~5s).
 # 4. thereafter OTA only (no reopening):
-docker run --rm -v "$PWD":/config ghcr.io/esphome/esphome upload levoit-vital200s-c3.yaml --device <ip-or-name.local>
+docker run --rm -v "$PWD":/config ghcr.io/esphome/esphome upload levoit-<room>.yaml --device <ip-or-name.local>
 #    NB: `upload` does NOT recompile — run `compile` first (or use `run`) after any config change.
 ```
-Config = `levoit-vital200s-c3.yaml` (secrets in `secrets.yaml`, see `secrets.example.yaml`). OEM backup is
+Config = one thin **per-unit** file + the shared body `levoit-vital200s-c3.common.yaml` (pulled in via
+`packages:`; holds the programming-header/wiring notes). Secrets in `secrets.yaml` (see `secrets.example.yaml`);
+each unit has its OWN OTA key.
+
+| Unit | Config | OTA secret key | Registry device_id |
+|---|---|---|---|
+| `levoit-office` (2026-06-27) | `levoit-office.yaml` | `ota_password` | `purifier_living_room` |
+| `levoit-c-office` (2026-10-01) | `levoit-c-office.yaml` | `ota_password_c_office` | `purifier_c_office` (area `c_office`) |
+
+**Adding a unit:** copy a thin file (≈20 lines — identity only, never the body), add `ota_password_<room>`
+(`openssl rand -hex 16`) to `secrets.yaml`, back up OEM to `instance/oem-backups/` on .210 (git-ignored),
+compile → serial flash → verify `<name>/status online` on `192.168.1.200`. Tooling on .210: Docker
+(`sudo systemctl start docker` — not enabled at boot) + `venv/bin/esptool`. OEM backup is
 kept **off-git** (restore image; may carry VeSync creds). Recovery: fallback AP `levoit-office-fallback`.
 
 ## MQTT topic map (for the canonical bridge — INTEGRATION TODO)

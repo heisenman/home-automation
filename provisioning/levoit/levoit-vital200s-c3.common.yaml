@@ -1,4 +1,4 @@
-# Levoit Vital 200S (LAP-V201S, ESP32-C3-SOLO-1) — FULL purifier control.
+# Levoit Vital 200S (LAP-V201S, ESP32-C3-SOLO-1) — FULL purifier control. SHARED BODY (see below).
 #
 # PROGRAMMING HEADER on this unit's PCB (labels as silk-screened): EN | GND | VCC(3.3V) | TXD | RXD | IO0.
 #   Flash over UART (NOT JTAG; NOT the SC95F keypad-MCU's separate 5V RX/TX pads). 3.3V logic ONLY.
@@ -11,17 +11,15 @@
 #     dc:1e:d5:3d:34:d0), IO0 strapped download mode correctly, full factory image flashed + hash-verified.
 #     CP210x programmer auto-resets via RTS (no manual EN/IO0 dance needed). (memory: levoit-programming-header.)
 # = tuct/levoit's tested Vital 200S config (UART GPIO18/19 to the MCU, model VITAL200S, full entity set)
-#   merged with our beachhead networking (name levoit-office, our WiFi/OTA secrets, MQTT -> .210 for our bus).
-# Pushed via OTA over the beachhead. WiFi/OTA/fallback-AP unchanged, so recovery paths are intact.
-substitutions:
-  device_name: levoit-office
-  wifi_ap_ssid: "levoit-office-fallback"
-  rx_pin: GPIO18                 # C3-SOLO-1 -> Vital 200S MCU UART (tuct, tested) — NOT the flash pads
-  tx_pin: GPIO19
-
+#   merged with our beachhead networking (our WiFi secrets, fallback AP, MQTT -> VIP .1.200 for our bus).
+#
+# SHARED BODY — not compiled directly. Each physical unit has a thin per-device file (levoit-<room>.yaml) that
+# sets the substitutions (device_name, friendly_name, wifi_ap_ssid, rx_pin, tx_pin) + its OWN `ota:` password
+# (per-unit secret key, so one leaked OTA key doesn't open every purifier) and pulls this in via `packages:`.
+# Adding a unit = a new thin file + a secrets.yaml key, never a copy of this body (ADR-0020: no cp -r forks).
 esphome:
   name: ${device_name}
-  friendly_name: Levoit Office
+  friendly_name: ${friendly_name}
 
 esp32:
   board: esp32-c3-devkitm-1
@@ -42,10 +40,6 @@ api:
   reboot_timeout: 0s               # MQTT-driven node: nothing connects to the native API, so the default
                                    # 15-min no-client reboot fires forever. Disable it. (ESPHome fleet fix;
                                    # same class as E1001 — see [[esphome-api-reboot-timeout]] / commit 6e29d94)
-
-ota:
-  - platform: esphome
-    password: !secret ota_password
 
 wifi:
   # autohome_airgap is kept UN-HIDDEN for this device. ESPHome cannot reliably join it while hidden —
