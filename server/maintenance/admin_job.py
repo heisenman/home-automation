@@ -115,6 +115,22 @@ def _worker(job_id: str) -> int:
             _write(job_id, rec)
             return 0
 
+        # ESPHome purifier intake: the registry entries are already written (by the API, synchronously);
+        # this only bounces the processes that build the command plane at boot. Fixed allow-list — the
+        # spec can't name arbitrary units. Held under maintenance-fit like run_plan (it bounces ha-api).
+        if op == "restart_control":
+            from server.esphome_intake import RESTART_SERVICES
+            A._set_maintenance_fit()
+            try:
+                rep = A._systemctl("restart", *A._present_units(RESTART_SERVICES))
+            finally:
+                A._clear_maintenance_fit()
+            rec.update(status=("done" if rep == "ok" else "failed"),
+                       report={"restart": rep, "services": RESTART_SERVICES, "device_id": did},
+                       finished=_now())
+            _write(job_id, rec)
+            return 0 if rep == "ok" else 2
+
         if not did:
             raise ValueError("spec missing device_id")
         if op == "rename":

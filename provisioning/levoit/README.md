@@ -48,7 +48,9 @@ each unit has its OWN OTA key.
 
 **Adding a unit:** copy a thin file (≈20 lines — identity only, never the body), add `ota_password_<room>`
 (`openssl rand -hex 16`) to `secrets.yaml`, back up OEM to `instance/oem-backups/` on .210 (git-ignored),
-compile → serial flash → verify `<name>/status online` on `192.168.1.200`. Tooling on .210: Docker
+compile → serial flash → verify `<name>/status online` on `192.168.1.200` → reassemble on mains → **PWA → Add device → Standby hardware → pick the unit → Adopt into a room** (writes the secret +
+`control.yaml` + `levoit-devices.yaml`, restarts the command plane; ADR-0036 amendment 2026-10-01). Then set
+its automation source in the automation editor. Nothing is auto-wired, by design. Tooling on .210: Docker
 (`sudo systemctl start docker` — not enabled at boot) + `venv/bin/esptool`. OEM backup is
 kept **off-git** (restore image; may carry VeSync creds). Recovery: fallback AP `levoit-office-fallback`.
 

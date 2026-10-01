@@ -835,7 +835,8 @@ def make_device_meta_router(api_authz, control_db, placement_path=None, devices_
 
 
 def make_registry_router(api_authz, devices_path, control_path=None, node_secrets_path=None, master=None,
-                         discovery_cache=None, edge_discovery_cache=None, broker="localhost", port=1883):
+                         discovery_cache=None, edge_discovery_cache=None, esphome_discovery_cache=None,
+                         broker="localhost", port=1883):
     """Admin-gated device registration (the add-device flow, ADR-0002 trait registry):
       GET  /api/v1/discover         -> unregistered BLE candidates heard nearby (the "see the filtered-out
                                        data" half of onboarding). Also returns edge_nodes[] (ADR-0036:
@@ -843,6 +844,9 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
                                        edge_discovery_cache is given. Omitted unless a cache is provided.
       POST /api/v1/edge-nodes/{node}/intake -> adopt a standby edge node into a room (ADR-0036): relocate
                                        its dormant gas device (gas_standby) to `area`, waking air_quality.
+      POST /api/v1/esphome-nodes/{name}/intake -> adopt an unregistered ESPHome air purifier into a room:
+                                       secret + control.yaml + levoit-devices.yaml, then a detached
+                                       controller/API restart (server/esphome_intake.py).
       POST /api/v1/devices          -> append a SENSOR to devices.yaml
       POST /api/v1/control-devices  -> append an ACTUATOR to control.yaml (its command secret is derived
                                        from the owning node's enrolled cmd_secret). Omitted if control_path None.
@@ -863,7 +867,7 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
             raise HTTPException(status_code=401, detail="unauthorized",
                                 headers={"WWW-Authenticate": "Bearer"})
 
-    if discovery_cache is not None or edge_discovery_cache is not None:
+    if discovery_cache is not None or edge_discovery_cache is not None or esphome_discovery_cache is not None:
         @router.get("/discover", dependencies=[Depends(require_admin)])
         async def discover():
             """Two intake feeds: `candidates` = unregistered BLE devices the scanner heard (decoded model,
@@ -876,7 +880,38 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
                 resp["candidates"] = discovery_cache.candidates(known)
             if edge_discovery_cache is not None:
                 resp["edge_nodes"] = edge_discovery_cache.candidates()
+            if esphome_discovery_cache is not None:
+                # unregistered ESPHome appliances, classified by what they publish (esphome_discovery.py)
+                resp["esphome_nodes"] = esphome_discovery_cache.candidates()
             return resp
+
+    if control_path is not None:
+        @router.post("/esphome-nodes/{name}/intake", dependencies=[Depends(require_admin)])
+        async def esphome_node_intake(name: str, body: dict = Body(...)):
+            """Adopt an unregistered ESPHome air purifier into a room. Body {area, dry_run?=false}.
+            Writes the three registry entries synchronously (rolled back on any failure), then launches a
+            detached restart of the command plane — this request's own process is one of the restarted
+            units, so the restart cannot run in-request (same reason as relocate; admin_job.py)."""
+            from server import esphome_intake as EI
+            from server.maintenance import admin_job
+            # Only adopt what discovery actually classified: adopting a name nobody has seen would write a
+            # registry entry for hardware that may not exist (or isn't a purifier).
+            seen = {c["node"]: c for c in (esphome_discovery_cache.candidates()
+                                           if esphome_discovery_cache is not None else [])}
+            if name not in seen or "air_purifier" not in seen[name].get("abilities", []):
+                return JSONResponse(status_code=404, content={
+                    "status": "not-found", "node": name,
+                    "reason": "no online, unregistered ESPHome air purifier by that name is publishing — "
+                              "is it powered and on the air-gap network?"})
+            cdir = Path(control_path).parent
+            code, payload = EI.handle_adopt_purifier(
+                name, body, control_path=Path(control_path), secrets_path=cdir / "control_secrets.yaml",
+                levoit_path=cdir / "levoit-devices.yaml", areas_path=cdir / "areas.yaml")
+            if code == 201:
+                payload["job_id"] = admin_job.launch({"op": "restart_control",
+                                                      "device_id": payload["device_id"]})
+                payload["poll"] = f"/api/v1/devices/jobs/{payload['job_id']}"
+            return JSONResponse(status_code=code, content=payload)
 
     @router.post("/edge-nodes/{node}/intake", dependencies=[Depends(require_admin)])
     async def edge_node_intake(node: str, body: dict = Body(...)):

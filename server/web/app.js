@@ -1624,7 +1624,7 @@ function AddDeviceModal({ onClose, onSaved }) {
     const tick = async () => {
       try {
         const r = await adminSend("GET", "/api/v1/discover");
-        if (alive) { setCands(r.candidates || []); setEdgeCands(r.edge_nodes || []); setScanErr(""); }
+        if (alive) { setCands(r.candidates || []); setEdgeCands([...(r.edge_nodes || []), ...(r.esphome_nodes || [])]); setScanErr(""); }
       } catch (e) { if (alive) setScanErr(String(e.message)); }
     };
     tick();
@@ -1666,7 +1666,10 @@ function AddDeviceModal({ onClose, onSaved }) {
     if (!edgePick || !edgeArea.trim()) return;
     setEdgeBusy(true); setEdgeErr("");
     try {
-      const r = await adminSend("POST", `/api/v1/edge-nodes/${edgePick.node}/intake`, { area: edgeArea.trim() });
+      // ESPHome appliances (kind 'esphome', e.g. a reflashed Levoit purifier) have their own intake: it
+      // registers a server-driven actuator instead of relocating a dormant edge gas device.
+      const path = edgePick.kind === "esphome" ? "esphome-nodes" : "edge-nodes";
+      const r = await adminSend("POST", `/api/v1/${path}/${edgePick.node}/intake`, { area: edgeArea.trim() });
       // Optional rename-on-adopt: the intake relocate is async/detached, so the rename is a SEPARATE
       // follow-up request (as the backend intends) — never chained server-side. Best-effort; if it races the
       // relocate you can still rename via the pencil. new_id must be [a-z0-9_]+.
@@ -1778,7 +1781,8 @@ function AddDeviceModal({ onClose, onSaved }) {
       <div class="discover-hd"><span>Standby / unassigned hardware</span>
         <span class="note sm">${edgeCands === null ? "listening…" : "live · every 3s"}</span></div>
       ${edgeCands !== null && edgeCands.length === 0 && html`<p class="note sm">No unassigned edge nodes
-        online. Power a standby node (C6/S3) on the house network — it self-announces and shows up here.</p>`}
+        online. Power a standby node (C6/S3) on the house network — it self-announces and shows up here. A
+        reflashed ESPHome purifier shows up here too once it's online on the air-gap network.</p>`}
       ${(edgeCands || []).map((n) => html`
         <button class="cand ${edgePick && edgePick.node === n.node ? "sel" : ""}"
           onClick=${() => { setEdgePick(n); setEdgeArea(""); setEdgeErr(""); setEdgeDone(null); }}>
@@ -1800,6 +1804,8 @@ function AddDeviceModal({ onClose, onSaved }) {
           ${edgeErr && html`<p class="err sm">${edgeErr}</p>`}
           ${edgeDone && html`<p class="note sm">✓ ${edgeDone.node} adopting into <b>${edgeDone.area}</b>
             (device ${edgeDone.renamed_to || edgeDone.device_id}). The fleet restarts to pick it up — give it a moment.
+            ${edgePick && edgePick.kind === "esphome" && html`<br/>Manual control works once it's back. No automation
+            is wired — pick its air-quality source in the automation editor.`}
             ${edgeDone.rename_error && html`<br/><span class="err">rename deferred (${edgeDone.rename_error}) — use the pencil once it settles.</span>`}</p>`}
         </div>`}
     </div>`;

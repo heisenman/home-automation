@@ -183,3 +183,38 @@ last-seen`). Selecting one opens **"assign to area"**, which drives:
   node_id or you overwrite a live node's identity (split-brain).
 - First tryout is `.210`-dev-contained (node brokers to `mqtt://192.168.0.210:1883`); prod
   (ha-2) rollout is a later, separate step.
+
+## Amendment 2026-10-01 — ESPHome appliances in the same intake list
+
+**Gap (found adopting the second Levoit, `levoit-c-office`):** a reflashed purifier was online on the
+air-gap broker and publishing, yet invisible to every intake surface, and its data reached nobody:
+1. `levoit_bridge` subscribed `<name>/#` **once, at connect, per registered name**. Its registry
+   hot-reloads, but a newly-added name was never subscribed until a restart, and an unregistered name
+   was never received at all. That left ADR-0032's quarantine hook dead code for purifiers.
+2. The Standby list only knew Layer-1 `hello`s. ESPHome firmware has no `hello` and no node-born secret.
+
+**Decision.** Keep **one** operator surface and give each identity model its own discovery source:
+- `server/ingest/esphome_discovery.py` lists ESPHome nodes from the retained `+/status` plus entity
+  topics, and **classifies them by what they publish** (fan + PM2.5 = `air_purifier`; see
+  `ABILITY_SIGNATURES`). A node that matches no signature is never listed. `GET /discover` returns them as
+  `esphome_nodes` (`kind: "esphome"`), and the PWA merges them into the same list.
+- `POST /api/v1/esphome-nodes/{name}/intake {area}` (`server/esphome_intake.py`) refuses names that
+  discovery hasn't classified. It writes **per-device secret → control.yaml → levoit-devices.yaml**, in
+  that order. The bridge hot-reloads the last file, so it goes in only once the command plane's entries
+  exist. Each write is a text **append that must parse back to old+new exactly**, otherwise the file is
+  restored and earlier steps are rolled back. Appending keeps control.yaml's inline comments and assumes
+  nothing about the target box's layout. The secret file keeps mode 600, and the secret is never
+  returned. A detached `admin_job` op `restart_control` then bounces ha-controller + ha-api(+tls) under
+  `.maintenance-fit`.
+- `levoit_bridge` now subscribes **by topic shape**: `+/status` plus `+/<entity>` for each mapped metric.
+  Adopted units are bridged the moment the reloader sees them, and unknown purifiers reach quarantine.
+
+**Not done, deliberately:** no automation policy is seeded on adoption (CONFORMANCE §B, ADR-0014 R2/R4: a
+purifier's own sensor is never an automatic control source). Manual control works after the restart.
+The operator picks the PM2.5 source in the automation editor.
+
+**Rejected:** a parallel "Add purifier" screen (a second intake UI to keep in sync with the first); adding
+ESPHome rows to `EdgeDiscoveryCache` (its placement truth is devices.yaml + edge manifests and its adopt is
+claim + relocate; mixing in purifiers would branch every method); reusing
+`device_registry._write_yaml_preserving` (it `safe_dump`-rewrites the file, dropping control.yaml's inline
+comments, and it doesn't preserve a secret file's mode).

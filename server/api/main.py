@@ -35,6 +35,8 @@ from fastapi.staticfiles import StaticFiles
 from server.ingest.discovery import DiscoveryCache, start_subscriber  # BLE 'Add sensor' discovery feed
 from server.ingest.edge_discovery import EdgeDiscoveryCache  # ADR-0036 standby edge-node intake feed
 from server.ingest.edge_discovery import start_subscriber as start_edge_subscriber
+from server.ingest.esphome_discovery import EsphomeDiscoveryCache  # unregistered ESPHome appliances (purifiers)
+from server.ingest.esphome_discovery import start_subscriber as start_esphome_subscriber
 
 # ── Config ────────────────────────────────────────────────────────────────────
 
@@ -175,6 +177,9 @@ async def lifespan(app: FastAPI):
     edge_disc_client = start_edge_subscriber(EDGE_DISCOVERY_CACHE,
                                              broker=os.environ.get("HA_BROKER", "localhost"),
                                              port=int(os.environ.get("HA_BROKER_PORT", "1883")))
+    esphome_disc_client = start_esphome_subscriber(ESPHOME_DISCOVERY_CACHE,
+                                                   broker=os.environ.get("HA_BROKER", "localhost"),
+                                                   port=int(os.environ.get("HA_BROKER_PORT", "1883")))
     # Cluster/service alerts for the PWA banner — also every instance, read-only (see cluster_alerts.py).
     from server.api.cluster_alerts import start_cluster_alert_subscriber
     clu_client = start_cluster_alert_subscriber(CLUSTER_ALERT_CACHE,
@@ -185,7 +190,7 @@ async def lifespan(app: FastAPI):
     finally:
         if push_task is not None:
             push_task.cancel()
-        for _c in (disc_client, clu_client):
+        for _c in (disc_client, edge_disc_client, esphome_disc_client, clu_client):
             if _c is not None:
                 _c.loop_stop()
                 _c.disconnect()
@@ -227,6 +232,9 @@ DISCOVERY_CACHE = DiscoveryCache()
 # ADR-0036: rolling cache of online-but-unassigned edge NODES (standby hardware) surfaced in the same
 # "Add device" flow. Fed by a best-effort subscriber to home/edge/+/{hello,status} (see edge_discovery.py).
 EDGE_DISCOVERY_CACHE = EdgeDiscoveryCache()
+# Same list, ESPHome half: unregistered ESPHome appliances classified by what they publish (a fan + PM2.5 =
+# air purifier), adopted via POST /api/v1/esphome-nodes/{name}/intake. See esphome_discovery.py.
+ESPHOME_DISCOVERY_CACHE = EsphomeDiscoveryCache()
 
 # Cluster/service-health alerts (service_missing / node_down) for the PWA banner, fed from retained cluster
 # topics by a per-instance subscriber (read-only, not VIP-gated). See server/api/cluster_alerts.py.
@@ -330,6 +338,7 @@ def _mount_control(app: FastAPI) -> None:
                                                  NODE_SECRETS_LUT, master,
                                                  discovery_cache=DISCOVERY_CACHE,
                                                  edge_discovery_cache=EDGE_DISCOVERY_CACHE,
+                                                 esphome_discovery_cache=ESPHOME_DISCOVERY_CACHE,
                                                  broker=broker, port=port))  # add-device: BLE discover + standby-node intake (ADR-0036) + claim/enroll
         app.include_router(make_battery_router(master, NODE_SECRETS_LUT, broker=broker, port=port))  # on-demand SwitchBot battery refresh
         app.state.control_registry = registry      # device_id -> DeviceCtl (traits for manual-control UI)

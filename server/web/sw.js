@@ -1,6 +1,6 @@
 // Service worker — caches the app SHELL only (so the UI loads offline), never the API.
 // Live device state always goes to the network; if the box is unreachable the app shows last-known.
-const CACHE = "ha-shell-v54";   // v54: Outdoor weather chip beside attic/crawlspace (rooms.outdoor)
+const CACHE = "ha-shell-v55";   // v55: ESPHome purifiers in Standby hardware (adopt via esphome-nodes intake)
 const SHELL = [
   "/app/", "/app/index.html", "/app/app.js", "/app/push.js", "/app/styles.css",
   "/app/vendor/preact-htm.standalone.module.js", "/app/manifest.webmanifest", "/app/icon.svg",

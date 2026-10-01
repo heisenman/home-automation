@@ -53,6 +53,13 @@ something cross-cutting a future agent would otherwise rebuild.
   render it (don't add a panel-specific endpoint). See [server/AGENTS.md](../server/AGENTS.md).
 - **A code-backed doc that can't rot** → generate it + drift-test it, mirroring `tools/gen_module_matrix.py`
   → `edge/MATRIX.md` (guarded by `tests/test_module_matrix.py`). This file follows the same pattern.
+- **Surface new hardware for adoption ("Standby hardware" list)** → one discovery cache per identity model,
+  merged in `GET /api/v1/discover`: BLE adverts `server/ingest/discovery.py`, our edge nodes' `hello`
+  `server/ingest/edge_discovery.py` (ADR-0036), ESPHome appliances classified by what they publish
+  `server/ingest/esphome_discovery.py` (add a signature to `ABILITY_SIGNATURES`, not a new list). Adopting an
+  ESPHome purifier = `server/esphome_intake.py` (append-and-verify registry writes; no auto-wired automation).
+- **Restart the command plane after a registry write, from an API request** → `admin_job` op
+  `restart_control` (detached; ha-api can't restart itself in-request; holds `.maintenance-fit`).
 - **Panel/edge tooling** → `tools/` (edge_ota/sign, node_bringup, enroll_node, the `agents/coord.py` board);
   battery profiling: `tools/e1001_*.py`, `tools/d1001_*.py`.
 

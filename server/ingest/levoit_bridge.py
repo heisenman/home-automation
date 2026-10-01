@@ -89,6 +89,11 @@ _METRIC_MAP: dict[str, tuple[str, callable]] = {
 }
 
 
+def bridge_subscriptions() -> list[tuple[str, int]]:
+    """Wildcard subscriptions: availability + every entity the bridge maps to a metric."""
+    return [("+/status", 0)] + [(f"+/{suffix}", 0) for suffix in _METRIC_MAP]
+
+
 def _utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
@@ -192,8 +197,12 @@ class LevoitBridge:
         if rc != 0:
             log.error("MQTT connect failed rc=%s", rc)
             return
-        for name in self._registry:
-            client.subscribe(f"{name}/#", qos=0)
+        # Subscribe by TOPIC SHAPE, not by registered name: one wildcard per bridged entity + status. A per-name
+        # subscribe (the old way) was taken once at connect, so a unit adopted later was never received until
+        # a restart even though the registry hot-reloads — and an unregistered unit was never received at all,
+        # which left ADR-0032's quarantine hook dead code. Now a new name in levoit-devices.yaml is bridged the
+        # moment the reloader sees it, and an unknown purifier's telemetry reaches quarantine.
+        client.subscribe(bridge_subscriptions())
         log.info("connected; bridging %d Levoit/ESPHome device(s): %s",
                  len(self._registry), ", ".join(self._registry) or "(none)")
 
@@ -201,12 +210,13 @@ class LevoitBridge:
         name, _, suffix = msg.topic.partition("/")
         reg = self._registry.get(name)
         if not reg:
-            if name not in self._unknown:
+            # `+/status` also matches non-purifier ESPHome nodes (panels); only a node publishing a bridged
+            # metric is an unknown PURIFIER worth a warning.
+            if suffix in _METRIC_MAP and name not in self._unknown:
                 self._unknown.add(name)
-                log.warning("telemetry from UNKNOWN ESPHome node %r — add it to the registry", name)
-            # ADR-0032: quarantine an unregistered node's metric instead of dropping. NB: this bridge
-            # subscribes per-registered-name, so an unknown node is normally never received at all — the
-            # primary levoit risk is NON-subscription, not this drop; the hook is defense-in-depth.
+                log.warning("telemetry from UNKNOWN ESPHome node %r — adopt it from PWA Standby hardware "
+                            "(or add it to levoit-devices.yaml)", name)
+            # ADR-0032: quarantine an unregistered node's metric instead of dropping it.
             self._quarantine_unknown(name, msg)
             return
         try:
