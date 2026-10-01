@@ -46,6 +46,11 @@ each unit has its OWN OTA key.
 | `levoit-office` (2026-06-27) | `levoit-office.yaml` | `ota_password` | `purifier_living_room` |
 | `levoit-c-office` (2026-10-01) | `levoit-c-office.yaml` | `ota_password_c_office` | `purifier_c_office` (area `c_office`) |
 
+**levoit-c-office verified live 2026-10-01** (CONFORMANCE §B R3): MCU link (fw 2.0.4, error Ok, real PM2.5);
+readback of a physical touch-panel ON → hot.db within 1 s; PWA control fan speed 1→2→3→4 (each confirmed on
+the unit + in hot.db), display LED on. Adopted via PWA Standby hardware (ADR-0036 amendment); automation left
+disabled with no source (inert policy) until a source sensor is chosen.
+
 **Adding a unit:** copy a thin file (≈20 lines — identity only, never the body), add `ota_password_<room>`
 (`openssl rand -hex 16`) to `secrets.yaml`, back up OEM to `instance/oem-backups/` on .210 (git-ignored),
 compile → serial flash → verify `<name>/status online` on `192.168.1.200` → reassemble on mains → **PWA → Add device → Standby hardware → pick the unit → Adopt into a room** (writes the secret +
