@@ -59,3 +59,6 @@ ca/
 # (CC BY-SA, explicitly shareable). Drop datasheets here locally for docs-first; they don't sync via git.
 docs/hardware/*.pdf
 !docs/hardware/reTerminal_E1001_V1_2_SCH_251120.pdf
+
+# Claude Code per-machine permission allowlist: local only, leaks usernames/LAN IPs/hosts. Never commit.
+.claude/settings.local.json
