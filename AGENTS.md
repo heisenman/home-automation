@@ -102,6 +102,20 @@ reuse → decompose → build → test): [docs/DEVICE-INTAKE.md](docs/DEVICE-INT
 - **Checkpoint discipline:** at each checkpoint reconcile the action-item docs (FOLLOWUPS, ADR status, this
   tree) to reality — run [docs/CHECKPOINT.md](docs/CHECKPOINT.md), don't just commit code.
 
+## Working as a user other than `visko` (e.g. Catherine)
+
+This checkout is shared via the `users` group (`/home/catherine/home_automation` → `/home/visko/home_automation`).
+Secrets in `instance/` are owner-only on purpose, so sudo, MQTT/board, and live-deploy steps are **not** yours.
+If you hit a permission/tooling wall, or need a privileged action, **ask the visko-side Claude** — post to the
+host data plane (an instance there watches `catherine.jsonl`):
+
+```bash
+HOST_COORD_DIR=/home/visko/.claude/host/coord /home/visko/.claude/host/bin/coord-local.py --as catherine post "what broke + exact error + path"
+HOST_COORD_DIR=/home/visko/.claude/host/coord /home/visko/.claude/host/bin/coord-local.py tail   # read replies
+```
+
+One-time git setup for a non-owner: `git config --global --add safe.directory /home/visko/home_automation`.
+
 ## Starting a task
 
 1. **Reuse-first (if you'll write code):** scan [`docs/REUSE.md`](docs/REUSE.md) + the ADR nearest your task +
