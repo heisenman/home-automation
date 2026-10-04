@@ -75,7 +75,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v2-hvac-census"   // keep in step with the version.txt tag ota_edge_node.sh brands
+#define HA_FW_VERSION "v3-hvac-live"   // keep in step with the version.txt tag ota_edge_node.sh brands
 #endif
 
 // ⛔ THE GATE. 1 = sniff only, and that is the only value this node has ever been run with. Setting it
@@ -103,7 +103,9 @@ static const char *TAG = "ha_hvac";
 #define OVR_RELAY_GPIO   GPIO_NUM_19    // silk D8
 
 #define BUS_READ_MS       50            // read timeout; also this task's idle tick
-#define TELEMETRY_MS   30000
+// 10 s while the ERV is being characterized (Hugh, 2026-10-04) — the fleet norm is 30 s; drop back once
+// the register map and behaviour are settled. Mode changes publish immediately regardless (below).
+#define TELEMETRY_MS   10000
 #define SNIFF_REPORT_MS 15000           // bring-up diagnostic cadence
 #define CENSUS_REPORT_MS 60000          // register census (which registers the wall control touches)
 
@@ -145,9 +147,11 @@ static const char *fan_mode_name(uint8_t m) {
     case BROAN_FAN_OVR:          return "override";
     case BROAN_FAN_RECIRCULATE:  return "recirculate";
     case BROAN_FAN_INTERMITTENT: return "intermittent";
-    case BROAN_FAN_MIN:          return "min";
-    case BROAN_FAN_MAX:          return "max";
-    case BROAN_FAN_MANUAL:       return "manual";
+    // The wall control's own labels, matched live 2026-10-04 against its LCD and erv_pm wall power:
+    // LOW 31 W, MED 64 W, HIGH ~130 W. The upstream names (min/manual/max) are what the enum says.
+    case BROAN_FAN_MIN:          return "low";
+    case BROAN_FAN_MAX:          return "high";
+    case BROAN_FAN_MANUAL:       return "med";
     case BROAN_FAN_TURBO:        return "turbo";
     case BROAN_FAN_HUMIDITY:     return "humidity";
     case BROAN_FAN_AWAY:         return "away";
@@ -168,7 +172,7 @@ static const char *fan_mode_name(uint8_t m) {
 static void census_report(void);
 
 static void publish_erv(void) {
-    char metrics[512], reg[96];
+    char metrics[640], reg[96];
     jsonbuf_t j;
     jsonbuf_init(&j, metrics, sizeof metrics);
 
@@ -181,6 +185,18 @@ static void publish_erv(void) {
     jb_f32(&j, "power_w",         BROAN_REG_POWER_W);
     jb_f32(&j, "supply_temp_raw", BROAN_REG_TEMP_SUPPLY);
     jb_f32(&j, "exhaust_temp_raw", BROAN_REG_TEMP_EXHAUST);
+    // Settings the wall control reads every ~3 s, so a listen-only node always has them fresh.
+    jb_i32(&j, "base_mode",       BROAN_REG_BASE_MODE);
+    jb_f32(&j, "target_cfm_in",   BROAN_REG_TARGET_CFM_IN);
+    jb_f32(&j, "target_cfm_out",  BROAN_REG_TARGET_CFM_OUT);
+    jb_f32(&j, "min_cfm_in",      BROAN_REG_MIN_CFM_IN);
+    jb_f32(&j, "min_cfm_out",     BROAN_REG_MIN_CFM_OUT);
+    jb_f32(&j, "max_cfm_in",      BROAN_REG_MAX_CFM_IN);
+    jb_f32(&j, "max_cfm_out",     BROAN_REG_MAX_CFM_OUT);
+    jb_f32(&j, "target_rh",       BROAN_REG_TARGET_RH_B);
+    uint8_t hm;
+    if (fresh(BROAN_REG_HUMIDITY_MODE) && ha_broan_get_u8(&s_erv, BROAN_REG_HUMIDITY_MODE, &hm))
+        jsonbuf_add(&j, "\"humidity_mode\":%u", (unsigned)hm);
     jb_f32(&j, "supply_cfm",      BROAN_REG_CFM_SUPPLY);
     jb_f32(&j, "exhaust_cfm",     BROAN_REG_CFM_EXHAUST);
     jb_f32(&j, "supply_rpm",      BROAN_REG_RPM_SUPPLY);
@@ -296,11 +312,18 @@ static void bus_task(void *arg) {
 static void telemetry_task(void *arg) {
     (void)arg;
     uint32_t last_pub = 0, last_sniff = 0, last_census = 0;
+    uint8_t  last_mode = 0xFF;
     bool primed = false;
 
     for (;;) {
         uint32_t t = now_ms();
-        if (!primed || (uint32_t)(t - last_pub) >= TELEMETRY_MS) {
+        // A mode change publishes at once: a 20 s press of HIGH fell between two 30 s publishes on the
+        // first characterization pass, and the mode is the one thing the wall control changes.
+        uint8_t mode = 0xFF;
+        if (!ha_broan_get_u8(&s_erv, BROAN_REG_FAN_MODE, &mode)) mode = 0xFF;
+        bool mode_changed = (mode != last_mode);
+        last_mode = mode;
+        if (!primed || mode_changed || (uint32_t)(t - last_pub) >= TELEMETRY_MS) {
             if (ha_mqtt_is_connected()) publish_erv();
             last_pub = t;
             primed = true;
@@ -448,7 +471,7 @@ void app_main(void) {
         .abilities = "erv", .enable_reach = false, .on_cmd = on_cmd });
     ha_mqtt_start(s_cfg.broker_uri, s_cfg.node_id);
 
-    xTaskCreate(telemetry_task, "erv_tlm", 4096, NULL, 4, NULL);
+    xTaskCreate(telemetry_task, "erv_tlm", 6144, NULL, 4, NULL);   // 640 B metrics + 896 B envelope
 
     ESP_LOGW(TAG, "hvac node up: node=%s broker=%s uart=%d tx=%d rx=%d baud=%u LISTEN_ONLY=%d",
              s_cfg.node_id, s_cfg.broker_uri, RS485_PORT, RS485_TX_GPIO, RS485_RX_GPIO,

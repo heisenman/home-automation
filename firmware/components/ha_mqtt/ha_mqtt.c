@@ -15,6 +15,7 @@
 #include "ha_config.h"        // ha_config_repoint_apply (the signed "repoint" op)
 #include <stdio.h>
 #include <stdarg.h>
+#include <stdlib.h>
 #include <string.h>
 #include "mqtt_client.h"
 #include "esp_log.h"
@@ -517,18 +518,22 @@ void ha_mqtt_publish_node_sensor_ex(const char *key, const char *reg_key, const 
     snprintf(topic, sizeof(topic), "home/edge/%s/%s/adv", s_node, key);
     char ts[24];
     if (!ha_sntp_iso_utc(ts, sizeof(ts))) ts[0] = '\0';
-    // Sized for the largest caller (hvac: ~512 B of metrics). Was 320, which a full ERV register set
-    // overflows — and the overflow path below drops the whole reading, so say so instead of vanishing.
-    char payload[704];
-    int n = snprintf(payload, sizeof(payload),
+    // Sized for the largest caller (hvac: up to 640 B of metrics + ~200 B envelope). Was 320, which a
+    // full ERV register set overflows — the overflow path below drops the reading, so it logs, not vanishes.
+    // Heap, not stack: every caller's telemetry task (shades, hvac: 4–6 KB) would otherwise carry it.
+    const size_t cap = 896;
+    char *payload = malloc(cap);
+    if (!payload) return;
+    int n = snprintf(payload, cap,
         "{\"schema\":1,\"node\":\"%s\",\"mac\":\"%s\",\"device_type\":\"%s\","
         "\"ts\":\"%s\",\"transport\":\"%s\",\"metrics\":%s,\"meta\":{}}",
         s_node, reg_key, device_type, ts, transport, metrics_json);
-    if (n <= 0 || n >= (int)sizeof(payload)) {
+    if (n <= 0 || n >= (int)cap) {
         ESP_LOGE(TAG, "node sensor '%s' payload too large (%d B) — dropped", key, n);
-        return;
+    } else {
+        esp_mqtt_client_publish(s_client, topic, payload, n, 1, false);
     }
-    esp_mqtt_client_publish(s_client, topic, payload, n, 1, false);
+    free(payload);
 }
 
 void ha_mqtt_publish_reply(const char *reqid, const char *payload) {
