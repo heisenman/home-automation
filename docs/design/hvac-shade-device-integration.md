@@ -1298,6 +1298,16 @@ conductive resting on the enclosure.
 - **Mode WRITES (v7, `erv_mode`) — all six confirmed by the ERV's own re-read within ~4 s and by wall
   power:** low 22 W/70 CFM · high 101 W/110 CFM · turbo 135 W/130 CFM · int 0 CFM (off-phase, 3 W wall) ·
   off 0 RPM (3 W wall; the ERV's own `power_w` holds a stale 7.69 at standby) · med 59 W/92 CFM.
+- **⛔ OVR LATCH (§1.9 hazard, observed).** A ~4 s OVR closure latched the ERV in OVR (`00 20` = `0x02`, max
+  airflow ~130 W) AFTER the contact opened; mode writes were ignored. Closures held 45–60 s released cleanly
+  (back to the prior mode within ~2 s of opening). Read: OVR behaves like Broan's push-button timers — a short
+  press starts a timed override, a held closure overrides only while held. Latch length not measured (cleared
+  after ~4 min by power-cycle). **Mitigation:** firmware v8 holds any boost ≥45 s (`BOOST_MIN_HOLD_MS`, a stop
+  inside it is deferred) — re-verified: boost+immediate stop held 45 s, released, ERV back to MED in 2 s.
+- **Power-cycle (via `erv_pm`) clears OVR.** After power-on the ERV sits ~2 min in start-up (`00 20` = `0x14`
+  = 20, fans stopped, fault register `0`, mode writes ignored), then settles into **LOW** — not its prior mode.
+- PWA: OVR → alarm banner + "Clear override (power-cycle ERV)" (admin); start-up → info banner; mode buttons
+  locked in both (control.yaml `external` + `power_cycle`).
 7. Confirm temperature units (°C or °F) against a known reference — the component publishes the raw float
    with no conversion and no document states which.
 8. Confirm whether the recirculation damper (J6) is fitted before trusting mode `0x06`.

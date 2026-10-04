@@ -134,4 +134,7 @@ last set.
 - **If the wall control is powered while the node is controller, both answer `0x11` and collide** — rising
   `bad`, erratic acks. Only one may be live.
 - `warning_code` reads `0`, which the firmware currently flags `warning_ok:false` — unconfirmed, not a fault.
-- The ERV can be power-cycled remotely via `cmnd/erv_pm/POWER` — no attic trip.
+- The ERV can be power-cycled remotely via `cmnd/erv_pm/POWER` — no attic trip. It then spends ~2 min in
+  start-up (`fan_mode` 20) and settles into LOW, not its previous mode.
+- **`fan_mode` 2 = OVR latched** (max airflow, mode writes ignored). Caused by a SHORT OVR pulse; firmware v8
+  prevents it (45 s minimum hold). Clear: PWA banner button, or power-cycle via `erv_pm`.
