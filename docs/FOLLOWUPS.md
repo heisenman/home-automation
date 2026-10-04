@@ -18,8 +18,11 @@ Entry 3. Design log: hvac-shade-device-integration §1.8 + §7.2.
   node can never answer ("no enroll reply … already claimed"). Patched by hand today: `hvac_c6`, `dehum_c6`,
   `shades_s3` copied into ha-2's LUT (backup `node_secrets.enc.bak-20261004`). `.210` still lacks
   `sgp41_mech`. **Fix:** enroll writes both, or intake fetches/merges, or the LUT joins a sync manifest.
-- **PWA ERV control (CONFORMANCE B / R1).** Mode + boost are signed commands (`tools/erv_cmd.py`) only — an
-  actuator must surface its traits as user-facing, admin-gated controls. Not built.
+- ~~**PWA ERV control (CONFORMANCE B / R1).**~~ ✅ **DONE 2026-10-04** — `erv_attic` is a `manual: true`
+  actuator in ha-2's `control.yaml` (mode + new `timed` boost trait), driven by `server/control/erv_driver.py`
+  (signed edge transport, confirmed by the ERV's readback). Verified on ha-2 through the real issuer: low/med
+  confirmed in 5–7 s, boost 15/stop in ~1 s. PWA: manual-only device card (sw v59). Automation for the ERV is
+  deliberately absent until Hugh binds a policy (R2).
 - **Warning register reads `0`**, code treats only `-1` as healthy → `warning_ok:false`. Confirm semantics.
 - **Supply temp units** (`supply_temp_raw` ≈ 29.5): °C or °F unconfirmed (design §7.2 item 7).
 - **Wall-control switch (Hugh: research, do last).** Node and wall control can't both be live at `0x11`; idea is
