@@ -77,17 +77,39 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v5-hvac-boost"   // keep in step with the version.txt tag ota_edge_node.sh brands
+#define HA_FW_VERSION "v6-hvac-ctrl"   // keep in step with the version.txt tag ota_edge_node.sh brands
 #endif
 
-// ⛔ THE GATE. 1 = sniff only, and that is the only value this node has ever been run with. Setting it
-// to 0 means taking the wall control's slot on a live ventilator, which owes a heartbeat every 10 s or
-// the unit raises E50 and SHUTS DOWN — including across every OTA. ADR-0041 §1.8 (does E50 self-clear,
-// or need a physical power cycle?) is UNRESOLVED and BLOCKING for that step. Do not flip this to get
-// telemetry: listen-only already harvests the full register map (see below).
+// ⛔ THE GATE. 1 = sniff only (v1–v5). 0 = this node IS the ERV's controller: it takes the token, owes a
+// heartbeat every 10 s, and polls the register map itself.
+//
+// Cleared 2026-10-04 (v6, Hugh) on live evidence, ADR-0041 §1.8:
+//   * The ERV serves ONE controller and only ever offers the token to the address it is paired with —
+//     0x11 on this unit (census: no discovery pings, no other address, while its controller was absent).
+//     So we answer AS 0x11 (HA_HVAC_CTRL_ADDR), and the wall control must be UNPOWERED: two controllers
+//     at one address collide.
+//   * Losing the controller raises E50 on the LCD but the unit KEEPS RUNNING its last mode (64 W steady
+//     for 7+ min, erv_pm). E50 is a warning here, not the shutdown upstream described — so an OTA reboot
+//     is a cosmetic gap, not an outage. Whether E50 self-clears on reconnect: answered by this build.
+// Still a compile-time knob, never runtime: flipping it back to 1 is one OTA.
 #ifndef HA_HVAC_LISTEN_ONLY
-#define HA_HVAC_LISTEN_ONLY 1
+#define HA_HVAC_LISTEN_ONLY 0
 #endif
+#ifndef HA_HVAC_CTRL_ADDR
+#define HA_HVAC_CTRL_ADDR 0x11      // the wall control's address — the one this ERV is paired to
+#endif
+
+// Polled in controller mode: upstream's telemetry set + the settings the wall control used to read, so
+// the published payload keeps every field it had while listening.
+static const uint16_t kPoll[] = {
+    BROAN_REG_FAN_MODE, BROAN_REG_ACTIVE_MODE, BROAN_REG_POWER_W,
+    BROAN_REG_TEMP_SUPPLY, BROAN_REG_TEMP_EXHAUST, BROAN_REG_CFM_SUPPLY, BROAN_REG_CFM_EXHAUST,
+    BROAN_REG_RPM_SUPPLY, BROAN_REG_RPM_EXHAUST, BROAN_REG_FILTER_LIFE, BROAN_REG_FAULT,
+    BROAN_REG_WARNING, BROAN_REG_UPTIME,
+    BROAN_REG_BASE_MODE, BROAN_REG_TARGET_CFM_IN, BROAN_REG_TARGET_CFM_OUT, BROAN_REG_MIN_CFM_IN,
+    BROAN_REG_MIN_CFM_OUT, BROAN_REG_MAX_CFM_IN, BROAN_REG_MAX_CFM_OUT, BROAN_REG_TARGET_RH_B,
+    BROAN_REG_HUMIDITY_MODE,
+};
 
 static const char *TAG = "ha_hvac";
 
@@ -513,7 +535,9 @@ void app_main(void) {
     // Default poll list (mode, power, temps, CFM, RPM, filter, fault, warning, uptime). It is not used
     // while listen-only — we never send a read request — but the field cache fills anyway from the wall
     // control's own traffic, which is the whole point of this step.
-    ha_broan_init(&s_erv, &(ha_broan_cfg_t){ .listen_only = HA_HVAC_LISTEN_ONLY }, now_ms());
+    ha_broan_init(&s_erv, &(ha_broan_cfg_t){ .listen_only = HA_HVAC_LISTEN_ONLY,
+        .our_addr = HA_HVAC_CTRL_ADDR, .poll_regs = kPoll,
+        .poll_reg_count = (uint8_t)(sizeof kPoll / sizeof kPoll[0]) }, now_ms());
 
     // Bus task before Wi-Fi for the same reason as the transport: start listening immediately.
     xTaskCreate(bus_task, "erv_bus", 4096, NULL, 6, NULL);
