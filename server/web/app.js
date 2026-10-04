@@ -335,6 +335,10 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
   const [onAbove, setOnAbove] = useState(c.on_above ?? "");
   const [offBelow, setOffBelow] = useState(c.off_below ?? "");
   const [quiet, setQuiet] = useState("");
+  // outdoor dew-point gate (dehumidifier only): skip STARTING when outdoor air is this dry. Edited in °F.
+  const gate = c.outdoor_gate || null;
+  const [gateSensor, setGateSensor] = useState((gate && gate.sensor) || "");
+  const [gateF, setGateF] = useState(gate ? Math.round(((gate.min_dewpoint_c ?? 4.4) * 9) / 5 + 32) : 40);
   const [scenes, setScenes] = useState(vm.scenes || {});   // {Away:{...}, Sleep:{...}}
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -404,6 +408,8 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
       else sc[name] = { on_above: Number(p.on_above), off_below: Number(p.off_below) };
     }
     patch.scenes = sc;
+    if (gate) patch.outdoor_gate = { sensor: gateSensor || null,
+                                     min_dewpoint_c: Math.round(((Number(gateF) - 32) * 5 / 9) * 10) / 10 };
     try {
       await adminSend("PUT", `/control/${vm.device_id}/policy`, patch);
       setFlash("saved"); await onChange();
@@ -454,6 +460,20 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
           <input type="number" value=${offBelow} onInput=${(e) => setOffBelow(e.target.value)} /></div>`
         : html`<p class="note">setpoint: the device runs its own loop to its target — the dashboard just
           keeps it powered. (Not recommended here: this unit's onboard RH reads low.)</p>`}
+      ${gate && html`<div class="field"><label>Outdoor dew-point gate</label>
+        <select value=${gateSensor} onChange=${(e) => setGateSensor(e.target.value)}>
+          <option value="">— off (no gating) —</option>
+          ${(sensors || []).filter((s) => s.metrics && s.metrics.temperature_c != null && s.metrics.humidity_pct != null)
+            .sort((a, b) => (b.area === "outdoor") - (a.area === "outdoor"))
+            .map((s) => html`<option value=${s.device_id}>${prettyName(s.device_id)} · ${prettyArea(s.area)}</option>`)}
+        </select>
+        <div class="controls"><span class="note">don't start when outdoor dew point is below</span>
+          <input type="number" value=${gateF} onInput=${(e) => setGateF(e.target.value)} /><span class="note">°F</span></div>
+        <p class="note">Air that dry dries the house through the ERV by itself, and is where the unit's E8
+          lockout begins. ${gate.dewpoint_now_c != null
+            ? `Outdoor dew point now: ${Math.round((gate.dewpoint_now_c * 9) / 5 + 32)}°F${gate.blocking ? " — gate is CLOSED (starts skipped)" : " — gate open"}.`
+            : ""} A Boost override ignores the gate.</p>
+      </div>`}
       <div class="field"><label>Quiet window</label>
         <input type="text" placeholder="22:00-07:00 (optional)" value=${quiet}
           onInput=${(e) => setQuiet(e.target.value)} /></div>

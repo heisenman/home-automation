@@ -21,6 +21,7 @@ from pathlib import Path
 from server.comms import events as ev
 from server.control import actuator_state, bootstrap, control_store as store
 from server.control.registry import load_control_registry
+from server.util.psychro import dewpoint_c
 from server.util.registry_reload import RegistryReloader
 from server.control.automation import (
     DEFAULT_SCENE, DeviceState, Override, Policy, Reading, Resolution, apply_scene, in_window, resolve,
@@ -85,6 +86,13 @@ DEHUM_POLICY = {
     "control": {"strategy": "hysteresis", "metric": "humidity_pct", "on_above": 55, "off_below": 50,
                 "min_on_min": 10, "min_off_min": 10},
     "ventilation": {"device": None, "during_level": 2, "after_level": 3, "after_min": 15},
+    # Skip calling when the OUTDOOR dew point is below min_dewpoint_c (40 °F): that air is so dry that
+    # ventilation alone dries the house, and it is where the E070's E8 inlet lockout starts. Outdoor dew point
+    # is a deliberately conservative proxy — the unit's real inlet is post-ERV air (in cold weather the ERV
+    # adds moisture), so this errs toward skipping. Gates on dew point ONLY: outdoor TEMPERATURE would wrongly
+    # block cold days, since the ERV warms the air before the coil. A manual Boost override bypasses it; a
+    # stale/missing outdoor reading fails OPEN (the unit protects itself; 'Called but not running' surfaces it).
+    "outdoor_gate": {"sensor": None, "min_dewpoint_c": 4.4},
     "schedule": [],
     "defaults": {"running": False},
     "sensor_stale_min": 30,
@@ -375,6 +383,23 @@ class Controller:
         return Resolution(True, dev_state.level != want or not dev_state.running, "rule",
                           f"{res.reason}; {why}", level=want)
 
+    def _apply_outdoor_gate(self, pol, res, dev_state, now):
+        g = pol.get("outdoor_gate") or {}
+        sid = g.get("sensor")
+        if not sid or not res.running or res.source == "override" or dev_state.running:
+            return res                                   # gates STARTS only; a running call ends by hysteresis
+        with self._lock:
+            rec = self.readings.get(sid)
+        if rec is None or (now - rec["ts"]) > float(pol.get("sensor_stale_min", 30)) * 60:
+            return res                                   # fail open — see DEHUM_POLICY["outdoor_gate"]
+        dp = dewpoint_c(rec["m"].get("temperature_c"), rec["m"].get("humidity_pct"))
+        lim = float(g.get("min_dewpoint_c", 4.4))
+        if dp is None or dp >= lim:
+            return res
+        return Resolution(False, dev_state.running, "rule",
+                          f"{res.reason}; skipped: outdoor dew point {dp:.1f}°C < {lim:.1f}°C "
+                          f"(dry outside — ventilation dries the house; E8 territory)")
+
     def _apply_airflow_interlock(self, conn, device_id, pol, res, dev_state, now):
         """A dehumidifier in series with an ERV must not run on stagnant air. Allowed while the ERV is moving
         air, or when the ERV's own automation will be raised by the floor. Blocked when the ERV is in an
@@ -564,6 +589,7 @@ class Controller:
 
         res = resolve(policy, now, sensor, dev_state, override, sched_off, scene_off, scene)
         res = self._apply_airflow_interlock(conn, device_id, pol, res, dev_state, now)
+        res = self._apply_outdoor_gate(pol, res, dev_state, now)
         lm = self._level_modes(device_id) if drv is None else None
         if lm is not None:
             res = self._apply_ventilation_floor(conn, device_id, res, dev_state, override, now, lm)

@@ -288,6 +288,20 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
                 return bad("ventilation.device must be a device id or null")
             cur["device"] = v["device"]
         pol["ventilation"] = cur
+    if "outdoor_gate" in patch:
+        g = patch["outdoor_gate"]
+        if not isinstance(g, dict):
+            return bad("outdoor_gate must be an object")
+        cur = dict(pol.get("outdoor_gate") or {})
+        if "sensor" in g:
+            if g["sensor"] is not None and (not isinstance(g["sensor"], str) or not g["sensor"]):
+                return bad("outdoor_gate.sensor must be a sensor id or null (null = no gating)")
+            cur["sensor"] = g["sensor"]
+        if "min_dewpoint_c" in g:
+            if not _is_num(g["min_dewpoint_c"]) or not -30 <= g["min_dewpoint_c"] <= 30:
+                return bad("outdoor_gate.min_dewpoint_c must be a number in -30..30 °C")
+            cur["min_dewpoint_c"] = g["min_dewpoint_c"]
+        pol["outdoor_gate"] = cur
     if "sensor_stale_min" in patch:
         if not _is_num(patch["sensor_stale_min"]) or patch["sensor_stale_min"] <= 0:
             return bad("sensor_stale_min must be a positive number")

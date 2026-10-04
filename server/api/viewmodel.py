@@ -9,19 +9,12 @@ Pure functions over two sqlite connections (control.db + hot.db) so they unit-te
 """
 from __future__ import annotations
 
-import math
 from datetime import datetime, timezone
 
 from server.gas_compensation import air_quality_for, band_legend, clean_air_baseline
 
 
-def dewpoint_c(temp_c, rh_pct):
-    """Dew point (°C) from temperature (°C) + relative humidity (%), Magnus-Tetens. None if undefined."""
-    if temp_c is None or rh_pct is None or rh_pct <= 0:
-        return None
-    a, b = 17.625, 243.04
-    g = math.log(rh_pct / 100.0) + a * temp_c / (b + temp_c)
-    return round(b * g / (a - g), 1)
+from server.util.psychro import dewpoint_c  # noqa: E402,F401  (moved: the controller's gates use it too)
 
 
 def _age_s(ts_iso: str | None, now: float) -> float | None:
@@ -738,6 +731,22 @@ def external_mode_alert(traits_cfg: dict | None, actuator: dict) -> dict | None:
     return None
 
 
+def _outdoor_gate_view(hot_conn, gate: dict | None) -> dict | None:
+    """The policy's outdoor dew-point gate plus the CURRENT outdoor dew point, so the UI can say whether it
+    would block a start right now."""
+    if gate is None:
+        return None
+    out = dict(gate)
+    sid = gate.get("sensor")
+    if sid and hot_conn is not None:
+        t = _latest(hot_conn, sid, "temperature_c", 1) or _latest(hot_conn, sid, "temperature_c", 0)
+        h = _latest(hot_conn, sid, "humidity_pct", 1) or _latest(hot_conn, sid, "humidity_pct", 0)
+        dp = dewpoint_c(t[0] if t else None, h[0] if h else None)
+        out["dewpoint_now_c"] = dp
+        out["blocking"] = dp is not None and dp < float(gate.get("min_dewpoint_c", 4.4))
+    return out
+
+
 def verify_power_alert(hot_conn, device_id: str, traits_cfg: dict | None, now: float) -> dict | None:
     """'Called but not running': a leased call (the Aprilaire's DH) has been closed longer than `grace_min`
     while the plug feeding the unit reads under `min_w`. The E070 has no status output and its lockouts
@@ -993,6 +1002,8 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
             "source_sensor": source_id,
             "fallback_sensors": policy.get("fallback_sensors") or [],
             "source_sensors": policy.get("source_sensors") or [],
+            "ventilation": policy.get("ventilation"),          # dehum -> ERV floor coupling (None if n/a)
+            "outdoor_gate": _outdoor_gate_view(hot_conn, policy.get("outdoor_gate")),
             "aggregate": policy.get("aggregate") or "first",
             # level-mode devices (ERV): band level N is this mode — the editor labels levels with these
             "level_labels": _level_labels(traits),

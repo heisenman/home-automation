@@ -129,3 +129,59 @@ def test_called_but_not_running_alarm(tmp_path):
     W._insert_readings(hc, {"schema": 1, "device_id": "dehum_pm", "device_type": "energy_meter", "area": "attic",
                             "transport": "wifi-mqtt", "ts": "2026-10-04T22:09:30Z", "metrics": {"power_w": 590}})
     assert verify_power_alert(hc, "dehum_attic", tc, now) is None
+
+
+# ── outdoor dew-point gate (2026-10-04) ──────────────────────────────────────────────────────────────
+
+def _gate(tmp_path, out_t, out_rh, *, age_s=60, dh_running=False):
+    ctrl, iss, db = _make(tmp_path, rh=(60, 62), dh_running=dh_running, lease_left=500, erv_mode=11)
+    conn = sqlite3.connect(db)
+    pol = store.get_policy(conn, "dehum_attic")
+    store.set_policy(conn, "dehum_attic", {**pol, "outdoor_gate": {"sensor": "outdoor_s", "min_dewpoint_c": 4.4}})
+    conn.close()
+    ctrl.readings["outdoor_s"] = {"m": {"temperature_c": out_t, "humidity_pct": out_rh}, "ts": NOW - age_s}
+    return ctrl, iss, db
+
+
+def test_dry_outdoor_air_skips_starting(tmp_path):
+    ctrl, iss, _ = _gate(tmp_path, 5.0, 50)                  # dew point ~ -4.6 °C
+    ctrl.tick(now=NOW)
+    assert ("dehum_attic", "switchable", {"on": True}) not in iss.calls
+
+
+def test_humid_outdoor_air_lets_it_start(tmp_path):
+    ctrl, iss, _ = _gate(tmp_path, 26.7, 38)                 # dew point ~ 11.2 °C
+    ctrl.tick(now=NOW)
+    assert ("dehum_attic", "switchable", {"on": True}) in iss.calls
+
+
+def test_gate_does_not_stop_a_running_call(tmp_path):
+    ctrl, iss, _ = _gate(tmp_path, 5.0, 50, dh_running=True)
+    ctrl.tick(now=NOW)
+    assert ("dehum_attic", "switchable", {"on": False}) not in iss.calls
+
+
+def test_stale_outdoor_reading_fails_open(tmp_path):
+    ctrl, iss, _ = _gate(tmp_path, 5.0, 50, age_s=3 * 3600)
+    ctrl.tick(now=NOW)
+    assert ("dehum_attic", "switchable", {"on": True}) in iss.calls
+
+
+def test_boost_override_bypasses_the_gate(tmp_path):
+    ctrl, iss, db = _gate(tmp_path, 5.0, 50)
+    conn = sqlite3.connect(db)
+    store.set_override(conn, "dehum_attic", "boost_on", NOW + 3600)
+    conn.close()
+    ctrl.tick(now=NOW)
+    assert ("dehum_attic", "switchable", {"on": True}) in iss.calls
+
+
+def test_gate_api_validation():
+    from server.api.control import handle_policy_update
+    conn = sqlite3.connect(":memory:")
+    store.ensure_schema(conn)
+    store.set_policy(conn, "dehum_attic", C.DEHUM_POLICY)
+    assert handle_policy_update(conn, "dehum_attic", {"outdoor_gate": {"min_dewpoint_c": 99}})[0] == 400
+    code, _ = handle_policy_update(conn, "dehum_attic", {"outdoor_gate": {"sensor": "switchbot_outdoor",
+                                                                          "min_dewpoint_c": 4.4}})
+    assert code == 200 and store.get_policy(conn, "dehum_attic")["outdoor_gate"]["sensor"] == "switchbot_outdoor"
