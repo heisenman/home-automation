@@ -28,7 +28,12 @@ driven by HOUSE RH sensors**. No Model 76 remote is installed, so `A`/`B` is fre
 - **Next attic visit (Hugh):** Sonoff on the cord · meter `DH`–`DH` powered, relay off, AC+DC and to chassis
   (>~30 V = stop) · confirm the `NC|NO` switch exists → `NO` · enable `EXTERNAL` in the installer menu (E070's
   manual doesn't document it — confirming it is itself a finding) · float jumper stays.
-- **Automation to design:** call `DH` only while the ERV is moving air (not Off/Intermittent) — first
+- **✅ Automation BUILT + deployed 2026-10-04 (disabled until Hugh picks RH sensors):** averaged RH vs 55/50
+  hysteresis → leased `DH` call (renewed <5 min left); ERV FLOOR med while running, high 15 min after each stop
+  (coil dry-out), ERV = max(own AQ level, floor); operator ERV-OFF wins and holds the dehum; "Called but not
+  running" alarm via `dehum_pm` (<100 W after 5 min). Not built: outdoor dew-point gating (skip hopeless E8
+  calls), PWA editor for the ventilation floor (API-editable), fan-only.
+- **(superseded design note)** call `DH` only while the ERV is moving air (not Off/Intermittent) — first
   cross-device interlock. Expect E8 lockouts in cool seasons (inlet <50 °F or dew point <40 °F); harmless but
   silent except via `dehum_pm` watts.
 - **Airflow test (series resistance):** dehum fan on vs off at each ERV mode, compare ERV supply RPM / power /
