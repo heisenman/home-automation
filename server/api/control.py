@@ -269,6 +269,25 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
         pol["aggregate"] = "first"
     if pol.get("aggregate") == "mean" and pol.get("enabled", True) and not pol.get("source_sensors"):
         return bad("pick at least one sensor to average")
+    if "ventilation" in patch:
+        v = patch["ventilation"]
+        if not isinstance(v, dict):
+            return bad("ventilation must be an object")
+        cur = dict(pol.get("ventilation") or {})
+        for k in ("during_level", "after_level"):
+            if k in v:
+                if not isinstance(v[k], int) or isinstance(v[k], bool) or not 1 <= v[k] <= 4:
+                    return bad(f"ventilation.{k} must be an integer level 1..4")
+                cur[k] = v[k]
+        if "after_min" in v:
+            if not _is_num(v["after_min"]) or not 0 <= v["after_min"] <= 240:
+                return bad("ventilation.after_min must be 0..240 minutes")
+            cur["after_min"] = v["after_min"]
+        if "device" in v:
+            if v["device"] is not None and (not isinstance(v["device"], str) or not v["device"]):
+                return bad("ventilation.device must be a device id or null")
+            cur["device"] = v["device"]
+        pol["ventilation"] = cur
     if "sensor_stale_min" in patch:
         if not _is_num(patch["sensor_stale_min"]) or patch["sensor_stale_min"] <= 0:
             return bad("sensor_stale_min must be a positive number")

@@ -50,6 +50,48 @@ def erv_devices_of(registry: dict) -> dict[str, str]:
     return {d: c.node for d, c in registry.items() if getattr(c, "device_type", None) == "erv"}
 
 
+def send_and_confirm(mqtt, broker, port, node, secret, inner, adv_topic, matches, wait_s, state_dir,
+                     device_id=""):
+    """Sign `inner` for `node`, publish it to home/edge/<node>/cmd, and collect the node's `adv_topic` metrics
+    until one satisfies `matches` (or `wait_s` passes). Returns the list of metrics dicts seen (possibly
+    empty), or None if the broker was unreachable. Shared by every signed edge-lane transport (ERV, dehum)."""
+    from ..util.mqtt_creds import apply_credentials
+    seen: list[dict] = []
+    matched = threading.Event()
+    lock = threading.Lock()
+
+    def on_msg(c, u, msg):
+        try:
+            m = (json.loads(msg.payload.decode()) or {}).get("metrics") or {}
+        except Exception:
+            return
+        with lock:
+            seen.append(m)
+        if matches(m):
+            matched.set()
+
+    c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+    apply_credentials(c)
+    c.on_message = on_msg
+    try:
+        c.connect(broker, port, 30)
+        c.loop_start()
+        c.subscribe(adv_topic, qos=0)
+        env = signed_command(node, secret, inner, state_dir)
+        c.publish(f"home/edge/{node}/cmd", json.dumps(env, separators=(",", ":")), qos=1)
+        matched.wait(wait_s)
+    except OSError as e:
+        log.warning("edge transport: broker %s:%s unreachable for %s: %s", broker, port, device_id, e)
+        return None
+    finally:
+        try:
+            c.loop_stop(); c.disconnect()
+        except Exception:
+            pass
+    with lock:
+        return list(seen)
+
+
 class ErvEdgeTransport:
     def __init__(self, devices: dict[str, str], lut: dict, broker: str = "localhost", port: int = 1883,
                  state_dir: Path = STATE_DIR, confirm_s: float = CONFIRM_S):
@@ -96,45 +138,14 @@ class ErvEdgeTransport:
             return protocol.build_ack(cmd_id=cmd["id"], status="rejected",
                                       reason=f"erv: no cmd_secret for node {node} in the LUT")
 
-        from ..util.mqtt_creds import apply_credentials
-        seen: list[dict] = []
-        matched = threading.Event()
-        lock = threading.Lock()
-
-        def on_msg(c, u, msg):
-            try:
-                m = (json.loads(msg.payload.decode()) or {}).get("metrics") or {}
-            except Exception:
-                return
-            with lock:
-                seen.append(m)
-            if matches(m):
-                matched.set()
-
-        c = self._mqtt.Client(self._mqtt.CallbackAPIVersion.VERSION2)
-        apply_credentials(c)
-        c.on_message = on_msg
-        try:
-            c.connect(self.broker, self.port, 30)
-            c.loop_start()
-            c.subscribe(f"home/edge/{node}/erv/adv", qos=0)
-            env = signed_command(node, secret, inner, self.state_dir)
-            c.publish(f"home/edge/{node}/cmd", json.dumps(env, separators=(",", ":")), qos=1)
-            matched.wait(max(timeout, self.confirm_s))
-        except OSError as e:
-            log.warning("ErvEdgeTransport: broker %s:%s unreachable for %s: %s",
-                        self.broker, self.port, device_id, e)
+        seen = send_and_confirm(self._mqtt, self.broker, self.port, node, secret, inner,
+                                f"home/edge/{node}/erv/adv", matches,
+                                max(timeout, self.confirm_s), self.state_dir, device_id)
+        if seen is None:
             return None
-        finally:
-            try:
-                c.loop_stop(); c.disconnect()
-            except Exception:
-                pass
-
-        with lock:
-            if not seen:
-                return None                                # node silent → issuer reports no-ack
-            hit = next((m for m in reversed(seen) if matches(m)), seen[-1])
+        if not seen:
+            return None                                    # node silent → issuer reports no-ack
+        hit = next((m for m in reversed(seen) if matches(m)), seen[-1])
         busy = hit.get("fan_mode")
         if cmd.get("trait") == "mode" and not matches(hit) and busy in _IGNORES_MODE:
             return protocol.build_ack(cmd_id=cmd["id"], status="rejected", reported_state={"mode": busy},

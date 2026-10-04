@@ -67,3 +67,20 @@ devices:
         # The verified OVR clear (2026-10-04): cut the ERV's mains via the Tasmota plug feeding it.
         power_cycle: {tasmota: erv_pm, off_s: 10, label: "Clear override (power-cycle ERV)"}
       timed: {max: 60, presets_min: [15, 30, 60], label: Boost (max airflow)}
+
+  # Aprilaire E070 via edge node dehum_c6 (ADR-0041) — External mode, a LEASED `DH` call
+  # (server/control/dehum_driver.py, routed by device_type dehum). The controller renews the lease while it
+  # wants dehumidification; a lost server lets it run out. `verify_power` raises "Called but not running"
+  # when the call is on past `grace_min` but the plug feeding the unit reads under `min_w` (E8/E7 lockouts
+  # are silent otherwise). Unit config that MUST be set (2026-10-04): EXTERNAL enabled, REMOTE off,
+  # board NC|NO switch on NO (ships NC).
+  dehum_attic:
+    node: dehum_c6
+    area: attic
+    device_type: dehum
+    traits:
+      switchable:
+        safe_on: false
+        lease_min: 10
+        label: Dehumidify
+        verify_power: {meter: dehum_pm, min_w: 100, grace_min: 5}

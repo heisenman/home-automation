@@ -72,6 +72,25 @@ ERV_POLICY = {
     "sensor_stale_min": 30,
 }
 
+# Aprilaire E070 (device_type dehum) — DISABLED until the operator picks the RH sensors to average (R2).
+# Hysteresis on the AVERAGE of those sensors; the call is a lease the controller renews. `ventilation`
+# couples it to the ERV it sits in series with (Hugh, 2026-10-04): while dehumidifying the ERV runs at AT
+# LEAST `during_level`; after each stop at AT LEAST `after_level` for `after_min` to blow the coil dry. A
+# floor, never a ceiling — the ERV runs max(own air-quality level, floor).
+DEHUM_POLICY = {
+    "enabled": False,
+    "source_sensor": None,
+    "source_sensors": [],
+    "aggregate": "mean",
+    "control": {"strategy": "hysteresis", "metric": "humidity_pct", "on_above": 55, "off_below": 50,
+                "min_on_min": 10, "min_off_min": 10},
+    "ventilation": {"device": None, "during_level": 2, "after_level": 3, "after_min": 15},
+    "schedule": [],
+    "defaults": {"running": False},
+    "sensor_stale_min": 30,
+}
+LEASE_RENEW_BELOW_S = 300      # renew a leased call once less than this is left on it
+
 # Which sensor metric the loop drives on. The policy may name it explicitly (control.metric — e.g. an
 # air-quality device choosing pm25_ugm3 vs aqi); otherwise it defaults by strategy. Default = RH.
 _DEFAULT_METRIC_BY_STRATEGY = {"threshold_ranged": "pm25_ugm3"}
@@ -131,6 +150,11 @@ class Controller:
         if nums:
             with self._lock:
                 self.readings[did] = {"m": nums, "ts": time.time()}
+        # leased-call actuators (the Aprilaire) report the call pin + lease remaining
+        if metrics.get("dh_call") is not None:
+            with self._lock:
+                self.telemetry[did] = {"running": bool(metrics["dh_call"]), "fan": None,
+                                       "lease_left_s": metrics.get("call_left_s"), "ts": time.time()}
         # level-mode actuators (the ERV) report their MODE; translate it to running + level for the resolver
         if metrics.get("fan_mode") is not None:
             lm = self._level_modes(did)
@@ -270,7 +294,10 @@ class Controller:
         conn = self._conn()
         try:
             scene = store.get_scene(conn, DEFAULT_SCENE)        # whole-house Home/Away/Sleep
-            for device_id, pol in store.all_policies(conn).items():
+            pols = store.all_policies(conn)
+            # devices that set a ventilation FLOOR (the dehumidifier) tick before the device they floor (the
+            # ERV), so the ERV sees this tick's demand rather than the last one
+            for device_id, pol in sorted(pols.items(), key=lambda kv: not (kv[1] or {}).get("ventilation")):
                 if not pol.get("enabled", True):
                     continue
                 self._tick_device(conn, device_id, pol, now, tod, scene, dry_run)
@@ -303,6 +330,70 @@ class Controller:
             store.append_log(conn, device_id, want_on, "night",
                              f"night-mode -> LED {'on' if want_on else 'off'}", True, r.status)
             log.info("night-mode: %s LED -> %s (%s)", device_id, "on" if want_on else "off", r.status)
+
+    # ── device coupling: a dehumidifier in series with an ERV (Hugh, 2026-10-04) ───────────────────────────
+    def _track_ventilation_demand(self, device_id, pol, was_running, wants_running, now):
+        """Record the floor this device puts on its ventilation partner: `during_level` while it runs (or is
+        about to), then `after_level` for `after_min` once it stops (coil dry-out). The floor itself is the
+        memory: a 'during' floor still present when the device no longer wants to run IS the stop edge.
+        (In-memory: a controller restart mid-dry-out drops the rest of that window — the coil still dries.)"""
+        v = pol.get("ventilation") or {}
+        partner = v.get("device")
+        if not partner:
+            return
+        floors = self.__dict__.setdefault("_vent_floor", {})
+        if wants_running:
+            floors[partner] = (int(v.get("during_level", 2)), None, device_id)
+        elif partner in floors and floors[partner][1] is None:
+            floors[partner] = (int(v.get("after_level", 3)), now + float(v.get("after_min", 15)) * 60,
+                               device_id)
+
+    def _ventilation_floor(self, device_id, now):
+        f = (self.__dict__.get("_vent_floor") or {}).get(device_id)
+        if not f:
+            return None
+        level, until, source = f
+        if until is not None and now >= until:
+            self._vent_floor.pop(device_id, None)
+            return None
+        return level, until, source
+
+    def _apply_ventilation_floor(self, conn, device_id, res, dev_state, override, now, lm):
+        """Raise a level-mode device (the ERV) to its partner's floor. A floor never lowers it, and an explicit
+        operator OFF override still wins (the partner's interlock then holds the dehumidifier off)."""
+        f = self._ventilation_floor(device_id, now)
+        if f is None:
+            return res
+        if override is not None and override.active(now) and override.action == "off":
+            return res
+        level, until, source = f
+        want = max(int(res.level or 0) if res.running else 0, level)
+        if res.running and res.level is not None and res.level >= level:
+            return res
+        why = (f"{source} running -> at least level {level}" if until is None
+               else f"{source} coil dry-out -> at least level {level} for {max(0, (until - now) / 60):.0f}m")
+        return Resolution(True, dev_state.level != want or not dev_state.running, "rule",
+                          f"{res.reason}; {why}", level=want)
+
+    def _apply_airflow_interlock(self, conn, device_id, pol, res, dev_state, now):
+        """A dehumidifier in series with an ERV must not run on stagnant air. Allowed while the ERV is moving
+        air, or when the ERV's own automation will be raised by the floor. Blocked when the ERV is in an
+        operator OFF override or its automation is disabled AND it isn't moving."""
+        partner = (pol.get("ventilation") or {}).get("device")
+        if not partner or not res.running:
+            return res
+        with self._lock:
+            tel = dict(self.telemetry.get(partner) or {})
+        lm = self._level_modes(partner)
+        moving = bool(tel.get("running")) and (tel.get("fan") is not None or
+                                                (lm is not None and tel.get("fan_mode") in lm["external"]))
+        ppol = store.get_policy(conn, partner) or {}
+        ov = store.get_override(conn, partner, now)
+        can_raise = ppol.get("enabled", True) and not (ov and ov[0] == "off")
+        if moving or can_raise:
+            return res
+        return Resolution(False, dev_state.running, "safety",
+                          f"{res.reason}; held: {partner} not moving air (off/intermittent, automation can't raise it)")
 
     def _level_modes(self, device_id):
         """A device whose `mode` trait carries an ordered `levels` list (the ERV: [low, med, high, turbo])
@@ -433,7 +524,8 @@ class Controller:
             if not tel:
                 store.append_log(conn, device_id, False, "safety", "no telemetry yet", False, "no-status")
                 return
-            st = {"running": tel.get("running"), "fan": tel.get("fan"), "fan_mode": tel.get("fan_mode")}
+            st = {"running": tel.get("running"), "fan": tel.get("fan"), "fan_mode": tel.get("fan_mode"),
+                  "lease_left_s": tel.get("lease_left_s")}
             transport = "wifi-mqtt"
             lm = self._level_modes(device_id)
             if lm is not None and st["fan_mode"] in lm["external"]:
@@ -471,7 +563,10 @@ class Controller:
         sched_off = schedule_off_now(pol.get("schedule"), tod)
 
         res = resolve(policy, now, sensor, dev_state, override, sched_off, scene_off, scene)
+        res = self._apply_airflow_interlock(conn, device_id, pol, res, dev_state, now)
         lm = self._level_modes(device_id) if drv is None else None
+        if lm is not None:
+            res = self._apply_ventilation_floor(conn, device_id, res, dev_state, override, now, lm)
         if lm is not None and res.running and res.level is None and res.source == "override" and lm["labels"]:
             # BOOST override on a level-mode device means its TOP level (ERV: turbo), not merely "on"
             top = len(lm["labels"])
@@ -524,6 +619,13 @@ class Controller:
             self._emit(device_id, transport, ev.from_issue_status(result.status), res.reason)
         elif res.act and dry_run:
             status = "dry-run"
+        if (not res.act and not dry_run and res.running and dev_state.running
+                and st.get("lease_left_s") is not None and st["lease_left_s"] < LEASE_RENEW_BELOW_S):
+            # a leased call (the Aprilaire's DH) runs out on its own unless renewed — that IS its fail-safe
+            r = self.issuer.issue(device_id=device_id, trait="switchable", action="set", args={"on": True})
+            status = f"renewed:{r.status}"
+        if pol.get("ventilation"):
+            self._track_ventilation_demand(device_id, pol, bool(dev_state.running), res.running, now)
         # The other half of a graceful off: idle MODE alone leaves the appliance self-regulating to its
         # old target, so a manual override also parks the setpoint at its inert end (and restores it when
         # the override ends). Runs every tick, not just on a transition — see _apply_setpoint_park.
@@ -642,8 +744,13 @@ def main():
         store.seed_policy(conn, midea_id, DEFAULT_POLICY)
     if levoit_id:                                    # only seed if the purifier is registered on this box
         store.seed_policy(conn, levoit_id, {**LEVOIT_POLICY, "source_sensor": levoit_id})
-    for erv_id in (d for d, c in registry.items() if getattr(c, "device_type", None) == "erv"):
+    erv_ids = [d for d, c in registry.items() if getattr(c, "device_type", None) == "erv"]
+    for erv_id in erv_ids:
         store.seed_policy(conn, erv_id, ERV_POLICY)     # disabled until the operator picks sensors
+    for dh_id in (d for d, c in registry.items() if getattr(c, "device_type", None) == "dehum"):
+        store.seed_policy(conn, dh_id, {**DEHUM_POLICY,
+                                        "ventilation": {**DEHUM_POLICY["ventilation"],
+                                                        "device": erv_ids[0] if erv_ids else None}})
 
     conn.close()
     ctrl = Controller(issuer, drivers, registry, a.db, hot_db=a.hot_db)

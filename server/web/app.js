@@ -325,8 +325,13 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
   const [open, setOpen] = useState(false);
   const [enabled, setEnabled] = useState(!!c.enabled);
   const [strategy, setStrategy] = useState(c.strategy || "hysteresis");
-  const [source, setSource] = useState(vm.control.source_sensor || "");
+  const source = vm.control.source_sensor || "";
   const [fallbacks, setFallbacks] = useState(vm.control.fallback_sensors || []);
+  // several picked = their AVERAGE drives the thresholds (aggregate "mean"); one = follow it (+ fallbacks)
+  const [picked, setPicked] = useState(
+    (c.aggregate === "mean" && (c.source_sensors || []).length) ? c.source_sensors
+      : (vm.control.source_sensor ? [vm.control.source_sensor] : []));
+  const togglePick = (id) => setPicked((p) => (p.includes(id) ? p.filter((x) => x !== id) : [...p, id]));
   const [onAbove, setOnAbove] = useState(c.on_above ?? "");
   const [offBelow, setOffBelow] = useState(c.off_below ?? "");
   const [quiet, setQuiet] = useState("");
@@ -369,8 +374,8 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
   const opts = (sensors || [])
     .filter((s) => s.metrics && s.metrics.humidity_pct != null)
     .map((s) => ({ id: s.device_id, label: `${prettyName(s.device_id)} · ${prettyArea(s.area)}` }));
-  if (source && !opts.some((o) => o.id === source)) {
-    opts.unshift({ id: source, label: `${prettyName(source)} (current)` });
+  for (const id of [source, ...picked].filter(Boolean)) {
+    if (!opts.some((o) => o.id === id)) opts.unshift({ id, label: `${prettyName(id)} (current)` });
   }
 
   const save = async () => {
@@ -382,8 +387,14 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
       enabled,
       control: { strategy, on_above: Number(onAbove), off_below: Number(offBelow) },
     };
-    if (source) patch.source_sensor = source;
-    patch.fallback_sensors = fallbacks;
+    if (picked.length > 1) {
+      patch.source_sensor = picked[0]; patch.source_sensors = picked; patch.aggregate = "mean";
+    } else {
+      const one = picked[0] || source;
+      if (one) { patch.source_sensor = one; patch.source_sensors = [one]; }
+      patch.aggregate = "first";
+      patch.fallback_sensors = fallbacks;
+    }
     if (quiet.trim()) patch.schedule = [{ when: quiet.trim(), policy: "off" }];
     // normalize scene profiles: drop empties, coerce thresholds to numbers
     const sc = {};
@@ -417,22 +428,26 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
           <option value="setpoint">setpoint (trust the device's own loop)</option>
         </select></div>
       ${strategy === "hysteresis" ? html`
-        <div class="field"><label>Humidity source</label>
-          <select value=${source} onChange=${(e) => setSource(e.target.value)}>
-            ${opts.length === 0 && html`<option value="">(no humidity sensors)</option>`}
-            ${opts.map((o) => html`<option value=${o.id}>${o.label}</option>`)}
-          </select></div>
-        <div class="field"><label>Fallback sources</label>
+        <div class="field"><label>Humidity sensors ${picked.length > 1 ? html`<span class="note">— averaged</span>` : ""}</label>
+          <div class="checklist">
+            ${opts.length === 0 && html`<p class="note">(no humidity sensors)</p>`}
+            ${opts.map((o) => html`<label class="check" key=${o.id}>
+              <input type="checkbox" checked=${picked.includes(o.id)} onChange=${() => togglePick(o.id)} />
+              ${o.label}</label>`)}
+          </div>
+          ${picked.length > 1 && html`<p class="note">The average of the ${picked.length} sensors' current
+            readings is compared to the thresholds; a sensor that goes quiet is left out.</p>`}</div>
+        ${picked.length <= 1 && html`<div class="field"><label>Fallback sources</label>
           <div class="controls">
             ${fallbacks.map((id) => html`<span class="trace-chip"
               onClick=${() => setFallbacks(fallbacks.filter((x) => x !== id))}>${prettyName(id)} ✕</span>`)}
             <select class="trace-add" value=""
               onChange=${(e) => { if (e.target.value) { setFallbacks([...fallbacks, e.target.value]); e.target.value = ""; } }}>
               <option value="">+ add fallback…</option>
-              ${opts.filter((o) => o.id !== source && !fallbacks.includes(o.id))
+              ${opts.filter((o) => o.id !== (picked[0] || source) && !fallbacks.includes(o.id))
                 .map((o) => html`<option value=${o.id}>${o.label}</option>`)}
             </select>
-          </div></div>
+          </div></div>`}
         <div class="field"><label>Turn ON at/above (%RH)</label>
           <input type="number" value=${onAbove} onInput=${(e) => setOnAbove(e.target.value)} /></div>
         <div class="field"><label>Turn OFF below (%RH)</label>
@@ -2338,6 +2353,7 @@ function HouseMap({ data, selected, onSelect }) {
     if (typeof m.humidity_pct === "number") parts.push(`${Math.round(m.humidity_pct)}%`);
     const stale = typeof o.age_s === "number" && o.age_s > 3 * 3600;
     return { text: `Outdoor · ${parts.join(" · ")}${stale ? ` (${fmtAge(o.age_s)})` : ""}`, stale,
+             short: `forecast ${parts.join(" · ")}${stale ? ` (${fmtAge(o.age_s)})` : ""}`,
              title: `weather ${o.location} (${o.source}) as of ${o.ts}` +
                     (typeof m.pressure_msl_hpa === "number" ? ` · ${Math.round(m.pressure_msl_hpa)} hPa` : "") };
   })();
@@ -2345,6 +2361,9 @@ function HouseMap({ data, selected, onSelect }) {
   const hasPoly = (r) => r.geometry && (r.geometry.poly || r.geometry.polys);
   const placed = rooms.filter(hasPoly);
   const mono = rooms.filter((r) => !hasPoly(r) && (r.counts.sensors + r.counts.actuators) > 0);
+  // ONE Outdoor chip (Hugh, 2026-10-04): a measured outdoor room leads, the weather feed rides along as its
+  // secondary "forecast" line. With no outdoor sensor, the weather-only chip stands in as before.
+  const outdoorRoom = mono.find((r) => r.type === "outdoor");
 
   return html`
     <div class="housemap-wrap">
@@ -2391,8 +2410,10 @@ function HouseMap({ data, selected, onSelect }) {
       </svg>
       ${(mono.length > 0 || outdoor) && html`<div class="mono-row" style="display:flex;gap:8px;flex-wrap:wrap;margin-top:8px">
         ${mono.map((r) => html`<button class=${"btn sm" + (selected === r.id ? "" : " ghost")}
-          onClick=${() => onSelect(r.id, r.name)}>${r.name}${roomGlance(r.devices) ? ` · ${roomGlance(r.devices)}` : ""}</button>`)}
-        ${outdoor && html`<span class="btn sm ghost" style=${"cursor:default" + (outdoor.stale ? ";opacity:.55" : "")}
+          title=${r === outdoorRoom && outdoor ? outdoor.title : undefined}
+          onClick=${() => onSelect(r.id, r.name)}>${r.name}${roomGlance(r.devices) ? ` · ${roomGlance(r.devices)}` : ""}${
+            r === outdoorRoom && outdoor ? html` <span style=${"opacity:" + (outdoor.stale ? ".45" : ".65")}>· ${outdoor.short}</span>` : ""}</button>`)}
+        ${outdoor && !outdoorRoom && html`<span class="btn sm ghost" style=${"cursor:default" + (outdoor.stale ? ";opacity:.55" : "")}
           title=${outdoor.title}>${outdoor.text}</span>`}
       </div>`}
       ${Array.isArray(data.air_quality_legend) && html`<div class="aq-legend"

@@ -738,6 +738,37 @@ def external_mode_alert(traits_cfg: dict | None, actuator: dict) -> dict | None:
     return None
 
 
+def verify_power_alert(hot_conn, device_id: str, traits_cfg: dict | None, now: float) -> dict | None:
+    """'Called but not running': a leased call (the Aprilaire's DH) has been closed longer than `grace_min`
+    while the plug feeding the unit reads under `min_w`. The E070 has no status output and its lockouts
+    (E8 cold/dry inlet, E7 float, wrong mode) are silent except on its LCD — the meter is the only witness.
+    Config: traits.switchable.verify_power {meter, min_w, grace_min}."""
+    cfg = ((traits_cfg or {}).get("switchable") or {}).get("verify_power") or {}
+    if hot_conn is None or not cfg.get("meter"):
+        return None
+    try:
+        call = _latest(hot_conn, device_id, "dh_call", 1) or _latest(hot_conn, device_id, "dh_call", 0)
+        if not call or call[0] < 0.5:
+            return None
+        last_off = hot_conn.execute("SELECT MAX(ts) FROM readings WHERE device_id=? AND metric='dh_call' "
+                                    "AND value<0.5", (device_id,)).fetchone()[0]
+        start = hot_conn.execute("SELECT MIN(ts) FROM readings WHERE device_id=? AND metric='dh_call' "
+                                 "AND value>=0.5 AND ts>?", (device_id, last_off or "")).fetchone()[0]
+        called_s = _age_s(start, now) or 0
+        if called_s < float(cfg.get("grace_min", 5)) * 60:
+            return None
+        p = _latest(hot_conn, cfg["meter"], "power_w", 1) or _latest(hot_conn, cfg["meter"], "power_w", 0)
+        if p is not None and p[0] >= float(cfg.get("min_w", 100)):
+            return None
+    except Exception:
+        return None
+    watts = "no reading" if p is None else f"{p[0]:.0f} W"
+    return {"level": "alarm", "title": "Called but not running",
+            "text": f"Dehumidification has been requested for {called_s / 60:.0f} min but {cfg['meter']} reads "
+                    f"{watts}. Likely a lockout (E8: inlet below 50 °F or dew point below 40 °F; E7: float), "
+                    f"or the unit is not in EXTERNAL mode — check its display."}
+
+
 def _setpoint_label(cfg: dict) -> tuple[str, str]:
     unit = cfg.get("unit", "")
     if unit in ("%", "%RH", "pct", "percent"):
@@ -903,6 +934,7 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         # `mode` (Midea) — or the ERV's `fan_mode`, which carries the same Broan int its mode trait uses
         mode = _latest_any(device_id, "mode") or _latest_any(device_id, "fan_mode")
         boost = _latest_any(device_id, "ovr_boost")
+        dh = _latest_any(device_id, "dh_call")
         if tv:
             actuator["target_pct"] = tv[0]
         if fv:
@@ -915,6 +947,8 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
             actuator["mode"] = int(mode[0])
         if boost is not None:
             actuator["boost_on"] = bool(boost[0])
+        if dh is not None:
+            actuator["call_on"] = bool(dh[0])
 
     # command capabilities (traits + ranges) so the UI can render manual controls
     traits = None
@@ -928,7 +962,7 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
     running = bool(last["desired"]) if last else None
 
     stale_s = float(policy.get("sensor_stale_min", 10)) * 60.0
-    alert = external_mode_alert(traits, actuator)
+    alert = external_mode_alert(traits, actuator) or verify_power_alert(hot_conn, device_id, traits, now)
     if alert and alert["level"] == "alarm":
         health = "alarm"
     elif manual:
