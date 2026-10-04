@@ -45,6 +45,7 @@ each unit has its OWN OTA key.
 |---|---|---|---|
 | `levoit-office` (2026-06-27) | `levoit-office.yaml` | `ota_password` | `purifier_living_room` |
 | `levoit-c-office` (2026-10-01) | `levoit-c-office.yaml` | `ota_password_c_office` | `purifier_c_office` (area `c_office`) |
+| `levoit-c-bed` (2026-10-04) | `levoit-c-bed.yaml` | `ota_password_c_bed` | `purifier_c_bed` (area `c_bed`) |
 
 **levoit-c-office verified live 2026-10-01** (CONFORMANCE §B R3): MCU link (fw 2.0.4, error Ok, real PM2.5);
 readback of a physical touch-panel ON → hot.db within 1 s; PWA control fan speed 1→2→3→4 (each confirmed on

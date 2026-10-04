@@ -1,0 +1,16 @@
+# Levoit C Bed — Levoit Vital 200S unit. Third unit (2026-10-04); registry device_id purifier_c_bed, area c_bed.
+# Thin per-device file: identity + this unit's OTA key; the purifier/network body is the shared package.
+# Flash/build/OTA recipe: README.md. Programming header + wiring: levoit-vital200s-c3.common.yaml header.
+substitutions:
+  device_name: levoit-c-bed
+  friendly_name: Levoit C Bed
+  wifi_ap_ssid: "levoit-c-bed-fallback"
+  rx_pin: GPIO18                 # C3-SOLO-1 -> Vital 200S MCU UART (tuct, tested) — NOT the flash pads
+  tx_pin: GPIO19
+
+packages:
+  vital200s: !include levoit-vital200s-c3.common.yaml
+
+ota:
+  - platform: esphome
+    password: !secret ota_password_c_bed
