@@ -308,3 +308,18 @@ def test_policy_api_validates_averaging(tmp_path):
     code, body = handle_policy_update(conn, "erv_attic", {"enabled": True, "source_sensors": ["a", "b", "a"]})
     assert code == 200 and store.get_policy(conn, "erv_attic")["source_sensors"] == ["a", "b"]
     assert handle_policy_update(conn, "erv_attic", {"aggregate": "median"})[0] == 400
+
+
+def test_single_sensor_save_from_an_old_editor_means_follow_it(tmp_path):
+    """The pre-averaging PWA sends only source_sensor. Against the seeded mean policy that used to 400."""
+    import sqlite3
+
+    from server.api.control import handle_policy_update
+    from server.control import control_store as store
+    from server.control import controller as C
+    conn = sqlite3.connect(":memory:")
+    store.ensure_schema(conn)
+    store.set_policy(conn, "erv_attic", C.ERV_POLICY)
+    code, _ = handle_policy_update(conn, "erv_attic", {"enabled": True, "source_sensor": "gas_h_office"})
+    pol = store.get_policy(conn, "erv_attic")
+    assert code == 200 and pol["aggregate"] == "first" and pol["source_sensors"] == ["gas_h_office"]

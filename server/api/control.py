@@ -262,8 +262,13 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
         if patch["aggregate"] not in ("first", "mean"):
             return bad("aggregate must be 'first' (primary + fallbacks) or 'mean' (average of source_sensors)")
         pol["aggregate"] = patch["aggregate"]
+    if "source_sensor" in patch and "source_sensors" not in patch and "aggregate" not in patch:
+        # a single-sensor save (any editor that predates averaging, or a script) means "follow this one" —
+        # never leave a seeded mean policy pointing at an empty list (2026-10-04: the ERV's first save 400'd).
+        pol["source_sensors"] = [pol["source_sensor"]]
+        pol["aggregate"] = "first"
     if pol.get("aggregate") == "mean" and pol.get("enabled", True) and not pol.get("source_sensors"):
-        return bad("averaging needs at least one sensor in source_sensors")
+        return bad("pick at least one sensor to average")
     if "sensor_stale_min" in patch:
         if not _is_num(patch["sensor_stale_min"]) or patch["sensor_stale_min"] <= 0:
             return bad("sensor_stale_min must be a positive number")
