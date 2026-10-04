@@ -7,6 +7,28 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 🟡 2026-10-04 — Aprilaire E070 plan (dehum_c6), decided with Hugh
+
+**Plumbing fact:** the HVAC installers ran the E070 IN SERIES on the ERV's fresh-air supply. So the unit dries
+post-ERV OUTDOOR air, not house air: its own RH sensor is the wrong input → **External mode via `DH` relay,
+driven by HOUSE RH sensors**. No Model 76 remote is installed, so `A`/`B` is free.
+
+- **Control = `DH` relay only** (External mode is a binary request; no more relays help). **Feedback = Sonoff**
+  `s31_spare3` → `dehum_pm` on the cord (idle <3 W / fan / compressor ~620 W; catches silent E8/E7).
+- **RS-485: listen-only first**, 2nd Waveshare TTL TO RS485 (C) **on order** (Hugh). D10/D9 UART1 like
+  hvac_c6; `PE`→`−`, `+` (9 VDC) unconnected; A/B polarity to be found by the sniff verdict. Question to answer:
+  does the E070 broadcast M-frames (run state + RH) with no remote attached? Control over 485 is mutually
+  exclusive with External mode AND needs a ~2 ms reply path the firmware doesn't have — only if it earns it.
+- **Next attic visit (Hugh):** Sonoff on the cord · meter `DH`–`DH` powered, relay off, AC+DC and to chassis
+  (>~30 V = stop) · confirm the `NC|NO` switch exists → `NO` · enable `EXTERNAL` in the installer menu (E070's
+  manual doesn't document it — confirming it is itself a finding) · float jumper stays.
+- **Automation to design:** call `DH` only while the ERV is moving air (not Off/Intermittent) — first
+  cross-device interlock. Expect E8 lockouts in cool seasons (inlet <50 °F or dew point <40 °F); harmless but
+  silent except via `dehum_pm` watts.
+- **Airflow test (series resistance):** dehum fan on vs off at each ERV mode, compare ERV supply RPM / power /
+  CFM. At Turbo the ERV already delivers 130/132 CFM — near its limit. A 24 VAC bypass damper is the only
+  relay worth adding, and only if this test says the penalty matters.
+
 ## 🟠 2026-10-04 — Broan ERV live (`erv_attic`); open items from the bring-up
 
 `hvac_c6` (v7-hvac-mode) is the ERV's RS-485 controller at `0x11`, wall control unpowered. Adopted on ha-2 as
