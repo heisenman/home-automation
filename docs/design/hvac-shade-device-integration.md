@@ -255,9 +255,24 @@ down.**
 
 Our node will drop off that bus routinely: **every OTA, every crash, every power blip.**
 
-**UNKNOWN and blocking: does E50 self-clear when the controller returns, or does it require a manual power
-cycle?** If the latter, every firmware update means a physical trip to the unit — an operator dead-end
-behind a routine operation. **Determine this on the bench before the wall control comes off permanently.**
+~~**UNKNOWN and blocking: does E50 self-clear when the controller returns?**~~ **RESOLVED live 2026-10-04 —
+better than feared, and the "shuts down" above is WRONG for our unit:**
+
+- **E50 does not stop the ERV.** Wall control unpowered → LCD showed `E50` (Hugh), but the unit kept running
+  its last mode: `erv_pm` held 63–64 W (MED) for 7+ min. Earlier the same day it ran 30+ min on HIGH with
+  no controller at all. E50 is a displayed warning here, not a shutdown.
+- **E50 self-clears when a controller returns.** `hvac_c6` v6 took the bus as `0x11` while E50 was active;
+  the fault register (`17 00`) read `-1` (OK) on the first poll. No power cycle.
+- **Pairing = the address.** The ERV offers the token only to the address it is paired with — `0x11` on
+  our unit (upstream's was `0x12`). With its controller gone it sends no discovery pings and tries no other
+  address (census, ~10 offers/s to `0x11` only). The protocol has no authentication, so the node simply
+  answers as `0x11`. Consequence: wall control and node can never both be live — see the planned 12 V
+  enable (FET) to switch between them.
+- **Remote recovery exists anyway:** the ERV is fed through `erv_pm` (Tasmota S31), so a power cycle is a
+  `cmnd/erv_pm/POWER` away — never a trip to the attic.
+
+How to re-check: runbook-device-verification (ERV entry) — watch `home/edge/hvac_c6/log` census +
+`erv/adv` `fault_code`, cross-checked against `home/attic/erv_pm/state` watts.
 
 After the swap the ERV's only local UI is its onboard LCD.
 
@@ -1264,8 +1279,22 @@ conductive resting on the enclosure.
 4. **LISTEN_ONLY build with the wall control still attached.** Validates wiring, polarity, baud, checksum
    at zero risk.
 5. Read-only active; confirm `02 60` → model string.
-6. **Determine E50 recovery behaviour** — drop the bus > 5 s deliberately and observe whether the unit
-   recovers on reconnect or needs a power cycle. ⛔ Blocking for the OTA story.
+6. ~~**Determine E50 recovery behaviour**~~ ✅ **DONE 2026-10-04** — warning only, self-clears (§1.8).
+
+**Bring-up log, 2026-10-04 (all live, hvac_c6 + erv_pm):**
+- Bench: relay, TX and RX lanes proven with `edge/esp32c6-hvac/bench` (AA-battery RX test, ±3.5 V TX swing).
+- Polarity: **`A+`→`D+`, `B-`→`D-`** (§1.7 corrected) — the upstream "A is D-" wiring gave 15 KB with
+  `frames=0`; swapped, frames decoded at once.
+- Listen-only census (wall control live): only `0x10` (ERV) and `0x11` (wall control); ~39 token offers/s;
+  the wall control reads 14 registers every ~3 s (min/max/target CFM, RH target + mode, base mode, unknowns
+  `02 30`, `00 30`, `00 22`, `0C 21`, `17 00`) and writes ~every 5 s (heartbeat `00 50`, unknown `07 50`).
+  It never reads power/temps/CFM/RPM — listen-only cannot see them. Mode changes are WRITES to `00 20`.
+- Mode values vs wall power: LOW (`0x09`) 31 W · MED (`0x0B`) 64 W · HIGH (`0x0A`) ~130 W · TURBO (`0x0C`)
+  135 W · INT (`0x08`) 17 W. MED target 92.4 CFM; min/max 66/132.
+- OVR boost via relay: 63 → 137 W, released on time (timed command, `tools/erv_cmd.py`).
+- Controller mode (v6, `0x11`): power 61.5 W (vs 63 W at the wall), CFM 92.2/92.5, RPM 2082/2306, supply
+  temp raw 29.7 (probably °C — item 7 still open), filter 6.39e6 s, fault -1. Warning register reads `0`,
+  not the `-1` the code treats as healthy — open.
 7. Confirm temperature units (°C or °F) against a known reference — the component publishes the raw float
    with no conversion and no document states which.
 8. Confirm whether the recirculation damper (J6) is fitted before trusting mode `0x06`.
