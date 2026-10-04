@@ -45,10 +45,12 @@ def main():
     ap.add_argument("--psk", default=None, help="WiFi passphrase (default: WIFI_PSK from instance/openwrt/airgap_router.env)")
     ap.add_argument("--mqtt-host", default="192.168.1.210", help="target MQTT host — a REAL IP, never the VIP")
     ap.add_argument("--revert", action="store_true", help="label a rollback (behaviour identical; give household --ssid/--psk/--mqtt-host)")
+    ap.add_argument("--topic", default=None, help="Tasmota topic, when the device is registered only on ha-2 "
+                    "(.210's row is commented out once a device lives on the air-gap)")
     ap.add_argument("--dry-run", action="store_true")
     a = ap.parse_args()
 
-    topic = topic_for(a.device_id)
+    topic = a.topic or topic_for(a.device_id)
     if not topic:
         print(f"✗ no Tasmota topic for device_id '{a.device_id}' in {TASMOTA_REG.name}", file=sys.stderr)
         return 2
