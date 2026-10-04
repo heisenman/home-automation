@@ -38,6 +38,7 @@
 #include "esp_system.h"
 #include "esp_timer.h"
 #include "freertos/FreeRTOS.h"
+#include "freertos/semphr.h"
 #include "freertos/task.h"
 #include "nvs.h"
 #include "nvs_flash.h"
@@ -45,6 +46,7 @@
 #include "ha_broan.h"
 #include "ha_broan_frame.h"
 #include "ha_config.h"
+#include "ha_dout.h"
 #include "ha_mqtt.h"
 #include "ha_ota.h"
 #include "ha_rs485.h"
@@ -75,7 +77,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v3-hvac-live"   // keep in step with the version.txt tag ota_edge_node.sh brands
+#define HA_FW_VERSION "v5-hvac-boost"   // keep in step with the version.txt tag ota_edge_node.sh brands
 #endif
 
 // ⛔ THE GATE. 1 = sniff only, and that is the only value this node has ever been run with. Setting it
@@ -97,10 +99,16 @@ static const char *TAG = "ha_hvac";
 #define BROAN_BAUD       38400u         // 38400 8N1, half-duplex (ha_broan_frame.h)
 
 // Broan OVR failsafe relay. Active-high module (bench-verified: IN floating leaves NO-COM open, IN high
-// shorts it), NO contact, 10k external pull-down. Held de-energized for the whole life of this build —
-// OVR is a hard override that BEATS the serial bus, and a listen-only node has no business asserting it.
-// When controller mode arrives this wants ha_dout (fail-safe state + max-on cap), not a bare gpio_set.
+// shorts it), NO contact, 10k external pull-down. De-energized from reset; asserted ONLY by a signed,
+// timed `erv_boost` (v4, 2026-10-04) through ha_dout's fail-safe + max-on cap — see "OVR boost" below.
 #define OVR_RELAY_GPIO   GPIO_NUM_19    // silk D8
+
+// OVR boost (2026-10-04, Hugh). Closing OVR to 12V is the manual's "crank timer" input: max airflow, beats
+// the bus, and lets go the instant the contact opens — so it is the one control that is safe while the bus
+// is listen-only, and it fails safe (relay de-energized = no override) if this node dies. Always TIMED: a
+// boost is an ha_dout pulse, capped at BOOST_MAX_MIN, with an esp_timer backstop that drives the pin low
+// directly if the loop that ticks ha_dout ever wedges (ha_dout.h "HONEST LIMITATION").
+#define BOOST_MAX_MIN    60u
 
 #define BUS_READ_MS       50            // read timeout; also this task's idle tick
 // 10 s while the ERV is being characterized (Hugh, 2026-10-04) — the fleet norm is 30 s; drop back once
@@ -117,6 +125,9 @@ static const char *TAG = "ha_hvac";
 
 static ha_rs485_t  s_bus;
 static ha_broan_t  s_erv;
+static ha_dout_t   s_ovr;
+static esp_timer_handle_t s_ovr_backstop;
+static SemaphoreHandle_t  s_ovr_mu;
 static ha_config_t s_cfg;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
@@ -230,6 +241,7 @@ static void publish_erv(void) {
     // Lets a consumer tell data harvested from the wall control apart from data we polled for
     // ourselves, without having to know which firmware is on the node.
     jsonbuf_add(&j, "\"listen_only\":%s", ha_rs485_is_listen_only(&s_bus) ? "true" : "false");
+    jsonbuf_add(&j, "\"ovr_boost\":%s", gpio_get_level(OVR_RELAY_GPIO) ? "true" : "false");
 
     if (!jsonbuf_finish(&j)) return;
 
@@ -355,9 +367,50 @@ static void census_report(void) {
     ha_mqtt_log("%s", line);
 }
 
+// ── OVR boost ─────────────────────────────────────────────────────────────────
+static void ovr_backstop_cb(void *arg) {
+    (void)arg;
+    gpio_set_level(OVR_RELAY_GPIO, 0);   // no lock, no ha_dout: this path exists for when those are wedged
+}
+
+static void ovr_apply(uint32_t t) {
+    ha_dout_rc_t rc = ha_dout_tick(&s_ovr, t);
+    gpio_set_level(OVR_RELAY_GPIO, ha_dout_level(&s_ovr) ? 1 : 0);
+    if (rc == HA_DOUT_FAULTED && ha_dout_faulted(&s_ovr)) {
+        ha_mqtt_log("hvac: OVR boost hit its %u min hard cap — forced off", (unsigned)BOOST_MAX_MIN);
+        ha_dout_clear_fault(&s_ovr, t);
+    }
+}
+
+static void ovr_task(void *arg) {
+    (void)arg;
+    for (;;) {
+        xSemaphoreTake(s_ovr_mu, portMAX_DELAY);
+        ovr_apply(now_ms());
+        xSemaphoreGive(s_ovr_mu);
+        vTaskDelay(pdMS_TO_TICKS(200));
+    }
+}
+
+// minutes 0 = stop now; 1..BOOST_MAX_MIN = boost that long. Returns false for anything else.
+static bool ovr_boost(int minutes) {
+    if (minutes < 0 || minutes > (int)BOOST_MAX_MIN) return false;
+    xSemaphoreTake(s_ovr_mu, portMAX_DELAY);
+    uint32_t t = now_ms();
+    esp_timer_stop(s_ovr_backstop);
+    ha_dout_rc_t rc = minutes == 0 ? ha_dout_set(&s_ovr, false, t)
+                                   : ha_dout_pulse(&s_ovr, (uint32_t)minutes * 60000u, t);
+    if (minutes > 0 && rc == HA_DOUT_OK)
+        esp_timer_start_once(s_ovr_backstop, ((uint64_t)minutes * 60u + 5u) * 1000000u);
+    ovr_apply(t);
+    xSemaphoreGive(s_ovr_mu);
+    return rc == HA_DOUT_OK;
+}
+
 // ── commands ──────────────────────────────────────────────────────────────────
-// Read-only by construction. There is no command to clear listen_only, and there must not be — see the
-// gate comment at the top. `erv_stats` just forces an immediate report instead of waiting for the tick.
+// Nothing here touches the BUS. There is no command to clear listen_only, and there must not be — see the
+// gate comment at the top. `erv_stats` forces an immediate report; `erv_boost` drives the OVR dry contact,
+// which is electrically separate from the bus (see OVR boost above).
 static bool on_cmd(const cJSON *cmd, void *user) {
     (void)user;
     const cJSON *op = cJSON_GetObjectItem(cmd, "op");
@@ -366,6 +419,15 @@ static bool on_cmd(const cJSON *cmd, void *user) {
     if (strcmp(op->valuestring, "erv_stats") == 0) {
         sniff_report();
         census_report();
+        publish_erv();
+        return true;
+    }
+    if (strcmp(op->valuestring, "erv_boost") == 0) {
+        const cJSON *m = cJSON_GetObjectItem(cmd, "min");
+        int minutes = cJSON_IsNumber(m) ? m->valueint : -1;
+        bool ok = ovr_boost(minutes);
+        ha_mqtt_log("hvac: erv_boost min=%d -> %s (relay=%d)", minutes,
+                    ok ? "ok" : "REFUSED (min must be 0..60)", gpio_get_level(OVR_RELAY_GPIO));
         publish_erv();
         return true;
     }
@@ -380,9 +442,14 @@ static bool on_cmd(const cJSON *cmd, void *user) {
 static void relay_init_safe(void) {
     gpio_reset_pin(OVR_RELAY_GPIO);
     gpio_set_level(OVR_RELAY_GPIO, 0);
-    gpio_set_direction(OVR_RELAY_GPIO, GPIO_MODE_OUTPUT);
+    gpio_set_direction(OVR_RELAY_GPIO, GPIO_MODE_INPUT_OUTPUT);   // INPUT too: output-only pins read back 0
     gpio_set_pull_mode(OVR_RELAY_GPIO, GPIO_PULLDOWN_ONLY);
     gpio_set_level(OVR_RELAY_GPIO, 0);
+    ha_dout_init(&s_ovr, &(ha_dout_cfg_t){ .active_high = true, .max_on_ms = BOOST_MAX_MIN * 60000u + 2000u },
+                 now_ms());
+    s_ovr_mu = xSemaphoreCreateMutex();
+    esp_timer_create(&(esp_timer_create_args_t){ .callback = ovr_backstop_cb, .name = "ovr_backstop" },
+                     &s_ovr_backstop);
 }
 
 static bool repoint_healthy(void *user) { (void)user; return ha_mqtt_is_connected(); }
@@ -471,13 +538,14 @@ void app_main(void) {
         .abilities = "erv", .enable_reach = false, .on_cmd = on_cmd });
     ha_mqtt_start(s_cfg.broker_uri, s_cfg.node_id);
 
+    xTaskCreate(ovr_task, "erv_ovr", 3072, NULL, 5, NULL);
     xTaskCreate(telemetry_task, "erv_tlm", 6144, NULL, 4, NULL);   // 640 B metrics + 896 B envelope
 
     ESP_LOGW(TAG, "hvac node up: node=%s broker=%s uart=%d tx=%d rx=%d baud=%u LISTEN_ONLY=%d",
              s_cfg.node_id, s_cfg.broker_uri, RS485_PORT, RS485_TX_GPIO, RS485_RX_GPIO,
              (unsigned)BROAN_BAUD, HA_HVAC_LISTEN_ONLY);
 #if HA_HVAC_LISTEN_ONLY
-    ESP_LOGW(TAG, "LISTEN-ONLY: this node will never transmit. OVR relay (GPIO%d) held de-energized.",
+    ESP_LOGW(TAG, "LISTEN-ONLY: this node will never transmit. OVR relay (GPIO%d) off until a timed erv_boost.",
              OVR_RELAY_GPIO);
 #else
     ESP_LOGE(TAG, "⛔ LISTEN_ONLY IS CLEARED — this node will TAKE THE BUS and owes the ERV a heartbeat "
