@@ -28,7 +28,7 @@ def parse_control_registry(data: dict[str, Any]) -> dict[str, DeviceCtl]:
             raise ValueError(f"control device '{dev_id}' missing node/area")
         out[dev_id] = DeviceCtl(device_id=dev_id, node=spec["node"], area=spec["area"],
                                 traits_cfg={t: (c or {}) for t, c in tcfg.items()},
-                                device_type=spec.get("device_type"))
+                                device_type=spec.get("device_type"), manual=bool(spec.get("manual", False)))
     return out
 
 

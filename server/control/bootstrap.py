@@ -9,6 +9,7 @@ from pathlib import Path
 
 import yaml
 
+from server.control.erv_driver import ErvEdgeTransport, erv_devices_of
 from server.control.host_led import HostLedTransport
 from server.control.issuer import CommandIssuer, MqttTransport, RoutingTransport
 from server.control.levoit_driver import LevoitMqttTransport, load_levoit_devices
@@ -66,6 +67,12 @@ def build_issuer(master: str, *, control_registry: Path, node_secrets_lut: Path,
     if levoit_devices:
         lt = LevoitMqttTransport(levoit_devices, broker=broker, port=port)
         overrides.update({d: lt for d in levoit_devices})
+    # Broan ERV via its enrolled edge node (hvac_c6): signed {p,s} commands, confirmed by the ERV's own
+    # readback. Routed by device_type "erv" (ADR-0026), signed with the NODE's cmd_secret from the LUT.
+    erv_devices = erv_devices_of(registry)
+    if erv_devices:
+        et = ErvEdgeTransport(erv_devices, lut, broker=broker, port=port)
+        overrides.update({d: et for d in erv_devices})
     # host indicator LEDs: device_id host_* -> HostLedTransport (runs tools/host-leds.sh locally via sudo).
     host_led_ids = [d for d in registry if d.startswith("host_")]
     if host_led_ids:

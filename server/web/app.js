@@ -481,13 +481,15 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
 function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
   const act = vm.actuator || {};
   const cmds = (vm.controls || []).filter((c) =>
-    c.kind === "setpoint" || c.kind === "ranged" || c.kind === "mode" || c.kind === "indicator");
+    c.kind === "setpoint" || c.kind === "ranged" || c.kind === "mode" || c.kind === "indicator" ||
+    c.kind === "timed");
   const spCtl = cmds.find((c) => c.kind === "setpoint");
   const rgCtl = cmds.find((c) => c.kind === "ranged");
   const modeCtl = cmds.find((c) => c.kind === "mode");
   const indCtl = cmds.find((c) => c.kind === "indicator");
+  const tmCtl = cmds.find((c) => c.kind === "timed");
   const spInit = spCtl ? (act[spCtl.now_key] ?? spCtl.safe_value ?? "") : "";
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(!!vm.manual);       // manual-only devices: the controls ARE the card
   const [target, setTarget] = useState(spInit);
   const [busy, setBusy] = useState("");
   const [err, setErr] = useState("");
@@ -518,11 +520,13 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
   const modeLabel = modeCtl && modeNow != null
     ? ((modeCtl.options.find((o) => o.value === modeNow) || {}).label ?? modeNow) : null;
   const indNow = indCtl ? act[indCtl.now_key] : null;
+  const tmNow = tmCtl ? act[tmCtl.now_key] : null;
   return html`
     <div class="settings">
       <div class="divider"></div>
-      <p class="note">Direct device commands. Power is automation-managed — use the override buttons
-        above to force on/off.</p>
+      <p class="note">${vm.manual
+        ? "Manual control — no automation drives this device. Each command is confirmed by the device's own readback."
+        : "Direct device commands. Power is automation-managed — use the override buttons above to force on/off."}</p>
       ${spCtl && html`
         <div class="field"><label>${spCtl.label}</label>
           <input type="number" min=${spCtl.min} max=${spCtl.max} value=${target}
@@ -548,6 +552,15 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
                 title=${o.value} onClick=${() => cmd(modeCtl, o.value, "mode")}>${o.label}</button>`)}
           </div>
           ${modeLabel != null && html`<span class="note">now: ${modeLabel}</span>`}
+        </div>`}
+      ${tmCtl && html`
+        <div class="field"><label>${tmCtl.label}</label>
+          <div class="controls">
+            ${tmCtl.options.map((o) => html`
+              <button class="btn sm ${o.value === 0 ? "ghost" : ""}" disabled=${busy === "timed"}
+                onClick=${() => cmd(tmCtl, o.value, "timed")}>${o.label}</button>`)}
+          </div>
+          ${tmNow != null && html`<span class="note">now: ${tmNow ? "boosting" : "off"}</span>`}
         </div>`}
       ${indCtl && html`
         <div class="field"><label>${indCtl.label}</label>
@@ -714,7 +727,40 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
     </div>`;
 }
 
+// The current mode's label for a device with a `mode` control (e.g. the ERV's "Med"), else null.
+function modeLabelOf(vm) {
+  const mc = (vm.controls || []).find((c) => c.kind === "mode");
+  const now = mc ? (vm.actuator || {})[mc.now_key] : null;
+  return mc && now != null ? ((mc.options.find((o) => o.value === now) || {}).label ?? String(now)) : null;
+}
+
+// A manual-only actuator (no automation policy — e.g. the ERV): no sensor/threshold/settings sections, which
+// would all read "—". Its state is what the device reports; its UI is its controls.
+function ManualDeviceCard({ vm, isAdmin, onChange, onNeedAdmin, onEdit, onClose }) {
+  const act = vm.actuator || {};
+  const mode = modeLabelOf(vm);
+  return html`
+    <div class="card health-${vm.health}">
+      <div class="card-head">
+        <h2 style=${onClose ? "cursor:pointer" : ""} onClick=${onClose || undefined}>${dispName(vm)}${onClose ? html` <span class="chev">▾</span>` : ""}</h2>
+        ${vm.room && html`<span class="sensor-area">${vm.room}</span>`}
+        <span class="badge health-${vm.health}">${vm.health}</span>
+        <button class="btn sm ghost edit-btn" onClick=${() => onEdit(vm)}>✎</button>
+        ${onClose && html`<button class="btn sm ghost close-btn" title="collapse" onClick=${onClose}>✕</button>`}
+      </div>
+      <div class="state-row">
+        <span class="pill ${mode && mode !== "Off" ? "on" : "off"}">${mode || "?"}</span>
+        ${act.boost_on && html`<span class="scene-chip">boost</span>`}
+      </div>
+      <${ManualControl} vm=${vm} isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
+    </div>`;
+}
+
 function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit, onClose }) {
+  if (vm.manual) {
+    return html`<${ManualDeviceCard} vm=${vm} isAdmin=${isAdmin} onChange=${onChange}
+      onNeedAdmin=${onNeedAdmin} onEdit=${onEdit} onClose=${onClose} />`;
+  }
   const running = vm.running;
   const s = vm.sensor, o = vm.onboard, d = vm.last_decision, act = vm.actuator || {};
   const ageStale = vm.health === "stale";   // the BFF already derives staleness; mirror it on the age
@@ -797,12 +843,15 @@ function ActuatorChip({ vm, onOpen, onEdit }) {
       <div class="sensor-name">${dispName(vm)} <span class="chev">▸</span></div>
       <div class="sensor-area">${vm.room || dispRoom(vm)}</div>
       <div class="sensor-vals">
-        <span class="pill ${running ? "on" : "off"}">${running == null ? "?" : running ? "RUNNING" : "IDLE"}</span>
+        ${vm.manual
+          ? html`<span class="pill ${modeLabelOf(vm) && modeLabelOf(vm) !== "Off" ? "on" : "off"}">${modeLabelOf(vm) || "?"}</span>
+                 ${(vm.actuator || {}).boost_on && html`<span class="sv"><b>boost</b></span>`}`
+          : html`<span class="pill ${running ? "on" : "off"}">${running == null ? "?" : running ? "RUNNING" : "IDLE"}</span>`}
         ${cval != null && html`<span class="sv"><b>${fmtC(cval)}</b> ${CM.label}</span>`}
       </div>
       <div class="sensor-meta">
         <span class="badge health-${vm.health}">${vm.health}</span>
-        ${vm.control.enabled === false && html` · <span class="note">auto off</span>`}
+        ${vm.control.enabled === false && !vm.manual && html` · <span class="note">auto off</span>`}
       </div>
     </div>`;
 }

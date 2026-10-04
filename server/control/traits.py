@@ -1,6 +1,6 @@
 """Capability contract — the trait vocabulary (ADR-0002, plan §11.1).
 
-Devices are described by a small set of traits, not product names: `switchable`, `ranged`,
+Devices are described by a small set of traits, not product names: `switchable`, `ranged`, `timed`,
 `positionable`, `lockable`, `setpoint`. Policies and commands target traits, so new hardware of a
 known shape is inducted with no new admin code. A bespoke driver may live *below* this interface,
 but the interface itself never leaks product specifics upward.
@@ -114,6 +114,13 @@ def _mode_set(args, cfg):
     return {"mode": n}
 
 
+def _timed_set(args, cfg):
+    """A self-releasing ON: {minutes: 0..max}. 0 = release now. The device owns the timer (and its hard
+    cap) — the trait only bounds the request, so a lost server can never leave it asserted."""
+    return {"minutes": _as_number_in_range(args.get("minutes"), "minutes", 0, cfg.get("max", 60),
+                                           integer=True)}
+
+
 def _mode_safe(cfg):
     values = cfg.get("values") or {}
     safe = cfg.get("safe")
@@ -174,6 +181,15 @@ _TRAITS: dict[str, Trait] = {
         actions={"set": _mode_set},
         sensitive_actions=frozenset(),
         safe_state=_mode_safe,
+    ),
+    # a TIMED boolean: on for N minutes, then the device releases it itself (e.g. the ERV's OVR boost relay,
+    # capped on-node). Distinct from switchable because "on" without an end is exactly what it must never
+    # be. Fail-safe is released (minutes 0).
+    "timed": Trait(
+        name="timed", state_keys=("minutes",),
+        actions={"set": _timed_set},
+        sensitive_actions=frozenset(),
+        safe_state=lambda cfg: {"minutes": 0},
     ),
 }
 

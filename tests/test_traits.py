@@ -5,7 +5,7 @@ from tests._harness import raises, run_module
 
 def test_known_traits():
     assert set(T.known_traits()) == {"switchable", "ranged", "positionable", "lockable",
-                                     "setpoint", "indicator", "mode"}
+                                     "setpoint", "indicator", "mode", "timed"}
 
 
 _MODE_CFG = {"values": {"set": 1, "continuous": 2, "dry": 4}, "safe": "set"}

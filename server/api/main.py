@@ -1176,7 +1176,9 @@ def display_list():
     dm = store.all_device_meta(cc)
     now = time.time()
     try:
-        ids = sorted(store.all_policies(cc).keys())
+        # policy-bearing devices + manual-only registry actuators (no policy by design — e.g. the ERV)
+        ids = sorted(set(store.all_policies(cc)) | {d for d, c in (reg or {}).items()
+                                                    if getattr(c, "manual", False)})
         out = [vm for did in ids
                if (vm := build_display(cc, hc, did, now, registry=reg, meta=dm)) is not None]
     finally:

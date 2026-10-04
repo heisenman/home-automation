@@ -705,14 +705,16 @@ def _setpoint_label(cfg: dict) -> tuple[str, str]:
     return "Setpoint", unit
 
 
-def build_controls(traits_cfg: dict | None) -> list[dict]:
+def build_controls(traits_cfg: dict | None, manual: bool = False) -> list[dict]:
     """Ordered, render-ready control descriptors for a controllable device (shared-ui-spec Phase 0).
     `override` is always present (every build_display device has a control policy); setpoint/ranged/
     indicator are emitted iff the device's traits_cfg declares that trait. Ranges/labels/admin/action are
     fully specified so both renderers stop deriving them client-side. A per-trait cfg `label` overrides
     the default (future device needs no client change)."""
     from server.api.control import OVERRIDE_UNITS, MAX_OVERRIDE_MIN
-    controls: list[dict] = [{
+    # A manual-only actuator has no automation policy, so the Power override (which acts THROUGH the
+    # controller loop) would be a dead button. Its traits are the whole UI.
+    controls: list[dict] = [] if manual else [{
         "kind": "override", "label": "Power", "admin": True,
         "action": {"method": "POST", "path": "/control/{id}/override"},
         "presets": [
@@ -757,6 +759,16 @@ def build_controls(traits_cfg: dict | None) -> list[dict]:
             "options": _mode_options(cfg), "now_key": "mode",
             "action": {"method": "POST", "path": _CMD_PATH, "trait": "mode", "action": "set",
                        "arg_key": "mode"}})
+    if "timed" in tc:
+        cfg = tc.get("timed") or {}
+        presets = cfg.get("presets_min") or [15, 30, 60]
+        controls.append({
+            "kind": "timed", "trait": "timed", "label": cfg.get("label") or "Boost", "admin": True,
+            "options": [{"value": int(m), "label": f"{int(m)} min"} for m in presets
+                        if 0 < int(m) <= int(cfg.get("max", 60))] + [{"value": 0, "label": "Stop"}],
+            "now_key": "boost_on",
+            "action": {"method": "POST", "path": _CMD_PATH, "trait": "timed", "action": "set",
+                       "arg_key": "minutes"}})
     if "indicator" in tc:
         cfg = tc.get("indicator") or {}
         controls.append({
@@ -789,8 +801,15 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
 
     snap = read_control_state(control_conn, device_id, now)
     policy = snap["policy"]
+    manual = False
     if policy is None:
-        return None
+        # A registry actuator flagged `manual: true` (e.g. the ERV) has no automation policy by design but
+        # must still surface its controls (CONFORMANCE B / ADR-0014 R1 — no trait ships hidden).
+        ctl = registry.get(device_id) if registry is not None else None
+        if not (ctl is not None and getattr(ctl, "manual", False)):
+            return None
+        manual = True
+        policy = {"enabled": False, "control": {"strategy": "manual"}}
     ctrl = policy.get("control", {}) or {}
     source_id = policy.get("source_sensor")
     # the metric this device controls on: an explicit control.metric (e.g. air-quality pm25_ugm3 vs aqi)
@@ -825,7 +844,9 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         fv = _latest_any(device_id, "fan_speed")
         fo = _latest_any(device_id, "fan_on")
         led = _latest_any(device_id, "led_on")
-        mode = _latest_any(device_id, "mode")
+        # `mode` (Midea) — or the ERV's `fan_mode`, which carries the same Broan int its mode trait uses
+        mode = _latest_any(device_id, "mode") or _latest_any(device_id, "fan_mode")
+        boost = _latest_any(device_id, "ovr_boost")
         if tv:
             actuator["target_pct"] = tv[0]
         if fv:
@@ -836,6 +857,8 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
             actuator["led_on"] = bool(led[0])
         if mode is not None:
             actuator["mode"] = int(mode[0])
+        if boost is not None:
+            actuator["boost_on"] = bool(boost[0])
 
     # command capabilities (traits + ranges) so the UI can render manual controls
     traits = None
@@ -849,7 +872,9 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
     running = bool(last["desired"]) if last else None
 
     stale_s = float(policy.get("sensor_stale_min", 10)) * 60.0
-    if not policy.get("enabled", True):
+    if manual:
+        health = "manual"
+    elif not policy.get("enabled", True):
         health = "disabled"
     elif snap["override"] is not None:
         health = "overridden"
@@ -879,7 +904,8 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         "onboard": onboard,
         "actuator": actuator,
         "traits": traits,                              # raw — kept for back-compat during migration
-        "controls": build_controls(traits),            # shared-ui-spec: server-authored render-ready controls
+        "controls": build_controls(traits, manual=manual),  # shared-ui-spec: server-authored render-ready controls
+        "manual": manual,                              # manual-only actuator: no policy, no automation
         "recent_decisions": [{"ts": r["ts"], "source": r["source"], "reason": r["reason"],
                               "acted": r["acted"]} for r in (snap.get("recent_log") or [])[:8]],
         "override": snap["override"],
