@@ -106,3 +106,32 @@ visible motion. Before limits are set, the motor is in dead-man mode, so a 500 m
 - **A `shade` command with no paired, powered motor does nothing visible.** The node log line proves only that the node acted, not the RF.
 - Don't pipe `mosquitto_sub` through `grep | head` under `timeout`: grep block-buffers and the kill loses the output, which reads as a dead node.
 - OTA "rolled back" on this node: check the image has WiFi first (`README` → Build + deploy). This node's WiFi is compiled in, not in NVS.
+
+## Entry 3 — ERV node (`hvac_c6`) controls the Broan, and the ERV is healthy
+
+**Asserted state:** `hvac_c6` runs `v6-hvac-ctrl` (or later) and is the ERV's bus controller at address
+`0x11`. The wall control is **unpowered**. The ERV is fed through `erv_pm` (Tasmota S31, area `attic`).
+E50 is a warning that self-clears when the controller returns (design §1.8).
+
+**Verified (2026-10-04):** ERV took the node as controller; polled power 61.5 W vs `erv_pm` 63 W; CFM
+92.2/92.5 vs target 92.4; fault register `-1`. OVR boost 63 → 137 W and released on time.
+
+**Re-check:**
+```sh
+S=$(mktemp)   # write to a file, then read it (grep|head under timeout loses output)
+timeout 40 mosquitto_sub -h 192.168.1.200 -v -t 'home/edge/hvac_c6/#' -t 'home/attic/erv_pm/state' > $S
+grep -E 'status|census|erv/adv' $S | tail -4; grep power_w $S | tail -2
+```
+
+**Expected:** (1) `status online ota_X v6-hvac-ctrl` (or later). (2) census `tok_ack` within a few of
+`tok_offer` and climbing, `bad` flat. (3) `erv/adv` has `listen_only:false`, `online:true`,
+`fault_code:-1`, and `power_w` within ~5 W of `erv_pm`'s `power_w`. (4) `fan_mode_name` matches what was
+last set.
+
+**Gotchas:**
+- **`tok_ack` frozen while `tok_offer` climbs = nobody is answering** (node not controller, or listen-only
+  firmware). The ERV keeps its last mode and shows E50; it does not shut down.
+- **If the wall control is powered while the node is controller, both answer `0x11` and collide** — rising
+  `bad`, erratic acks. Only one may be live.
+- `warning_code` reads `0`, which the firmware currently flags `warning_ok:false` — unconfirmed, not a fault.
+- The ERV can be power-cycled remotely via `cmnd/erv_pm/POWER` — no attic trip.
