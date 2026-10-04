@@ -144,3 +144,46 @@ def test_unquoted_yaml_off_is_refused_at_load():
                           "      mode: {values: {off: 1, med: 11}}\n")
     with pytest.raises(ValueError, match="quote"):
         parse_control_registry(data)
+
+
+# ── OVR latch (2026-10-04): announce it, refuse into it, clear it by power-cycle ────────────────────
+
+def _erv_cfg():
+    import yaml
+    return parse_control_registry(yaml.safe_load(open("config-examples/control.example.yaml")))
+
+
+def test_ovr_raises_an_alarm_with_a_clear_action_and_startup_is_info():
+    from server.api.viewmodel import external_mode_alert
+    tc = _erv_cfg()["erv_attic"].traits_cfg
+    a = external_mode_alert(tc, {"mode": 2})
+    assert a["level"] == "alarm" and a["clear"]["path"] == "/devices/{id}/power-cycle"
+    s = external_mode_alert(tc, {"mode": 20})
+    assert s["level"] == "info" and "clear" not in s
+    assert external_mode_alert(tc, {"mode": 11}) is None
+
+
+def test_mode_control_lists_external_states_so_the_ui_can_lock_buttons():
+    c = build_controls(_erv_cfg()["erv_attic"].traits_cfg, manual=True)[0]
+    assert {e["value"] for e in c["external"]} == {2, 20}
+    assert not ({o["value"] for o in c["options"]} & {2, 20})   # never offered as a button
+
+
+def test_power_cycle_always_restores_power_even_if_the_wait_fails():
+    from server.api.control import handle_power_cycle
+    sent = []
+
+    def boom(s):
+        raise RuntimeError("interrupted")
+    with pytest.raises(RuntimeError):
+        handle_power_cycle(_erv_cfg(), "erv_attic", lambda t, p: sent.append((t, p)), boom)
+    assert sent == [("cmnd/erv_pm/POWER", "OFF"), ("cmnd/erv_pm/POWER", "ON")]
+
+
+def test_power_cycle_happy_path_and_unconfigured_device():
+    from server.api.control import handle_power_cycle
+    sent, slept = [], []
+    code, body = handle_power_cycle(_erv_cfg(), "erv_attic", lambda t, p: sent.append(p), slept.append)
+    assert code == 200 and sent == ["OFF", "ON"] and slept == [10]
+    code, _ = handle_power_cycle(_erv_cfg(), "lamp_office", lambda t, p: None, lambda s: None)
+    assert code == 404

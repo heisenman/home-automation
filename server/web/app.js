@@ -521,9 +521,11 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
     ? ((modeCtl.options.find((o) => o.value === modeNow) || {}).label ?? modeNow) : null;
   const indNow = indCtl ? act[indCtl.now_key] : null;
   const tmNow = tmCtl ? act[tmCtl.now_key] : null;
+  const modeLocked = !!(modeCtl && (modeCtl.external || []).some((x) => x.value === modeNow));
   return html`
     <div class="settings">
       <div class="divider"></div>
+      <${AlertBanner} alert=${vm.alert} vm=${vm} isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
       <p class="note">${vm.manual
         ? "Manual control — no automation drives this device. Each command is confirmed by the device's own readback."
         : "Direct device commands. Power is automation-managed — use the override buttons above to force on/off."}</p>
@@ -548,10 +550,13 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
         <div class="field"><label>${modeCtl.label}</label>
           <div class="controls">
             ${modeCtl.options.map((o) => html`
-              <button class="btn sm ${modeNow === o.value ? "primary" : ""}" disabled=${busy === "mode"}
-                title=${o.value} onClick=${() => cmd(modeCtl, o.value, "mode")}>${o.label}</button>`)}
+              <button class="btn sm ${modeNow === o.value ? "primary" : ""}" disabled=${busy === "mode" || modeLocked}
+                title=${modeLocked ? "ignored by the device until the override ends" : o.value}
+                onClick=${() => cmd(modeCtl, o.value, "mode")}>${o.label}</button>`)}
           </div>
-          ${modeLabel != null && html`<span class="note">now: ${modeLabel}</span>`}
+          ${modeLocked
+            ? html`<span class="note err">now: ${modeLabelOf(vm)} — mode buttons disabled until it ends</span>`
+            : modeLabel != null && html`<span class="note">now: ${modeLabel}</span>`}
         </div>`}
       ${tmCtl && html`
         <div class="field"><label>${tmCtl.label}</label>
@@ -731,7 +736,33 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
 function modeLabelOf(vm) {
   const mc = (vm.controls || []).find((c) => c.kind === "mode");
   const now = mc ? (vm.actuator || {})[mc.now_key] : null;
-  return mc && now != null ? ((mc.options.find((o) => o.value === now) || {}).label ?? String(now)) : null;
+  if (!mc || now == null) return null;
+  const o = mc.options.find((x) => x.value === now) || (mc.external || []).find((x) => x.value === now);
+  return o ? o.label : String(now);
+}
+
+// Loud, server-authored alert (e.g. the ERV latched in OVR). Rendered above everything it affects.
+function AlertBanner({ alert, vm, isAdmin, onChange, onNeedAdmin }) {
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState("");
+  if (!alert) return null;
+  const clear = alert.clear;
+  const doClear = async () => {
+    if (!isAdmin) return onNeedAdmin && onNeedAdmin();
+    if (!window.confirm(clear.confirm)) return;
+    setBusy(true); setMsg("");
+    try {
+      const r = await adminSend(clear.method, clear.path.replace("{id}", vm.device_id), {});
+      setMsg((r && r.note) || "done");
+      onChange && (await onChange());
+    } catch (e) { setMsg(String(e.message)); }
+    setBusy(false);
+  };
+  return html`<div class="alert-banner ${alert.level || "alarm"}" role="alert">
+      <b>${alert.level === "info" ? "ℹ" : "⚠"} ${alert.title}</b><div>${alert.text}</div>
+      ${clear && html`<div class="controls" style="margin-top:6px">
+        <button class="btn sm primary" disabled=${busy} onClick=${doClear}>${busy ? "Power-cycling…" : clear.label}</button></div>`}
+      ${msg && html`<div class="note">${msg}</div>`}</div>`;
 }
 
 // A manual-only actuator (no automation policy — e.g. the ERV): no sensor/threshold/settings sections, which
@@ -748,8 +779,9 @@ function ManualDeviceCard({ vm, isAdmin, onChange, onNeedAdmin, onEdit, onClose 
         <button class="btn sm ghost edit-btn" onClick=${() => onEdit(vm)}>✎</button>
         ${onClose && html`<button class="btn sm ghost close-btn" title="collapse" onClick=${onClose}>✕</button>`}
       </div>
+      <${AlertBanner} alert=${vm.alert} vm=${vm} isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
       <div class="state-row">
-        <span class="pill ${mode && mode !== "Off" ? "on" : "off"}">${mode || "?"}</span>
+        <span class="pill ${vm.alert ? "alarm" : mode && mode !== "Off" ? "on" : "off"}">${mode || "?"}</span>
         ${act.boost_on && html`<span class="scene-chip">boost</span>`}
       </div>
       <${ManualControl} vm=${vm} isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
@@ -844,7 +876,7 @@ function ActuatorChip({ vm, onOpen, onEdit }) {
       <div class="sensor-area">${vm.room || dispRoom(vm)}</div>
       <div class="sensor-vals">
         ${vm.manual
-          ? html`<span class="pill ${modeLabelOf(vm) && modeLabelOf(vm) !== "Off" ? "on" : "off"}">${modeLabelOf(vm) || "?"}</span>
+          ? html`<span class="pill ${vm.alert ? "alarm" : modeLabelOf(vm) && modeLabelOf(vm) !== "Off" ? "on" : "off"}">${modeLabelOf(vm) || "?"}</span>
                  ${(vm.actuator || {}).boost_on && html`<span class="sv"><b>boost</b></span>`}`
           : html`<span class="pill ${running ? "on" : "off"}">${running == null ? "?" : running ? "RUNNING" : "IDLE"}</span>`}
         ${cval != null && html`<span class="sv"><b>${fmtC(cval)}</b> ${CM.label}</span>`}

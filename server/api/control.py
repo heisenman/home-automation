@@ -1276,7 +1276,40 @@ def make_override_router(api_authz, control_db, device_ids=None):
     return router
 
 
-def make_router(issuer: CommandIssuer, confirm_verifier=None, api_authz=None):
+def power_cycle_spec(registry, device_id: str) -> dict | None:
+    """The device's `power_cycle` recovery config ({tasmota: <topic>, off_s}) from its mode trait, or None.
+    The ERV's OVR latch ignores every command; cutting its power through the smart plug that feeds it is
+    the one verified clear (2026-10-04: OVR → start-up state 20 for ~2 min → LOW)."""
+    ctl = (registry or {}).get(device_id)
+    spec = ((getattr(ctl, "traits_cfg", None) or {}).get("mode") or {}).get("power_cycle") if ctl else None
+    if not spec or not spec.get("tasmota"):
+        return None
+    return {"tasmota": str(spec["tasmota"]), "off_s": max(5, min(60, int(spec.get("off_s", 10))))}
+
+
+def handle_power_cycle(registry, device_id: str, publish, sleep) -> tuple[int, dict]:
+    """Cut and restore a device's power via its Tasmota plug. `publish(topic, payload)` / `sleep(s)` are
+    injected so this is testable without a broker. ON is sent even if something between fails — the one
+    outcome this must never produce is an appliance left unpowered."""
+    spec = power_cycle_spec(registry, device_id)
+    if spec is None:
+        return 404, {"status": "not-found", "reason": f"'{device_id}' has no power_cycle recovery configured"}
+    topic = f"cmnd/{spec['tasmota']}/POWER"
+    try:
+        publish(topic, "OFF")
+        sleep(spec["off_s"])
+    finally:
+        publish(topic, "ON")
+    import logging
+    logging.getLogger("ha.api.control").warning("POWER-CYCLE %s via %s (%ss off)", device_id, spec["tasmota"],
+                                                spec["off_s"])
+    return 200, {"status": "ok", "device_id": device_id, "via": spec["tasmota"], "off_s": spec["off_s"],
+                 "note": "Power restored. The device runs a start-up phase (~2 min for the ERV) before it "
+                         "accepts mode commands."}
+
+
+def make_router(issuer: CommandIssuer, confirm_verifier=None, api_authz=None, admin_authz=None,
+                broker: str = "localhost", port: int = 1883):
     """Build the FastAPI control router (fastapi imported lazily so non-API code/tests don't need it).
 
     `api_authz(authorization_header) -> bool` is the admin gate (bearer = SHA256("ha-api:"+master), see
@@ -1303,6 +1336,32 @@ def make_router(issuer: CommandIssuer, confirm_verifier=None, api_authz=None):
         # async API (reads, other clients) while it waits on the appliance.
         from starlette.concurrency import run_in_threadpool
         code, payload = await run_in_threadpool(handle_command, issuer, device_id, body, confirm_verifier)
+        return JSONResponse(status_code=code, content=payload)
+
+    def require_admin_only(authorization: str | None = Header(default=None)):
+        # cutting an appliance's mains is an ADMIN act, not an operator one (a wall panel holds operator)
+        if admin_authz is None or not admin_authz(authorization):
+            raise HTTPException(status_code=401, detail="unauthorized",
+                                headers={"WWW-Authenticate": "Bearer"})
+
+    @router.post("/{device_id}/power-cycle", dependencies=[Depends(require_admin_only)])
+    async def post_power_cycle(device_id: str):
+        import time as _t
+        from starlette.concurrency import run_in_threadpool
+
+        def run():
+            import paho.mqtt.client as mqtt
+            from server.util.mqtt_creds import apply_credentials
+            c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+            apply_credentials(c)
+            c.connect(broker, port, 30)
+            c.loop_start()
+            try:
+                return handle_power_cycle(issuer.registry, device_id,
+                                          lambda t, p: c.publish(t, p, qos=1).wait_for_publish(5), _t.sleep)
+            finally:
+                c.loop_stop(); c.disconnect()
+        code, payload = await run_in_threadpool(run)
         return JSONResponse(status_code=code, content=payload)
 
     return router

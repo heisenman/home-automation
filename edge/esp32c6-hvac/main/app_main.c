@@ -77,7 +77,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v7-hvac-mode"   // keep in step with the version.txt tag ota_edge_node.sh brands
+#define HA_FW_VERSION "v8-hvac-ovrhold"   // keep in step with the version.txt tag ota_edge_node.sh brands
 #endif
 
 // ⛔ THE GATE. 1 = sniff only (v1–v5). 0 = this node IS the ERV's controller: it takes the token, owes a
@@ -131,6 +131,11 @@ static const char *TAG = "ha_hvac";
 // boost is an ha_dout pulse, capped at BOOST_MAX_MIN, with an esp_timer backstop that drives the pin low
 // directly if the loop that ticks ha_dout ever wedges (ha_dout.h "HONEST LIMITATION").
 #define BOOST_MAX_MIN    60u
+// ⛔ Minimum OVR closure. A SHORT closure (~4 s, 2026-10-04) LATCHED the ERV into a timed override (fan_mode
+// 2, max airflow) that outlived the contact and ignored every mode write until a power cycle; closures held
+// 45–60 s released cleanly the moment the contact opened. So a stop inside this window is DEFERRED by ha_dout
+// (min_on_ms) — never a short pulse. The exact latch threshold is unknown; 45 s is the shortest proven-safe.
+#define BOOST_MIN_HOLD_MS 45000u
 
 #define BUS_READ_MS       50            // read timeout; also this task's idle tick
 // 10 s while the ERV is being characterized (Hugh, 2026-10-04) — the fleet norm is 30 s; drop back once
@@ -441,9 +446,12 @@ static bool ovr_boost(int minutes) {
                                    : ha_dout_pulse(&s_ovr, (uint32_t)minutes * 60000u, t);
     if (minutes > 0 && rc == HA_DOUT_OK)
         esp_timer_start_once(s_ovr_backstop, ((uint64_t)minutes * 60u + 5u) * 1000000u);
+    else if (minutes == 0 && rc == HA_DOUT_DEFERRED)
+        // stop inside the min hold: ha_dout releases at min_on; keep a backstop past that in case it wedges
+        esp_timer_start_once(s_ovr_backstop, ((uint64_t)BOOST_MIN_HOLD_MS + 5000u) * 1000u);
     ovr_apply(t);
     xSemaphoreGive(s_ovr_mu);
-    return rc == HA_DOUT_OK;
+    return rc == HA_DOUT_OK || rc == HA_DOUT_DEFERRED;
 }
 
 // ── commands ──────────────────────────────────────────────────────────────────
@@ -491,7 +499,9 @@ static bool on_cmd(const cJSON *cmd, void *user) {
         int minutes = cJSON_IsNumber(m) ? m->valueint : -1;
         bool ok = ovr_boost(minutes);
         ha_mqtt_log("hvac: erv_boost min=%d -> %s (relay=%d)", minutes,
-                    ok ? "ok" : "REFUSED (min must be 0..60)", gpio_get_level(OVR_RELAY_GPIO));
+                    !ok ? "REFUSED (min must be 0..60)"
+                        : (minutes == 0 && gpio_get_level(OVR_RELAY_GPIO)) ? "ok — release DEFERRED to the 45 s min hold"
+                                                                          : "ok", gpio_get_level(OVR_RELAY_GPIO));
         publish_erv();
         return true;
     }
@@ -509,7 +519,8 @@ static void relay_init_safe(void) {
     gpio_set_direction(OVR_RELAY_GPIO, GPIO_MODE_INPUT_OUTPUT);   // INPUT too: output-only pins read back 0
     gpio_set_pull_mode(OVR_RELAY_GPIO, GPIO_PULLDOWN_ONLY);
     gpio_set_level(OVR_RELAY_GPIO, 0);
-    ha_dout_init(&s_ovr, &(ha_dout_cfg_t){ .active_high = true, .max_on_ms = BOOST_MAX_MIN * 60000u + 2000u },
+    ha_dout_init(&s_ovr, &(ha_dout_cfg_t){ .active_high = true, .min_on_ms = BOOST_MIN_HOLD_MS,
+                                            .max_on_ms = BOOST_MAX_MIN * 60000u + 2000u },
                  now_ms());
     s_ovr_mu = xSemaphoreCreateMutex();
     s_erv_mu = xSemaphoreCreateMutex();

@@ -30,6 +30,16 @@ log = logging.getLogger("ha.control.erv")
 # edge/esp32c6-hvac/main/app_main.c and MODES in tools/erv_cmd.py. 0x02 (OVR) is deliberately absent.
 ERV_MODE_NAMES = {1: "off", 8: "int", 9: "low", 11: "med", 10: "high", 12: "turbo"}
 
+# The ERV's fan-mode value while its hard-wired OVR input is in control. It ignores mode writes until the
+# override ends — and a SHORT OVR closure latches a timed override (seen 2026-10-04: a ~4 s pulse held max
+# airflow long after the contact opened). Never commanded (absent from ERV_MODE_NAMES).
+OVR = 2
+# Start-up after power-on (~2 min, fans stopped): mode writes are ignored, then it settles into LOW by itself.
+STARTUP = 20
+_IGNORES_MODE = {OVR: "ERV is in external override (OVR) and ignores mode commands until it ends",
+                 STARTUP: "ERV is starting up (~2 min after power-on) and ignores mode commands until it "
+                          "settles — retry after that"}
+
 # A mode change publishes at once (~4 s observed); re-selecting the CURRENT mode produces no change, so it
 # confirms only on the node's next periodic publish (10 s). Wait past one period rather than report no-ack.
 CONFIRM_S = 12.0
@@ -125,5 +135,9 @@ class ErvEdgeTransport:
             if not seen:
                 return None                                # node silent → issuer reports no-ack
             hit = next((m for m in reversed(seen) if matches(m)), seen[-1])
+        busy = hit.get("fan_mode")
+        if cmd.get("trait") == "mode" and not matches(hit) and busy in _IGNORES_MODE:
+            return protocol.build_ack(cmd_id=cmd["id"], status="rejected", reported_state={"mode": busy},
+                                      reason=_IGNORES_MODE[busy])
         return protocol.build_ack(cmd_id=cmd["id"], status="ok", reported_state=reported_of(hit),
                                   source="commanded")

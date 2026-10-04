@@ -46,4 +46,21 @@ devices:
         labels: {int: Intermittent}
         safe: med
         label: Ventilation
+        # States the ERV enters ON ITS OWN — never commanded; shown as a banner, mode buttons locked meanwhile.
+        external:
+          2:
+            label: OVR override active
+            level: alarm
+            clear: true
+            note: >-
+              The ERV's hard-wired override (OVR) is in control: max airflow, mode commands ignored. A SHORT OVR
+              pulse latches a timed override that outlives the contact. Clear it by power-cycling the ERV.
+          20:
+            label: ERV starting up
+            level: info
+            note: >-
+              Start-up after power-on (~2 min): fans stopped and mode commands ignored. It then settles into
+              LOW on its own — set the mode you want after that.
+        # The verified OVR clear (2026-10-04): cut the ERV's mains via the Tasmota plug feeding it.
+        power_cycle: {tasmota: erv_pm, off_s: 10, label: "Clear override (power-cycle ERV)"}
       timed: {max: 60, presets_min: [15, 30, 60], label: Boost (max airflow)}

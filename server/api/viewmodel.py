@@ -696,6 +696,38 @@ def _mode_options(cfg: dict) -> list[dict]:
             for k, v in values.items()]
 
 
+def _external_modes(cfg: dict) -> list[dict]:
+    """A mode trait's `external` map → [{value, label, level, note, clear}]. Each entry is either a bare label
+    or {label, level: alarm|info, note, clear: bool}. YAML keys may arrive as int or str."""
+    out = []
+    for k, v in (cfg.get("external") or {}).items():
+        e = v if isinstance(v, dict) else {"label": v}
+        out.append({"value": int(k), "label": str(e.get("label", k)), "level": e.get("level", "alarm"),
+                    "note": e.get("note"), "clear": bool(e.get("clear", False))})
+    return out
+
+
+def external_mode_alert(traits_cfg: dict | None, actuator: dict) -> dict | None:
+    """Loud alert when the device reports a mode it entered on its own (not commandable, ignores mode writes).
+    None otherwise. Server-authored so every renderer (PWA, panel) says the same thing. A `clear` entry on a
+    device with a `power_cycle` recovery carries the action that clears it."""
+    cfg = (traits_cfg or {}).get("mode") or {}
+    now = actuator.get("mode")
+    for e in _external_modes(cfg):
+        if now == e["value"]:
+            alert = {"level": e["level"], "title": e["label"],
+                     "text": e["note"] or "The device entered this state on its own and is ignoring mode "
+                                          "commands until it ends."}
+            pc = cfg.get("power_cycle") or {}
+            if e["clear"] and pc.get("tasmota"):
+                alert["clear"] = {"method": "POST", "path": "/devices/{id}/power-cycle", "admin": True,
+                                  "label": pc.get("label") or "Clear (power-cycle)",
+                                  "confirm": f"Cut power for {int(pc.get('off_s', 10))} s via "
+                                             f"{pc['tasmota']} to clear this?"}
+            return alert
+    return None
+
+
 def _setpoint_label(cfg: dict) -> tuple[str, str]:
     unit = cfg.get("unit", "")
     if unit in ("%", "%RH", "pct", "percent"):
@@ -757,6 +789,9 @@ def build_controls(traits_cfg: dict | None, manual: bool = False) -> list[dict]:
         controls.append({
             "kind": "mode", "trait": "mode", "label": cfg.get("label") or "Mode", "admin": True,
             "options": _mode_options(cfg), "now_key": "mode",
+            # states the DEVICE can enter but we must never command (e.g. the ERV's OVR, entered via its
+            # hard-wired override input). Rendered as a loud banner + buttons disabled while active.
+            "external": _external_modes(cfg),
             "action": {"method": "POST", "path": _CMD_PATH, "trait": "mode", "action": "set",
                        "arg_key": "mode"}})
     if "timed" in tc:
@@ -872,7 +907,10 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
     running = bool(last["desired"]) if last else None
 
     stale_s = float(policy.get("sensor_stale_min", 10)) * 60.0
-    if manual:
+    alert = external_mode_alert(traits, actuator)
+    if alert and alert["level"] == "alarm":
+        health = "alarm"
+    elif manual:
         health = "manual"
     elif not policy.get("enabled", True):
         health = "disabled"
@@ -906,6 +944,7 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         "traits": traits,                              # raw — kept for back-compat during migration
         "controls": build_controls(traits, manual=manual),  # shared-ui-spec: server-authored render-ready controls
         "manual": manual,                              # manual-only actuator: no policy, no automation
+        "alert": alert,                                # e.g. ERV in OVR — rendered as a loud banner
         "recent_decisions": [{"ts": r["ts"], "source": r["source"], "reason": r["reason"],
                               "acted": r["acted"]} for r in (snap.get("recent_log") or [])[:8]],
         "override": snap["override"],
