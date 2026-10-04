@@ -12,7 +12,7 @@
 **Add device → Flash new hardware → "Levoit Vital 200S purifier"** is live on .210. It writes one generic ESPHome
 image (the unit names itself `levoit-<mac6>`) after a gated OEM backup. Design:
 [pwa-levoit-flashing.md](design/pwa-levoit-flashing.md). Host-tested (`tests/test_levoit_flash.py`, esptool faked).
-**Open:** the first live run is the proof. It covers the esptool-API single session (no-reset connect → backup → write)
+**Open:** the first live run is the proof. It covers the connect-check flow (backup → panel asks for an EN re-pulse → write)
 on real hardware, and checking that `levoit-<mac6>` appears in Standby hardware once on mains. Do it with the next Levoit.
 
 ## ✅ 2026-09-27 — Shades (ADR-0041): FIRMWARE COMPLETE; install-side items OPEN

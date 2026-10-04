@@ -27,7 +27,7 @@ the other Vital/Core Levoits (different `model:` + board).
    `levoit-<last 6 hex of MAC>` at boot.
 2. Unit unplugged from mains, programmer on the header and plugged into .210's USB.
 3. PWA → **Add device → Flash new hardware → Scan USB → "Levoit Vital 200S purifier"**. Hold IO0→GND, tap
-   EN→GND, click **Back up + flash Levoit**. The OEM image is backed up to `instance/oem-backups/levoit-<mac6>-oem-*.bin`
+   EN→GND, click **Back up + flash Levoit**; when the panel says so (expect it once, after the backup) re-pulse EN — it continues by itself. The OEM image is backed up to `instance/oem-backups/levoit-<mac6>-oem-*.bin`
    first (nothing is erased if that fails), then the generic image is written + verified.
 4. Release IO0, unplug programmer, reassemble, mains → `levoit-<mac6>` appears in **Standby hardware** → Adopt.
 Design + trade-offs (shared OTA key `ota_password_generic`): `docs/design/pwa-levoit-flashing.md`.

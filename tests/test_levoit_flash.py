@@ -35,15 +35,26 @@ class FakeEsp:
 
 
 class FakeCmds:
-    def __init__(self, *, chip="ESP32-C3", size="4MB", data=OEM, connect_ok=("no-reset",)):
-        self.log, self.chip, self.size, self.data, self.connect_ok = [], chip, size, data, connect_ok
+    """`answers(n, mode)` -> bool decides whether the n-th detect call (0-based) syncs; `macs` (optional) is the
+    MAC each successful connection reports, in order."""
+
+    def __init__(self, *, chip="ESP32-C3", size="4MB", data=OEM, answers=None, macs=None):
+        self.log, self.chip, self.size, self.data = [], chip, size, data
+        self.answers = answers or (lambda n, mode: mode == "no-reset")
+        self.macs = list(macs or [])
+        self.calls = 0
 
     def detect_chip(self, port, baud, connect_mode, connect_attempts):
+        n = self.calls
+        self.calls += 1
         self.log.append(("connect", connect_mode))
-        if connect_mode not in self.connect_ok:
+        if not self.answers(n, connect_mode):
             raise OSError("No serial data received.")
         e = FakeEsp(self.log)
         e.CHIP_NAME = self.chip
+        if self.macs:
+            m = self.macs.pop(0)
+            e.read_mac = lambda: m
         return e
 
     def run_stub(self, esp):
@@ -82,11 +93,14 @@ def env(tmp_path, cmds, *, image=True, known=None):
         LF.IMAGE_META.write_text(json.dumps({"sha256": hashlib.sha256(b"esphome-image").hexdigest(),
                                              "built": "t", "esphome": "2026.6.5"}))
     LF._cmds = lambda: cmds
+    saved_wait = (LF.WAIT_S, LF.RETRY_S)
+    LF.WAIT_S, LF.RETRY_S = 0.2, 0.0
     EF.known_node_for_mac = lambda mac: known
     EF._PortLock.__init__.__defaults__ = (tmp_path / ".lock",)
     try:
         yield
     finally:
+        LF.WAIT_S, LF.RETRY_S = saved_wait
         (LF.IMAGE, LF.IMAGE_META, LF.BACKUP_DIR, LF._cmds, EF.known_node_for_mac,
          EF._PortLock.__init__.__defaults__) = saved
 
@@ -141,7 +155,8 @@ def test_non_oem_content_saved_as_preflash(tmp_path):
     with env(tmp_path, f):
         r = LF.flash_levoit({"port": "/dev/ttyUSB0"})
         assert "-preflash-" in r["backup"]
-        assert LF.existing_backup("12:34:56:AB:CD:EF") is None    # never mistaken for the OEM image later
+        assert not list(LF.BACKUP_DIR.glob("*-oem-*")), "never labelled as the OEM image"
+        assert LF.existing_backup("12:34:56:AB:CD:EF").name == r["backup"]   # but it does satisfy the gate
 
 
 def test_our_edge_node_is_refused(tmp_path):
@@ -170,18 +185,63 @@ def _sub(tmp_path):
     return p
 
 
-def test_falls_back_to_rts_reset_then_explains_download_mode(tmp_path):
-    f = FakeCmds(connect_ok=("default-reset",))
+def _gap_after_first(n, mode):
+    """Chip answers the first connection, then not for 3 tries (operator re-pulsing), then answers."""
+    return n == 0 or n >= 4
+
+
+def test_second_connection_prompts_operator_then_continues(tmp_path):
+    f = FakeCmds(answers=lambda n, mode: _gap_after_first(n, mode))
+    prompts = []
+    with env(tmp_path, f):
+        r = LF.flash_levoit({"port": "/dev/ttyUSB0"}, ask=prompts.append)
+        assert r["status"] == "flashed"
+        assert prompts[0] and "EN" in prompts[0] and prompts[-1] is None, "asked once, then cleared"
+        ops = [e[0] for e in f.log]
+        assert ops.index("read") < ops.index("write")
+        assert ops.index("close") < ops.index("write"), "write happens on a NEW connection after the backup"
+
+
+def test_already_backed_up_needs_no_second_connection_or_prompt(tmp_path):
+    f = FakeCmds()
+    prompts = []
     with env(tmp_path, f):
         LF.flash_levoit({"port": "/dev/ttyUSB0"})
-        assert [e[1] for e in f.log if e[0] == "connect"] == ["no-reset", "default-reset"]
-    g = FakeCmds(connect_ok=())
-    with env(_sub(tmp_path), g):
+        f.log.clear()
+        f.calls = 0
+        f.answers = lambda n, mode: n == 0                           # only ONE connection would succeed
+        LF.flash_levoit({"port": "/dev/ttyUSB0"}, ask=prompts.append)
+        assert prompts == [] and not any(e[0] == "read" for e in f.log)
+
+
+def test_auto_reset_units_need_no_operator(tmp_path):
+    f = FakeCmds(answers=lambda n, mode: mode == "default-reset")    # RTS auto-reset works on this unit
+    prompts = []
+    with env(tmp_path, f):
+        LF.flash_levoit({"port": "/dev/ttyUSB0"}, ask=prompts.append)
+        assert prompts == [], "no prompt when auto-reset reaches the bootloader"
+        assert [e[1] for e in f.log if e[0] == "connect"][:2] == ["no-reset", "default-reset"]
+
+
+def test_never_answers_times_out_with_instructions(tmp_path):
+    g = FakeCmds(answers=lambda n, mode: False)
+    prompts = []
+    with env(tmp_path, g):
         try:
-            LF.flash_levoit({"port": "/dev/ttyUSB0"})
+            LF.flash_levoit({"port": "/dev/ttyUSB0"}, ask=prompts.append)
             raise AssertionError("expected FlashError")
         except LF.FlashError as e:
             assert "hold IO0" in str(e)
+        assert prompts[-1] is None and not any(e[0] in ("read", "write") for e in g.log)
+
+
+def test_swapped_board_during_prompt_is_refused(tmp_path):
+    other = (0xAA, 0xBB, 0xCC, 0xDD, 0xEE, 0xFF)
+    f = FakeCmds(answers=lambda n, mode: _gap_after_first(n, mode), macs=[MAC_BYTES, other])
+    with env(tmp_path, f):
+        with raises(LF.FlashError):
+            LF.flash_levoit({"port": "/dev/ttyUSB0"}, ask=lambda m: None)
+        assert not any(e[0] == "write" for e in f.log)
 
 
 def test_missing_or_mismatched_image_refused_before_touching_board(tmp_path):

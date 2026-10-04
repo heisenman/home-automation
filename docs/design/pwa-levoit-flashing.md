@@ -41,13 +41,18 @@ gets one ESPHome factory image and has no secret at all (it is a server-driven a
    is the wrong size, or is blank (all `0xFF`), **nothing is erased**. If a backup for that MAC already
    exists, it is reused rather than re-read: a re-flash of an already-converted unit must not overwrite the
    real OEM image with an ESPHome one.
-4. **One esptool session, manual download mode first.** CP210x RTS auto-reset failed on 2 of 3 units, so the
-   UI tells the operator to *hold IO0→GND, tap EN→GND* and then click Flash. The job connects with
-   `no-reset` first (the chip is already in the ROM bootloader), and only falls back to `default-reset`.
-   Backup, erase, write and verify all run on **one** connection through the esptool v5 Python API. Separate
-   CLI calls would each try to reset the chip, and a reset that works after the operator has let go of IO0
-   boots the OEM firmware mid-sequence. IO0 can be released once the bootloader is entered, because the strap
-   is latched at reset.
+4. **Every new connection checks first and asks the operator only if it has to** (Hugh, 2026-10-04: *"the
+   code checks connection and pings the user if needed at the beginning of any new communication with the
+   uC"*). CP210x RTS auto-reset failed on 2 of 3 units. So `_connect` tries `no-reset` (the chip is already in
+   download mode), then `default-reset` (RTS, which needs nobody on units where it works). If both fail, it
+   posts a prompt to the job record (the PWA shows *"hold IO0, tap EN"*) and keeps retrying for up to 3 min,
+   then carries on by itself. Pulsing RTS is safe whenever a connection opens, because nothing has been erased
+   yet. The backup and the write are **separate connections**: the backup's stub is left at the flash baud,
+   where a fresh sync can't reach it. So expect **one re-pulse between them** (Hugh: *"backup and re-flash won't
+   be a single step"*). A unit already backed up needs no second connection. The write connection re-reads the
+   MAC and refuses if a different chip answered.
+   *Rejected:* one esptool session for everything (it relied on the link surviving a 2-min read and a
+   re-sync), and two operator buttons (more clicks, and it still needs the same connection check).
 5. **The operator names the kind; the chip can't.** A Levoit's ESP32-C3 looks the same as our own bare
    `esp32c3` edge board. The panel asks *"What is this? Edge node | Levoit Vital 200S"*. Guards:
    - the chip must be an ESP32-C3 with 4 MB flash;
@@ -63,8 +68,10 @@ gets one ESPHome factory image and has no secret at all (it is a server-driven a
 ```
 Add device → Flash new hardware → Scan USB → "Levoit Vital 200S"
   → panel: "hold IO0→GND, tap EN→GND (IO0 can be let go after), then Flash"
-  → job: connect (no-reset → default-reset) → ESP32-C3 + 4 MB? → MAC not an edge node?
-         → OEM backup (or reuse existing) → erase → write generic factory image → hash-verified
+  → job: connect* → ESP32-C3 + 4 MB? → MAC not an edge node?
+         → OEM backup (skipped if one is on file) → connect* again (expect "re-pulse EN") → same MAC?
+         → erase → write generic factory image → hash-verified
+     * connect = no-reset → default-reset → else prompt the operator in the panel and keep retrying (3 min)
   → panel: "release IO0, unplug the programmer, reassemble, plug into mains"
   → unit boots as levoit-xxxxxx → appears in Standby hardware ONLY once on mains (no PM2.5 on programmer power)
   → Adopt into a room (existing ADR-0036 ESPHome intake) → pick automation source
@@ -86,7 +93,8 @@ cycle.
 ## 5. Verification
 
 Host tests: `tests/test_levoit_flash.py`, which mocks esptool and covers the backup gating, the backup reuse,
-the edge-MAC and wrong-chip refusals, the missing-image report, and the predicted name. The **live proof needs
+the edge-MAC and wrong-chip refusals, the missing-image report, the predicted name, the operator prompt
+(raised once, then cleared), auto-reset units needing no prompt, the timeout, and a swapped board. The **live proof needs
 the next physical Levoit**: flash it from the PWA, confirm `levoit-<mac6>/status online` on `192.168.1.200`,
 then on mains confirm it appears in Standby hardware and adopt it (CONFORMANCE §B R3 per-unit range check as
 usual). Recheck recipe: [runbook-device-verification.md](../runbook-device-verification.md).
@@ -97,4 +105,5 @@ usual). Recheck recipe: [runbook-device-verification.md](../runbook-device-verif
   not blanked; ESPHome then defaults it to the runtime name.
 - A unit on programmer power publishes fan/filter state but **no PM2.5**, so discovery's purifier signature
   (fan + PM2.5) does not match until it is on mains. This is correct behaviour.
-- Don't split the sequence across CLI calls; see decision 4.
+- Don't rely on the esptool CLI for this. Every CLI call ends in a hard reset, and with RTS unreliable that
+  means a re-pulse per call. The Python API keeps control of when a new connection happens.

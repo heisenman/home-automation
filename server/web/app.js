@@ -1761,7 +1761,8 @@ function AddDeviceModal({ onClose, onSaved }) {
             <p class="note sm">Unit <b>unplugged from mains</b>, programmer on the header (EN · GND · VCC 3.3V ·
               TXD · RXD · IO0). <b>Now:</b> hold <b>IO0→GND</b>, tap <b>EN→GND</b>, release EN — you can let go
               of IO0 too — then click Flash. The original firmware is backed up first (~2 min); nothing is
-              erased unless that backup succeeds. Wi-Fi and broker are built into the image; the unit names
+              erased unless that backup succeeds. Whenever the chip stops answering (expect it once, between the
+              backup and the write) this panel asks you to re-pulse EN and then continues by itself. Wi-Fi and broker are built into the image; the unit names
               itself from its MAC.</p>
             <button class="btn primary sm" disabled=${flashBusy || !flash.levoit?.ready || !flashPort}
               onClick=${doFlash}>${flashBusy ? "Flashing…" : "Back up + flash Levoit"}</button>
@@ -1792,6 +1793,8 @@ function AddDeviceModal({ onClose, onSaved }) {
             ${flashBusy ? "Flashing…" : `Flash ${flashNode || "board"}${board.needs_rotate ? " (rotate)" : ""}`}</button>
           `}
           ${flashJob && html`
+            ${flashJob.prompt && flashJob.status === "running" && html`<p class="err">👉 ${flashJob.prompt} —
+              waiting for the chip; it carries on by itself once it answers.</p>`}
             <div class="note sm mono flash-steps">
               ${(flashJob.steps || []).map((s) => html`<div>${s.split(" ").slice(1).join(" ")}</div>`)}
               ${flashJob.status === "done" && flashJob.report?.kind === "levoit" && html`<div><b>✓ flashed as

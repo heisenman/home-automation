@@ -113,7 +113,11 @@ def _worker(job_id: str) -> int:
             fspec = spec.get("flash") or {}
             if fspec.get("kind") == "levoit":           # ESPHome appliance — docs/design/pwa-levoit-flashing.md
                 from server.maintenance import levoit_flash as LF
-                report = LF.flash_levoit(fspec, progress=say)
+                def ask(msg):                      # operator prompt ("re-pulse EN"), shown big in the PWA
+                    rec.update(prompt=msg)
+                    _write(job_id, rec)
+
+                report = LF.flash_levoit(fspec, progress=say, ask=ask)
             else:
                 report = EF.flash_node(fspec, progress=say)
             rec.update(status="done", report=report, steps=list(steps), finished=_now())
