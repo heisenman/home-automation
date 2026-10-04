@@ -1295,6 +1295,9 @@ conductive resting on the enclosure.
 - Controller mode (v6, `0x11`): power 61.5 W (vs 63 W at the wall), CFM 92.2/92.5, RPM 2082/2306, supply
   temp raw 29.7 (probably °C — item 7 still open), filter 6.39e6 s, fault -1. Warning register reads `0`,
   not the `-1` the code treats as healthy — open.
+- **Mode WRITES (v7, `erv_mode`) — all six confirmed by the ERV's own re-read within ~4 s and by wall
+  power:** low 22 W/70 CFM · high 101 W/110 CFM · turbo 135 W/130 CFM · int 0 CFM (off-phase, 3 W wall) ·
+  off 0 RPM (3 W wall; the ERV's own `power_w` holds a stale 7.69 at standby) · med 59 W/92 CFM.
 7. Confirm temperature units (°C or °F) against a known reference — the component publishes the raw float
    with no conversion and no document states which.
 8. Confirm whether the recirculation damper (J6) is fitted before trusting mode `0x06`.

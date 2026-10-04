@@ -77,7 +77,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v6-hvac-ctrl"   // keep in step with the version.txt tag ota_edge_node.sh brands
+#define HA_FW_VERSION "v7-hvac-mode"   // keep in step with the version.txt tag ota_edge_node.sh brands
 #endif
 
 // ⛔ THE GATE. 1 = sniff only (v1–v5). 0 = this node IS the ERV's controller: it takes the token, owes a
@@ -150,6 +150,9 @@ static ha_broan_t  s_erv;
 static ha_dout_t   s_ovr;
 static esp_timer_handle_t s_ovr_backstop;
 static SemaphoreHandle_t  s_ovr_mu;
+// Guards s_erv. ha_broan is single-threaded by design; the bus task, the telemetry task and the MQTT
+// command handler (erv_mode pushes into its tx queue) all touch it.
+static SemaphoreHandle_t  s_erv_mu;
 static ha_config_t s_cfg;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
@@ -204,10 +207,10 @@ static const char *fan_mode_name(uint8_t m) {
 // settles the units is a deliberate one-time cost, taken while this node is still on the bench.
 static void census_report(void);
 
-static void publish_erv(void) {
-    char metrics[640], reg[96];
+// Builds the payload; caller holds s_erv_mu. Returns false when there is nothing to publish.
+static bool build_erv(char *metrics, size_t cap) {
     jsonbuf_t j;
-    jsonbuf_init(&j, metrics, sizeof metrics);
+    jsonbuf_init(&j, metrics, cap);
 
     uint8_t mode;
     if (fresh(BROAN_REG_FAN_MODE) && ha_broan_get_u8(&s_erv, BROAN_REG_FAN_MODE, &mode)) {
@@ -253,7 +256,7 @@ static void publish_erv(void) {
     // rather than never firing. Until the transceiver is on the bus this node has nothing to report,
     // and minting a `<node>-erv` device record with no measurement in it would put an empty reading in
     // the system of record. Liveness already lives on .../status and the sniff line on .../log.
-    if (!jsonbuf_any(&j)) return;
+    if (!jsonbuf_any(&j)) return false;
 
     // Token-based online can never be true while listening — the token goes to the wall control — so a
     // listen-only node reports whether the ERV's bus is alive instead.
@@ -265,8 +268,17 @@ static void publish_erv(void) {
     jsonbuf_add(&j, "\"listen_only\":%s", ha_rs485_is_listen_only(&s_bus) ? "true" : "false");
     jsonbuf_add(&j, "\"ovr_boost\":%s", gpio_get_level(OVR_RELAY_GPIO) ? "true" : "false");
 
-    if (!jsonbuf_finish(&j)) return;
+    return jsonbuf_finish(&j);
+}
 
+// Publishes OUTSIDE the lock: an MQTT publish can block, and the bus task must answer token offers
+// promptly — it is the ERV's controller now.
+static void publish_erv(void) {
+    char metrics[640], reg[96];
+    xSemaphoreTake(s_erv_mu, portMAX_DELAY);
+    bool ok = build_erv(metrics, sizeof metrics);
+    xSemaphoreGive(s_erv_mu);
+    if (!ok) return;
     snprintf(reg, sizeof reg, "%s-erv", s_cfg.node_id);
     ha_mqtt_publish_node_sensor_ex("erv", reg, "erv", "rs485", metrics);
 }
@@ -321,9 +333,10 @@ static void bus_task(void *arg) {
     for (;;) {
         int n = ha_rs485_read(&s_bus, rx, sizeof rx, BUS_READ_MS);
         uint32_t t = now_ms();
+        xSemaphoreTake(s_erv_mu, portMAX_DELAY);
         if (n > 0) ha_broan_rx(&s_erv, rx, (size_t)n, t);
-
         size_t len = ha_broan_next_tx(&s_erv, tx, sizeof tx, t);
+        xSemaphoreGive(s_erv_mu);
         if (len == 0) continue;
 
         // ha_broan_next_tx() is contracted to return 0 whenever listen_only is set. Reaching here with
@@ -354,7 +367,9 @@ static void telemetry_task(void *arg) {
         // A mode change publishes at once: a 20 s press of HIGH fell between two 30 s publishes on the
         // first characterization pass, and the mode is the one thing the wall control changes.
         uint8_t mode = 0xFF;
+        xSemaphoreTake(s_erv_mu, portMAX_DELAY);
         if (!ha_broan_get_u8(&s_erv, BROAN_REG_FAN_MODE, &mode)) mode = 0xFF;
+        xSemaphoreGive(s_erv_mu);
         bool mode_changed = (mode != last_mode);
         last_mode = mode;
         if (!primed || mode_changed || (uint32_t)(t - last_pub) >= TELEMETRY_MS) {
@@ -379,6 +394,7 @@ static void telemetry_task(void *arg) {
 // Which registers the wall control actually reads or writes, how often, and how long ago. Decides what a
 // listen-only node can honestly publish, and is the evidence for the poll list once we take the bus.
 static void census_report(void) {
+    xSemaphoreTake(s_erv_mu, portMAX_DELAY);
     char line[400];
     int n = snprintf(line, sizeof line, "regs:");
     uint16_t reg, hits;
@@ -386,6 +402,7 @@ static void census_report(void) {
     for (uint8_t i = 0; ha_broan_field_at(&s_erv, i, &reg, &hits, &upd) && n < (int)sizeof line - 24; i++)
         n += snprintf(line + n, sizeof line - n, " %04X x%u @%lus", reg, (unsigned)hits,
                       (unsigned long)((t - upd) / 1000));
+    xSemaphoreGive(s_erv_mu);
     ha_mqtt_log("%s", line);
 }
 
@@ -444,6 +461,31 @@ static bool on_cmd(const cJSON *cmd, void *user) {
         publish_erv();
         return true;
     }
+    if (strcmp(op->valuestring, "erv_mode") == 0) {
+        // Only modes whose wire value was matched live to the wall control's own button (design §7.2 log)
+        // plus standby. Override is refused by ha_broan itself; recirc/humidity/away/smart are unverified.
+        static const struct { const char *name; uint8_t v; } kModes[] = {
+            { "off", BROAN_FAN_OFF }, { "int", BROAN_FAN_INTERMITTENT }, { "low", BROAN_FAN_MIN },
+            { "med", BROAN_FAN_MANUAL }, { "high", BROAN_FAN_MAX }, { "turbo", BROAN_FAN_TURBO },
+        };
+        const cJSON *m = cJSON_GetObjectItem(cmd, "mode");
+        int v = -1;
+        for (size_t i = 0; cJSON_IsString(m) && i < sizeof kModes / sizeof kModes[0]; i++)
+            if (strcmp(m->valuestring, kModes[i].name) == 0) v = kModes[i].v;
+        bool ok = false;
+        if (v >= 0 && !ha_rs485_is_listen_only(&s_bus)) {
+            xSemaphoreTake(s_erv_mu, portMAX_DELAY);
+            ok = ha_broan_set_fan_mode(&s_erv, (uint8_t)v);
+            xSemaphoreGive(s_erv_mu);
+        }
+        // "queued" is all this can honestly say: the write goes out on our next token hold, and the ERV's
+        // reply is what confirms it — the next poll re-reads 00 20 and erv/adv publishes on the change.
+        ha_mqtt_log("hvac: erv_mode %s -> %s", cJSON_IsString(m) ? m->valuestring : "?",
+                    ok ? "queued" : v < 0 ? "REFUSED (off|int|low|med|high|turbo)"
+                                          : ha_rs485_is_listen_only(&s_bus) ? "REFUSED (listen-only build)"
+                                                                            : "REFUSED (queue full)");
+        return true;
+    }
     if (strcmp(op->valuestring, "erv_boost") == 0) {
         const cJSON *m = cJSON_GetObjectItem(cmd, "min");
         int minutes = cJSON_IsNumber(m) ? m->valueint : -1;
@@ -470,6 +512,7 @@ static void relay_init_safe(void) {
     ha_dout_init(&s_ovr, &(ha_dout_cfg_t){ .active_high = true, .max_on_ms = BOOST_MAX_MIN * 60000u + 2000u },
                  now_ms());
     s_ovr_mu = xSemaphoreCreateMutex();
+    s_erv_mu = xSemaphoreCreateMutex();
     esp_timer_create(&(esp_timer_create_args_t){ .callback = ovr_backstop_cb, .name = "ovr_backstop" },
                      &s_ovr_backstop);
 }

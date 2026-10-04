@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Sign + send a command to the Broan ERV node (hvac_c6) over the ADR-0010 signed channel.
 
+  python3 tools/erv_cmd.py mode med       # off | int | low | med | high | turbo  (over RS-485, v7+)
   python3 tools/erv_cmd.py boost 20     # close the OVR contact for 20 min (1..60) — ERV goes to max airflow
   python3 tools/erv_cmd.py boost 0      # release it now
   python3 tools/erv_cmd.py stats        # force a sniff + register census + telemetry publish
@@ -28,10 +29,15 @@ sys.path.insert(0, str(REPO / "tools"))
 import shade_cmd  # noqa: E402  (reads HA_NODE / HA_CMD_SECRET at import)
 
 
+MODES = ("off", "int", "low", "med", "high", "turbo")   # must match kModes[] in the node's on_cmd
+
+
 def main() -> None:
     a = sys.argv[1:]
     if a[:1] == ["boost"] and len(a) == 2 and a[1].isdigit() and 0 <= int(a[1]) <= 60:
         shade_cmd.send({"op": "erv_boost", "min": int(a[1])})
+    elif a[:1] == ["mode"] and len(a) == 2 and a[1] in MODES:
+        shade_cmd.send({"op": "erv_mode", "mode": a[1]})
     elif a == ["stats"]:
         shade_cmd.send({"op": "erv_stats"})
     else:
