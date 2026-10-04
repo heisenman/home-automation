@@ -70,6 +70,7 @@ static void field_store(ha_broan_t *b, const broan_tlv_t *t, uint32_t now_ms) {
     memset(f->raw, 0, sizeof(f->raw));
     if (t->data && f->len) memcpy(f->raw, t->data, f->len);
     f->updated_ms = now_ms;
+    if (f->hits < UINT16_MAX) f->hits++;
     f->valid = true;
 }
 
@@ -111,8 +112,23 @@ static void handle_frame(ha_broan_t *b, const broan_frame_t *f, uint32_t now_ms)
     b->seen_erv      = true;
     b->last_frame_ms = now_ms;
 
+    if (f->target < 32) b->stats.addrs_seen |= 1u << f->target;
+    if (f->sender < 32) b->stats.addrs_seen |= 1u << f->sender;
+
     if (f->len == 0) return;
     uint8_t op = f->payload[0];
+
+    switch (op) {
+    case BROAN_MSG_PING:        b->stats.op_ping++;        break;
+    case BROAN_MSG_PONG:        b->stats.op_pong++;        break;
+    case BROAN_MSG_TOKEN_OFFER: b->stats.op_token_offer++; break;
+    case BROAN_MSG_TOKEN_ACK:   b->stats.op_token_ack++;   break;
+    case BROAN_MSG_READ_REQ:    b->stats.op_read_req++;    break;
+    case BROAN_MSG_READ_RESP:   b->stats.op_read_resp++;   break;
+    case BROAN_MSG_WRITE_REQ:   b->stats.op_write_req++;   break;
+    case BROAN_MSG_WRITE_ACK:   b->stats.op_write_ack++;   break;
+    default:                    b->stats.op_other++;       break;
+    }
 
     // Register responses are harvested regardless of who they were addressed to. A listen-only build
     // parked beside the real wall control therefore collects genuine telemetry — the cheapest possible
@@ -121,6 +137,22 @@ static void handle_frame(ha_broan_t *b, const broan_frame_t *f, uint32_t now_ms)
         size_t cur = 1;
         broan_tlv_t t;
         while (broan_tlv_next(f->payload, f->len, &cur, &t)) field_store(b, &t, now_ms);
+    }
+
+    // Another controller's writes are harvested too. The wall control changes mode by WRITING 0x0020 and
+    // need never read it back, so a cache fed only by read responses keeps the mode it first saw for as
+    // long as the node runs (observed 2026-10-04: "max" reported for minutes after the LCD said MED).
+    // Taken at the request rather than at the ack: the ack carries no values, and the next read
+    // response — if the wall control ever makes one — corrects a write the ERV refused. Our own writes
+    // are excluded; the WRITE_ACK path below invalidates those so a sweep re-reads them.
+    if (op == BROAN_MSG_WRITE_REQ && f->target == b->cfg.erv_addr &&
+        (b->cfg.listen_only || f->sender != b->cfg.our_addr)) {
+        size_t cur = 1;
+        broan_tlv_t t;
+        while (broan_tlv_next(f->payload, f->len, &cur, &t)) {
+            field_store(b, &t, now_ms);
+            b->stats.writes_observed++;
+        }
     }
 
     // Everything below is session state and only applies to frames aimed at us.
@@ -401,6 +433,19 @@ bool ha_broan_have_token(const ha_broan_t *b) {
 bool ha_broan_online(const ha_broan_t *b, uint32_t now_ms) {
     if (!b || !b->inited || !b->seen_erv) return false;
     return !elapsed(now_ms, b->last_token_ms, b->cfg.control_timeout_ms);
+}
+
+bool ha_broan_bus_alive(const ha_broan_t *b, uint32_t now_ms, uint32_t window_ms) {
+    if (!b || !b->inited || !b->seen_erv) return false;
+    return (uint32_t)(now_ms - b->last_frame_ms) < window_ms;
+}
+
+bool ha_broan_field_at(const ha_broan_t *b, uint8_t i, uint16_t *reg, uint16_t *hits, uint32_t *updated_ms) {
+    if (!b || i >= b->nfields) return false;
+    if (reg) *reg = b->fields[i].reg;
+    if (hits) *hits = b->fields[i].hits;
+    if (updated_ms) *updated_ms = b->fields[i].updated_ms;
+    return true;
 }
 
 uint32_t ha_broan_e50_exposure_ms(const ha_broan_t *b, uint32_t now_ms) {

@@ -280,6 +280,34 @@ int main(void) {
               ha_broan_get_f32(&c, BROAN_REG_POWER_W, &f) && f == 72.5f);
     }
 
+    // …and another controller's WRITES. The wall control changes mode by writing 0x0020 and need never read
+    // it back, so without this the cache keeps the first mode it saw (live, 2026-10-04: "max" long after MED).
+    {
+        uint8_t m = 0;
+        const uint8_t to_max[] = { 0x21, 0x00, 0x20, 0x01, BROAN_FAN_MAX };
+        const uint8_t wr_med[] = { 0x40, 0x00, 0x20, 0x01, BROAN_FAN_MANUAL };
+        uint8_t frame[BROAN_MAX_FRAME];
+        int n = broan_encode(frame, sizeof frame, 0x14, BROAN_ADDR_ERV, to_max, sizeof to_max);
+        ha_broan_rx(&c, frame, (size_t)n, t);
+        check("mode from a read response", ha_broan_get_u8(&c, BROAN_REG_FAN_MODE, &m) && m == BROAN_FAN_MAX);
+        n = broan_encode(frame, sizeof frame, BROAN_ADDR_ERV, 0x14, wr_med, sizeof wr_med);
+        ha_broan_rx(&c, frame, (size_t)n, t + 10);
+        check("mode follows an observed write", ha_broan_get_u8(&c, BROAN_REG_FAN_MODE, &m) && m == BROAN_FAN_MANUAL);
+        check("  age resets on the write", ha_broan_age_ms(&c, BROAN_REG_FAN_MODE, t + 10) == 0);
+
+        // A write aimed at something other than the ERV is not a fact about the ERV.
+        const uint8_t wr_off[] = { 0x40, 0x00, 0x20, 0x01, BROAN_FAN_OFF };
+        n = broan_encode(frame, sizeof frame, 0x15, 0x14, wr_off, sizeof wr_off);
+        ha_broan_rx(&c, frame, (size_t)n, t + 20);
+        check("  ignores writes not to the ERV", ha_broan_get_u8(&c, BROAN_REG_FAN_MODE, &m) && m == BROAN_FAN_MANUAL);
+
+        ha_broan_get_stats(&c, &st);
+        check("census counts the ops", st.op_read_resp >= 2 && st.op_write_req == 2 && st.writes_observed == 1);
+        check("census sees addresses", (st.addrs_seen & (1u << 0x14)) && (st.addrs_seen & (1u << BROAN_ADDR_ERV)));
+        check("listen-only: bus alive", ha_broan_bus_alive(&c, t + 30, 1000));
+        check("  …and not after silence", !ha_broan_bus_alive(&c, t + 5000, 1000));
+    }
+
     // ── stream robustness ─────────────────────────────────────────────────────
     sim_init(&s); t = 1000;
     ha_broan_init(&c, NULL, t);

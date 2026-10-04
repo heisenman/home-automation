@@ -54,6 +54,7 @@ typedef struct {
     uint8_t  len;
     uint8_t  raw[4];
     uint32_t updated_ms;
+    uint16_t hits;           // times this register was seen (read response or observed write) — census
     bool     valid;
 } ha_broan_field_t;
 
@@ -68,6 +69,13 @@ typedef struct {
     uint32_t writes_dropped;    // queue full
     uint32_t reply_timeouts;
     uint32_t control_timeouts;  // ERV stopped yielding the token
+
+    // Bus census — every decoded frame, whoever it was addressed to. This is how a listen-only node
+    // proves what the wall control actually does on the wire instead of us inferring it.
+    uint32_t op_ping, op_pong, op_token_offer, op_token_ack;
+    uint32_t op_read_req, op_read_resp, op_write_req, op_write_ack, op_other;
+    uint32_t writes_observed;   // another controller's write requests harvested into the cache
+    uint32_t addrs_seen;        // bitmap of sender/target addresses 0..31
 } ha_broan_stats_t;
 
 typedef struct { uint8_t buf[HA_BROAN_MSG_MAX]; uint8_t len; } ha_broan_msg_t;
@@ -137,7 +145,14 @@ uint32_t ha_broan_age_ms(const ha_broan_t *b, uint16_t reg, uint32_t now_ms);
 // ── health ────────────────────────────────────────────────────────────────────
 bool ha_broan_have_token(const ha_broan_t *b);
 // True once the ERV has been heard from and is still yielding the token within control_timeout_ms.
+// ⚠ Token-based, so it can never be true on a listen-only node — use ha_broan_bus_alive() there.
 bool ha_broan_online(const ha_broan_t *b, uint32_t now_ms);
+
+// True if any valid frame was decoded within window_ms. The liveness signal for a listen-only node.
+bool ha_broan_bus_alive(const ha_broan_t *b, uint32_t now_ms, uint32_t window_ms);
+
+// Register census for diagnostics: the i-th cached register, or false past the end.
+bool ha_broan_field_at(const ha_broan_t *b, uint8_t i, uint16_t *reg, uint16_t *hits, uint32_t *updated_ms);
 // Milliseconds since our last heartbeat landed. Compare against control_timeout_ms to see how close the
 // unit is to E50. Returns 0 before the first heartbeat (nothing owed yet — we have not taken the bus).
 uint32_t ha_broan_e50_exposure_ms(const ha_broan_t *b, uint32_t now_ms);

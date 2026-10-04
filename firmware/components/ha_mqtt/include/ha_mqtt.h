@@ -63,6 +63,9 @@ void ha_mqtt_publish_reply(const char *reqid, const char *payload);
 // segment, `reg_key` = registry lookup key in the payload "mac" field, transport tagged "i2c-local".
 void ha_mqtt_publish_node_sensor(const char *key, const char *reg_key,
                                  const char *device_type, const char *metrics_json);
+// Same, with an honest transport tag ("rs485", "gpio", …) for nodes that are not I2C.
+void ha_mqtt_publish_node_sensor_ex(const char *key, const char *reg_key, const char *device_type,
+                                    const char *transport, const char *metrics_json);
 
 // Publish a mesh reach census (ADR-0023) to home/edge/<node>/reach. `reach_json` is a pre-formed JSON
 // ARRAY from ha_reach; this wraps it with schema/node/ts.

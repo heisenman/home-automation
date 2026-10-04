@@ -75,7 +75,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v1-hvac-listen"
+#define HA_FW_VERSION "v2-hvac-census"   // keep in step with the version.txt tag ota_edge_node.sh brands
 #endif
 
 // ⛔ THE GATE. 1 = sniff only, and that is the only value this node has ever been run with. Setting it
@@ -105,6 +105,13 @@ static const char *TAG = "ha_hvac";
 #define BUS_READ_MS       50            // read timeout; also this task's idle tick
 #define TELEMETRY_MS   30000
 #define SNIFF_REPORT_MS 15000           // bring-up diagnostic cadence
+#define CENSUS_REPORT_MS 60000          // register census (which registers the wall control touches)
+
+// A cached register older than this is OMITTED, not republished. In listen-only we only know what the
+// wall control happens to read or write, and a mode changed at the ERV's own LCD never crosses the bus —
+// so a value nobody has touched for a while is a guess, and the system of record takes measurements.
+#define FIELD_STALE_MS  (15u * 60u * 1000u)
+#define BUS_ALIVE_MS    5000u           // listen-only "online": a valid frame within this window
 
 static ha_rs485_t  s_bus;
 static ha_broan_t  s_erv;
@@ -117,16 +124,18 @@ static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 // a register that has never arrived must not be published as 0 (that is fabricated data in the system of
 // record), and BROAN_REG_TEMP_EXHAUST reads NaN on units without the second thermistor — "nan" is not
 // valid JSON and would poison the whole payload, not just that field.
+static bool fresh(uint16_t reg) { return ha_broan_age_ms(&s_erv, reg, now_ms()) < FIELD_STALE_MS; }
+
 static void jb_f32(jsonbuf_t *j, const char *name, uint16_t reg) {
     float v;
-    if (!ha_broan_get_f32(&s_erv, reg, &v)) return;
+    if (!fresh(reg) || !ha_broan_get_f32(&s_erv, reg, &v)) return;
     if (isnan(v) || isinf(v)) return;      // no 2nd thermistor, or a register we misread
     jsonbuf_add(j, "\"%s\":%.2f", name, v);
 }
 
 static void jb_i32(jsonbuf_t *j, const char *name, uint16_t reg) {
     int32_t v;
-    if (!ha_broan_get_i32(&s_erv, reg, &v)) return;
+    if (!fresh(reg) || !ha_broan_get_i32(&s_erv, reg, &v)) return;
     jsonbuf_add(j, "\"%s\":%ld", name, (long)v);
 }
 
@@ -156,13 +165,15 @@ static const char *fan_mode_name(uint8_t m) {
 // UNRESOLVED (ADR-0041 open question #6) and the component does no conversion. A field named
 // `supply_temp` would be charted as °C by the first person to see it. Renaming these once §7.2 step 5
 // settles the units is a deliberate one-time cost, taken while this node is still on the bench.
+static void census_report(void);
+
 static void publish_erv(void) {
     char metrics[512], reg[96];
     jsonbuf_t j;
     jsonbuf_init(&j, metrics, sizeof metrics);
 
     uint8_t mode;
-    if (ha_broan_get_u8(&s_erv, BROAN_REG_FAN_MODE, &mode)) {
+    if (fresh(BROAN_REG_FAN_MODE) && ha_broan_get_u8(&s_erv, BROAN_REG_FAN_MODE, &mode)) {
         jsonbuf_add(&j, "\"fan_mode\":%u", (unsigned)mode);
         jsonbuf_add(&j, "\"fan_mode_name\":\"%s\"", fan_mode_name(mode));
     }
@@ -180,11 +191,11 @@ static void publish_erv(void) {
     // Fault/warning read -1 when healthy. Publish the raw code AND the interpretation, so a dashboard
     // never has to know that -1 is the good value.
     int32_t code;
-    if (ha_broan_get_i32(&s_erv, BROAN_REG_FAULT, &code)) {
+    if (fresh(BROAN_REG_FAULT) && ha_broan_get_i32(&s_erv, BROAN_REG_FAULT, &code)) {
         jsonbuf_add(&j, "\"fault_code\":%ld", (long)code);
         jsonbuf_add(&j, "\"fault_ok\":%s", broan_code_is_ok(code) ? "true" : "false");
     }
-    if (ha_broan_get_i32(&s_erv, BROAN_REG_WARNING, &code)) {
+    if (fresh(BROAN_REG_WARNING) && ha_broan_get_i32(&s_erv, BROAN_REG_WARNING, &code)) {
         jsonbuf_add(&j, "\"warning_code\":%ld", (long)code);
         jsonbuf_add(&j, "\"warning_ok\":%s", broan_code_is_ok(code) ? "true" : "false");
     }
@@ -195,7 +206,11 @@ static void publish_erv(void) {
     // the system of record. Liveness already lives on .../status and the sniff line on .../log.
     if (!jsonbuf_any(&j)) return;
 
-    jsonbuf_add(&j, "\"online\":%s", ha_broan_online(&s_erv, now_ms()) ? "true" : "false");
+    // Token-based online can never be true while listening — the token goes to the wall control — so a
+    // listen-only node reports whether the ERV's bus is alive instead.
+    bool online = ha_rs485_is_listen_only(&s_bus) ? ha_broan_bus_alive(&s_erv, now_ms(), BUS_ALIVE_MS)
+                                                  : ha_broan_online(&s_erv, now_ms());
+    jsonbuf_add(&j, "\"online\":%s", online ? "true" : "false");
     // Lets a consumer tell data harvested from the wall control apart from data we polled for
     // ourselves, without having to know which firmware is on the node.
     jsonbuf_add(&j, "\"listen_only\":%s", ha_rs485_is_listen_only(&s_bus) ? "true" : "false");
@@ -203,7 +218,7 @@ static void publish_erv(void) {
     if (!jsonbuf_finish(&j)) return;
 
     snprintf(reg, sizeof reg, "%s-erv", s_cfg.node_id);
-    ha_mqtt_publish_node_sensor("erv", reg, "erv", metrics);
+    ha_mqtt_publish_node_sensor_ex("erv", reg, "erv", "rs485", metrics);
 }
 
 // ── bring-up diagnostic ───────────────────────────────────────────────────────
@@ -235,6 +250,12 @@ static void sniff_report(void) {
                 (unsigned long long)t.rx_bytes, (unsigned long)b.frames_rx, (unsigned long)b.frames_bad,
                 (unsigned long)b.pings, (unsigned long)b.tokens, (unsigned long)t.writes_refused,
                 verdict);
+    ha_mqtt_log("census: ping=%lu pong=%lu tok_offer=%lu tok_ack=%lu rd_req=%lu rd_resp=%lu wr_req=%lu "
+                "wr_ack=%lu other=%lu | writes_harvested=%lu | addrs=0x%08lx",
+                (unsigned long)b.op_ping, (unsigned long)b.op_pong, (unsigned long)b.op_token_offer,
+                (unsigned long)b.op_token_ack, (unsigned long)b.op_read_req, (unsigned long)b.op_read_resp,
+                (unsigned long)b.op_write_req, (unsigned long)b.op_write_ack, (unsigned long)b.op_other,
+                (unsigned long)b.writes_observed, (unsigned long)b.addrs_seen);
     ESP_LOGI(TAG, "sniff: rx=%llu B frames=%lu bad=%lu | %s",
              (unsigned long long)t.rx_bytes, (unsigned long)b.frames_rx, (unsigned long)b.frames_bad,
              verdict);
@@ -274,7 +295,7 @@ static void bus_task(void *arg) {
 
 static void telemetry_task(void *arg) {
     (void)arg;
-    uint32_t last_pub = 0, last_sniff = 0;
+    uint32_t last_pub = 0, last_sniff = 0, last_census = 0;
     bool primed = false;
 
     for (;;) {
@@ -290,8 +311,25 @@ static void telemetry_task(void *arg) {
             if (ha_mqtt_is_connected()) sniff_report();
             last_sniff = t;
         }
+        if ((uint32_t)(t - last_census) >= CENSUS_REPORT_MS) {
+            if (ha_mqtt_is_connected()) census_report();
+            last_census = t;
+        }
         vTaskDelay(pdMS_TO_TICKS(1000));
     }
+}
+
+// Which registers the wall control actually reads or writes, how often, and how long ago. Decides what a
+// listen-only node can honestly publish, and is the evidence for the poll list once we take the bus.
+static void census_report(void) {
+    char line[400];
+    int n = snprintf(line, sizeof line, "regs:");
+    uint16_t reg, hits;
+    uint32_t upd, t = now_ms();
+    for (uint8_t i = 0; ha_broan_field_at(&s_erv, i, &reg, &hits, &upd) && n < (int)sizeof line - 24; i++)
+        n += snprintf(line + n, sizeof line - n, " %04X x%u @%lus", reg, (unsigned)hits,
+                      (unsigned long)((t - upd) / 1000));
+    ha_mqtt_log("%s", line);
 }
 
 // ── commands ──────────────────────────────────────────────────────────────────
@@ -304,6 +342,7 @@ static bool on_cmd(const cJSON *cmd, void *user) {
 
     if (strcmp(op->valuestring, "erv_stats") == 0) {
         sniff_report();
+        census_report();
         publish_erv();
         return true;
     }
