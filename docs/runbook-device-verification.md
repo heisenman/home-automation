@@ -119,7 +119,7 @@ E50 is a warning that self-clears when the controller returns (design §1.8).
 **Re-check:**
 ```sh
 S=$(mktemp)   # write to a file, then read it (grep|head under timeout loses output)
-timeout 40 mosquitto_sub -h 192.168.1.200 -v -t 'home/edge/hvac_c6/#' -t 'home/attic/erv_pm/state' > $S
+timeout 40 mosquitto_sub -h 192.168.1.200 -v -t 'home/edge/hvac_c6/#' -T 'home/edge/hvac_c6/hello' -t 'home/attic/erv_pm/state' > $S   # -T: hello carries the MAC
 grep -E 'status|census|erv/adv' $S | tail -4; grep power_w $S | tail -2
 ```
 
