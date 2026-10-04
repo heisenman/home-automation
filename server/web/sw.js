@@ -1,6 +1,6 @@
 // Service worker — caches the app SHELL only (so the UI loads offline), never the API.
 // Live device state always goes to the network; if the box is unreachable the app shows last-known.
-const CACHE = "ha-shell-v56";   // v56: Flash new hardware → "Levoit Vital 200S" kind (generic ESPHome image + OEM backup)
+const CACHE = "ha-shell-v57";   // v57: Levoit flash — operator prompt "re-pulse EN" (v56: Levoit Vital 200S flash kind)
 const SHELL = [
   "/app/", "/app/index.html", "/app/app.js", "/app/push.js", "/app/styles.css",
   "/app/vendor/preact-htm.standalone.module.js", "/app/manifest.webmanifest", "/app/icon.svg",
