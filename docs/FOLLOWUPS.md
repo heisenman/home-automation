@@ -7,6 +7,23 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 🔴 2026-10-04 — ha-2 FAILOVER (on .210, `~/ha-airgap-standby`) is stale: code AND registry
+
+Found at the 10-04 checkpoint while syncing the day's work. The **ha-2 dictator** is current: every file changed
+today was copied with scp and md5-verified, the API restarted under `.maintenance-fit`, and the VIP was held. The
+**failover instance on .210** is not current:
+- **Code:** HEAD `edc61ee`, **245 commits behind** origin/main, plus ~20 surgically patched files
+  (`git status` there). Example: its `server/api/control.py` = `ead521f`, which predates the 10-01 ESPHome intake.
+- **Registry:** `instance/control.yaml` was last written 2026-08-02 and `levoit-devices.yaml` 2026-07-08. Neither has
+  `purifier_c_office` or `purifier_c_bed`. **No `sync-standby` timer exists for the ha-ag stack**, and nothing
+  else keeps `failover/dictator-files.manifest` rows fresh there.
+- **Impact:** if ha-2 fails over, both new purifiers are quarantined as unregistered, and control runs code
+  from before 10-01.
+
+**Fix (own window, not a hurried patch):** reconcile the standby checkout to main without losing its box-local
+failover customizations (diff the ~20 modified files first; [[airgap-checkout-drift]]). Then install a periodic
+`sync-standby.sh` for the ha-ag stack, and re-run `cluster-doctor`.
+
 ## 🟡 2026-10-04 — Levoit: flash from the PWA (BUILT, awaiting the next physical unit)
 
 **Add device → Flash new hardware → "Levoit Vital 200S purifier"** is live on .210. It writes one generic ESPHome
