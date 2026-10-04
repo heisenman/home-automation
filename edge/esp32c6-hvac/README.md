@@ -64,6 +64,8 @@ application-layer, so none of them exists yet when the ROM bootloader is talking
 `uart_set_pin()` relocates the console *along with* UART0, so choosing `UART_NUM_0` re-creates the same
 hazard on any pins. Use `UART_NUM_1`.
 
+**Bench-test the board first:** [`bench/`](bench/README.md) checks the relay, TX and RX before any of this is landed.
+
 ## Reading the sniff report
 
 The two ways this wiring fails look identical to "the ERV is quiet" unless you watch the byte counters,

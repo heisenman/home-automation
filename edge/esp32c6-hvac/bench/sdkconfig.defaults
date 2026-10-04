@@ -1,0 +1,11 @@
+CONFIG_IDF_TARGET="esp32c6"
+# Console on USB-Serial-JTAG so the host tool can both read and type. The bench never has a bus attached,
+# so the ROM banner on UART0 (D6/D7) is harmless here — but RS-485 is still on UART_NUM_1 to match the node.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+# Same partition table as the node, so the node's NVS (node-born cmd secret, ADR-0036) sits where it
+# always does. This image never initialises NVS, so reflashing the node image afterwards finds it intact.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
