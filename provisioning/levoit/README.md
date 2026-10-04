@@ -52,6 +52,13 @@ readback of a physical touch-panel ON → hot.db within 1 s; PWA control fan spe
 the unit + in hot.db), display LED on. Adopted via PWA Standby hardware (ADR-0036 amendment); automation left
 disabled with no source (inert policy) until a source sensor is chosen.
 
+**levoit-c-bed verified live 2026-10-04:** MCU link (fw 2.0.4, error Ok, PM2.5 reading), canonical
+`home/c_bed/purifier_c_bed/state` publishing; adopted + automation created by Hugh from the PWA. RTS auto-reset
+failed again on the flash (2 of 3 units) — treat manual IO0/EN as the normal path.
+**Gotcha:** on programmer power (3.3 V only) the purifier MCU is off, so no `pm_2_5` is published and the unit
+does NOT appear in Standby hardware (classifier needs fan + PM2.5, `server/ingest/esphome_discovery.py`). It
+shows up seconds after it is on mains. Not a fault.
+
 **Adding a unit:** copy a thin file (≈20 lines — identity only, never the body), add `ota_password_<room>`
 (`openssl rand -hex 16`) to `secrets.yaml`, back up OEM to `instance/oem-backups/` on .210 (git-ignored),
 compile → serial flash → verify `<name>/status online` on `192.168.1.200` → reassemble on mains → **PWA → Add device → Standby hardware → pick the unit → Adopt into a room** (writes the secret +
