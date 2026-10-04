@@ -218,12 +218,15 @@ terminal block. Not RJ45.
 | `OVR` | Override input (aux wall control / dry contact) | **Fallback path — §1.9** |
 | `LED` | LED status return to aux control | unused |
 | `12V` | 12 VDC isolated, PTC-protected | ⛔ see hazard 2 |
-| `D-` | RS-485 differential − | → adapter **A** |
-| `D+` | RS-485 differential + | → adapter **B** |
+| `D-` | RS-485 differential − | → Waveshare **B-** |
+| `D+` | RS-485 differential + | → Waveshare **A+** |
 | `GND` | Isolated ground | → adapter GND |
 
-**Polarity is counterintuitive: `D+` → `B`, `D-` → `A`.** Upstream: *"Somewhat confusingly, A is D- and B
-is D+."* Getting it backwards is non-destructive — it presents as `"Alignment: Unexpected XX"` log spew.
+**Polarity — CONFIRMED live 2026-10-04: Waveshare `A+` → `D+`, `B-` → `D-` (straight through).** Upstream says
+*"Somewhat confusingly, A is D- and B is D+"* — that is true of *their* adapter's A/B naming, not of the Waveshare
+TTL TO RS485 (C), whose `A+` is the line that idles positive (bench: A+−B- = +3.4 V idle, −3.5 V driven low). Wired
+per upstream, our node heard 15 KB with `frames=0`; swapped, it decoded at once. Vendors disagree on A/B — trust the
+`+`/`−` marks and the node's sniff verdict. Backwards is non-destructive.
 
 #### ⚠️ Hazards
 
@@ -1188,8 +1191,8 @@ On hand 2026-09-22. Already named as auto-direction in `ha_rs485.h:24-26`.
 | `GND` | XIAO `GND` | TTL side only |
 | `RXD` | **D10 (GPIO18)** — C6 TX | crossover; see the swap test below |
 | `TXD` | **D9 (GPIO20)** — C6 RX | |
-| `A+` | Broan J9 **`D-`** | ⚠️ `D+`→`B-`, `D-`→`A+`. Counterintuitive but correct; backwards is non-destructive and just logs `Alignment: Unexpected XX` |
-| `B-` | Broan J9 **`D+`** | |
+| `A+` | Broan J9 **`D+`** | + to +. CONFIRMED live 2026-10-04 (the earlier "A+→D-" from upstream gave `frames=0`); backwards is non-destructive |
+| `B-` | Broan J9 **`D-`** | |
 | `PE` | Broan J9 `GND` | Waveshare wiki calls `PE` *"RS485 Signal Ground"* — the **isolated**-side reference, not a chassis/shield terminal |
 
 - ⛔ **Galvanically isolated — do not bond XIAO `GND` to Broan `GND`.** Digital isolator plus an onboard

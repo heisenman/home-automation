@@ -41,8 +41,8 @@ XIAO 3V3          ───────>                            VCC     ⚠�
 XIAO GND          ───────>                            GND
 XIAO D8  (GPIO19) ───────> OVR relay IN                       active-high, 10k pull-down, NO contact
 
-Waveshare A+ ──> Broan J9 `D-`      ⚠️ inverted, and correct
-Waveshare B- ──> Broan J9 `D+`
+Waveshare A+ ──> Broan J9 `D+`      straight through: + to + (live-verified 2026-10-04)
+Waveshare B- ──> Broan J9 `D-`
 Waveshare PE ──> Broan J9 `GND`     Waveshare calls PE "RS485 Signal Ground"
 ```
 
@@ -74,7 +74,7 @@ so the node interprets them itself and publishes the verdict to `home/edge/<node
 | Symptom | Verdict |
 |---|---|
 | `rx=0 B` | Not hearing the bus at all. The Waveshare wiki's `RXD`/`TXD` labels are ambiguous — move the data-out wire to the other TTL pad. Then check A+/B-/PE are landed. |
-| bytes, `frames=0` | **A/B swapped** (or wrong baud). Non-destructive; just swap them. |
+| bytes, `frames=0` | **A/B swapped** (or wrong baud). Non-destructive; just swap them. This is exactly what the old "A+→D-" instruction produced on the first install. |
 | high `bad` rate | Marginal bus — a third terminator, or a noisy ground reference. |
 | `frames>0`, low `bad` | Working. |
 

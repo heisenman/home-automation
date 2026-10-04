@@ -35,7 +35,7 @@ Then wire per `edge/esp32c6-hvac/README.md` and read the sniff verdict:
 | Symptom | Meaning |
 |---|---|
 | `rx=0 B` | Not hearing the bus. Move the transceiver's data-out to the other TTL pad — Waveshare's `RXD`/`TXD` labels are ambiguous and crossover is only the *likely* reading. |
-| bytes, `frames=0` | **A/B swapped.** `D+`→`B-`, `D-`→`A+`. Non-destructive. |
+| bytes, `frames=0` | **A/B swapped.** Correct is `D+`→`A+`, `D-`→`B-` (corrected 2026-10-04). Non-destructive. |
 | high `bad` rate | Marginal bus — a third terminator, or a noisy ground reference. |
 | `frames>0`, low `bad` | Working. Telemetry starts appearing on `erv/adv`. |
 

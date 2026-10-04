@@ -16,7 +16,7 @@
 //
 //   XIAO D10 (GPIO18) ──TX──> Waveshare TTL TO RS485 (C) RXD        3V3 -> VCC   (NOT 5V: C6 GPIOs
 //   XIAO D9  (GPIO20) <─RX─── Waveshare TTL TO RS485 (C) TXD        GND -> GND    are not 5V tolerant)
-//   Waveshare A+ -> Broan J9 D-    B- -> J9 D+    PE -> J9 GND      (note the A/B inversion)
+//   Waveshare A+ -> Broan J9 D+    B- -> J9 D-    PE -> J9 GND      (+ to +; live-verified 2026-10-04)
 //   XIAO D8  (GPIO19) ────────> OVR relay IN (active-high, 10k pull-down) — NEVER asserted in this build
 //
 // ⛔ RS-485 is on UART_NUM_1 and GPIO18/20 for a SAFETY reason, not an ergonomic one. UART0 is this
@@ -222,8 +222,8 @@ static void sniff_report(void) {
                   "on D9/GPIO20 (the wiki's RXD/TXD labels are ambiguous — try the other TTL pad), then "
                   "that A+/B- are landed on J9 and PE on J9 GND.";
     } else if (b.frames_rx == 0) {
-        verdict = "BYTES BUT ZERO VALID FRAMES — almost certainly A/B swapped (J9 D+ goes to B-, D- goes "
-                  "to A+), or the baud is wrong. Swapping A/B is non-destructive.";
+        verdict = "BYTES BUT ZERO VALID FRAMES — almost certainly A/B swapped (J9 D+ goes to A+, D- goes "
+                  "to B-), or the baud is wrong. Swapping A/B is non-destructive.";
     } else if (b.frames_bad > b.frames_rx / 4) {
         verdict = "FRAMES DECODING, BUT A HIGH REJECT RATE — suspect a marginal bus (did a third "
                   "termination resistor get added?) or a noisy ground reference.";
