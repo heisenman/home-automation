@@ -42,7 +42,7 @@ devices:
     manual: true
     traits:
       mode:
-        values: {off: 1, int: 8, low: 9, med: 11, high: 10, turbo: 12}
+        values: {"off": 1, "int": 8, "low": 9, "med": 11, "high": 10, "turbo": 12}   # quote "off": YAML 1.1 reads it as False
         labels: {int: Intermittent}
         safe: med
         label: Ventilation
