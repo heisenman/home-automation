@@ -10,7 +10,8 @@
 #   zone:  h_suite | c_suite | common | circulation | utility | exterior | none
 #          (first-class: rollups + house-scenes target a whole zone)
 #   type:  kitchen | living | bedroom | bathroom | office | dining | entry |
-#          closet | mechanical | circulation | porch | monolithic
+#          closet | mechanical | circulation | porch | monolithic | outdoor
+#          (outdoor = outside the envelope, its own `level: outdoor`, zone exterior — fresh-air/weather sensors)
 #
 # Load-bearing choices (ADR-0026 / ops review): zone is first-class not a tag; closets are
 # their own addressable id; non-room areas are allowed via `type` (e.g. a network rack);
