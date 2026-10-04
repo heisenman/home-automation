@@ -74,6 +74,13 @@ METRIC_CATALOG: dict[str, dict] = {
     "gas_ohm":       {"label": "Gas resistance", "unit": "Ω",  "color": "#2dd4bf", "precision": 0, "graph": True},
     "power_w":       {"label": "Power",       "unit": "W",     "color": "#f59e0b", "precision": 0, "graph": True},
     "energy_today_kwh": {"label": "Energy today", "unit": "kWh", "color": "#eab308", "precision": 2, "graph": True},
+    # ERV (Broan over RS-485, hvac_c6 — ADR-0041). power_w above is shared with the energy meters.
+    "supply_cfm":    {"label": "Supply airflow",  "unit": "CFM", "color": "#38bdf8", "precision": 0, "graph": True},
+    "exhaust_cfm":   {"label": "Exhaust airflow", "unit": "CFM", "color": "#818cf8", "precision": 0, "graph": True},
+    "supply_rpm":    {"label": "Supply fan",      "unit": "RPM", "color": "#7dd3fc", "precision": 0, "graph": True},
+    "exhaust_rpm":   {"label": "Exhaust fan",     "unit": "RPM", "color": "#a5b4fc", "precision": 0, "graph": True},
+    # Raw on purpose: °C vs °F is unconfirmed (design §7.2 item 7) — no unit until it is.
+    "supply_temp_raw": {"label": "Supply air (raw)", "unit": "", "color": "#fca5a5", "precision": 1, "graph": True},
 }
 
 

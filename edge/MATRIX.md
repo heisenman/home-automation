@@ -18,7 +18,7 @@ Which module each **real firmware build** links. Pairs with [MODULES.md](MODULES
 | `app_main` | fork | fork | fork | fork | fork | fork | fork |
 | `ha_rs485` | — | — | — | — | shared | — | — |
 | `ha_broan` | — | — | — | — | shared | — | — |
-| `ha_dout` | — | — | — | shared | — | — | — |
+| `ha_dout` | — | — | — | shared | shared | — | — |
 | `ha_gaposa` | — | — | — | shared | — | — | — |
 | `ha_config` | shared | shared | shared | shared | shared | shared | shared |
 | `ha_wifi` | shared | shared | shared | shared | shared | shared | — |

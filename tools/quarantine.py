@@ -99,7 +99,8 @@ def cmd_merge(store: QuarantineStore, args) -> int:
         print(f"unknown source {args.source!r} (expected: {', '.join(_REGISTRIES)})")
         return 2
     rep = store.merge(args.source, args.identity, device_id=args.device_id, area=args.area,
-                      device_type=args.device_type, hot_db=args.hot_db, dry_run=args.dry_run)
+                      device_type=args.device_type, hot_db=args.hot_db, dry_run=args.dry_run,
+                      since=args.since)
     print(json.dumps(rep, indent=2))
     if not rep.get("ok"):
         return 1
@@ -152,6 +153,8 @@ def main() -> int:
     pm.add_argument("--hot-db", default="instance/db/hot.db", type=Path)
     pm.add_argument("--register", action="store_true", help="also append to the source registry (ACTIVATE)")
     pm.add_argument("--dry-run", action="store_true")
+    pm.add_argument("--since", default=None,
+                    help="replay only readings at/after this ISO-8601 UTC ts; earlier rows stay pending")
     pm.set_defaults(fn=cmd_merge)
 
     pp = sub.add_parser("purge", help="user-directed deletion of quarantined data")

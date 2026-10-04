@@ -266,12 +266,17 @@ class QuarantineStore:
 
     # ── merge ───────────────────────────────────────────────────────────────
     def merge(self, source: str, identity: str, *, device_id: str, area: str, device_type: str,
-              hot_db: str | Path, dry_run: bool = False) -> dict:
+              hot_db: str | Path, dry_run: bool = False, since: str | None = None) -> dict:
         """Replay every PENDING captured reading for this identity into hot.db under the given identity,
         then mark those rows merged. Lossless recovery of the quarantined window. Registration of the
         device in its source registry is a separate step (see tools/quarantine.py --register) so this
         core only ever touches data stores."""
         rows = self.readings(source, identity, status="pending")
+        # `since` (ISO-8601 UTC, compared as text like every ts here): replay only readings at/after it.
+        # Earlier rows are NOT deleted — they stay pending for an explicit purge (nothing auto-deleted).
+        # For a window known to be wrong, e.g. hvac_c6 v1's stale fan_mode before 2026-10-04T19:49Z.
+        if since:
+            rows = [r for r in rows if (r["reading_ts"] or r["recv_ts"] or "") >= since]
         if not rows:
             return {"ok": False, "reason": "no pending rows", "source": source, "identity": identity}
 

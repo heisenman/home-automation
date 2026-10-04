@@ -854,6 +854,11 @@ const GRAPHABLE = [
   { key: "gas_ohm", unit: "Ω", color: "#2dd4bf", label: "Gas resistance" },
   { key: "power_w", unit: "W", color: "#f59e0b", label: "Power" },
   { key: "energy_today_kwh", unit: "kWh", color: "#eab308", label: "Energy today" },
+  { key: "supply_cfm", unit: "CFM", color: "#38bdf8", label: "Supply airflow" },    // ERV (hvac_c6, ADR-0041)
+  { key: "exhaust_cfm", unit: "CFM", color: "#818cf8", label: "Exhaust airflow" },
+  { key: "supply_rpm", unit: "RPM", color: "#7dd3fc", label: "Supply fan" },
+  { key: "exhaust_rpm", unit: "RPM", color: "#a5b4fc", label: "Exhaust fan" },
+  { key: "supply_temp_raw", unit: "", color: "#fca5a5", label: "Supply air (raw)" },  // °C/°F unconfirmed
 ];
 
 // Unified air-quality band → color (ADR-0035), shared by the map badge + sensor cards + legend. Keyed by the

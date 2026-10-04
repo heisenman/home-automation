@@ -132,6 +132,25 @@ def test_merge_replays_into_hot_db_and_marks_merged(tmp_path):
     store.close()
 
 
+def test_merge_since_skips_a_known_bad_window_without_deleting_it(tmp_path):
+    """hvac_c6 v1 published a stale fan_mode for its first minutes (2026-10-04). Those rows must not reach
+    the system of record — but per the no-auto-delete directive they stay pending, not vanish."""
+    db, hot = tmp_path / "q.db", tmp_path / "hot.db"
+    sink = QuarantineSink(db)
+    for i, mode in enumerate([10.0, 10.0, 11.0]):                     # two stale, one good
+        sink.capture(source="edge", identity="HVAC_C6-ERV", topic="home/edge/hvac_c6/erv/adv",
+                     payload={"x": i}, metrics={"fan_mode": mode},
+                     reading_ts=f"2026-10-04T19:4{7 + i}:00Z", transport="rs485")
+    sink.close()
+    store = QuarantineStore(db)
+    rep = store.merge("edge", "HVAC_C6-ERV", device_id="erv_attic", area="attic", device_type="erv",
+                      hot_db=hot, since="2026-10-04T19:49:00Z")
+    assert rep["ok"] and rep["readings_written"] == 1
+    assert _hot_rows(str(hot)) == [("erv_attic", "fan_mode", 11.0)]
+    assert len(store.readings("edge", "HVAC_C6-ERV", status="pending")) == 2   # kept, not deleted
+    store.close()
+
+
 def test_purge_requires_intent_and_deletes(tmp_path):
     db = tmp_path / "q.db"
     sink = QuarantineSink(db)

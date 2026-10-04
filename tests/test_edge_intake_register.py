@@ -120,3 +120,34 @@ def test_genuinely_relay_only_node_still_reports_relay_only(tmp_path):
     assert "relay-only" in err
     assert "THIS SERVER BUILD" not in err
     assert not _read(p)                           # and registers nothing
+
+
+# ── non-gas abilities (_NODE_ABILITIES) ──────────────────────────────────────────────────────────
+
+def test_erv_node_registers_its_own_lane(tmp_path):
+    """hvac_c6 announces abilities ["erv"]. Before _NODE_ABILITIES, intake told the operator it was a
+    relay-only node with nothing to adopt (2026-10-04) — the same misleading verdict as 2026-08-02."""
+    p = _registry(tmp_path)
+    did, err = C._register_edge_node_device(p, "hvac_c6", ["erv"], "attic")
+    assert (did, err) == ("erv_attic", None)
+    rec = _read(p)["hvac_c6-erv"]                 # matches the payload mac "hvac_c6-erv" the mapper keys on
+    assert rec["device_type"] == "erv"
+    assert rec["node_id"] == "hvac_c6"
+    assert rec["area"] == C.DORMANT_AREA
+    assert "fan_mode" in rec["capabilities"] and "power_w" in rec["capabilities"]
+    assert "rs485" in rec["notes"] and "/erv/adv" in rec["notes"]
+
+
+def test_erv_is_idempotent_and_collision_qualified(tmp_path):
+    p = _registry(tmp_path, {"other-erv": {"device_id": "erv_attic", "node_id": "other",
+                                          "device_type": "erv", "area": "attic"}})
+    did, err = C._register_edge_node_device(p, "hvac_c6", ["erv"], "attic")
+    assert (did, err) == ("erv_attic_erv", None)
+    again, err = C._register_edge_node_device(p, "hvac_c6", ["erv"], "attic")
+    assert (again, err) == (did, None)
+
+
+def test_relay_only_message_names_what_the_server_knows(tmp_path):
+    p = _registry(tmp_path)
+    _, err = C._register_edge_node_device(p, "relay_hall", ["ble_relay"], "hall")
+    assert "erv" in err and "sgp41_gas" in err

@@ -494,6 +494,18 @@ _GAS_CAPABILITIES = {
     "bme680_gas": ["temperature_c", "humidity_pct", "pressure_hpa", "gas_ohm"],
 }
 
+# Non-gas edge abilities a node can self-describe in its hello and have auto-registered at intake.
+# Each is a LANE: the node publishes home/edge/<node>/<lane>/adv with payload mac "<node>-<lane>", so the
+# registry key is "<node>-<lane>" exactly like the gas lane's "<node>-gas". `prefix` names the device_id
+# (prefix_<area>, collision-qualified like gas). Add an ability here, not a new intake path.
+_NODE_ABILITIES = {
+    # Broan AI-series ERV over RS-485 (ADR-0041, hvac_c6). Verified live 2026-10-04 (design §7.2 log).
+    "erv": {"lane": "erv", "prefix": "erv", "transport": "rs485",
+            "capabilities": ["fan_mode", "power_w", "supply_cfm", "exhaust_cfm", "supply_rpm", "exhaust_rpm",
+                             "supply_temp_raw", "target_cfm_in", "target_cfm_out", "filter_life_s",
+                             "fault_code", "warning_code", "ovr_boost"]},
+}
+
 # Where a freshly auto-registered edge ability is parked until intake relocates it into a real room.
 # Matches the area standby_c6-gas has carried since 2026-07-08.
 DORMANT_AREA = "staging"
@@ -514,16 +526,34 @@ def _gas_device_id(taken, area: str, gas: str) -> str:
     Deterministic and total: same registry + same inputs -> same answer, and the numeric tail terminates
     for any number of same-family sensors in one room.
     """
-    base = f"gas_{area}"
+    return _lane_device_id(taken, "gas", area, gas.removesuffix("_gas"))
+
+
+def _lane_device_id(taken, prefix: str, area: str, family: str) -> str:
+    """`<prefix>_<area>`, qualified by `family` then a numeric tail on collision — see _gas_device_id."""
+    base = f"{prefix}_{area}"
     if base not in taken:
         return base
-    qualified = f"{base}_{gas.removesuffix('_gas')}"     # gas_mech_closet_sgp41
+    qualified = f"{base}_{family}"                       # gas_mech_closet_sgp41
     if qualified not in taken:
         return qualified
     n = 2                                                # ...and a third SGP41 in that room: _2, _3, ...
     while f"{qualified}_{n}" in taken:
         n += 1
     return f"{qualified}_{n}"
+
+
+def _intake_lane(abilities):
+    """(ability, lane, prefix, family, capabilities, transport) for the first intake-able ability a node
+    announced — a gas family first (the established path), else a _NODE_ABILITIES entry — or None."""
+    gas = next((a for a in (abilities or []) if a in _GAS_CAPABILITIES), None)
+    if gas:
+        return gas, "gas", "gas", gas.removesuffix("_gas"), list(_GAS_CAPABILITIES[gas]), "i2c-local"
+    ab = next((a for a in (abilities or []) if a in _NODE_ABILITIES), None)
+    if ab:
+        d = _NODE_ABILITIES[ab]
+        return ab, d["lane"], d["prefix"], ab, list(d["capabilities"]), d["transport"]
+    return None
 
 
 def _register_edge_node_device(devices_path, node_id: str, abilities, area: str, *, dry_run=False):
@@ -557,12 +587,12 @@ def _register_edge_node_device(devices_path, node_id: str, abilities, area: str,
     devices = raw.get("devices") or {}
     raw["devices"] = devices
 
-    key = f"{node_id}-gas"
+    lane = _intake_lane(abilities)
+    key = f"{node_id}-{lane[1] if lane else 'gas'}"
     if key in devices:                       # already registered (re-adopt, or a race) — idempotent
         return (devices[key] or {}).get("device_id"), None
 
-    gas = next((a for a in (abilities or []) if a in _GAS_CAPABILITIES), None)
-    if not gas:
+    if not lane:
         # Distinguish "no gas lane" from "a gas lane this BUILD has never heard of". Both used to land on
         # the relay-only message below, which is stated as a verdict about the hardware — so a node that
         # was simply newer than the server read as a node that needed no record at all (2026-08-02:
@@ -574,15 +604,17 @@ def _register_edge_node_device(devices_path, node_id: str, abilities, area: str,
                           f"not know (it knows {sorted(_GAS_CAPABILITIES)}). The node is fine — this "
                           f"server is behind it. Deploy the build that supports {unknown} and re-adopt; "
                           f"do not re-flash the node.")
-        return None, (f"node {node_id!r} announced no gas ability ({list(abilities or []) or 'none'}) and "
+        return None, (f"node {node_id!r} announced no adoptable ability ({list(abilities or []) or 'none'}; "
+                      f"this server knows {sorted(_GAS_CAPABILITIES) + sorted(_NODE_ABILITIES)}) and "
                       f"has no registry record. A relay-only node needs no device record — it forwards "
                       f"BLE adverts keyed by the peripheral MAC. Nothing to adopt into a room.")
 
-    device_id = _gas_device_id({(v or {}).get("device_id") for v in devices.values()}, area, gas)
+    ability, lane_name, prefix, family, caps, transport = lane
+    device_id = _lane_device_id({(v or {}).get("device_id") for v in devices.values()}, prefix, area, family)
     entry = {
         "device_id": device_id,
         "node_id": node_id,
-        "device_type": gas,
+        "device_type": ability,
         # Born DORMANT in `staging`, not in the target area — matching the standby_c6 precedent
         # ("air_quality stays dormant until a real area is assigned (one-line relocate)"). The caller
         # immediately relocates staging -> area, and THAT move is what wakes the ability. Registering
@@ -590,10 +622,10 @@ def _register_edge_node_device(devices_path, node_id: str, abilities, area: str,
         # path rejects with a 400 (bench-found 2026-08-01). device_id is already the destination name so
         # the deferred gas_standby->gas_<area> rename never has to happen for auto-registered nodes.
         "area": DORMANT_AREA,
-        "capabilities": list(_GAS_CAPABILITIES[gas]),
+        "capabilities": caps,
         "notes": (f"Auto-registered at ADR-0036 intake from node {node_id}'s self-described hello "
-                  f"(abilities={list(abilities)}). Publishes home/edge/{node_id}/gas/adv; "
-                  f"transport i2c-local."),
+                  f"(abilities={list(abilities)}). Publishes home/edge/{node_id}/{lane_name}/adv; "
+                  f"transport {transport}."),
     }
     if dry_run:
         return device_id, None
@@ -965,8 +997,10 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
                     "status": "preview", "node": node, "device_id": device_id, "area": area,
                     "dry_run": True, "claim": None,
                     "plan": [
-                        {"step": "register", "key": f"{node}-gas", "device_id": device_id,
-                         "device_type": next((a for a in abilities if a in _GAS_CAPABILITIES), None),
+                        {"step": "register",
+                         "key": f"{node}-{(_intake_lane(abilities) or (None, 'gas'))[1]}",
+                         "device_id": device_id,
+                         "device_type": (_intake_lane(abilities) or (None,))[0],
                          "area": DORMANT_AREA, "note": "new record, born dormant"},
                         {"step": "claim", "note": "TOFU claim of the node-born secret (skipped if already "
                                                   "enrolled)"},
