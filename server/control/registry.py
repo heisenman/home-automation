@@ -24,6 +24,10 @@ def parse_control_registry(data: dict[str, Any]) -> dict[str, DeviceCtl]:
     for dev_id, spec in (data.get("devices") or {}).items():
         tcfg = spec.get("traits") or {}
         traits.validate_device_traits(list(tcfg))
+        bad = [k for k in ((tcfg.get("mode") or {}).get("values") or {}) if not isinstance(k, str)]
+        if bad:   # YAML 1.1 reads bare off/on/yes/no as booleans — a silently broken mode button otherwise
+            raise ValueError(f"control device '{dev_id}': mode value label(s) {bad} are not strings — "
+                             f"quote them (e.g. \"off\": 1)")
         if not spec.get("node") or not spec.get("area"):
             raise ValueError(f"control device '{dev_id}' missing node/area")
         out[dev_id] = DeviceCtl(device_id=dev_id, node=spec["node"], area=spec["area"],

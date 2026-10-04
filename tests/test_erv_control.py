@@ -136,3 +136,11 @@ def test_manual_device_without_policy_is_displayed_with_its_readback(tmp_path):
     # …while an unflagged policy-less device is still hidden (host LEDs etc. must not suddenly appear)
     reg["erv_attic"].manual = False
     assert V.build_display(cc, hc, "erv_attic", 1_791_146_000, registry=reg) is None
+
+
+def test_unquoted_yaml_off_is_refused_at_load():
+    import yaml
+    data = yaml.safe_load("devices:\n  e:\n    node: n\n    area: a\n    traits:\n"
+                          "      mode: {values: {off: 1, med: 11}}\n")
+    with pytest.raises(ValueError, match="quote"):
+        parse_control_registry(data)
