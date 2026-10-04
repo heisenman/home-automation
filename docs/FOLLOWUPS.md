@@ -13,6 +13,10 @@
 post-ERV OUTDOOR air, not house air: its own RH sensor is the wrong input → **External mode via `DH` relay,
 driven by HOUSE RH sensors**. No Model 76 remote is installed, so `A`/`B` is free.
 
+- **2026-10-04 progress:** `dehum_c6` v3-dehum-call (leased DH call, relay verified OTA); `dehum_pm` (S31 ex
+  s31_spare3, attic, air-gap) live — compressor reads ~594 W; node adopted as `dehum_attic` (intake `dehum` lane).
+  ⚠ Hugh connected the relay to `DH` WITHOUT metering `DH`–`DH` first (relay switched fine) — still meter it.
+  External mode: not found on first try; Hugh working it out.
 - **Control = `DH` relay only** (External mode is a binary request; no more relays help). **Feedback = Sonoff**
   `s31_spare3` → `dehum_pm` on the cord (idle <3 W / fan / compressor ~620 W; catches silent E8/E7).
 - **RS-485: listen-only first**, 2nd Waveshare TTL TO RS485 (C) **on order** (Hugh). D10/D9 UART1 like
