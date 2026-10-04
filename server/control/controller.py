@@ -23,7 +23,7 @@ from server.control import actuator_state, bootstrap, control_store as store
 from server.control.registry import load_control_registry
 from server.util.registry_reload import RegistryReloader
 from server.control.automation import (
-    DEFAULT_SCENE, DeviceState, Override, Policy, Reading, apply_scene, in_window, resolve,
+    DEFAULT_SCENE, DeviceState, Override, Policy, Reading, Resolution, apply_scene, in_window, resolve,
     schedule_off_now)
 from server.control.secret_store import available_master
 
@@ -52,6 +52,24 @@ LEVOIT_POLICY = {
     "schedule": [],
     "defaults": {"running": True},
     "sensor_stale_min": 15,
+}
+
+# Broan ERV (device_type erv). Seeded DISABLED: the ERV has no sensor of its own, so the operator picks which
+# air-quality sensors to average (ADR-0014 R2 — never auto-wired) and enables it in the PWA. Bands run on the
+# unified 0-100 index (higher = cleaner) at the ADR-0035 edges, so worse air -> higher level; level N is the
+# ERV's mode `levels[N-1]` (low/med/high/turbo). LOW is the floor: automation never turns it off — only an
+# explicit Off override / scene / schedule does (Hugh, 2026-10-04).
+ERV_POLICY = {
+    "enabled": False,
+    "source_sensor": None,
+    "source_sensors": [],
+    "aggregate": "mean",
+    "control": {"strategy": "threshold_ranged", "metric": "air_quality",
+                "bands": [{"max": 20, "level": 4}, {"max": 40, "level": 3},
+                          {"max": 60, "level": 2}, {"max": None, "level": 1}]},
+    "schedule": [],
+    "defaults": {"running": True},
+    "sensor_stale_min": 30,
 }
 
 # Which sensor metric the loop drives on. The policy may name it explicitly (control.metric — e.g. an
@@ -113,6 +131,17 @@ class Controller:
         if nums:
             with self._lock:
                 self.readings[did] = {"m": nums, "ts": time.time()}
+        # level-mode actuators (the ERV) report their MODE; translate it to running + level for the resolver
+        if metrics.get("fan_mode") is not None:
+            lm = self._level_modes(did)
+            if lm is not None:
+                fm = int(metrics["fan_mode"])
+                with self._lock:
+                    self.telemetry[did] = {
+                        "running": fm != lm["off_val"],
+                        "fan": (lm["vals"].index(fm) + 1) if fm in lm["vals"] else None,
+                        "fan_mode": fm, "ts": time.time(),
+                    }
         # actuator telemetry for driverless MQTT devices (e.g. Levoit) that have no local-driver status()
         fan_on, fan_speed = metrics.get("fan_on"), metrics.get("fan_speed")
         if fan_on is not None or fan_speed is not None:
@@ -169,6 +198,8 @@ class Controller:
         freshness is judged the same way for both."""
         metric = control_metric(pol)
         derived = metric in DERIVED_METRICS
+        if pol.get("aggregate") == "mean" and pol.get("source_sensors"):
+            return self._mean_source(pol["source_sensors"], metric, derived, stale_s, now)
         primary = pol.get("source_sensor")
         order = [primary, *(pol.get("fallback_sensors") or [])]
         first = None
@@ -190,6 +221,31 @@ class Controller:
                 return r, sid, sid != primary
         if first:
             return first[0], first[1], first[1] != primary
+        return None, None, False
+
+    def _mean_source(self, sids, metric, derived, stale_s, now):
+        """The MEAN of the fresh readings of `metric` across `sids` (an operator-chosen set — e.g. the rooms
+        an ERV ventilates). Stale/missing members are left out, not counted as zero; the result's ts is the
+        OLDEST fresh member's, so staleness stays conservative. No fresh member -> the first stale one, so
+        the resolver fail-safes exactly as for a single dead source."""
+        with self._lock:
+            live = dict(self.readings) if not derived else {}
+        fresh, first = [], None
+        for sid in sids:
+            rec = live.get(sid)
+            if rec is None or metric not in rec["m"]:
+                rec = self._latest_stored(sid, metric, now) if derived else None
+            if rec is None or metric not in rec["m"]:
+                continue
+            if first is None:
+                first = (Reading(rec["m"][metric], rec["ts"]), sid)
+            if (now - rec["ts"]) <= stale_s:
+                fresh.append((rec["m"][metric], rec["ts"]))
+        if fresh:
+            avg = sum(v for v, _ in fresh) / len(fresh)
+            return Reading(avg, min(t for _, t in fresh)), f"mean of {len(fresh)}/{len(sids)}", False
+        if first:
+            return first[0], first[1], False
         return None, None, False
 
     # ── tick ────────────────────────────────────────────────────────────────────
@@ -247,6 +303,22 @@ class Controller:
             store.append_log(conn, device_id, want_on, "night",
                              f"night-mode -> LED {'on' if want_on else 'off'}", True, r.status)
             log.info("night-mode: %s LED -> %s (%s)", device_id, "on" if want_on else "off", r.status)
+
+    def _level_modes(self, device_id):
+        """A device whose `mode` trait carries an ordered `levels` list (the ERV: [low, med, high, turbo])
+        is driven by threshold_ranged through its MODE: band level N -> levels[N-1], off -> `off_mode`.
+        Returns {labels, vals, off_label, off_val, external} or None."""
+        ctl = self.registry.get(device_id)
+        mcfg = (getattr(ctl, "traits_cfg", {}) or {}).get("mode") if ctl else None
+        if not mcfg or not mcfg.get("levels"):
+            return None
+        values = mcfg.get("values") or {}
+        labels = [str(x) for x in mcfg["levels"] if str(x) in values]
+        off_label = str(mcfg.get("off_mode", "off"))
+        return {"labels": labels, "vals": [int(values[x]) for x in labels],
+                "off_label": off_label if off_label in values else None,
+                "off_val": int(values[off_label]) if off_label in values else None,
+                "external": {int(k) for k in (mcfg.get("external") or {})}}
 
     def _mode_cfg(self, device_id):
         """If this device declares a `mode` enum trait wired for graceful on/off (run_mode + idle_mode
@@ -361,8 +433,15 @@ class Controller:
             if not tel:
                 store.append_log(conn, device_id, False, "safety", "no telemetry yet", False, "no-status")
                 return
-            st = {"running": tel.get("running"), "fan": tel.get("fan")}
+            st = {"running": tel.get("running"), "fan": tel.get("fan"), "fan_mode": tel.get("fan_mode")}
             transport = "wifi-mqtt"
+            lm = self._level_modes(device_id)
+            if lm is not None and st["fan_mode"] in lm["external"]:
+                # the device entered a state on its own (ERV: OVR latch / power-on start-up) and ignores mode
+                # writes until it ends — commanding into it just logs mismatches. Hold; the PWA shows why.
+                store.append_log(conn, device_id, bool(st["running"]), "safety",
+                                 f"device in external state {st['fan_mode']} -> hold", False, "hold")
+                return
 
         interlocks = []
         if st.get("tank_full"):
@@ -392,9 +471,33 @@ class Controller:
         sched_off = schedule_off_now(pol.get("schedule"), tod)
 
         res = resolve(policy, now, sensor, dev_state, override, sched_off, scene_off, scene)
+        lm = self._level_modes(device_id) if drv is None else None
+        if lm is not None and res.running and res.level is None and res.source == "override" and lm["labels"]:
+            # BOOST override on a level-mode device means its TOP level (ERV: turbo), not merely "on"
+            top = len(lm["labels"])
+            res = Resolution(True, dev_state.level != top, res.source, res.reason + f" -> level {top}",
+                             level=top)
         reason = res.reason + (f" (via fallback {used_id})" if via_fallback and res.source == "rule" else "")
         status = "noop"
-        if res.act and not dry_run:
+        if res.act and not dry_run and lm is not None:
+            # level-mode device (ERV): everything goes through its MODE — off -> off_mode, level N ->
+            # levels[N-1]. No switchable trait exists; the ERV is never power-cut by automation.
+            if not res.running:
+                target = lm["off_label"]
+            else:
+                lvl = res.level if res.level is not None else 1
+                target = lm["labels"][max(1, min(len(lm["labels"]), int(lvl))) - 1]
+            if target is None:                         # no off_mode configured: cannot express OFF
+                from types import SimpleNamespace
+                result = SimpleNamespace(status="rejected")
+            else:
+                result = self.issuer.issue(device_id=device_id, trait="mode", action="set",
+                                           args={"mode": target})
+            status = result.status
+            if result.status == "ok" and res.running != dev_state.running:
+                store.record_transition(conn, device_id, res.running, now)
+            self._emit(device_id, transport, ev.from_issue_status(result.status), res.reason)
+        elif res.act and not dry_run:
             if res.level is not None:
                 # speed-stepping (ranged): ensure the fan is ON, then set the level
                 if res.running and not dev_state.running:
@@ -539,6 +642,9 @@ def main():
         store.seed_policy(conn, midea_id, DEFAULT_POLICY)
     if levoit_id:                                    # only seed if the purifier is registered on this box
         store.seed_policy(conn, levoit_id, {**LEVOIT_POLICY, "source_sensor": levoit_id})
+    for erv_id in (d for d, c in registry.items() if getattr(c, "device_type", None) == "erv"):
+        store.seed_policy(conn, erv_id, ERV_POLICY)     # disabled until the operator picks sensors
+
     conn.close()
     ctrl = Controller(issuer, drivers, registry, a.db, hot_db=a.hot_db)
     # live-reload control.yaml so an actuator relocate (area edit) takes effect without a controller

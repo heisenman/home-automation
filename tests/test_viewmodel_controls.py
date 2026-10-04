@@ -31,7 +31,7 @@ def test_override_offers_an_arbitrary_duration():
     assert [u["key"] for u in cu["units"]] == ["min", "hour", "day"]
     assert [u["mult"] for u in cu["units"]] == [1, 60, 1440]
     assert cu["max_min"] == MAX_OVERRIDE_MIN              # client bound mirrors the server's authority
-    assert cu["actions"] == [{"action": "off", "label": "Off"}]
+    assert cu["actions"] == [{"action": "off", "label": "Off"}, {"action": "boost_on", "label": "Boost"}]
     assert cu["default"] == {"value": 6, "unit": "hour"}
 
 

@@ -46,6 +46,9 @@ devices:
         labels: {int: Intermittent}
         safe: med
         label: Ventilation
+        # automation (threshold_ranged) drives the MODE: band level N -> levels[N-1]; OFF -> off_mode.
+        levels: [low, med, high, turbo]
+        off_mode: "off"
         # States the ERV enters ON ITS OWN — never commanded; shown as a banner, mode buttons locked meanwhile.
         external:
           2:

@@ -615,7 +615,12 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
   const [open, setOpen] = useState(false);
   const [enabled, setEnabled] = useState(c.enabled !== false);
   const [metric, setMetric] = useState(c.metric || "pm25_ugm3");
-  const [source, setSource] = useState(c.source_sensor || "");
+  // one sensor = follow it (+ fallbacks, as before); several = AVERAGE them (controller aggregate "mean")
+  const [picked, setPicked] = useState(
+    (c.aggregate === "mean" && (c.source_sensors || []).length) ? c.source_sensors
+      : (c.source_sensor ? [c.source_sensor] : []));
+  const source = picked[0] || "";
+  const levelName = (lvl) => (c.level_labels && c.level_labels[lvl - 1]) || `Speed ${lvl}`;
   const [cuts, setCuts] = useState(bands.filter((b) => b.max != null).map((b) => b.max));
   const [speeds, setSpeeds] = useState(bands.map((b) => b.level));
   const [busy, setBusy] = useState(false);
@@ -637,15 +642,17 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
     .filter((s) => metricsOf(s).length)
     .map((s) => ({ id: s.device_id, metrics: metricsOf(s),
                    label: `${prettyName(s.device_id)} · ${prettyArea(s.area)}` }));
-  if (source && !sensorOpts.some((o) => o.id === source)) {
-    sensorOpts.unshift({ id: source, metrics: [metric],
-                         label: `${prettyName(source)} (current — not reporting)` });
+  for (const id of picked) {
+    if (!sensorOpts.some((o) => o.id === id)) {
+      sensorOpts.unshift({ id, metrics: [metric], label: `${prettyName(id)} (current — not reporting)` });
+    }
   }
 
-  // the measures this sensor can actually drive. A gas node offers only the unified index; the purifier
-  // offers its own PM2.5/AQI. Nothing selectable is ever a binding that cannot produce a reading.
-  const metricOpts = AIR_QUALITY_METRICS.filter((m) =>
-    ((sensorOpts.find((o) => o.id === source) || {}).metrics || []).includes(m.key));
+  // the measures EVERY picked sensor can drive (an average needs one measure common to all of them). A gas
+  // node offers only the unified index; the purifier its own PM2.5/AQI. Nothing selectable is ever a
+  // binding that cannot produce a reading.
+  const metricOpts = AIR_QUALITY_METRICS.filter((m) => picked.length && picked.every((id) =>
+    ((sensorOpts.find((o) => o.id === id) || {}).metrics || []).includes(m.key)));
 
   // switching the measure resets the cutoffs AND the speed ladder to that measure's defaults —
   // PM2.5 µg/m³ ≠ AQI 1-5 ≠ air_quality 0-100, and air_quality also runs the opposite direction.
@@ -657,14 +664,17 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
 
   // switching sensor keeps the measure when the new sensor also reports it (re-pointing PM2.5 from one
   // purifier to another shouldn't rewrite the bands); otherwise fall to that sensor's first measure.
-  const changeSource = (id) => {
-    setSource(id);
-    const avail = (sensorOpts.find((o) => o.id === id) || {}).metrics || [];
-    if (avail.length && !avail.includes(metric)) changeMetric(avail[0]);
+  const toggleSource = (id) => {
+    const next = picked.includes(id) ? picked.filter((x) => x !== id) : [...picked, id];
+    setPicked(next);
+    const common = AIR_QUALITY_METRICS.filter((m) => next.length && next.every((sid) =>
+      ((sensorOpts.find((o) => o.id === sid) || {}).metrics || []).includes(m.key))).map((m) => m.key);
+    if (common.length && !common.includes(metric)) changeMetric(common[0]);
   };
   const setCut = (i, v) => setCuts((cs) => cs.map((x, j) => (j === i ? v : x)));
   const issue = () => {
-    if (!source) return "pick a sensor to follow";
+    if (!source) return "pick at least one sensor";
+    if (!metricOpts.length) return "the picked sensors share no common measure";
     for (let i = 0; i < cuts.length; i++) {
       if (cuts[i] === "" || !Number.isFinite(Number(cuts[i]))) return "enter all thresholds";
       if (i && Number(cuts[i]) <= Number(cuts[i - 1])) return "thresholds must increase";
@@ -679,7 +689,8 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
     setBusy(true); setErr(""); setFlash("");
     try {
       await adminSend("PUT", `/control/${vm.device_id}/policy`,
-        { enabled, source_sensor: source,
+        { enabled, source_sensor: source, source_sensors: picked,
+          aggregate: picked.length > 1 ? "mean" : "first",
           control: { strategy: "threshold_ranged", metric, bands: newBands } });
       setFlash("saved"); await onChange();
     } catch (e) { setErr(String(e.message)); }
@@ -695,32 +706,35 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
       <div class="divider"></div>
       <label class="switch">
         <input type="checkbox" checked=${enabled} onChange=${(e) => setEnabled(e.target.checked)} />
-        Automation enabled (fan speed follows air quality)
+        Automation enabled (${c.level_labels ? "ventilation" : "fan speed"} follows air quality)
       </label>
-      <div class="field"><label>Sensor to follow</label>
-        <select value=${source} onChange=${(e) => changeSource(e.target.value)}>
-          <option value="">— pick a sensor —</option>
-          ${sensorOpts.map((o) => html`<option value=${o.id}>${o.label}</option>`)}
-        </select>
+      <div class="field"><label>Sensors to follow ${picked.length > 1 ? html`<span class="note">— averaged</span>` : ""}</label>
+        <div class="checklist">
+          ${sensorOpts.map((o) => html`<label class="check" key=${o.id}>
+            <input type="checkbox" checked=${picked.includes(o.id)} onChange=${() => toggleSource(o.id)} />
+            ${o.label}</label>`)}
+        </div>
         ${!sensorOpts.length && html`<p class="note">No sensor on this server is reporting an
-          air-quality measure right now.</p>`}</div>
+          air-quality measure right now.</p>`}
+        ${picked.length > 1 && html`<p class="note">The average of the ${picked.length} sensors' current
+          readings drives it; a sensor that goes quiet is left out of the average.</p>`}</div>
       <div class="field"><label>Measure</label>
         <select value=${metric} disabled=${!source}
                 onChange=${(e) => changeMetric(e.target.value)}>
           ${!source && html`<option value="">— pick a sensor first —</option>`}
           ${metricOpts.map((m) => html`<option value=${m.key}>${m.label}${m.unit ? ` (${m.unit})` : ""}</option>`)}
         </select>
-        ${source && metricOpts.length === 1 && html`<p class="note">${prettyName(source)} reports only
-          ${metricOpts[0].label}.</p>`}
+        ${source && metricOpts.length === 1 && html`<p class="note">${picked.length > 1
+          ? "The common measure is" : prettyName(source) + " reports only"} ${metricOpts[0].label}.</p>`}
         ${sel.hint && source && html`<p class="note">${sel.hint}</p>`}</div>
-      <div class="field"><label>Fan speed by ${sel.label}</label>
+      <div class="field"><label>${c.level_labels ? "Ventilation" : "Fan speed"} by ${sel.label}</label>
         ${cuts.map((v, i) => html`
           <div class="controls" key=${i}>
-            <span class="note">Speed ${speeds[i]} below</span>
+            <span class="note">${levelName(speeds[i])} below</span>
             <input type="number" value=${v} onInput=${(e) => setCut(i, e.target.value)} />
             <span class="note">${sel.unit || sel.label}</span>
           </div>`)}
-        <p class="note">Speed ${speeds[speeds.length - 1]} when above ${cuts.length ? cuts[cuts.length - 1] : "—"} ${sel.unit}.</p>
+        <p class="note">${levelName(speeds[speeds.length - 1])} when above ${cuts.length ? cuts[cuts.length - 1] : "—"} ${sel.unit}.</p>
       </div>
       ${issue() && html`<span class="err sm">⚠ ${issue()}</span>`}
       <div class="controls">
@@ -810,6 +824,7 @@ function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit, onClo
         <button class="btn sm ghost edit-btn" onClick=${() => onEdit(vm)}>✎</button>
         ${onClose && html`<button class="btn sm ghost close-btn" title="collapse" onClick=${onClose}>✕</button>`}
       </div>
+      <${AlertBanner} alert=${vm.alert} vm=${vm} isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
       <div class="state-row">
         <span class="pill ${running ? "on" : "off"}">${running == null ? "?" : running ? "RUNNING" : "IDLE"}</span>
         ${vm.control.enabled === false && html`<span class="note">automation off</span>`}
@@ -826,16 +841,17 @@ function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit, onClo
           <div class="v">${fmtC(cval)}</div>
           <div class="k">${CM.label} · <span class=${ageStale ? "age-stale" : "age-fresh"}>${
             s ? fmtAge(s.age_s) : "no data"}</span></div>
-          <div class="k">from ${vm.control.source_sensor || "—"}</div>
+          <div class="k">from ${s && s.members ? s.device_id : (vm.control.source_sensor || "—")}</div>
         </div>
         ${ranged ? html`
           <div class="reading">
-            <div class="v">${act.fan_on === 0 ? "off" : (act.fan_speed != null ? "speed " + Math.round(act.fan_speed) : "—")}</div>
-            <div class="k">fan</div>
+            <div class="v">${vm.control.level_labels ? (modeLabelOf(vm) || "—")
+              : act.fan_on === 0 ? "off" : (act.fan_speed != null ? "speed " + Math.round(act.fan_speed) : "—")}</div>
+            <div class="k">${vm.control.level_labels ? "ventilation" : "fan"}</div>
           </div>
           <div class="reading muted">
             <div class="v">auto</div>
-            <div class="k">speed ↔ ${CM.label}</div>
+            <div class="k">${vm.control.level_labels ? "mode" : "speed"} ↔ ${CM.label}</div>
           </div>` : html`
           <div class="reading muted">
             <div class="v">${o ? round1(o.humidity_pct) + "%" : "—"}</div>

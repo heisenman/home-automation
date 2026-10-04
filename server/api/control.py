@@ -253,6 +253,17 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
         if not isinstance(fb, list) or any(not isinstance(x, str) or not x for x in fb):
             return bad("fallback_sensors must be a list of non-empty strings")
         pol["fallback_sensors"] = fb
+    if "source_sensors" in patch:
+        ss = patch["source_sensors"]
+        if not isinstance(ss, list) or any(not isinstance(x, str) or not x for x in ss):
+            return bad("source_sensors must be a list of non-empty strings")
+        pol["source_sensors"] = list(dict.fromkeys(ss))          # de-dup, keep order
+    if "aggregate" in patch:
+        if patch["aggregate"] not in ("first", "mean"):
+            return bad("aggregate must be 'first' (primary + fallbacks) or 'mean' (average of source_sensors)")
+        pol["aggregate"] = patch["aggregate"]
+    if pol.get("aggregate") == "mean" and pol.get("enabled", True) and not pol.get("source_sensors"):
+        return bad("averaging needs at least one sensor in source_sensors")
     if "sensor_stale_min" in patch:
         if not _is_num(patch["sensor_stale_min"]) or patch["sensor_stale_min"] <= 0:
             return bad("sensor_stale_min must be a positive number")

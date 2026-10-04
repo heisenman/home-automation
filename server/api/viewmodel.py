@@ -696,6 +696,16 @@ def _mode_options(cfg: dict) -> list[dict]:
             for k, v in values.items()]
 
 
+def _level_labels(traits_cfg: dict | None) -> list[str] | None:
+    """For a mode trait with ordered `levels` (ERV: low..turbo), the display label of each band level."""
+    cfg = (traits_cfg or {}).get("mode") or {}
+    levels = cfg.get("levels")
+    if not levels:
+        return None
+    labels = cfg.get("labels") or {}
+    return [labels.get(x) or str(x).replace("_", " ").title() for x in levels]
+
+
 def _external_modes(cfg: dict) -> list[dict]:
     """A mode trait's `external` map → [{value, label, level, note, clear}]. Each entry is either a bare label
     or {label, level: alarm|info, note, clear: bool}. YAML keys may arrive as int or str."""
@@ -759,9 +769,9 @@ def build_controls(traits_cfg: dict | None, manual: bool = False) -> list[dict]:
         # there is no second endpoint and no second validation path. `max_min` mirrors the API cap
         # (server stays the authority — the client bound is a courtesy, not the check).
         "custom": {
-            "label": "Off for", "units": list(OVERRIDE_UNITS), "max_min": MAX_OVERRIDE_MIN,
+            "label": "Override for", "units": list(OVERRIDE_UNITS), "max_min": MAX_OVERRIDE_MIN,
             "default": {"value": 6, "unit": "hour"},
-            "actions": [{"action": "off", "label": "Off"}],
+            "actions": [{"action": "off", "label": "Off"}, {"action": "boost_on", "label": "Boost"}],
         },
         "state": {"from": "override"},
     }]
@@ -857,7 +867,18 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
     # the authoritative reading that DRIVES the loop. Carries both the metric-named key (back-compat for
     # the dehumidifier card) and a generic value/metric so a purifier card can render the same shape.
     sensor = None
-    if source_id and hot_conn is not None:
+    if policy.get("aggregate") == "mean" and policy.get("source_sensors") and hot_conn is not None:
+        # the controller averages the fresh members; mirror it so the card shows the number it acts on
+        stale_s_ = float(policy.get("sensor_stale_min", 10)) * 60.0
+        vals = [(sid, _latest_any(sid, metric)) for sid in policy["source_sensors"]]
+        fresh = [(sid, v) for sid, v in vals if v and (_age_s(v[1], now) or 0) <= stale_s_]
+        if fresh:
+            avg = sum(v[0] for _, v in fresh) / len(fresh)
+            oldest = min((v[1] for _, v in fresh), key=lambda t: t)
+            sensor = {"device_id": f"average of {len(fresh)}/{len(vals)}", metric: avg, "value": avg,
+                      "metric": metric, "ts": oldest, "age_s": _age_s(oldest, now),
+                      "members": [{"device_id": sid, "value": v[0]} for sid, v in fresh]}
+    elif source_id and hot_conn is not None:
         sv = _latest(hot_conn, source_id, metric, 1)
         if sv:
             sensor = {"device_id": source_id, metric: sv[0], "value": sv[0], "metric": metric,
@@ -937,6 +958,10 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
             "bands": ctrl.get("bands"),                # threshold_ranged: sensor band -> fan speed
             "source_sensor": source_id,
             "fallback_sensors": policy.get("fallback_sensors") or [],
+            "source_sensors": policy.get("source_sensors") or [],
+            "aggregate": policy.get("aggregate") or "first",
+            # level-mode devices (ERV): band level N is this mode — the editor labels levels with these
+            "level_labels": _level_labels(traits),
         },
         "sensor": sensor,
         "onboard": onboard,

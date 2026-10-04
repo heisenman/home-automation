@@ -187,3 +187,124 @@ def test_power_cycle_happy_path_and_unconfigured_device():
     assert code == 200 and sent == ["OFF", "ON"] and slept == [10]
     code, _ = handle_power_cycle(_erv_cfg(), "lamp_office", lambda t, p: None, lambda s: None)
     assert code == 404
+
+
+# ── automation: averaged sources + level-mode drive (2026-10-04) ────────────────────────────────────
+
+class _Msg:
+    def __init__(self, payload):
+        self.payload = json.dumps(payload).encode()
+        self.topic = "home/attic/erv_attic/state"
+
+
+def _erv_ctrl(tmp_path, policy_patch=None, aq=None, now=2_000_000.0):
+    import sqlite3
+
+    from server.control import controller as C
+    from server.control import control_store as store
+    from server.control.issuer import Result
+
+    class Iss:
+        calls = []
+
+        def issue(self, *, device_id, trait, action, args, **kw):
+            self.calls.append((trait, args))
+            return Result("ok", "ok", intended=args, reported=args)
+
+    db = str(tmp_path / "control.db")
+    conn = sqlite3.connect(db)
+    store.ensure_schema(conn)
+    store.set_policy(conn, "erv_attic", {**C.ERV_POLICY, "enabled": True,
+                                         "source_sensors": ["gas_a", "gas_b", "gas_c"], **(policy_patch or {})})
+    conn.close()
+    iss = Iss()
+    iss.calls = []
+    ctrl = C.Controller(iss, {}, _erv_cfg(), db)
+    aq = aq or {}
+    # air_quality is DERIVED (read from hot.db); stub the stored-series lookup with {sensor: (value, age_s)}
+    ctrl._latest_stored = lambda sid, metric, n: (
+        {"m": {metric: aq[sid][0]}, "ts": n - aq[sid][1]} if sid in aq else None)
+    return ctrl, iss, now
+
+
+def _report(ctrl, fan_mode):
+    ctrl.on_message(None, None, _Msg({"device_id": "erv_attic", "metrics": {"fan_mode": fan_mode}}))
+
+
+def test_mean_of_fresh_sensors_drives_the_band_and_stale_ones_are_left_out(tmp_path):
+    # a=30, b=50 fresh -> mean 40 -> band "<60" -> level 2 (med); c is an hour stale and must not count
+    ctrl, iss, now = _erv_ctrl(tmp_path, aq={"gas_a": (30, 60), "gas_b": (50, 60), "gas_c": (0, 3600)})
+    r, used, _ = ctrl._pick_source(ctrl_pol(tmp_path), 1800, now)
+    assert r.value == 40 and used == "mean of 2/3"
+    _report(ctrl, 9)                                     # currently LOW
+    ctrl.tick(now=now)
+    assert iss.calls[-1] == ("mode", {"mode": "med"})
+
+
+def ctrl_pol(tmp_path):
+    import sqlite3
+
+    from server.control import control_store as store
+    return store.get_policy(sqlite3.connect(str(tmp_path / "control.db")), "erv_attic")
+
+
+def test_bad_air_steps_up_and_clean_air_floors_at_low_never_off(tmp_path):
+    ctrl, iss, now = _erv_ctrl(tmp_path, aq={"gas_a": (10, 60)})          # very poor -> turbo
+    _report(ctrl, 11)
+    ctrl.tick(now=now)
+    assert iss.calls[-1] == ("mode", {"mode": "turbo"})
+    (tmp_path / "clean").mkdir()
+    ctrl, iss, now = _erv_ctrl(tmp_path / "clean", aq={"gas_a": (95, 60)})  # excellent -> LOW, not off
+    _report(ctrl, 11)
+    ctrl.tick(now=now)
+    assert iss.calls[-1] == ("mode", {"mode": "low"})
+
+
+def test_no_command_when_already_at_the_banded_mode(tmp_path):
+    ctrl, iss, now = _erv_ctrl(tmp_path, aq={"gas_a": (70, 60)})          # good -> level 1 = low
+    _report(ctrl, 9)                                                       # already LOW
+    ctrl.tick(now=now)
+    assert iss.calls == []
+
+
+def test_ovr_or_startup_holds_without_commanding(tmp_path):
+    for external in (2, 20):
+        ctrl, iss, now = _erv_ctrl(tmp_path, aq={"gas_a": (10, 60)})
+        _report(ctrl, external)
+        ctrl.tick(now=now)
+        assert iss.calls == [], external
+
+
+def test_boost_override_means_turbo_and_off_override_means_mode_off(tmp_path):
+    import sqlite3
+
+    from server.control import control_store as store
+    ctrl, iss, now = _erv_ctrl(tmp_path, aq={"gas_a": (90, 60)})
+    conn = sqlite3.connect(str(tmp_path / "control.db"))
+    store.set_override(conn, "erv_attic", "boost_on", now + 3600)
+    conn.close()
+    _report(ctrl, 9)
+    ctrl.tick(now=now)
+    assert iss.calls[-1] == ("mode", {"mode": "turbo"})
+    conn = sqlite3.connect(str(tmp_path / "control.db"))
+    store.set_override(conn, "erv_attic", "off", now + 3600)
+    conn.close()
+    _report(ctrl, 12)
+    ctrl.tick(now=now + 60)
+    assert iss.calls[-1] == ("mode", {"mode": "off"})
+
+
+def test_policy_api_validates_averaging(tmp_path):
+    import sqlite3
+
+    from server.api.control import handle_policy_update
+    from server.control import control_store as store
+    conn = sqlite3.connect(":memory:")
+    store.ensure_schema(conn)
+    from server.control import controller as C
+    store.set_policy(conn, "erv_attic", C.ERV_POLICY)
+    code, _ = handle_policy_update(conn, "erv_attic", {"enabled": True})       # mean with no sensors
+    assert code == 400
+    code, body = handle_policy_update(conn, "erv_attic", {"enabled": True, "source_sensors": ["a", "b", "a"]})
+    assert code == 200 and store.get_policy(conn, "erv_attic")["source_sensors"] == ["a", "b"]
+    assert handle_policy_update(conn, "erv_attic", {"aggregate": "median"})[0] == 400
