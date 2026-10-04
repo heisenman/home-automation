@@ -151,3 +151,11 @@ def test_relay_only_message_names_what_the_server_knows(tmp_path):
     p = _registry(tmp_path)
     _, err = C._register_edge_node_device(p, "relay_hall", ["ble_relay"], "hall")
     assert "erv" in err and "sgp41_gas" in err
+
+
+def test_dehum_node_registers_its_own_lane(tmp_path):
+    p = _registry(tmp_path)
+    did, err = C._register_edge_node_device(p, "dehum_c6", ["dehum"], "attic")
+    assert (did, err) == ("dehum_attic", None)
+    rec = _read(p)["dehum_c6-dehum"]              # matches the payload mac "dehum_c6-dehum"
+    assert rec["device_type"] == "dehum" and "dh_call" in rec["capabilities"]
