@@ -7,6 +7,14 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 🟡 2026-10-04 — Levoit: flash from the PWA (BUILT, awaiting the next physical unit)
+
+**Add device → Flash new hardware → "Levoit Vital 200S purifier"** is live on .210. It writes one generic ESPHome
+image (the unit names itself `levoit-<mac6>`) after a gated OEM backup. Design:
+[pwa-levoit-flashing.md](design/pwa-levoit-flashing.md). Host-tested (`tests/test_levoit_flash.py`, esptool faked).
+**Open:** the first live run is the proof. It covers the esptool-API single session (no-reset connect → backup → write)
+on real hardware, and checking that `levoit-<mac6>` appears in Standby hardware once on mains. Do it with the next Levoit.
+
 ## ✅ 2026-09-27 — Shades (ADR-0041): FIRMWARE COMPLETE; install-side items OPEN
 
 `shades_s3` runs `v4-shades`. The 18-line map is verified by pintest, and a signed command moved a paired motor

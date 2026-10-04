@@ -1597,6 +1597,9 @@ function AddDeviceModal({ onClose, onSaved }) {
   const [flashBusy, setFlashBusy] = useState(false);
   const [flashErr, setFlashErr] = useState("");
   const [flashJob, setFlashJob] = useState(null);
+  // What the board IS. A Levoit's ESP32-C3 looks identical to our bare esp32c3 edge board, so the operator
+  // says which (docs/design/pwa-levoit-flashing.md). "levoit" = generic ESPHome image, no name/network/gas.
+  const [flashKind, setFlashKind] = useState("edge");
   const toggleTrait = (t) => setTraits((ts) => (ts.includes(t) ? ts.filter((x) => x !== t) : [...ts, t]));
 
   // Canonical rooms for the area pickers (ADR-0026) — a dropdown beats free-text (typos spawn phantom areas).
@@ -1698,6 +1701,10 @@ function AddDeviceModal({ onClose, onSaved }) {
       if (b) {
         setFlashPort(b.port);
         if (!flashNode && b.manifest_node) setFlashNode(b.manifest_node);
+        // An unknown C3 (or one we couldn't reach — a Levoit not yet in download mode) is far more likely
+        // a purifier than one of our own C3 edge boards; the operator can still switch.
+        if (!b.manifest_node && (b.target === "esp32c3" || !b.detected)) setFlashKind("levoit");
+        else if (b.target && b.target !== "esp32c3") setFlashKind("edge");
       }
       if (!flashProfile && (s.defaults?.profiles || []).length) setFlashProfile(s.defaults.profiles[0].id);
     } catch (e) { setFlashErr(String(e.message)); }
@@ -1710,11 +1717,11 @@ function AddDeviceModal({ onClose, onSaved }) {
   const doFlash = async () => {
     setFlashBusy(true); setFlashErr(""); setFlashJob(null);
     try {
-      const body = { port: flashPort, node_id: flashNode.trim(), profile: flashProfile,
-                     gas_sensor: flashGas };
-      if (board?.needs_rotate) body.confirm_rotate = true;
+      const body = flashKind === "levoit" ? { kind: "levoit", port: flashPort }
+        : { port: flashPort, node_id: flashNode.trim(), profile: flashProfile, gas_sensor: flashGas };
+      if (flashKind !== "levoit" && board?.needs_rotate) body.confirm_rotate = true;
       const r = await adminSend("POST", "/api/v1/flash", body);
-      // A flash is ~40s of USB writes; poll the job so the operator sees motion. Silence at a bench is
+      // A flash is ~40s of USB writes (a Levoit ~2.5 min incl. the OEM backup); poll the job so the operator sees motion. Silence at a bench is
       // indistinguishable from a hang, and the wrong instinct there is to unplug mid-write.
       const poll = setInterval(async () => {
         try {
@@ -1743,6 +1750,22 @@ function AddDeviceModal({ onClose, onSaved }) {
         <div class="edge-adopt">
           <p class="note sm mono">${board.chip || board.target || "?"} · ${board.mac || "mac?"}
             ${board.manifest_node ? ` · known as ${board.manifest_node}` : " · new hardware"}</p>
+          <select value=${flashKind} onChange=${(e) => setFlashKind(e.target.value)}>
+            <option value="edge">Edge node (our C6 / S3 / C3 board)</option>
+            <option value="levoit">Levoit Vital 200S purifier</option>
+          </select>
+          ${flashKind === "levoit" ? html`
+            ${!flash.levoit?.ready && html`<p class="err sm">${flash.levoit?.reason || "generic Levoit image not available"}</p>`}
+            ${flash.levoit?.ready && html`<p class="note sm mono">generic image ${flash.levoit.sha256} · ESPHome
+              ${flash.levoit.esphome} · built ${flash.levoit.built}</p>`}
+            <p class="note sm">Unit <b>unplugged from mains</b>, programmer on the header (EN · GND · VCC 3.3V ·
+              TXD · RXD · IO0). <b>Now:</b> hold <b>IO0→GND</b>, tap <b>EN→GND</b>, release EN — you can let go
+              of IO0 too — then click Flash. The original firmware is backed up first (~2 min); nothing is
+              erased unless that backup succeeds. Wi-Fi and broker are built into the image; the unit names
+              itself from its MAC.</p>
+            <button class="btn primary sm" disabled=${flashBusy || !flash.levoit?.ready || !flashPort}
+              onClick=${doFlash}>${flashBusy ? "Flashing…" : "Back up + flash Levoit"}</button>
+          ` : html`
           ${!imageFor?.ready && html`<p class="err sm">No generic image for
             <b>${board.target || "this chip"}</b>${imageFor?.reason ? ` — ${imageFor.reason}` : ""}</p>`}
           ${board.needs_rotate && html`<p class="err sm">⚠ This board is already enrolled as
@@ -1767,11 +1790,15 @@ function AddDeviceModal({ onClose, onSaved }) {
             disabled=${flashBusy || !flashNode.trim() || !flashProfile || !imageFor?.ready}
             onClick=${doFlash}>
             ${flashBusy ? "Flashing…" : `Flash ${flashNode || "board"}${board.needs_rotate ? " (rotate)" : ""}`}</button>
+          `}
           ${flashJob && html`
             <div class="note sm mono flash-steps">
               ${(flashJob.steps || []).map((s) => html`<div>${s.split(" ").slice(1).join(" ")}</div>`)}
-              ${flashJob.status === "done" && html`<div><b>✓ flashed — it will announce itself below in
-                ~20s, then adopt it into a room.</b></div>`}
+              ${flashJob.status === "done" && flashJob.report?.kind === "levoit" && html`<div><b>✓ flashed as
+                ${flashJob.report.name}.</b> Release IO0, unplug the programmer, reassemble and plug into mains —
+                it shows up below only once it's on mains (no PM2.5 on programmer power). Then adopt it.</div>`}
+              ${flashJob.status === "done" && flashJob.report?.kind !== "levoit" && html`<div><b>✓ flashed — it
+                will announce itself below in ~20s, then adopt it into a room.</b></div>`}
             </div>`}
         </div>`}
     </div>`;

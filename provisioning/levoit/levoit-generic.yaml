@@ -1,0 +1,33 @@
+# Levoit (generic) — ONE image for every future Vital 200S, flashed from the PWA (Add device → Flash new
+# hardware → "Levoit Vital 200S"). Design: docs/design/pwa-levoit-flashing.md.
+#
+# Identity is NOT compiled in: name_add_mac_suffix makes each unit name itself `levoit-<last 6 hex of its MAC>`
+# at boot, and ESPHome derives the MQTT topic prefix (`levoit-xxxxxx/...`) and the fallback-AP SSID from that
+# runtime name. Room + device_id are assigned later by PWA adopt (levoit-devices.yaml), exactly as for the
+# hand-named units. So nothing here changes per unit and the flasher never compiles.
+#
+# Trade-off accepted 2026-10-04 (Hugh): all generic units share ONE OTA key (`ota_password_generic`) instead of
+# a per-unit key — the price of a no-compile flash. They live on the air-gapped network; the key stays in the
+# gitignored secrets.yaml. The three hand-named units (office, c-office, c-bed) keep their own files + keys.
+#
+# Build (and rebuild after any change to the shared body): tools/levoit_build_generic.sh
+substitutions:
+  device_name: levoit
+  friendly_name: Levoit
+  wifi_ap_ssid: "unused"           # the body's ap.ssid is removed below -> ESPHome defaults it to the runtime name
+  rx_pin: GPIO18                   # C3-SOLO-1 -> Vital 200S MCU UART (tuct, tested) — NOT the flash pads
+  tx_pin: GPIO19
+
+packages:
+  vital200s: !include levoit-vital200s-c3.common.yaml
+
+esphome:
+  name_add_mac_suffix: true
+
+wifi:
+  ap:
+    ssid: !remove                  # a fixed SSID would be identical on every unit; default = levoit-xxxxxx-ish
+
+ota:
+  - platform: esphome
+    password: !secret ota_password_generic

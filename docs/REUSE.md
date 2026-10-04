@@ -46,6 +46,7 @@ something cross-cutting a future agent would otherwise rebuild.
 
 - **Read/write a device's SD card live (no reflash)** → the `cmd/fs` handler (`fs_ops`) + `tools/d1001_fs_pull.py`.
   *This is the one this session nearly reinvented — the whole reflash-free profile pull already existed here.*
+- **Flash a USB-attached board from the PWA** → `server/maintenance/edge_flash.py` (edge nodes: generic IDF image + NVS identity) and `server/maintenance/levoit_flash.py` (Levoit: generic ESPHome image + gated OEM backup); one panel, one admin-job op `flash`.
 - **Deploy a battery curve as data (no reflash)** → `cmd/profile` (`ha_battery_profile_rt`) + `tools/d1001_profile_push.py` (ADR-0024 §5).
 - **Edge event / advert contracts** → `home/edge/<node>/{event,adv}`; the coordinator's `edge_mapper` maps
   MAC → canonical `home/<area>/<id>/state`. See [edge/AGENTS.md](../edge/AGENTS.md).

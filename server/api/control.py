@@ -1048,10 +1048,11 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
             come off the silicon, so the operator confirms rather than types. `needs_rotate` flags a board
             that is already enrolled — flashing it would orphan a node the dictator can currently command.
             .210-only by design (Hugh: the one box with reliable USB port access)."""
-            from server.maintenance import edge_flash as EF
+            from server.maintenance import edge_flash as EF, levoit_flash as LF
             try:
-                return JSONResponse(status_code=200, content=EF.survey(
-                    node_secrets_path=node_secrets_path, master=master))
+                s = EF.survey(node_secrets_path=node_secrets_path, master=master)
+                s["levoit"] = LF.image_status()     # the "Levoit Vital 200S" kind (pwa-levoit-flashing.md)
+                return JSONResponse(status_code=200, content=s)
             except EF.FlashError as exc:
                 return JSONResponse(status_code=500,
                                     content={"status": "error", "reason": str(exc)})
@@ -1066,6 +1067,22 @@ def make_registry_router(api_authz, devices_path, control_path=None, node_secret
             is node-born (ADR-0036 L0), so this path never handles a credential."""
             from server.maintenance import admin_job, edge_flash as EF
             b = dict(body or {})
+            # A Levoit (ESPHome appliance) needs only the port: its network is baked into the generic image,
+            # its name comes from its MAC, and it has no secret. docs/design/pwa-levoit-flashing.md.
+            if b.get("kind") == "levoit":
+                from server.maintenance import levoit_flash as LF
+                if not str(b.get("port", "")).startswith("/dev/"):
+                    return JSONResponse(status_code=400, content={
+                        "status": "bad-request", "reason": "port is required (a /dev/tty* path)"})
+                img = LF.image_status()
+                if not img["ready"]:
+                    return JSONResponse(status_code=409, content={"status": "not-ready",
+                                                                  "reason": img["reason"]})
+                job_id = admin_job.launch({"op": "flash", "flash": {"kind": "levoit", "port": b["port"]}})
+                return JSONResponse(status_code=202, content={
+                    "status": "launched", "job_id": job_id, "poll": f"/api/v1/devices/jobs/{job_id}",
+                    "note": "backup + write take ~2.5 min; the unit then appears in Standby hardware once "
+                            "it is reassembled and on mains"})
             for required in ("port", "node_id"):
                 if not str(b.get(required, "")).strip():
                     return JSONResponse(status_code=400,

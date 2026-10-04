@@ -21,7 +21,22 @@ the other Vital/Core Levoits (different `model:` + board).
   THEN add the levoit component over OTA. Once sealed in the unit you can't easily re-wire, so never gamble
   the first flash on an unproven UART config. `captive_portal` + fallback AP = wireless recovery, always.
 
-## Flash / build / OTA workflow
+## Adding a unit — the PWA way (default from 2026-10-04)
+1. Once per ESPHome/body change, on .210: `tools/levoit_build_generic.sh` (Docker must be running:
+   `sudo systemctl start docker`). This builds ONE generic image (`levoit-generic.yaml`) that names itself
+   `levoit-<last 6 hex of MAC>` at boot.
+2. Unit unplugged from mains, programmer on the header and plugged into .210's USB.
+3. PWA → **Add device → Flash new hardware → Scan USB → "Levoit Vital 200S purifier"**. Hold IO0→GND, tap
+   EN→GND, click **Back up + flash Levoit**. The OEM image is backed up to `instance/oem-backups/levoit-<mac6>-oem-*.bin`
+   first (nothing is erased if that fails), then the generic image is written + verified.
+4. Release IO0, unplug programmer, reassemble, mains → `levoit-<mac6>` appears in **Standby hardware** → Adopt.
+Design + trade-offs (shared OTA key `ota_password_generic`): `docs/design/pwa-levoit-flashing.md`.
+OTA a generic unit: `docker run --rm -v "$PWD":/config ghcr.io/esphome/esphome upload levoit-generic.yaml --device <ip>`
+(same image for every generic unit — compile once, upload to each).
+
+The by-hand recipe below is how units 1–3 were done and remains the fallback.
+
+## Flash / build / OTA workflow (by hand)
 ```bash
 # 0. tooling (one-time): python3 -m venv ~/.flashtools && ~/.flashtools/bin/pip install esptool ; docker present
 # 1. BACK UP the OEM firmware first (4 MB):
@@ -59,7 +74,7 @@ failed again on the flash (2 of 3 units) — treat manual IO0/EN as the normal p
 does NOT appear in Standby hardware (classifier needs fan + PM2.5, `server/ingest/esphome_discovery.py`). It
 shows up seconds after it is on mains. Not a fault.
 
-**Adding a unit:** copy a thin file (≈20 lines — identity only, never the body), add `ota_password_<room>`
+**Adding a unit by hand (fallback):** copy a thin file (≈20 lines — identity only, never the body), add `ota_password_<room>`
 (`openssl rand -hex 16`) to `secrets.yaml`, back up OEM to `instance/oem-backups/` on .210 (git-ignored),
 compile → serial flash → verify `<name>/status online` on `192.168.1.200` → reassemble on mains → **PWA → Add device → Standby hardware → pick the unit → Adopt into a room** (writes the secret +
 `control.yaml` + `levoit-devices.yaml`, restarts the command plane; ADR-0036 amendment 2026-10-01). Then set

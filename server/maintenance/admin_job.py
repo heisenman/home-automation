@@ -110,7 +110,12 @@ def _worker(job_id: str) -> int:
                 rec.update(status="running", steps=list(steps))
                 _write(job_id, rec)               # publish each step so the PWA can follow it live
 
-            report = EF.flash_node(spec.get("flash") or {}, progress=say)
+            fspec = spec.get("flash") or {}
+            if fspec.get("kind") == "levoit":           # ESPHome appliance — docs/design/pwa-levoit-flashing.md
+                from server.maintenance import levoit_flash as LF
+                report = LF.flash_levoit(fspec, progress=say)
+            else:
+                report = EF.flash_node(fspec, progress=say)
             rec.update(status="done", report=report, steps=list(steps), finished=_now())
             _write(job_id, rec)
             return 0
