@@ -427,15 +427,17 @@ block physically carries `DH`/`DH`, and it lists *"a separate, remote control su
 reason to wire. The same-chassis E070W and same-platform E080/E100/E130 document External-via-DH
 explicitly. **LIKELY-to-certain but not proven for the plain E070 — walk the menu and confirm.**
 
-**⛔ LIVE RESULT 2026-10-04 (our E070, installed in series on the ERV supply): `DH` External control does
-NOT work as installed.** Hugh found and enabled `EXTERNAL` (display reads `EXTERNAL`; `REMOTE` off), but a
-5-minute `DH` closure (relay verified, contacts verified) left the unit at **3 W** (`dehum_pm`) — no fan, no
-compressor; it idled with the contact open too. **`DH`–`DH` measures 0 V open-circuit** (and 0 V from either
-`DH` to everything else): the input carries no sense voltage, so nothing is watching it. Either the E070
-(= Model 1820) doesn't implement `DH`, or its board follows the OLDER `DH`+`Rf` scheme (24 VAC from the furnace
-on `Rf`/`Cf`, which this install may not feed) — unresolved. Also observed: with `REMOTE` enabled and no Model
-76 answering, the unit refuses to run (idle 3 W). **Decision: control via RS-485 Remote (§2.8)**, which also
-lets us FEED it house RH — the right input given it sits on post-ERV outdoor air.
+**✅ LIVE RESULT 2026-10-04 (our E070, installed in series on the ERV supply): `DH` External control WORKS**
+once configured — and the two gotchas are exactly the ones above:
+- The board's **`NC|NO` slide switch EXISTS on the E070** (was unverified) and shipped on **`NC`**. On `NC` a
+  `DH` closure did nothing (unit idled at 3 W both ways). Set to **`NO`** → works.
+- **`DH` carries ~24 V open-circuit** (measured; an earlier "0 V" reading was a mistake). Low-voltage, fine
+  for the relay contact; it is the board's own sense voltage, not furnace 24 VAC (`Rf`/`Cf` not involved).
+- `EXTERNAL` must be ENABLED and `REMOTE` OFF: with `REMOTE` on and no Model 76 answering, the unit refuses to
+  run (idle 3 W).
+- Measured (`dehum_pm`): call → 457 W within 8 s, ~595–600 W steady (compressor + blower); release → 3 W
+  within 8 s. No start delay after 19 min off. When NOT called the blower is off too (3 W) — the unit is a
+  passive resistance on the ERV supply then.
 
 **Protections still active in External mode** (the relay is a *request*, not a command): compressor
 anti-short-cycle, defrost, inlet air **50–104 °F with dew point ≥ 40 °F** (else fault `E8`), and
