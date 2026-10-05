@@ -1,12 +1,16 @@
 # ADR-0041 — HVAC + shade actuators: capability seams over device seams
 
-**Status:** Accepted — **shades IMPLEMENTED and verified end to end (2026-09-27)**; HVAC in progress.
+**Status:** Accepted — **shades IMPLEMENTED and verified end to end (2026-09-27)**; **HVAC IMPLEMENTED and live
+(2026-10-04/05)** — Broan over RS-485 + Aprilaire over `DH`; Aprilaire RS-485 an optional upgrade.
 - **Shades — firmware complete.** `shades_s3` (`edge/esp32s3-shades`, `v4-shades`) drives the QCTZ36SDU via the
   Atmel-direct modification; 18-line map verified by pintest; signed `shade` command moved a paired XS40.
   Remaining work is install-side (mount, direction, limits, pair CH2–6, calibrate). See the node README.
-- **HVAC — built, parked.** `hvac_c6` (LISTEN_ONLY Broan sniffer) and `dehum_c6` (inert) were built and
-  enrolled 2026-09-22 and are **offline** (retained status, 2026-09-27). Broan control is gated on E50 recovery;
-  `ha_aprilaire_dehum` is gated on the §7.3 bench measurement. Next up after shades.
+- **HVAC — live (2026-10-04/05).** `hvac_c6` (v9) IS the Broan ERV's RS-485 controller, answering as its paired
+  address `0x11` (wall control unpowered); E50 turned out warning-only and self-clearing. Modes + timed OVR boost
+  from the PWA and automation; OVR-latch protection (45 s minimum hold) and alert. `dehum_c6` (v3) drives the
+  Aprilaire E070's `DH` input as a leased call (External mode; board `NC|NO` switch → `NO`). Both adopted on
+  ha-2 (`erv_attic`, `dehum_attic`) with metering plugs; the dehumidifier floors the ERV (Low while running, High
+  15 min after). Evidence: design doc §1.8, §2.5, §7.2; `docs/design/erv-airflow-2026-10-04.md`; runbook Entry 3.
 **Relates to:** ADR-0020 (shared firmware core / module-first), ADR-0014 (device-control conventions),
 ADR-0034 (Node / Ability / Entity), ADR-0027 (actuator telemetry + area contract)
 **Reference:** [docs/design/hvac-shade-device-integration.md](../design/hvac-shade-device-integration.md)

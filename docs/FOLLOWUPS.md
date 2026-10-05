@@ -7,6 +7,23 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 📌 CURRENT OPEN — 2026-10-05 checkpoint (authoritative; details in the dated sections below)
+
+Live + verified today on ha-2: Broan ERV `erv_attic` (hvac_c6 v9, RS-485 controller @0x11, manual + automation
+on 3 averaged AQ sensors, levels low/med/high); Aprilaire `dehum_attic` (dehum_c6 v3, leased DH call, automation
+on kitchen RH + outdoor dew-point gate, floors the ERV); plugs `erv_pm` + `dehum_pm`; Outdoor area + sensor;
+node-secret LUTs synced (12 = 12). run_all 785/15 (the 15 pre-existing).
+
+1. **Aprilaire RS-485 (Model 76 emulation)** — 2nd isolated TTL→RS485 (C) on order. Bench-test → listen-only on
+   `A`/`B` → decide control; then settle VENT mode (stays ON until then — see REVISIT below).
+2. **.210 ha-2-failover instance stale** (code + registry) — section 🔴 below. Now also lacks erv_attic /
+   dehum_attic / dehum_pm / erv_pm and the Outdoor area.
+3. **Wall-control switch** (FET on the Broan wall control's 12 V) — research only, nothing on hand (Hugh: last).
+4. **Shades intake** — `shade` ability not in `_NODE_ABILITIES`; node powered off until install.
+5. **Levoit PWA flashing** — built, unproven until the next physical unit.
+6. **Not built (ideas):** humidity-aware ERV bias (ventilate more when outdoor dew point < indoor); PWA editor
+   for the dehum→ERV floor (API-editable today); Aprilaire fan-only.
+
 ## 🟡 REVISIT — Aprilaire VENT (air-cycling) mode costs ~67 W net, adds no fresh air (2026-10-05)
 
 Airflow test: the ERV meets its CFM targets without it; the dehum blower only offloads the ERV supply fan
@@ -23,7 +40,7 @@ driven by HOUSE RH sensors**. No Model 76 remote is installed, so `A`/`B` is fre
 
 - **2026-10-04 progress:** `dehum_c6` v3-dehum-call (leased DH call, relay verified OTA); `dehum_pm` (S31 ex
   s31_spare3, attic, air-gap) live — compressor reads ~594 W; node adopted as `dehum_attic` (intake `dehum` lane).
-  ⚠ Hugh connected the relay to `DH` WITHOUT metering `DH`–`DH` first (relay switched fine) — still meter it.
+  ✅ `DH` metered by Hugh (~24 V open) after the relay was connected — within the relay's rating.
   **External/`DH` WORKS** (22:14Z): E070 `NC|NO` switch exists, shipped `NC` → set `NO`; `DH` = ~24 V open;
   call → 457 W in 8 s, ~600 W steady; release → 3 W in 8 s. RS-485 Remote stays an optional upgrade (feed
   house RH + read run state/RH), not required.
@@ -33,18 +50,19 @@ driven by HOUSE RH sensors**. No Model 76 remote is installed, so `A`/`B` is fre
   hvac_c6; `PE`→`−`, `+` (9 VDC) unconnected; A/B polarity to be found by the sniff verdict. Question to answer:
   does the E070 broadcast M-frames (run state + RH) with no remote attached? Control over 485 is mutually
   exclusive with External mode AND needs a ~2 ms reply path the firmware doesn't have — only if it earns it.
-- **Next attic visit (Hugh):** Sonoff on the cord · meter `DH`–`DH` powered, relay off, AC+DC and to chassis
+- ✅ **DONE 2026-10-04 —** Sonoff on the cord · meter `DH`–`DH` powered, relay off, AC+DC and to chassis
   (>~30 V = stop) · confirm the `NC|NO` switch exists → `NO` · enable `EXTERNAL` in the installer menu (E070's
   manual doesn't document it — confirming it is itself a finding) · float jumper stays.
-- **✅ Automation BUILT + deployed 2026-10-04 (disabled until Hugh picks RH sensors):** averaged RH vs 55/50
+- **✅ Automation LIVE (Hugh enabled it 2026-10-04 on kitchen RH; outdoor dew-point gate added + set to
+  switchbot_outdoor / 40 °F; ERV floor while dehumidifying lowered to Low on 2026-10-05):** averaged RH vs 55/50
   hysteresis → leased `DH` call (renewed <5 min left); ERV FLOOR med while running, high 15 min after each stop
   (coil dry-out), ERV = max(own AQ level, floor); operator ERV-OFF wins and holds the dehum; "Called but not
-  running" alarm via `dehum_pm` (<100 W after 5 min). Not built: outdoor dew-point gating (skip hopeless E8
-  calls), PWA editor for the ventilation floor (API-editable), fan-only.
+  running" alarm via `dehum_pm` (<100 W after 5 min). ✅ outdoor dew-point gate BUILT 2026-10-05. Not built:
+  PWA editor for the ventilation floor (API-editable), fan-only.
 - **(superseded design note)** call `DH` only while the ERV is moving air (not Off/Intermittent) — first
   cross-device interlock. Expect E8 lockouts in cool seasons (inlet <50 °F or dew point <40 °F); harmless but
   silent except via `dehum_pm` watts.
-- **Airflow test (series resistance):** dehum fan on vs off at each ERV mode, compare ERV supply RPM / power /
+- ✅ **Airflow test DONE 2026-10-05** (`docs/design/erv-airflow-2026-10-04.md`) — was: dehum fan on vs off at each ERV mode, compare ERV supply RPM / power /
   CFM. At Turbo the ERV already delivers 130/132 CFM — near its limit. A 24 VAC bypass damper is the only
   relay worth adding, and only if this test says the penalty matters.
 
@@ -65,9 +83,9 @@ Entry 3. Design log: hvac-shade-device-integration §1.8 + §7.2.
   actuator in ha-2's `control.yaml` (mode + new `timed` boost trait), driven by `server/control/erv_driver.py`
   (signed edge transport, confirmed by the ERV's readback). Verified on ha-2 through the real issuer: low/med
   confirmed in 5–7 s, boost 15/stop in ~1 s. PWA: manual-only device card (sw v59).
-- **ERV automation BUILT 2026-10-04, awaiting Hugh's sensor pick.** Policy seeded DISABLED on ha-2: averaged
-  air_quality (`aggregate: mean`, operator-chosen `source_sensors`) → Low/Med/High/Turbo (bands <20 turbo, <40
-  high, <60 med, else low; LOW floor). Overrides Boost (= turbo) / Off for min·hour·day. Holds during OVR /
+- ✅ **ERV automation LIVE** (Hugh enabled it 2026-10-04 on 3 averaged sensors: c_bed, h_bed, h_office).
+  Since 2026-10-05: levels Low/Med/High (Turbo manual-only — same airflow as High here); bands <60 high, <75
+  med, else low; LOW floor. Overrides Boost (= High) / Off for min·hour·day. Holds during OVR /
   start-up. ⚠ Overrides act through the controller loop, which skips DISABLED policies — enable automation
   for Off/Boost overrides to take effect (true of every device).
 - ~~Warning register `0`~~ ✅ v9 treats `0` and `-1` as no warning (W-codes start at 61 — inferred).
