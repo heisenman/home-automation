@@ -7,6 +7,14 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 🟡 REVISIT — Aprilaire VENT (air-cycling) mode costs ~67 W net, adds no fresh air (2026-10-05)
+
+Airflow test: the ERV meets its CFM targets without it; the dehum blower only offloads the ERV supply fan
+(Med 61→43 W) at 86 W. ≈1.6 kWh/day if continuous. Hugh's call (2026-10-05): **leave it ON for now**; once
+RS-485 digital control lands, find out whether vent can be switched digitally — if yes, drive it (e.g. only for
+coil dry-out, or only when outdoor air is drier than indoor); if not, Hugh turns it off at the unit menu. Applied the same day: Turbo out of ERV automation
+(levels low/med/high; bands merged <60 high, <75 med, else low); dehum's ERV floor during dehumidifying = Low.
+
 ## 🟡 2026-10-04 — Aprilaire E070 plan (dehum_c6), decided with Hugh
 
 **Plumbing fact:** the HVAC installers ran the E070 IN SERIES on the ERV's fresh-air supply. So the unit dries

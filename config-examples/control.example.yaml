@@ -47,7 +47,9 @@ devices:
         safe: med
         label: Ventilation
         # automation (threshold_ranged) drives the MODE: band level N -> levels[N-1]; OFF -> off_mode.
-        levels: [low, med, high, turbo]
+        # Turbo deliberately absent (2026-10-05): it delivers the same ~124 CFM as High on this install (the
+        # exhaust fan caps both) for the same or more power — manual-only. docs/design/erv-airflow-2026-10-04.md
+        levels: [low, med, high]
         off_mode: "off"
         # States the ERV enters ON ITS OWN — never commanded; shown as a banner, mode buttons locked meanwhile.
         external:

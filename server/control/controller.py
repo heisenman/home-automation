@@ -66,8 +66,7 @@ ERV_POLICY = {
     "source_sensors": [],
     "aggregate": "mean",
     "control": {"strategy": "threshold_ranged", "metric": "air_quality",
-                "bands": [{"max": 20, "level": 4}, {"max": 40, "level": 3},
-                          {"max": 60, "level": 2}, {"max": None, "level": 1}]},
+                "bands": [{"max": 40, "level": 3}, {"max": 60, "level": 2}, {"max": None, "level": 1}]},
     "schedule": [],
     "defaults": {"running": True},
     "sensor_stale_min": 30,
@@ -85,7 +84,9 @@ DEHUM_POLICY = {
     "aggregate": "mean",
     "control": {"strategy": "hysteresis", "metric": "humidity_pct", "on_above": 55, "off_below": 50,
                 "min_on_min": 10, "min_off_min": 10},
-    "ventilation": {"device": None, "during_level": 2, "after_level": 3, "after_min": 15},
+    # during_level 1 (Low), not Med (2026-10-05): the dehum's own blower moves air through its coil, and less
+    # fresh air means less humid outdoor air to remove in summer. Dry-out stays High (≈ Turbo's airflow here).
+    "ventilation": {"device": None, "during_level": 1, "after_level": 3, "after_min": 15},
     # Skip calling when the OUTDOOR dew point is below min_dewpoint_c (40 °F): that air is so dry that
     # ventilation alone dries the house, and it is where the E070's E8 inlet lockout starts. Outdoor dew point
     # is a deliberately conservative proxy — the unit's real inlet is post-ERV air (in cold weather the ERV
@@ -601,6 +602,12 @@ class Controller:
         res = self._apply_airflow_interlock(conn, device_id, pol, res, dev_state, now)
         res = self._apply_outdoor_gate(pol, res, dev_state, now)
         lm = self._level_modes(device_id) if drv is None else None
+        if lm is not None and res.level is not None and lm["labels"] and res.level > len(lm["labels"]):
+            # a band asking above the device's top level (e.g. bands written when Turbo was a level) means
+            # "the top level" — clamp BEFORE deciding to act, or it re-commands the same mode every tick
+            top = len(lm["labels"])
+            res = Resolution(res.running, (not dev_state.running) or dev_state.level != top, res.source,
+                             res.reason, level=top)
         if lm is not None:
             res = self._apply_ventilation_floor(conn, device_id, res, dev_state, override, now, lm)
         if lm is not None and res.running and res.level is None and res.source == "override" and lm["labels"]:

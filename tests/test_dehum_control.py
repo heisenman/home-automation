@@ -57,18 +57,32 @@ def _erv_cmds(iss):
     return [a for d, t, a in iss.calls if d == "erv_attic"]
 
 
-def test_humid_house_calls_dehum_and_floors_the_erv_at_med(tmp_path):
-    ctrl, iss, _ = _make(tmp_path, rh=(60, 62))                    # mean 61 >= 55
+def test_humid_house_calls_dehum_and_floors_the_erv_at_low(tmp_path):
+    # ERV on Intermittent (not a level): the dehum still starts (ERV automation can raise it) and the floor —
+    # Low since 2026-10-05 — lifts the ERV to continuous Low
+    ctrl, iss, _ = _make(tmp_path, rh=(60, 62), erv_mode=8)        # mean 61 >= 55
     ctrl.tick(now=NOW)
     assert ("dehum_attic", "switchable", {"on": True}) in iss.calls
-    assert _erv_cmds(iss)[-1] == {"mode": "med"}                    # own level = low; floor lifts to med
+    assert _erv_cmds(iss)[-1] == {"mode": "low"}
 
 
 def test_floor_never_lowers_the_erv(tmp_path):
-    ctrl, iss, _ = _make(tmp_path, rh=(60, 62), erv_mode=12)        # already turbo
-    ctrl._latest_stored = lambda sid, metric, n: {"m": {metric: 10.0}, "ts": n - 60}   # bad air -> turbo
+    ctrl, iss, _ = _make(tmp_path, rh=(60, 62), erv_mode=10)        # already high (the top level)
+    ctrl._latest_stored = lambda sid, metric, n: {"m": {metric: 10.0}, "ts": n - 60}   # bad air -> high
     ctrl.tick(now=NOW)
-    assert _erv_cmds(iss) == []                                      # stays turbo, no downward command
+    assert _erv_cmds(iss) == []                                      # stays high, no downward command
+
+
+def test_band_above_the_top_level_is_clamped_not_re_sent_every_tick(tmp_path):
+    ctrl, iss, db = _make(tmp_path, rh=(40, 40), erv_mode=10)        # dry house; ERV at high (top)
+    conn = sqlite3.connect(db)
+    pol = store.get_policy(conn, "erv_attic")
+    store.set_policy(conn, "erv_attic", {**pol, "control": {**pol["control"], "bands": [
+        {"max": 20, "level": 4}, {"max": None, "level": 1}]}})        # a stale level-4 band
+    conn.close()
+    ctrl._latest_stored = lambda sid, metric, n: {"m": {metric: 10.0}, "ts": n - 60}
+    ctrl.tick(now=NOW)
+    assert _erv_cmds(iss) == []
 
 
 def test_running_lease_is_renewed_before_it_runs_out(tmp_path):

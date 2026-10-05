@@ -249,10 +249,10 @@ def ctrl_pol(tmp_path):
 
 
 def test_bad_air_steps_up_and_clean_air_floors_at_low_never_off(tmp_path):
-    ctrl, iss, now = _erv_ctrl(tmp_path, aq={"gas_a": (10, 60)})          # very poor -> turbo
+    ctrl, iss, now = _erv_ctrl(tmp_path, aq={"gas_a": (10, 60)})          # very poor -> top level = high
     _report(ctrl, 11)
     ctrl.tick(now=now)
-    assert iss.calls[-1] == ("mode", {"mode": "turbo"})
+    assert iss.calls[-1] == ("mode", {"mode": "high"})                   # turbo is manual-only (2026-10-05)
     (tmp_path / "clean").mkdir()
     ctrl, iss, now = _erv_ctrl(tmp_path / "clean", aq={"gas_a": (95, 60)})  # excellent -> LOW, not off
     _report(ctrl, 11)
@@ -275,7 +275,7 @@ def test_ovr_or_startup_holds_without_commanding(tmp_path):
         assert iss.calls == [], external
 
 
-def test_boost_override_means_turbo_and_off_override_means_mode_off(tmp_path):
+def test_boost_override_means_top_level_and_off_override_means_mode_off(tmp_path):
     import sqlite3
 
     from server.control import control_store as store
@@ -285,7 +285,7 @@ def test_boost_override_means_turbo_and_off_override_means_mode_off(tmp_path):
     conn.close()
     _report(ctrl, 9)
     ctrl.tick(now=now)
-    assert iss.calls[-1] == ("mode", {"mode": "turbo"})
+    assert iss.calls[-1] == ("mode", {"mode": "high"})                   # Boost = the top automation level
     conn = sqlite3.connect(str(tmp_path / "control.db"))
     store.set_override(conn, "erv_attic", "off", now + 3600)
     conn.close()
