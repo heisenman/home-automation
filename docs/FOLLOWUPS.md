@@ -23,6 +23,11 @@ node-secret LUTs synced (12 = 12). run_all 785/15 (the 15 pre-existing).
 5. **Levoit PWA flashing** — built, unproven until the next physical unit.
 6. **Not built (ideas):** humidity-aware ERV bias (ventilate more when outdoor dew point < indoor); PWA editor
    for the dehum→ERV floor (API-editable today); Aprilaire fan-only.
+7. **2nd D1001 panel `d1001_2`** (2026-10-06) — per-unit identity built (v115-unitid, `panel.sh flash-unit`).
+   Open: (a) **Hugh wants to discuss panel location/purpose** — panels have rooms; make a panel's place more
+   relevant to what it shows/does; (b) both units share the COMPILED `HA_CMD_SECRET` — move panels to the
+   ADR-0036 node-born secret + LUT entry per unit; (c) the first panel still runs v114 (no need to OTA unless
+   wanted — v115 is identical for it, no NVS node_id); (d) `bat_profile.c` log string still says d1001-beachhead.
 
 ## 🟡 REVISIT — Aprilaire VENT (air-cycling) mode costs ~67 W net, adds no fresh air (2026-10-05)
 

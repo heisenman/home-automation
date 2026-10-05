@@ -19,7 +19,8 @@ in this file.
   # roadmap #5: pull a SwitchBot meter's on-device history over GATT (relays home/edge/<node>/<mac>/history)
   python3 tools/d1001_cmd.py gathist B0:E9:FE:54:A8:02 outdoor
 
-Broker + secret source override with $HA_BROKER (default 192.168.0.210) / $HA_CMD_SECRET.
+Broker + secret source override with $HA_BROKER (default 192.168.0.210) / $HA_CMD_SECRET; target another
+panel unit with $HA_PANEL=<node_id> (default d1001-beachhead).
 """
 import json
 import os
@@ -30,7 +31,8 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[1]
 SECRETS_H = REPO / "provisioning/reterminal/beachhead/main/secrets.h"
-TOPIC = "d1001-beachhead/cmd"
+# Which panel: $HA_PANEL = its node_id (default the first unit; a 2nd is e.g. d1001_2 — tools/panel_nvs.py)
+TOPIC = f"{os.environ.get('HA_PANEL', 'd1001-beachhead')}/cmd"
 
 
 def load_secret() -> str:

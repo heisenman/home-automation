@@ -70,52 +70,68 @@
 #define PANEL_TZ "PST8PDT,M3.2.0,M11.1.0"   // America/Los_Angeles (POSIX TZ); override in secrets.h
 #endif
 
-#define APP_BUILD_TAG "v114-outdoor"
+#define APP_BUILD_TAG "v115-unitid"
 // Edge-node identity for BLE advert relay. The panel is a peer edge node (ADR-0020):
 // decoded meters publish to home/edge/<BLE_NODE>/<mac>/adv, same shape the c3/c6/s3
 // nodes emit, so the dictator's edge-mapper ingests it with zero new server work.
-#define BLE_NODE "d1001-beachhead"
+// PANEL_IMAGE is the firmware's IMAGE identity — every D1001 runs the same image, and the OTA gate refuses
+// anything not branded "d1001-beachhead@…". s_node is THIS UNIT's name (MQTT topics, broker client id, edge
+// node id): the NVS "ha" node_id if one was provisioned at flash time, else PANEL_IMAGE. Two panels sharing a
+// client id would take turns kicking each other off the broker, so a 2nd unit MUST be flashed with its own
+// node_id (tools/panel_nvs.py). The first panel has no NVS node_id and keeps the old name unchanged.
+#define PANEL_IMAGE "d1001-beachhead"
+static char s_node[32] = PANEL_IMAGE;
+#define BLE_NODE s_node
 #define BSP_BUTTON_IN  GPIO_NUM_3     // back-of-device button, ACTIVE-HIGH (released=0/held=1, verified; see recovery.h)
 static const char *TAG = "beachhead";
 
-#define T_STATUS "d1001-beachhead/status"
-#define T_OTAST  "d1001-beachhead/ota"
-#define T_LOG    "d1001-beachhead/log"
-#define T_ACK    "d1001-beachhead/ack"
-#define T_OTA    "d1001-beachhead/cmd/ota"
-#define T_PING   "d1001-beachhead/cmd/ping"
-#define T_REPLC  "d1001-beachhead/cmd/replica"     // -> (any) force the #7 instance-backup files lane to run now
-#define T_DEBUG  "d1001-beachhead/cmd/debug"
-#define T_DISP   "d1001-beachhead/display"       // <- retained display bring-up result
-#define T_DISPC  "d1001-beachhead/cmd/display"    // -> "on" triggers display bring-up (default off)
-#define T_BLEC   "d1001-beachhead/cmd/ble"        // -> "on" starts the passive BLE relay (default off)
-#define T_BLE    "d1001-beachhead/ble"            // <- BLE relay telemetry (adv total / decoded / rssi)
-#define T_SLVOTA "d1001-beachhead/cmd/slaveota"   // -> URL of C6 slave app bin (network_adapter.bin)
-#define T_SLVST  "d1001-beachhead/slaveota"       // <- C6 slave-OTA result
-#define T_I2CSC  "d1001-beachhead/cmd/i2cscan"    // -> (any) probe both I2C buses (find fuel gauge)
-#define T_I2CRES "d1001-beachhead/i2c"            // <- I2C scan result
-#define T_BDUMP  "d1001-beachhead/cmd/battdump"   // -> (any) dump 0x36 MAX17048 regs (chip ID)
-#define T_BPROF  "d1001-beachhead/battprofile"    // <- live mirror of the SD battery-profile rows
-#define T_FSC    "d1001-beachhead/cmd/fs"          // -> JSON SD file op (ls/stat/read/write/rm/mkdir/df)
-#define T_FS     "d1001-beachhead/fs"              // <- JSON file-op result
-#define T_PWR    "d1001-beachhead/power"           // <- power-context change (on_wall / ble_relay), retained
-#define T_SCRC   "d1001-beachhead/cmd/screen"      // -> off/on/toggle (or 0/1): control backlight+panel power
-#define T_BRTC   "d1001-beachhead/cmd/brightness"  // -> N (0-100): setpoint trait -> backlight %; 0 = screen off
-#define T_SCRST  "d1001-beachhead/state/screen"    // <- retained {"on":bool,"level":pct}: screen actuator state (ADR-0014 R3)
-#define T_GPIOC  "d1001-beachhead/cmd/gpio"        // -> "N" read P4 GPIO N | "N 0|1" drive it. Result -> pin
-#define T_EXPC   "d1001-beachhead/cmd/exp"         // -> "N" read PCA9535 pin N | "N 0|1" drive it. Result -> pin
-#define T_PIN    "d1001-beachhead/pin"             // <- {gpio|exp, level|set} readback for cmd/gpio + cmd/exp
-#define T_CHGC   "d1001-beachhead/cmd/charge"      // -> auto|hold|on|off | reset[ ms] | status : charge-mgr control
-#define T_CHG    "d1001-beachhead/charge"          // <- charge-manager state (mode + STAT + cell)
-#define T_ALERT  "d1001-beachhead/alert"           // <- low-battery warn (retained) -> ntfy bridge
-#define T_BRATE  "d1001-beachhead/cmd/battrate"    // -> N: battery telemetry sample period in ms (finer-cadence hook)
-#define T_PPTEST "d1001-beachhead/cmd/pptest"      // -> "mv N": inject a policy reading to bench-test warn/shutdown (0=resume)
-#define T_PROFC  "d1001-beachhead/cmd/profile"     // -> JSON profile (hot-swap+persist to NVS) | "get" | "default" (ADR-0024 §5)
-#define T_PROF   "d1001-beachhead/profile"         // <- active battery profile (provenance+offsets+lut+source), retained
-#define T_SDIMC  "d1001-beachhead/cmd/scene-brightness" // -> JSON {"Home":N,...} (persist to NVS) | "get" | "default": device-local per-scene backlight (roadmap #2 pivot)
-#define T_SDIM   "d1001-beachhead/scene-brightness" // <- retained {"source","table":{...}}: active per-scene backlight policy
-#define T_CMD    "d1001-beachhead/cmd"              // -> SIGNED {p,s} authority directive (ADR-0010): inner {op:ota|fs|gpio|exp|gattprobe,...}; verified before it acts (roadmap #4)
-#define T_GATT   "d1001-beachhead/gatt"             // <- GATT-central probe progress/result (roadmap #5 Spike 0)
+// MQTT topics, all under <s_node>/. Built once by topics_init() after the identity is resolved.
+#define PANEL_TOPICS(X) \
+    X(T_STATUS, "status") \
+    X(T_OTAST,  "ota") \
+    X(T_LOG,    "log") \
+    X(T_ACK,    "ack") \
+    X(T_OTA,    "cmd/ota") \
+    X(T_PING,   "cmd/ping") \
+    X(T_REPLC,  "cmd/replica") /* -> (any) force the #7 instance-backup files lane to run now */ \
+    X(T_DEBUG,  "cmd/debug") \
+    X(T_DISP,   "display") /* <- retained display bring-up result */ \
+    X(T_DISPC,  "cmd/display") /* -> "on" triggers display bring-up (default off) */ \
+    X(T_BLEC,   "cmd/ble") /* -> "on" starts the passive BLE relay (default off) */ \
+    X(T_BLE,    "ble") /* <- BLE relay telemetry (adv total / decoded / rssi) */ \
+    X(T_SLVOTA, "cmd/slaveota") /* -> URL of C6 slave app bin (network_adapter.bin) */ \
+    X(T_SLVST,  "slaveota") /* <- C6 slave-OTA result */ \
+    X(T_I2CSC,  "cmd/i2cscan") /* -> (any) probe both I2C buses (find fuel gauge) */ \
+    X(T_I2CRES, "i2c") /* <- I2C scan result */ \
+    X(T_BDUMP,  "cmd/battdump") /* -> (any) dump 0x36 MAX17048 regs (chip ID) */ \
+    X(T_BPROF,  "battprofile") /* <- live mirror of the SD battery-profile rows */ \
+    X(T_FSC,    "cmd/fs") /* -> JSON SD file op (ls/stat/read/write/rm/mkdir/df) */ \
+    X(T_FS,     "fs") /* <- JSON file-op result */ \
+    X(T_PWR,    "power") /* <- power-context change (on_wall / ble_relay), retained */ \
+    X(T_SCRC,   "cmd/screen") /* -> off/on/toggle (or 0/1): control backlight+panel power */ \
+    X(T_BRTC,   "cmd/brightness") /* -> N (0-100): setpoint trait -> backlight %; 0 = screen off */ \
+    X(T_SCRST,  "state/screen") /* <- retained {"on":bool,"level":pct}: screen actuator state (ADR-0014 R3) */ \
+    X(T_GPIOC,  "cmd/gpio") /* -> "N" read P4 GPIO N | "N 0|1" drive it. Result -> pin */ \
+    X(T_EXPC,   "cmd/exp") /* -> "N" read PCA9535 pin N | "N 0|1" drive it. Result -> pin */ \
+    X(T_PIN,    "pin") /* <- {gpio|exp, level|set} readback for cmd/gpio + cmd/exp */ \
+    X(T_CHGC,   "cmd/charge") /* -> auto|hold|on|off | reset[ ms] | status : charge-mgr control */ \
+    X(T_CHG,    "charge") /* <- charge-manager state (mode + STAT + cell) */ \
+    X(T_ALERT,  "alert") /* <- low-battery warn (retained) -> ntfy bridge */ \
+    X(T_BRATE,  "cmd/battrate") /* -> N: battery telemetry sample period in ms (finer-cadence hook) */ \
+    X(T_PPTEST, "cmd/pptest") /* -> "mv N": inject a policy reading to bench-test warn/shutdown (0=resume) */ \
+    X(T_PROFC,  "cmd/profile") /* -> JSON profile (hot-swap+persist to NVS) | "get" | "default" (ADR-0024 §5) */ \
+    X(T_PROF,   "profile") /* <- active battery profile (provenance+offsets+lut+source), retained */ \
+    X(T_SDIMC,  "cmd/scene-brightness") /* -> JSON {"Home":N,...} (persist to NVS) | "get" | "default": device-local per-scene backlight (roadmap #2 pivot) */ \
+    X(T_SDIM,   "scene-brightness") /* <- retained {"source","table":{...}}: active per-scene backlight policy */ \
+    X(T_CMD,    "cmd") /* -> SIGNED {p,s} authority directive (ADR-0010): inner {op:ota|fs|gpio|exp|gattprobe,...}; verified before it acts (roadmap #4) */ \
+    X(T_GATT,   "gatt") /* <- GATT-central probe progress/result (roadmap #5 Spike 0) */
+#define X_DECL(name, suffix) static char name[64];
+PANEL_TOPICS(X_DECL)
+static void topics_init(void)
+{
+#define X_INIT(name, suffix) snprintf(name, sizeof name, "%s/%s", s_node, suffix);
+    PANEL_TOPICS(X_INIT)
+}
 
 static esp_mqtt_client_handle_t s_client = NULL;
 static volatile bool s_mqtt_up = false;
@@ -224,11 +240,11 @@ static void publish_status(void)
         ui_tiles_set_battery(bs.soc, bs.on_wall, bs.gaining);   // panel top-bar power indicator (3-state)
     char msg[380];
     snprintf(msg, sizeof(msg),
-        "{\"device\":\"d1001-beachhead\",\"status\":\"online\",\"partition\":\"%s\",\"build\":\"%s\","
+        "{\"device\":\"%s\",\"status\":\"online\",\"partition\":\"%s\",\"build\":\"%s\","
         "\"ip\":\"%s\",\"uptime_s\":%lld,\"heap\":%u,\"rssi\":%d,\"wifi_rc\":%d,\"mqtt_rc\":%d,"
         "\"display\":%s,\"debug\":%s,\"batt_pct\":%d,\"batt_mv\":%d,\"charging\":%s,"
         "\"on_wall\":%s,\"gaining\":%s,\"temp_dc\":%d,\"charge_en\":%s}",
-        run ? run->label : "?", APP_BUILD_TAG, s_ip,
+        s_node, run ? run->label : "?", APP_BUILD_TAG, s_ip,
         esp_timer_get_time() / 1000000, (unsigned)esp_get_free_heap_size(), rssi, s_wifi_rc, s_mqtt_rc,
         bsp_display_ready() ? "true" : "false", s_debug ? "true" : "false",
         have_batt ? bs.soc : -1, have_batt ? bs.batt_mv_smoothed : 0, bs.charging ? "true" : "false",
@@ -573,7 +589,7 @@ static void mqtt_event_handler(void *args, esp_event_base_t base, int32_t id, vo
     switch ((esp_mqtt_event_id_t)id) {
     case MQTT_EVENT_CONNECTED:
         s_mqtt_up = true;
-        esp_mqtt_client_subscribe(e->client, "d1001-beachhead/cmd/#", 1);
+        { char sub[48]; snprintf(sub, sizeof sub, "%s/cmd/#", s_node); esp_mqtt_client_subscribe(e->client, sub, 1); }
         esp_mqtt_client_subscribe(e->client, "home/+/+/state", 0);   // live device state -> tiles
         ESP_LOGW(TAG, "MQTT connected (reconnect #%d) — subscribed cmd/# + home/+/+/state", s_mqtt_rc);
         publish_status();
@@ -1014,15 +1030,19 @@ static void battdump_task(void *pv)
 // app_main returns — a stack cfg would dangle (the edge hit exactly this). Populated once by ha_config_load.
 static ha_config_t s_cfg;
 
+static bool s_identity_bad = false;   // NVS identity minted for another chip -> stay off the broker
+static char s_lwt[80];   // static: the client keeps the pointer
+
 static void start_mqtt(void)
 {
+    snprintf(s_lwt, sizeof s_lwt, "{\"device\":\"%s\",\"status\":\"offline\"}", s_node);
     esp_mqtt_client_config_t cfg = {
         .broker.address.uri = s_cfg.broker_uri,   // was MQTT_BROKER_URI; now overlay-able (repoint)
-        .credentials.client_id = "d1001-beachhead",
+        .credentials.client_id = s_node,          // per-unit: a shared client id makes two panels evict each other
         .session.keepalive = 15,
         .session.last_will = {
             .topic = T_STATUS,
-            .msg = "{\"device\":\"d1001-beachhead\",\"status\":\"offline\"}",
+            .msg = s_lwt,
             .qos = 1, .retain = 1,
         },
     };
@@ -1286,7 +1306,20 @@ void app_main(void)
     // this yields the exact old values, so boot behavior is unchanged until a repoint lands. (ADR-0028/DJ-19)
     ha_config_load(&s_cfg, &(ha_config_t){
         .wifi_ssid = WIFI_SSID, .wifi_psk = WIFI_PASS, .broker_uri = MQTT_BROKER_URI,
-        .node_id = BLE_NODE, .ntp_server = NTP_SERVER, .ota_host = "" });
+        .node_id = PANEL_IMAGE, .ntp_server = NTP_SERVER, .ota_host = "" });
+    // Per-unit identity: NVS node_id (bound to this chip's MAC) or the PANEL_IMAGE default. A blob minted
+    // for ANOTHER chip must not be worn — that is impersonation — so keep the default name and say why.
+    {
+        char why[96] = "";
+        if (ha_config_identity_ok(&s_cfg, why, sizeof why)) {
+            strncpy(s_node, s_cfg.node_id[0] ? s_cfg.node_id : PANEL_IMAGE, sizeof s_node - 1);
+        } else {
+            ESP_LOGE(TAG, "identity: NVS blob not for this chip (%s) — NOT starting MQTT", why);
+            s_identity_bad = true;
+        }
+        topics_init();
+        ESP_LOGW(TAG, "identity: node=%s image=%s", s_node, PANEL_IMAGE);
+    }
     // Repoint self-heal (DJ-19), EARLY — before any Wi-Fi bring-up: if a repoint is pending, count this
     // trial boot and, after RP_MAX_TRIES failures, revert to the backed-up config + reboot. Must be here —
     // a bad SSID fails the connect below and reboots before the late confirm runs, so only this early
@@ -1295,7 +1328,7 @@ void app_main(void)
     scene_dim_init();   // load the device-local per-scene backlight table (NVS override or baked default)
     ha_gatt_init(&(ha_gatt_cfg_t){ .publish = gatt_hist_publish, .log = gatt_log_cb });   // roadmap #5
     ha_ota_init(&(ha_ota_cfg_t){                 // shared OTA client: identity gate keyed on this node id (ADR-0020)
-        .node_id    = BLE_NODE,                  // "d1001-beachhead" — refuse any image not branded "<node_id>@…"
+        .node_id    = PANEL_IMAGE,               // image identity (same for every unit) — refuse any image not branded "d1001-beachhead@…"
         .ota_host   = s_cfg.ota_host,            // overlay-able host pin (repoint moves it); default "" = pin OFF, identity is the gate
         .log        = ha_ota_log_cb,
         .is_healthy = ha_ota_healthy_cb,
@@ -1324,8 +1357,8 @@ void app_main(void)
     ESP_LOGI(TAG, "WiFi started — joining %s", s_cfg.wifi_ssid);
 
     xEventGroupWaitBits(s_evt, WIFI_CONNECTED_BIT, pdFALSE, pdTRUE, portMAX_DELAY);
-    ESP_LOGI(TAG, "WiFi up — starting MQTT");
-    start_mqtt();
+    if (s_identity_bad) ESP_LOGE(TAG, "WiFi up — MQTT NOT started (identity blob is for another chip)");
+    else { ESP_LOGI(TAG, "WiFi up — starting MQTT"); start_mqtt(); }
     ha_battery_cfg_t bcfg = ha_battery_d1001_cfg(bsp_io_expander(), bsp_i2c1());
     bcfg.display_on_fn = bsp_display_is_on;   // display state for SoC normalization (ADR-0024)
     // A profile persisted from an earlier MQTT push (ADR-0024 §5) wins over the baked-in default; a

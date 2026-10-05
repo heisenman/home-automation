@@ -27,11 +27,16 @@ WORK="${WORK:-$(dirname "$OUT")/.flash-blocks}"
 GAPLOG="$(dirname "$OUT")/gaps.txt"
 rm -rf "$WORK"; mkdir -p "$WORK"; : > "$GAPLOG"
 
+# esptool 5.x spells commands/flags with dashes (read-flash, default-reset); 4.x (the IDF 5.4 env) accepts
+# ONLY underscores. A wrong spelling fails every read, which this script used to log as an all-gaps image.
+if "$ESPTOOL" -h 2>&1 | grep -q "read-flash"; then RF=read-flash BEF=default-reset AFT=hard-reset
+else RF=read_flash BEF=default_reset AFT=hard_reset; fi
+
 read_at() {  # addr size outfile -> 0 ok / 1 fail
   local addr=$1 size=$2 of=$3 t
   for t in 1 2; do
-    "$ESPTOOL" --port "$PORT" --before default-reset --after hard-reset \
-      read-flash "$addr" "$size" "$of" >/dev/null 2>&1 \
+    "$ESPTOOL" --port "$PORT" --before "$BEF" --after "$AFT" \
+      "$RF" "$addr" "$size" "$of" >/dev/null 2>&1 \
       && [ "$(stat -c%s "$of" 2>/dev/null)" = "$size" ] && return 0
     sleep 1
   done
@@ -45,7 +50,7 @@ while [ "$addr" -lt "$SIZE" ]; do
     echo "ok    $(printf '0x%08x' "$addr")  $((BLK/1024))K"
   else
     echo "COARSE FAIL $(printf '0x%08x' "$addr") -> subdividing to $((FINE/1024))K"
-    faddr="$addr"; fend=$((addr+BLK)); : > "$of"
+    faddr="$addr"; fend=$((addr+BLK)); : > "$of"; nfail=0
     while [ "$faddr" -lt "$fend" ]; do
       fof="$WORK/f_$(printf '%010x' "$faddr").bin"
       if read_at "$faddr" "$FINE" "$fof"; then
@@ -53,10 +58,17 @@ while [ "$addr" -lt "$SIZE" ]; do
       else
         echo "  GAP $(printf '0x%08x' "$faddr") $((FINE/1024))K (zero-filled)" | tee -a "$GAPLOG"
         head -c "$FINE" /dev/zero >> "$of"
+        nfail=$((nfail+1))
       fi
       rm -f "$fof"
       faddr=$((faddr+FINE))
     done
+    # A WHOLE block unreadable is a tool/port/connection fault, not dead flash (the D1001's bad region was
+    # ONE 64K sector). Stop rather than assemble a zero-filled "backup" that looks complete.
+    if [ "$nfail" -eq $((BLK/FINE)) ]; then
+      echo "ABORT: every sector of block $(printf '0x%08x' "$addr") failed — check esptool/port, not the flash"
+      exit 1
+    fi
   fi
   addr=$((addr+BLK))
 done

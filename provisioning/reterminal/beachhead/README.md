@@ -69,6 +69,20 @@ idf.py set-target esp32p4                    # fetches esp_wifi_remote + esp_hos
 idf.py -p /dev/ttyACM0 flash                 # P4 auto-enters download mode over USB-C (no buttons)
 ```
 
+### More than one panel (per-unit identity)
+Every D1001 runs the **same image** (OTA identity `d1001-beachhead@vNN`). A unit's *name* — MQTT topics
+(`<node>/status`, `<node>/cmd/#`…), broker client id, edge node id — comes from the NVS `ha` `node_id`, else
+defaults to `d1001-beachhead` (the first panel, which has no NVS node_id and is unchanged). **Two units with
+the same name share a broker client id and evict each other** — so a new unit is flashed with its own:
+
+```bash
+bash tools/panel.sh flash-unit d1001_2       # app + golden slot (ADR-0030) + identity blob, then REAL power-cycle
+HA_PANEL=d1001_2 HA_BROKER=192.168.1.200 python3 ../../../tools/d1001_cmd.py …   # address that unit
+```
+The blob (`tools/panel_nvs.py`, reusing `edge_flash.build_nvs_blob`) is bound to the chip's MAC; a blob for
+another chip is refused at boot (panel stays off MQTT). Boot log line: `identity: node=<name> image=d1001-beachhead`.
+Back up each new unit's factory flash first (`../resilient-flash-backup.sh`, auto-detects esptool 4/5 syntax).
+
 ## Key facts (the non-obvious bits)
 - **WiFi = ESP32-C6 coprocessor over esp-hosted/SDIO.** The P4 has no radio. `esp_wifi_remote` + `esp_hosted`
   route the standard `esp_wifi_*` API to the C6; **no explicit hosted-init call** (whole-archive link

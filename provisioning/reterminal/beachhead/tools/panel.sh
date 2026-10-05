@@ -8,6 +8,7 @@
 #   build            source ESP-IDF env + idf.py build (in place)
 #   size             idf.py size (DIRAM/IRAM budget)
 #   flash            cable-flash over the stable USB-JTAG by-id symlink (no OTA)
+#   flash-unit <id>  NEW unit: flash + golden slot + per-unit identity blob (tools/panel_nvs.py)
 #   console [secs]   follow the console via the by-id symlink, DTR/RTS DEASSERTED (default 60s)
 #   pull [host]      force a full replica pull (mosquitto_pub cmd/replica), default broker .210
 #   reset            hard-reset a (possibly wedged) panel over the by-id port
@@ -33,6 +34,20 @@ case "$cmd" in
     P="$(resolve_port)" || { echo "no by-id device — is the panel cabled to the bench?" >&2; exit 1; }
     . "$IDF/export.sh" >/dev/null 2>&1
     exec idf.py -C "$PROJ" -p "$P" flash ;;
+  flash-unit)
+    # A NEW panel unit: app + golden recovery slot (ADR-0030, same image) + this unit's identity blob.
+    # Usage: panel.sh flash-unit <node_id>   (node_id = slug [a-z0-9_], e.g. d1001_2; never the 1st panel's)
+    NODE="${1:?usage: panel.sh flash-unit <node_id>}"
+    P="$(resolve_port)" || { echo "no by-id device — is the panel cabled?" >&2; exit 1; }
+    REPO="$(cd "$PROJ/../../.." && pwd)"
+    BLOB="$(mktemp -d)/nvs-$NODE.bin"
+    "$REPO/venv/bin/python" "$REPO/tools/panel_nvs.py" --node-id "$NODE" --port "$P" --out "$BLOB" || exit 1
+    . "$IDF/export.sh" >/dev/null 2>&1
+    idf.py -C "$PROJ" -p "$P" flash || exit 1
+    esptool.py --port "$P" --chip esp32p4 --before default_reset --after hard_reset write_flash \
+      0x9000 "$BLOB" 0xA20000 "$PROJ/build/d1001_beachhead.bin" || exit 1
+    rm -f "$BLOB"
+    echo "== flashed $NODE (app + golden + identity). Now UNPLUG and REPLUG the panel (a real power-cycle)." ;;
   reset)
     P="$(resolve_port)" || { echo "no by-id device" >&2; exit 1; }
     . "$IDF/export.sh" >/dev/null 2>&1
@@ -83,5 +98,5 @@ PY
     # bash tools/panel.sh mon <topic-suffix|#> [secs]  — subscribe to a panel topic
     t="${1:-#}"; secs="${2:-20}"
     exec mosquitto_sub -h "$BROKER_DEFAULT" -t "$NODE/$t" -v -W "$secs" ;;
-  *) echo "usage: bash tools/panel.sh <build|size|flash|console|pull|reset|port|fs|mon> [args]" >&2; exit 2 ;;
+  *) echo "usage: bash tools/panel.sh <build|size|flash|flash-unit|console|pull|reset|port|fs|mon> [args]" >&2; exit 2 ;;
 esac

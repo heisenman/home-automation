@@ -29,6 +29,14 @@ topic write home/edge/d1001-beachhead/+/history
 topic read  d1001-beachhead/cmd
 topic read  d1001-beachhead/cmd/#
 
+# 2nd D1001 unit (same image, per-unit node_id from its NVS blob — tools/panel_nvs.py). Same shape.
+user d1001_2
+topic write d1001_2/#
+topic write home/edge/d1001_2/+/adv
+topic write home/edge/d1001_2/+/history
+topic read  d1001_2/cmd
+topic read  d1001_2/cmd/#
+
 # ── template for future actuator nodes (state up + ack up, only own cmd down) ──
 # user <node-id>
 # topic write home/<area>/<device_id>/state
