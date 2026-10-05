@@ -46,7 +46,9 @@ driven by HOUSE RH sensors**. No Model 76 remote is installed, so `A`/`B` is fre
 **`erv_attic`** (attic), history merged from 19:49Z; `erv_pm` (S31) meters its wall power. Re-check: runbook
 Entry 3. Design log: hvac-shade-device-integration §1.8 + §7.2.
 
-- **🔴 Node secrets don't reach ha-2 (structural).** `enroll_node` writes `.210`'s `instance/node_secrets.enc`
+- ~~**🔴 Node secrets don't reach ha-2 (structural).**~~ ✅ **FIXED 2026-10-05:** `tools/sync_node_secrets.py`
+  (union both ways, conflicts never silent) + `enroll_node` calls it after every enrollment. Ran it: both = 12.
+  Old note: `enroll_node` writes `.210`'s `instance/node_secrets.enc`
   only; ha-2's copy was last written 08-02. Intake then attempts a TOFU *claim* that a build-time-enrolled
   node can never answer ("no enroll reply … already claimed"). Patched by hand today: `hvac_c6`, `dehum_c6`,
   `shades_s3` copied into ha-2's LUT (backup `node_secrets.enc.bak-20261004`). `.210` still lacks

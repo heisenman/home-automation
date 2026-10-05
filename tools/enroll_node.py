@@ -24,6 +24,7 @@ its own command-signing key + broker credential; revoke = drop it from the LUT +
   HA_MASTER_PASSPHRASE=CHANGE_ME_master_passphrase python3 tools/enroll_node.py --show-confirm
 """
 import argparse
+import os
 import re
 import secrets as pysecrets
 import sys
@@ -144,6 +145,15 @@ def main() -> None:
                           "mqtt_pass": mqtt_pass, "created": stamp}
         S.save_lut(a.lut, master, lut)
         print(f"  recorded in encrypted LUT: {a.lut}  ({len(lut)} node(s))")
+        # ha-2 signs commands and runs intake with ITS copy of the LUT — push this node there now, or its
+        # first PWA adopt fails on a TOFU claim it can never answer (2026-10-04). Best-effort: say so loudly.
+        if os.environ.get("HA_SYNC_LUT", "1") != "0" and a.lut == DEFAULT_LUT:
+            try:
+                import sync_node_secrets as SY
+                SY.sync(lut_path=a.lut, quiet=True)
+                print("  synced node secrets to ha-2")
+            except Exception as e:                                    # noqa: BLE001
+                print(f"  ⚠ ha-2 NOT updated ({e}) — run tools/sync_node_secrets.py before adopting this node")
 
     if not a.no_secrets_file:
         sh = gen_secrets_h(a.node_id, cmd_secret, mqtt_pass, ssid, psk, broker, ntp,

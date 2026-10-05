@@ -1,0 +1,111 @@
+#!/usr/bin/env python3
+"""ERV airflow vs the in-series Aprilaire: does the dehumidifier's resistance (or its blower) change the ERV's
+fresh-air delivery? Steps the ERV through low/med/high/turbo with the dehumidifier NOT called (phase A) and
+CALLED (phase B), and reports the ERV's own supply/exhaust CFM + RPM + power and both plugs' watts per step.
+
+    tools/erv_airflow_test.py [--dwell 90] [--sample 30] [--out docs/design/erv-airflow-<date>.md]
+
+PAUSE BOTH AUTOMATIONS FIRST (erv_attic, dehum_attic) or the controller undoes each step within a tick —
+tools/erv_airflow_test.sh wraps this with pause/restore. Readings come from the broker (mosquitto_sub), so
+no paho import (the shared venv pins paho<2 for esphome). Commands go through tools/erv_cmd.py and
+tools/dehum_cmd.py (signed, replay-safe). The dehumidifier call is a lease long enough for phase B; it is
+released at the end whatever happens.
+"""
+from __future__ import annotations
+
+import argparse
+import json
+import subprocess
+import sys
+import tempfile
+import time
+from datetime import datetime, timezone
+from pathlib import Path
+
+REPO = Path(__file__).resolve().parents[1]
+BROKER = "192.168.1.200"
+TOPICS = ["home/edge/hvac_c6/erv/adv", "home/attic/dehum_pm/state", "home/attic/erv_pm/state"]
+MODES = ["low", "med", "high", "turbo"]
+
+
+def cmd(tool: str, *args: str) -> None:
+    subprocess.run([sys.executable, str(REPO / "tools" / tool), *args], check=True,
+                   stdout=subprocess.DEVNULL)
+
+
+def parse(path: Path):
+    """[(epoch, source, metrics)] from a `mosquitto_sub -v` capture."""
+    out = []
+    for line in path.read_text().splitlines():
+        topic, _, payload = line.partition(" ")
+        try:
+            p = json.loads(payload)
+            ts = datetime.fromisoformat(p["ts"].replace("Z", "+00:00")).timestamp()
+        except Exception:
+            continue
+        src = "erv" if "/erv/adv" in topic else ("dehum_pm" if "dehum_pm" in topic else "erv_pm")
+        out.append((ts, src, p.get("metrics") or {}))
+    return out
+
+
+def window(rows, t0, t1, src, key):
+    vals = [m[key] for ts, s, m in rows if s == src and t0 <= ts <= t1 and isinstance(m.get(key), (int, float))
+            and not isinstance(m.get(key), bool)]
+    return round(sum(vals) / len(vals), 1) if vals else None
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    ap.add_argument("--dwell", type=int, default=90, help="seconds per step (settle + sample)")
+    ap.add_argument("--sample", type=int, default=30, help="averaging window at the END of each step")
+    ap.add_argument("--restore-mode", default="low", help="ERV mode to leave it in afterwards")
+    ap.add_argument("--out", type=Path, default=None)
+    a = ap.parse_args()
+
+    cap = Path(tempfile.mkstemp(prefix="erv_airflow_", suffix=".txt")[1])
+    sub = subprocess.Popen(["mosquitto_sub", "-h", BROKER, "-v", *sum((["-t", t] for t in TOPICS), [])],
+                           stdout=cap.open("w"), stderr=subprocess.DEVNULL)
+    steps = []
+    try:
+        cmd("dehum_cmd.py", "call", "0")                       # phase A: not called
+        for phase, call in (("A: dehum not called", False), ("B: dehum called", True)):
+            if call:
+                lease = max(10, (a.dwell * len(MODES)) // 60 + 3)
+                cmd("dehum_cmd.py", "call", str(min(60, lease)))
+                time.sleep(60)                                 # let the compressor come up
+            for mode in MODES:
+                cmd("erv_cmd.py", "mode", mode)
+                t_start = time.time()
+                time.sleep(a.dwell)
+                steps.append((phase, mode, time.time() - a.sample, time.time()))
+                print(f"{phase:22s} {mode:6s} done", flush=True)
+    finally:
+        try:
+            cmd("dehum_cmd.py", "call", "0")
+            cmd("erv_cmd.py", "mode", a.restore_mode)
+        finally:
+            time.sleep(12)
+            sub.terminate()
+
+    rows = parse(cap)
+    hdr = ("| phase | ERV mode | supply CFM | exhaust CFM | supply RPM | exhaust RPM | ERV W (own) | "
+           "erv_pm W | dehum_pm W |")
+    lines = [hdr, "|" + "---|" * 9]
+    for phase, mode, t0, t1 in steps:
+        lines.append("| {} | {} | {} | {} | {} | {} | {} | {} | {} |".format(
+            phase, mode, window(rows, t0, t1, "erv", "supply_cfm"), window(rows, t0, t1, "erv", "exhaust_cfm"),
+            window(rows, t0, t1, "erv", "supply_rpm"), window(rows, t0, t1, "erv", "exhaust_rpm"),
+            window(rows, t0, t1, "erv", "power_w"), window(rows, t0, t1, "erv_pm", "power_w"),
+            window(rows, t0, t1, "dehum_pm", "power_w")))
+    table = "\n".join(lines)
+    print("\n" + table)
+    if a.out:
+        a.out.write_text(f"# ERV airflow vs in-series Aprilaire — {datetime.now(timezone.utc):%Y-%m-%d %H:%MZ}\n\n"
+                         f"Dwell {a.dwell}s, averaged over the last {a.sample}s of each step. Generated by "
+                         f"tools/erv_airflow_test.py.\n\n{table}\n")
+        print(f"\nwrote {a.out}")
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
