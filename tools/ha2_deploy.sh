@@ -5,13 +5,17 @@
 #   e.g. tools/ha2_deploy.sh 0bfcd70 ha-controller ha-api ha-api-tls
 #
 # Run on .210 from the repo checkout. Steps: touch instance/.maintenance-fit on ha-2 (keepalived won't
-# flip the VIP while services restart) -> scp each file the commit touched -> md5-verify every one ->
-# sudo restart the services (asks for ha-2's sudo password) -> confirm active -> clear the inhibit.
-# The inhibit is cleared on ANY exit, so a failed run never leaves failover disarmed.
+# flip the VIP while services restart) -> ship every file the commit touched in ONE tar stream ->
+# md5-verify every one -> sudo restart the services (passwordless on ha-2) -> confirm active -> clear the
+# inhibit. The inhibit is cleared on ANY exit, so a failed run never leaves failover disarmed.
+# All ssh calls share one multiplexed connection: over the air-gap WiFi bridge each new ssh handshake
+# cost seconds, and the old per-file mkdir+scp loop made a 9-file deploy take minutes.
 set -euo pipefail
 
 HA2="${HA2:-192.168.1.200}"
 REMOTE_REPO="home_automation"
+CTL="$(mktemp -u /tmp/ha2deploy-XXXXXX)"
+ssh_ha2() { ssh -o ControlMaster=auto -o ControlPath="$CTL" -o ControlPersist=60 "$HA2" "$@"; }
 
 [ $# -ge 2 ] || { sed -n 2,5p "$0"; exit 2; }
 commit="$1"; shift
@@ -29,17 +33,13 @@ done
 echo "== deploying $(git log --oneline -1 "$commit") to $HA2"
 printf '   %s\n' "${files[@]}"
 
-ssh "$HA2" "touch ~/$REMOTE_REPO/instance/.maintenance-fit"
-trap 'ssh "$HA2" "rm -f ~/$REMOTE_REPO/instance/.maintenance-fit" && echo "== VIP inhibit cleared"' EXIT
+ssh_ha2 "touch ~/$REMOTE_REPO/instance/.maintenance-fit"
+trap 'ssh_ha2 "rm -f ~/$REMOTE_REPO/instance/.maintenance-fit" && echo "== VIP inhibit cleared"; ssh -o ControlPath="$CTL" -O exit "$HA2" 2>/dev/null' EXIT
 echo "== VIP inhibit set"
 
-for f in "${files[@]}"; do
-  ssh "$HA2" "mkdir -p ~/$REMOTE_REPO/$(dirname "$f")"
-  scp -q "$f" "$HA2:$REMOTE_REPO/$f"
-done
-md5sum "${files[@]}" | ssh "$HA2" "cd ~/$REMOTE_REPO && md5sum -c --quiet" && echo "== md5 verified (${#files[@]} files)"
+tar cf - "${files[@]}" | ssh_ha2 "cd ~/$REMOTE_REPO && tar xf -"
+md5sum "${files[@]}" | ssh_ha2 "cd ~/$REMOTE_REPO && md5sum -c --quiet" && echo "== md5 verified (${#files[@]} files)"
 
-echo "== restarting: ${services[*]} (sudo password for ha-2 may be asked)"
-ssh -t "$HA2" "sudo systemctl restart ${services[*]}"
-sleep 5
-ssh "$HA2" "systemctl is-active ${services[*]}" && echo "== DONE — all services active"
+echo "== restarting: ${services[*]}"
+ssh_ha2 "sudo -n systemctl restart ${services[*]} && sleep 3 && systemctl is-active ${services[*]}" \
+  && echo "== DONE — all services active"
