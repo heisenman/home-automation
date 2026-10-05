@@ -62,12 +62,15 @@ Entry 3. Design log: hvac-shade-device-integration §1.8 + §7.2.
   high, <60 med, else low; LOW floor). Overrides Boost (= turbo) / Off for min·hour·day. Holds during OVR /
   start-up. ⚠ Overrides act through the controller loop, which skips DISABLED policies — enable automation
   for Off/Boost overrides to take effect (true of every device).
-- **Warning register reads `0`**, code treats only `-1` as healthy → `warning_ok:false`. Confirm semantics.
-- **Supply temp units** (`supply_temp_raw` ≈ 29.5): °C or °F unconfirmed (design §7.2 item 7).
+- ~~Warning register `0`~~ ✅ v9 treats `0` and `-1` as no warning (W-codes start at 61 — inferred).
+- ~~Supply temp units~~ ✅ **°C** — v9 publishes `supply_temp_c`; today's `supply_temp_raw` rows relabelled on ha-2.
 - **Wall-control switch (Hugh: research, do last).** Node and wall control can't both be live at `0x11`; idea is
   a FET on the wall control's 12 V so the node can hand control back. Nothing on hand.
 - **Shades intake** has the same gap `erv` had (`shade` ability, 6 entities) — not in `_NODE_ABILITIES`.
-- **Telemetry cadence** is 10 s while characterizing (Hugh); drop back to 30 s once settled (`TELEMETRY_MS`).
+- ~~Telemetry cadence~~ ✅ back to 30 s in v9 (mode changes still publish at once).
+- ✅ **Airflow test done** (`docs/design/erv-airflow-2026-10-04.md`): the dehum doesn't limit fresh air; the ERV's
+  EXHAUST fan (3000 RPM) caps High/Turbo at ~124 CFM (Turbo = High here); the dehum blower assists the supply
+  (Med: 2082→1149 RPM, 61→43 W) at a net +67 W.
 
 ## 🔴 2026-10-04 — ha-2 FAILOVER (on .210, `~/ha-airgap-standby`) is stale: code AND registry
 
