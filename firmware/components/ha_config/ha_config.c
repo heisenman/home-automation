@@ -84,12 +84,22 @@ void ha_config_load(ha_config_t *cfg, const ha_config_t *defaults) {
 
 // --- Identity binding (generic-image flashing) ------------------------------------------------------
 
+// The chip's identity MAC = what esptool reports at flash time (the blob's bind_mac). On radio chips
+// (c3/c6/s3) the WiFi-STA MAC IS the base MAC. A radio-less chip (ESP32-P4 — WiFi lives on the C6 co-proc
+// via esp_hosted) has no WiFi-STA MAC: esp_read_mac returns zeros/error, so fall back to the eFuse base MAC.
+// (Observed 2026-10-06: the 2nd D1001 refused its own blob — "this chip is 00:00:00:00:00:00".)
+static void chip_mac(uint8_t mac[6]) {
+    static const uint8_t zero[6] = {0};
+    if (esp_read_mac(mac, ESP_MAC_WIFI_STA) != ESP_OK || memcmp(mac, zero, 6) == 0)
+        esp_efuse_mac_get_default(mac);
+}
+
 bool ha_config_identity_ok(const ha_config_t *cfg, char *why, size_t why_sz) {
     if (why && why_sz) why[0] = '\0';
     if (!cfg || !cfg->bind_mac[0]) return true;      // unbound: legacy / hand-built image — unchanged
 
     uint8_t mac[6] = {0};
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    chip_mac(mac);
     char actual[18];
     snprintf(actual, sizeof(actual), "%02X:%02X:%02X:%02X:%02X:%02X",
              mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
@@ -147,7 +157,7 @@ bool ha_config_ensure_node_secret(ha_config_t *cfg) {
     uint8_t key[32];
     esp_fill_random(key, sizeof(key));
     uint8_t mac[6] = {0};
-    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    chip_mac(mac);
 
     unsigned char out[32];
     const mbedtls_md_info_t *info = mbedtls_md_info_from_type(MBEDTLS_MD_SHA256);
