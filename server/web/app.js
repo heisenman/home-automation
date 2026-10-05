@@ -184,7 +184,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v56 House timezone — controller time shown only when it disagrees with this device";
+const BUILD = "v57 Sensor pickers — full-width rows, current reading + device id (no more misaligned checkboxes)";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -377,7 +377,7 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
   // list even if it's momentarily offline/absent, so saving never silently drops it.
   const opts = (sensors || [])
     .filter((s) => s.metrics && s.metrics.humidity_pct != null)
-    .map((s) => ({ id: s.device_id, label: `${prettyName(s.device_id)} · ${prettyArea(s.area)}` }));
+    .map((s) => ({ id: s.device_id, label: sensorOptLabel(s, "humidity_pct", "%") }));
   for (const id of [source, ...picked].filter(Boolean)) {
     if (!opts.some((o) => o.id === id)) opts.unshift({ id, label: `${prettyName(id)} (current)` });
   }
@@ -439,7 +439,7 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
             ${opts.length === 0 && html`<p class="note">(no humidity sensors)</p>`}
             ${opts.map((o) => html`<label class="check" key=${o.id}>
               <input type="checkbox" checked=${picked.includes(o.id)} onChange=${() => togglePick(o.id)} />
-              ${o.label}</label>`)}
+              <span>${o.label}<span class="note sm check-id">${o.id}</span></span></label>`)}
           </div>
           ${picked.length > 1 && html`<p class="note">The average of the ${picked.length} sensors' current
             readings is compared to the thresholds; a sensor that goes quiet is left out.</p>`}</div>
@@ -676,7 +676,7 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
   const sensorOpts = (sensors || [])
     .filter((s) => metricsOf(s).length)
     .map((s) => ({ id: s.device_id, metrics: metricsOf(s),
-                   label: `${prettyName(s.device_id)} · ${prettyArea(s.area)}` }));
+                   label: sensorOptLabel(s, metric, "") }));
   for (const id of picked) {
     if (!sensorOpts.some((o) => o.id === id)) {
       sensorOpts.unshift({ id, metrics: [metric], label: `${prettyName(id)} (current — not reporting)` });
@@ -747,7 +747,7 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
         <div class="checklist">
           ${sensorOpts.map((o) => html`<label class="check" key=${o.id}>
             <input type="checkbox" checked=${picked.includes(o.id)} onChange=${() => toggleSource(o.id)} />
-            ${o.label}</label>`)}
+            <span>${o.label}<span class="note sm check-id">${o.id}</span></span></label>`)}
         </div>
         ${!sensorOpts.length && html`<p class="note">No sensor on this server is reporting an
           air-quality measure right now.</p>`}
@@ -961,6 +961,13 @@ function Actuators({ devices, sensors, isAdmin, onEdit, onChange, onNeedAdmin })
 
 // ── sensors (read-only) ──────────────────────────────────────────────────────
 const prettyArea = (a) => (a || "unknown").replace(/_/g, " ");
+// A sensor-picker row: name (+ area only when the name doesn't already say it) + its current reading, so two
+// similarly-named meters ("living room" vs "pro living room") can be told apart by what they read right now.
+const sensorOptLabel = (s, metric, unit) => {
+  const name = prettyName(s.device_id), area = prettyArea(s.area);
+  const v = s.metrics && s.metrics[metric];
+  return `${name}${name.includes(area) ? "" : ` · ${area}`}${v != null ? ` — ${Math.round(v)}${unit}` : ""}`;
+};
 const prettyName = (id) => id.replace(/^meter_/, "").replace(/_/g, " ");
 // R8: prefer the user overlay (name/room), fall back to the prettified registry id/area.
 const dispName = (o) => (o && o.name) || prettyName(o.device_id);

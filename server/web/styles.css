@@ -354,4 +354,10 @@ details > summary { cursor: pointer; }
 .card.health-alarm { border-left-color: var(--bad); }
 .badge.health-alarm { color: var(--bad); font-weight: 700; }
 .checklist { display: flex; flex-direction: column; gap: 4px; max-height: 220px; overflow-y: auto; }
-.checklist .check { display: flex; align-items: center; gap: 8px; font-size: .92rem; }
+.checklist { flex: 1; min-width: 0; }
+/* `.field label` (the 130px title column) also matched these rows and squeezed each name into 130px, so
+   names wrapped 2-3 lines and the centred checkbox looked like it belonged to the neighbouring name. */
+.field .checklist .check { width: auto; display: flex; align-items: flex-start; gap: 8px; font-size: .92rem;
+  color: var(--txt); padding: 3px 0; }
+.checklist .check input { margin-top: 3px; flex: none; }
+.checklist .check-id { display: block; color: var(--muted); }
