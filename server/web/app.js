@@ -184,7 +184,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v55 House timezone — schedules (LED night mode) run on the house clock, set in the topbar";
+const BUILD = "v56 House timezone — controller time shown only when it disagrees with this device";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -2167,19 +2167,25 @@ function NightMode({ isAdmin, onNeedAdmin }) {
 
 function HouseTimezone({ isAdmin, onNeedAdmin }) {
   // The house timezone: every schedule window (LED night mode, policy schedules) is read in this zone — the
-  // dictator's clock is UTC. Shows the controller's idea of "now" so a wrong zone is visible at a glance.
+  // dictator's clock is UTC. The controller's idea of "now" appears (red) ONLY when it disagrees with this device.
   // Reads /api/v1/house (open); setting is admin-gated (PUT /control/house/timezone).
   const [h, setH] = useState(null);            // {timezone, house_time}
   const [busy, setBusy] = useState(false);
   const load = useCallback(() => getJSON("/api/v1/house")
-    .then((r) => r.timezone && setH({ timezone: r.timezone, house_time: r.house_time })).catch(() => {}), []);
+    .then((r) => r.timezone && setH({ timezone: r.timezone, house_time: r.house_time, seen: new Date() }))
+    .catch(() => {}), []);
   useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
   if (!h) return null;
   let zones = [];
   try { zones = Intl.supportedValuesOf("timeZone"); } catch (e) { /* older browser */ }
   if (!zones.length) zones = ["America/Los_Angeles", "America/Denver", "America/Chicago", "America/New_York", "UTC"];
   if (!zones.includes(h.timezone)) zones = [h.timezone, ...zones];
-  const browserTz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { return ""; } })();
+  // Mismatch = the controller's wall clock disagrees with this device's (compared at fetch time, ±1 min for
+  // the minute boundary). Compare TIMES, not zone names: two names with the same offset are both fine.
+  const [hh, mm] = (h.house_time || "").split(":").map(Number);
+  const local = h.seen.getHours() * 60 + h.seen.getMinutes();
+  const diff = Math.abs((hh * 60 + mm) - local) % 1440;
+  const mismatch = Number.isFinite(diff) && Math.min(diff, 1440 - diff) > 1;
   const save = async (tz) => {
     if (!isAdmin) { setH({ ...h }); onNeedAdmin && onNeedAdmin(); return; }   // re-render snaps the picker back
     setBusy(true);
@@ -2187,10 +2193,9 @@ function HouseTimezone({ isAdmin, onNeedAdmin }) {
     catch (e) { alert("Timezone: " + e.message); }
     setBusy(false);
   };
-  const mismatch = browserTz && browserTz !== h.timezone;
   return html`<span class="tz-sel" title="House timezone — schedules (LED night mode, policy windows) run on this clock">
-    <span class="note ${mismatch ? "tz-warn" : ""}"
-      title=${mismatch ? `This browser is in ${browserTz}` : "House time as the controller sees it"}>🕓 ${h.house_time}</span>
+    ${mismatch && html`<span class="note tz-warn"
+      title="The controller's clock disagrees with this device — schedules run on the controller's time">⚠ house ${h.house_time}</span>`}
     <select class="tz-pick" value=${h.timezone} disabled=${busy}
       onChange=${(e) => save(e.target.value)}>
       ${zones.map((z) => html`<option key=${z} value=${z}>${z}</option>`)}
