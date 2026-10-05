@@ -77,7 +77,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v8-hvac-ovrhold"   // keep in step with the version.txt tag ota_edge_node.sh brands
+#define HA_FW_VERSION "v9-hvac-units"   // keep in step with the version.txt tag ota_edge_node.sh brands
 #endif
 
 // ⛔ THE GATE. 1 = sniff only (v1–v5). 0 = this node IS the ERV's controller: it takes the token, owes a
@@ -138,9 +138,9 @@ static const char *TAG = "ha_hvac";
 #define BOOST_MIN_HOLD_MS 45000u
 
 #define BUS_READ_MS       50            // read timeout; also this task's idle tick
-// 10 s while the ERV is being characterized (Hugh, 2026-10-04) — the fleet norm is 30 s; drop back once
-// the register map and behaviour are settled. Mode changes publish immediately regardless (below).
-#define TELEMETRY_MS   10000
+// Fleet norm. Was 10 s while the ERV was characterized (2026-10-04, through the airflow test); mode changes
+// still publish immediately (telemetry_task), which is what the PWA and the controller actually wait on.
+#define TELEMETRY_MS   30000
 #define SNIFF_REPORT_MS 15000           // bring-up diagnostic cadence
 #define CENSUS_REPORT_MS 60000          // register census (which registers the wall control touches)
 
@@ -206,10 +206,9 @@ static const char *fan_mode_name(uint8_t m) {
 // controller they were addressed to, so parking beside the wall control validates the entire register
 // map — wiring, polarity, baud, checksum and semantics — before we ever take the bus.
 //
-// ⚠️ Temperatures are published as `*_temp_raw` ON PURPOSE. Whether the ERV reports °C or °F is
-// UNRESOLVED (ADR-0041 open question #6) and the component does no conversion. A field named
-// `supply_temp` would be charted as °C by the first person to see it. Renaming these once §7.2 step 5
-// settles the units is a deliberate one-time cost, taken while this node is still on the bench.
+// Temperatures are °C — settled 2026-10-04 by comparison: supply read ~29.5 while the outdoor SwitchBot read
+// 26.7 °C on a warm afternoon (attic + ERV warm the supply); 29.5 °F would be below freezing. Published as
+// *_temp_c from v9; history before that is under *_temp_raw (the planned one-time rename, ADR-0041 OQ #6).
 static void census_report(void);
 
 // Builds the payload; caller holds s_erv_mu. Returns false when there is nothing to publish.
@@ -224,8 +223,8 @@ static bool build_erv(char *metrics, size_t cap) {
     }
     jb_i32(&j, "active_mode",     BROAN_REG_ACTIVE_MODE);
     jb_f32(&j, "power_w",         BROAN_REG_POWER_W);
-    jb_f32(&j, "supply_temp_raw", BROAN_REG_TEMP_SUPPLY);
-    jb_f32(&j, "exhaust_temp_raw", BROAN_REG_TEMP_EXHAUST);
+    jb_f32(&j, "supply_temp_c",   BROAN_REG_TEMP_SUPPLY);
+    jb_f32(&j, "exhaust_temp_c",  BROAN_REG_TEMP_EXHAUST);
     // Settings the wall control reads every ~3 s, so a listen-only node always has them fresh.
     jb_i32(&j, "base_mode",       BROAN_REG_BASE_MODE);
     jb_f32(&j, "target_cfm_in",   BROAN_REG_TARGET_CFM_IN);
@@ -254,7 +253,9 @@ static bool build_erv(char *metrics, size_t cap) {
     }
     if (fresh(BROAN_REG_WARNING) && ha_broan_get_i32(&s_erv, BROAN_REG_WARNING, &code)) {
         jsonbuf_add(&j, "\"warning_code\":%ld", (long)code);
-        jsonbuf_add(&j, "\"warning_ok\":%s", broan_code_is_ok(code) ? "true" : "false");
+        // Broan warnings are W61 and up, and the live unit reads 0 when healthy (the fault register reads -1),
+        // so both mean "no warning". INFERRED, not documented — revisit if a real W-code ever shows as 0.
+        jsonbuf_add(&j, "\"warning_ok\":%s", (broan_code_is_ok(code) || code == 0) ? "true" : "false");
     }
 
     // Checked BEFORE the always-present annotations below, so it actually means "no ERV data yet"

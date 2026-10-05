@@ -272,7 +272,7 @@ def test_ui_metric_catalog_matches_pwa_graphable_contract():
         "temperature_c", "humidity_pct", "dewpoint_c", "air_quality", "co2_ppm",
         "radon_bqm3", "pressure_hpa", "pm25_ugm3", "aqi", "voc_index", "voc_raw",
         "nox_index", "nox_raw", "eco2", "tvoc", "gas_ohm", "power_w", "energy_today_kwh",
-        "supply_cfm", "exhaust_cfm", "supply_rpm", "exhaust_rpm", "supply_temp_raw"]
+        "supply_cfm", "exhaust_cfm", "supply_rpm", "exhaust_rpm", "supply_temp_c"]
     for c in cat:
         assert {"key", "label", "unit", "color", "precision", "graph"} <= set(c)
         assert c["graph"] is True

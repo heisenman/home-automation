@@ -551,7 +551,7 @@ _NODE_ABILITIES = {
     # Broan AI-series ERV over RS-485 (ADR-0041, hvac_c6). Verified live 2026-10-04 (design §7.2 log).
     "erv": {"lane": "erv", "prefix": "erv", "transport": "rs485",
             "capabilities": ["fan_mode", "power_w", "supply_cfm", "exhaust_cfm", "supply_rpm", "exhaust_rpm",
-                             "supply_temp_raw", "target_cfm_in", "target_cfm_out", "filter_life_s",
+                             "supply_temp_c", "target_cfm_in", "target_cfm_out", "filter_life_s",
                              "fault_code", "warning_code", "ovr_boost"]},
     # Aprilaire E070 External-mode DH call through dehum_c6 (ADR-0041). `dh_call` is the relay PIN read
     # back; whether the unit actually runs is dehum_pm's watts (the E070 has no status output).

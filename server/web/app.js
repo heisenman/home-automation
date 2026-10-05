@@ -990,7 +990,7 @@ const GRAPHABLE = [
   { key: "exhaust_cfm", unit: "CFM", color: "#818cf8", label: "Exhaust airflow" },
   { key: "supply_rpm", unit: "RPM", color: "#7dd3fc", label: "Supply fan" },
   { key: "exhaust_rpm", unit: "RPM", color: "#a5b4fc", label: "Exhaust fan" },
-  { key: "supply_temp_raw", unit: "", color: "#fca5a5", label: "Supply air (raw)" },  // °C/°F unconfirmed
+  { key: "supply_temp_c", unit: "°C", color: "#fca5a5", label: "Supply air" },   // °C settled 2026-10-04
 ];
 
 // Unified air-quality band → color (ADR-0035), shared by the map badge + sensor cards + legend. Keyed by the

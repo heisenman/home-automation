@@ -1320,8 +1320,10 @@ conductive resting on the enclosure.
   = 20, fans stopped, fault register `0`, mode writes ignored), then settles into **LOW** — not its prior mode.
 - PWA: OVR → alarm banner + "Clear override (power-cycle ERV)" (admin); start-up → info banner; mode buttons
   locked in both (control.yaml `external` + `power_cycle`).
-7. Confirm temperature units (°C or °F) against a known reference — the component publishes the raw float
-   with no conversion and no document states which.
+7. ~~Confirm temperature units~~ ✅ **°C** (2026-10-04): supply ~29.5 vs the outdoor SwitchBot's 26.7 °C on a warm
+   afternoon (attic + ERV add heat); 29.5 °F would be freezing. Published as `*_temp_c` from hvac_c6 v9.
+   Warning register reads `0` when healthy (fault reads `-1`); W-codes start at 61, so `0` = no warning
+   (INFERRED, firmware v9 treats both as OK).
 8. Confirm whether the recirculation damper (J6) is fitted before trusting mode `0x06`.
 
 ### 7.3 Aprilaire E070

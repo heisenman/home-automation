@@ -72,8 +72,8 @@ METRIC_CATALOG: dict[str, dict] = {
     "exhaust_cfm":   {"label": "Exhaust airflow", "unit": "CFM", "color": "#818cf8", "precision": 0, "graph": True},
     "supply_rpm":    {"label": "Supply fan",      "unit": "RPM", "color": "#7dd3fc", "precision": 0, "graph": True},
     "exhaust_rpm":   {"label": "Exhaust fan",     "unit": "RPM", "color": "#a5b4fc", "precision": 0, "graph": True},
-    # Raw on purpose: °C vs °F is unconfirmed (design §7.2 item 7) — no unit until it is.
-    "supply_temp_raw": {"label": "Supply air (raw)", "unit": "", "color": "#fca5a5", "precision": 1, "graph": True},
+    # °C — settled 2026-10-04 (design §7.2 item 7). History before hvac_c6 v9 is under supply_temp_raw.
+    "supply_temp_c": {"label": "Supply air", "unit": "°C", "color": "#fca5a5", "precision": 1, "graph": True},
 }
 
 

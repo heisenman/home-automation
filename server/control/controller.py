@@ -97,7 +97,17 @@ DEHUM_POLICY = {
     "defaults": {"running": False},
     "sensor_stale_min": 30,
 }
-LEASE_RENEW_BELOW_S = 300      # renew a leased call once less than this is left on it
+LEASE_RENEW_BELOW_S = 300
+
+
+def _level_words(text: str, labels: list) -> str:
+    """'sensor 76 -> speed 1' -> 'sensor 76 -> low' for a level-mode device (labels = its mode `levels`)."""
+    import re
+
+    def word(m):
+        n = int(m.group(2))
+        return labels[n - 1] if 1 <= n <= len(labels) else m.group(0)
+    return re.sub(r"\b(speed|level) (\d+)\b", word, text)      # renew a leased call once less than this is left on it
 
 # Which sensor metric the loop drives on. The policy may name it explicitly (control.metric — e.g. an
 # air-quality device choosing pm25_ugm3 vs aqi); otherwise it defaults by strategy. Default = RH.
@@ -599,6 +609,9 @@ class Controller:
             res = Resolution(True, dev_state.level != top, res.source, res.reason + f" -> level {top}",
                              level=top)
         reason = res.reason + (f" (via fallback {used_id})" if via_fallback and res.source == "rule" else "")
+        if lm is not None:
+            # a level-mode device's "speed N"/"level N" are its MODES — log what the operator sees in the PWA
+            reason = _level_words(reason, lm["labels"])
         status = "noop"
         if res.act and not dry_run and lm is not None:
             # level-mode device (ERV): everything goes through its MODE — off -> off_mode, level N ->
@@ -658,8 +671,9 @@ class Controller:
         self._apply_setpoint_park(conn, device_id, res, st, now, dry_run)
         store.append_log(conn, device_id, res.running, res.source, reason, res.act, status)
         log.info("%s -> %s | %s | act=%s status=%s%s", device_id,
-                 (f"speed {res.level}" if res.level is not None else ("ON" if res.running else "OFF")),
-                 res.reason, res.act, status,
+                 (_level_words(f"speed {res.level}", lm["labels"]) if lm is not None and res.level is not None
+                  else f"speed {res.level}" if res.level is not None else ("ON" if res.running else "OFF")),
+                 reason, res.act, status,
                  f" | sensor={sensor.value:.0f}" if sensor else " | sensor=none")
         if drv is not None:                                    # Midea self-reports; bridged devices already publish
             self._publish_state(device_id, st)
