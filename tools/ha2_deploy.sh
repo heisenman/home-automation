@@ -18,6 +18,8 @@ commit="$1"; shift
 services=("$@")
 
 cd "$(git rev-parse --show-toplevel)"
+git rev-parse --verify --quiet "$commit^{commit}" >/dev/null \
+  || { echo "ABORT: '$commit' is not a commit here (typo?). Recent commits:"; git log --oneline -5; exit 1; }
 mapfile -t files < <(git diff-tree --no-commit-id --name-only -r --diff-filter=AM "$commit")
 [ ${#files[@]} -gt 0 ] || { echo "no added/modified files in $commit"; exit 1; }
 for f in "${files[@]}"; do
