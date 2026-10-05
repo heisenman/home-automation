@@ -11,7 +11,7 @@
 
 Live + verified today on ha-2: Broan ERV `erv_attic` (hvac_c6 v9, RS-485 controller @0x11, manual + automation
 on 3 averaged AQ sensors, levels low/med/high); Aprilaire `dehum_attic` (dehum_c6 v3, leased DH call, automation
-on kitchen RH + outdoor dew-point gate, floors the ERV); plugs `erv_pm` + `dehum_pm`; Outdoor area + sensor;
+on living-room RH + outdoor dew-point gate, floors the ERV); plugs `erv_pm` + `dehum_pm`; Outdoor area + sensor;
 node-secret LUTs synced (12 = 12). run_all 785/15 (the 15 pre-existing).
 
 1. **Aprilaire RS-485 (Model 76 emulation)** — 2nd isolated TTL→RS485 (C) on order. Bench-test → listen-only on
@@ -53,7 +53,7 @@ driven by HOUSE RH sensors**. No Model 76 remote is installed, so `A`/`B` is fre
 - ✅ **DONE 2026-10-04 —** Sonoff on the cord · meter `DH`–`DH` powered, relay off, AC+DC and to chassis
   (>~30 V = stop) · confirm the `NC|NO` switch exists → `NO` · enable `EXTERNAL` in the installer menu (E070's
   manual doesn't document it — confirming it is itself a finding) · float jumper stays.
-- **✅ Automation LIVE (Hugh enabled it 2026-10-04 on kitchen RH; outdoor dew-point gate added + set to
+- **✅ Automation LIVE (Hugh enabled it 2026-10-04; now on living-room RH; outdoor dew-point gate added + set to
   switchbot_outdoor / 40 °F; ERV floor while dehumidifying lowered to Low on 2026-10-05):** averaged RH vs 55/50
   hysteresis → leased `DH` call (renewed <5 min left); ERV FLOOR med while running, high 15 min after each stop
   (coil dry-out), ERV = max(own AQ level, floor); operator ERV-OFF wins and holds the dehum; "Called but not
