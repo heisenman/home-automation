@@ -39,8 +39,9 @@ the bench.** Same code, different directory — don't assume a path from one mac
   (`tools/edge_ota.py` + `edge_sign.py`). This is where each node's real `secrets.h` (wifi creds + per-device
   `HA_CMD_SECRET`) lives, so it's the only place an edge bin builds correctly and an OTA can be signed to match
   the running firmware. Edge builds link the shared `firmware/components/` via `EXTRA_COMPONENT_DIRS`.
-- **Live-dictator production writes are CLASSIFIER-GATED** — hand Hugh copy-paste, never self-deploy (restart
-  of existing `ha-*` services is fine; new package/unit installs are gated).
+- **Live-dictator code deploys go through `tools/ha2_deploy.sh <commit> <services…>`** — the agent runs it (allowed
+  in `.claude/settings.local.json`; ad-hoc scp/ssh deploys are still auto-mode-blocked). Restart of existing `ha-*`
+  services is fine; new package/unit installs stay gated → hand Hugh copy-paste.
 
 ### fileserver — `192.168.0.245` (warm standby)
 - **Role:** Hugh's **CRITICAL fileserver** + temporary HA warm-standby (keepalived BACKUP behind VIP `.200`).

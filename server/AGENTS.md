@@ -37,6 +37,6 @@ by-capability index is [`docs/REUSE.md`](../docs/REUSE.md). Link up, don't dupli
   Don't hardcode metric/control lists in a client. Tests pin this: `../tests/test_viewmodel.py`.
 - **Auth (ADR-0017):** `:8123` = `ha-api` (LAN reads open); `:8443` = `ha-api-tls` with `/auth/login` JWT.
   Admin credential = `SHA256("ha-api:"+master)`; raw master never crosses the wire.
-- **Live-dictator writes are gated** (see root AGENTS.md): restart existing `ha-*` = fine; new units/packages
-  or new code = hand Hugh, don't self-deploy.
+- **Deploy to the live dictator via `tools/ha2_deploy.sh <commit> <services…>`** (see root AGENTS.md) — the agent
+  runs it. Restart existing `ha-*` = fine; new units/packages = still hand Hugh.
 - Run tests before proposing server changes: `python3 ../tests/run_all.py` (venv).

@@ -93,8 +93,10 @@ reuse → decompose → build → test): [docs/DEVICE-INTAKE.md](docs/DEVICE-INT
 
 - **Dumb-relay (ADR-0001):** edge nodes relay raw readings keyed by MAC; the **dictator owns the registry** and
   MAC→device/area mapping (`ha-edge-mapper`). Commands go *down* signed (ADR-0010).
-- **Production writes are gated:** on the **live dictator**, restarting an *existing* `ha-*` service is fine;
-  installing new packages/units or deploying new code is **gated → hand Hugh copy-paste, never self-deploy.**
+- **Deploying code to ha-2 = `tools/ha2_deploy.sh <commit> <services…>` — the agent runs it** (Hugh, 2026-10-05:
+  keep ha-2 current; frozen prod drifts). It is the ONLY sanctioned path: VIP inhibit → one tar stream → md5-verify
+  → restart → inhibit cleared on any exit. Restarting an *existing* `ha-*` service is fine. Still **gated → hand
+  Hugh copy-paste:** installing new packages or systemd units, and overwriting live data (e.g. a DB restore).
 - **Hugh runs box-side commands himself** — give direct on-box commands, not `ssh … 'bash -s'` wrappers.
 - **Secrets never enter git/logs/transcripts.** Secret: MACs, GPS coords, the master passphrase, WiFi
   password, bearer tokens. Not secret: LAN IPs. Back up OEM/factory firmware **off-git**.
