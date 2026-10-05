@@ -182,6 +182,33 @@ def resolve(policy: Policy, now: float, sensor: Reading | None, state: DeviceSta
 
 
 # ── schedule window helpers (pure) ───────────────────────────────────────────────
+# Every schedule window (night mode, policy `schedule`) is HOUSE wall-clock time. The dictator's system clock
+# is UTC, so minute-of-day must come from the house zone, never time.localtime() (that read 21:00-07:00 as
+# UTC -> LEDs lit at local midnight, observed 2026-10-05). The zone is the `timezone` house setting (PWA).
+HOUSE_TZ_DEFAULT = "America/Los_Angeles"
+
+
+def valid_tz(name) -> bool:
+    """True iff `name` is an IANA zone this box's tzdata knows."""
+    from zoneinfo import ZoneInfo
+    if not isinstance(name, str) or not name or len(name) > 64:
+        return False
+    try:
+        ZoneInfo(name)
+        return True
+    except Exception:
+        return False
+
+
+def house_tod(now: float, tz: str | None) -> int:
+    """Minute-of-day [0,1440) of epoch `now` in house zone `tz` (falls back to HOUSE_TZ_DEFAULT if unset/bad)."""
+    from datetime import datetime
+    from zoneinfo import ZoneInfo
+    zone = ZoneInfo(tz if valid_tz(tz) else HOUSE_TZ_DEFAULT)
+    lt = datetime.fromtimestamp(now, zone)
+    return lt.hour * 60 + lt.minute
+
+
 def _parse_hhmm(s: str) -> int:
     h, m = s.strip().split(":")
     return int(h) * 60 + int(m)

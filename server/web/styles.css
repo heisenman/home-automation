@@ -65,6 +65,10 @@ body {
 /* ── house scene selector (Home/Away/Sleep) ──────────────── */
 .scene-sel { display: inline-flex; gap: 4px; }
 .scene-sel .btn.sm { padding: 5px 9px; }
+.tz-sel { display: inline-flex; align-items: center; gap: 4px; }
+.tz-pick { max-width: 170px; font-size: 12px; padding: 4px; background: var(--panel); color: inherit; border: 1px solid var(--line); border-radius: 6px; }
+.tz-pick option { background: var(--panel); }
+.tz-warn { color: var(--bad); }
 .scene-note { font-size: 11px; color: var(--muted); margin-left: 4px; }
 .scene-chip {
   font-size: 11px; font-weight: 600; color: var(--accent);

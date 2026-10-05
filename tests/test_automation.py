@@ -133,6 +133,27 @@ def test_in_window_wraps_midnight():
     assert not in_window(12 * 60, "22:00-07:00")    # noon
 
 
+def test_house_tod_uses_the_house_zone_not_the_box_clock():
+    from server.control.automation import house_tod
+    t = 1791183638.0                                  # 2026-10-05T07:00:38Z
+    assert house_tod(t, "UTC") == 7 * 60
+    assert house_tod(t, "America/Los_Angeles") == 0   # PDT midnight
+    assert house_tod(t, "Not/AZone") == 0             # bad zone -> house default, never the box clock
+    assert house_tod(t, None) == 0
+
+
+def test_set_timezone_validates_iana_names():
+    import sqlite3
+    from server.api.control import handle_set_timezone
+    from server.control import control_store as store
+    conn = sqlite3.connect(":memory:")
+    store.ensure_schema(conn)
+    assert handle_set_timezone(conn, {"timezone": "Not/AZone"})[0] == 400
+    assert handle_set_timezone(conn, {})[0] == 400
+    code, body = handle_set_timezone(conn, {"timezone": "America/Denver"})
+    assert code == 200 and store.get_setting(conn, "timezone") == "America/Denver"
+
+
 def test_schedule_off_now_matches_off_window_only():
     sched = [{"when": "22:00-07:00", "policy": "off"}, {"when": "07:00-22:00", "policy": "auto"}]
     assert schedule_off_now(sched, 23 * 60)          # in the off window

@@ -184,7 +184,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v54 Outdoor — latest recorded weather shown beside attic/crawlspace on the house map";
+const BUILD = "v55 House timezone — schedules (LED night mode) run on the house clock, set in the topbar";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -2165,6 +2165,39 @@ function NightMode({ isAdmin, onNeedAdmin }) {
   </div>`;
 }
 
+function HouseTimezone({ isAdmin, onNeedAdmin }) {
+  // The house timezone: every schedule window (LED night mode, policy schedules) is read in this zone — the
+  // dictator's clock is UTC. Shows the controller's idea of "now" so a wrong zone is visible at a glance.
+  // Reads /api/v1/house (open); setting is admin-gated (PUT /control/house/timezone).
+  const [h, setH] = useState(null);            // {timezone, house_time}
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => getJSON("/api/v1/house")
+    .then((r) => r.timezone && setH({ timezone: r.timezone, house_time: r.house_time })).catch(() => {}), []);
+  useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
+  if (!h) return null;
+  let zones = [];
+  try { zones = Intl.supportedValuesOf("timeZone"); } catch (e) { /* older browser */ }
+  if (!zones.length) zones = ["America/Los_Angeles", "America/Denver", "America/Chicago", "America/New_York", "UTC"];
+  if (!zones.includes(h.timezone)) zones = [h.timezone, ...zones];
+  const browserTz = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch (e) { return ""; } })();
+  const save = async (tz) => {
+    if (!isAdmin) { setH({ ...h }); onNeedAdmin && onNeedAdmin(); return; }   // re-render snaps the picker back
+    setBusy(true);
+    try { await adminSend("PUT", "/control/house/timezone", { timezone: tz }); await load(); }
+    catch (e) { alert("Timezone: " + e.message); }
+    setBusy(false);
+  };
+  const mismatch = browserTz && browserTz !== h.timezone;
+  return html`<span class="tz-sel" title="House timezone — schedules (LED night mode, policy windows) run on this clock">
+    <span class="note ${mismatch ? "tz-warn" : ""}"
+      title=${mismatch ? `This browser is in ${browserTz}` : "House time as the controller sees it"}>🕓 ${h.house_time}</span>
+    <select class="tz-pick" value=${h.timezone} disabled=${busy}
+      onChange=${(e) => save(e.target.value)}>
+      ${zones.map((z) => html`<option key=${z} value=${z}>${z}</option>`)}
+    </select>
+  </span>`;
+}
+
 function NotifyToggle() {
   const [state, setState] = useState("default");   // unsupported|denied|subscribed|default
   const [busy, setBusy] = useState(false);
@@ -2558,6 +2591,7 @@ function App() {
         <div class="topbar-row topbar-row-2">
           <button class="btn sm ghost" onClick=${toggleUnit} title="temperature unit">°${tempUnit}</button>
           <${NotifyToggle} />
+          <${HouseTimezone} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} />
           ${isAdmin
             ? html`<span class="admin-on" title="Admin unlocked">🔓 Admin</span>
                    <button class="btn sm ghost" onClick=${() => setShowAdd(true)}>+ Device</button>

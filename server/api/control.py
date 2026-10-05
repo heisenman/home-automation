@@ -176,6 +176,18 @@ def handle_set_night_mode(conn, body: dict[str, Any]) -> tuple[int, dict]:
     return 200, {"status": "ok", "night_mode": cfg}
 
 
+def handle_set_timezone(conn, body: dict[str, Any]) -> tuple[int, dict]:
+    """Set the house timezone {timezone: IANA name}. Every schedule window (LED night mode, policy
+    schedules) is read in this zone — the dictator's clock is UTC. Pure (no HTTP framework)."""
+    from server.control import control_store as store
+    from server.control.automation import valid_tz
+    tz = (body or {}).get("timezone")
+    if not valid_tz(tz):
+        return 400, {"status": "bad-request", "reason": "timezone must be an IANA zone, e.g. America/Los_Angeles"}
+    store.set_setting(conn, "timezone", tz)
+    return 200, {"status": "ok", "timezone": tz}
+
+
 def _validate_scenes(sc, bad):
     """Validate a policy `scenes` map: {scene_name: {off?: bool, on_above?/off_below?/min_*?: num}}.
     Returns None if OK, else the (code, body) tuple from `bad`."""
@@ -1293,6 +1305,15 @@ def make_override_router(api_authz, control_db, device_ids=None):
         c = _conn()
         try:
             code, payload = handle_set_night_mode(c, body)
+        finally:
+            c.close()
+        return JSONResponse(status_code=code, content=payload)
+
+    @router.put("/house/timezone", dependencies=[Depends(require_admin)])
+    async def put_timezone(body: dict = Body(...)):
+        c = _conn()
+        try:
+            code, payload = handle_set_timezone(c, body)
         finally:
             c.close()
         return JSONResponse(status_code=code, content=payload)

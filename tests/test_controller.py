@@ -475,5 +475,51 @@ def test_non_derived_metric_never_reads_the_stored_series():
         assert ctrl._pick_source(C.DEFAULT_POLICY, 900.0, NOW) == (None, None, False)
 
 
+# ── LED night mode runs on the HOUSE clock, not the box's (UTC) ─────────────────────────────────────────────
+class _CtlLed:
+    area = "living_room"
+    traits_cfg = {"indicator": {}}
+
+
+def _make_night(tmp, tz=None):
+    db = os.path.join(tmp, "control.db")
+    conn = sqlite3.connect(db)
+    store.ensure_schema(conn)
+    store.set_setting(conn, "night_mode", {"enabled": True, "window": "21:00-07:00"})
+    if tz:
+        store.set_setting(conn, "timezone", tz)
+    conn.close()
+    iss = FakeIssuer()
+    return C.Controller(iss, {}, {"purifier_x": _CtlLed()}, db), iss
+
+
+# 2026-10-05T07:00:38Z = 00:00 PDT — the instant the UTC-read window lit the LEDs at local midnight.
+UTC_0700 = 1791183638.0
+
+
+def test_night_mode_reads_window_in_house_zone():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss = _make_night(tmp, "America/Los_Angeles")
+        ctrl.tick(now=UTC_0700)                          # 00:00 local -> inside 21:00-07:00 -> LED OFF
+        assert [c["args"] for c in iss.calls if c["trait"] == "indicator"] == [{"on": False}]
+        iss.calls.clear()
+        ctrl.tick(now=UTC_0700 + 7 * 3600)               # 07:00 local -> dawn edge -> LED ON
+        assert [c["args"] for c in iss.calls if c["trait"] == "indicator"] == [{"on": True}]
+
+
+def test_night_mode_unset_timezone_defaults_to_house_default():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss = _make_night(tmp)                     # no timezone setting -> America/Los_Angeles
+        ctrl.tick(now=UTC_0700)
+        assert [c["args"] for c in iss.calls if c["trait"] == "indicator"] == [{"on": False}]
+
+
+def test_night_mode_honours_a_changed_zone():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss = _make_night(tmp, "UTC")              # 07:00 UTC -> outside the window -> no edge
+        ctrl.tick(now=UTC_0700)
+        assert not [c for c in iss.calls if c["trait"] == "indicator"]
+
+
 if __name__ == "__main__":
     run_module(globals())

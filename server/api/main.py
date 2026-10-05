@@ -1102,9 +1102,15 @@ def house_state():
     if cc is None:
         return {"scene": "Home", "set_ts": None, "scenes": list(HOUSE_SCENES)}
     try:
+        import time as _time
         from server.api.control import NIGHT_MODE_DEFAULT
+        from server.control.automation import HOUSE_TZ_DEFAULT, house_tod, valid_tz
+        tz = store.get_setting(cc, "timezone")
+        tz = tz if valid_tz(tz) else HOUSE_TZ_DEFAULT
+        tod = house_tod(_time.time(), tz)                 # what the controller thinks the time is — a sanity check
         return {**store.get_scene_full(cc), "scenes": list(HOUSE_SCENES),
-                "night_mode": store.get_setting(cc, "night_mode") or NIGHT_MODE_DEFAULT}
+                "night_mode": store.get_setting(cc, "night_mode") or NIGHT_MODE_DEFAULT,
+                "timezone": tz, "house_time": f"{tod // 60:02d}:{tod % 60:02d}"}
     finally:
         cc.close()
 

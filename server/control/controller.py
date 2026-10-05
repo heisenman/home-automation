@@ -24,7 +24,7 @@ from server.control.registry import load_control_registry
 from server.util.psychro import dewpoint_c
 from server.util.registry_reload import RegistryReloader
 from server.control.automation import (
-    DEFAULT_SCENE, DeviceState, Override, Policy, Reading, Resolution, apply_scene, in_window, resolve,
+    DEFAULT_SCENE, DeviceState, Override, Policy, Reading, Resolution, apply_scene, house_tod, in_window, resolve,
     schedule_off_now)
 from server.control.secret_store import available_master
 
@@ -308,10 +308,9 @@ class Controller:
     def tick(self, now: float | None = None, dry_run: bool = False):
         self._refresh_registry()               # pick up a live control.yaml edit (actuator relocate)
         now = now if now is not None else time.time()
-        lt = time.localtime(now)
-        tod = lt.tm_hour * 60 + lt.tm_min
         conn = self._conn()
         try:
+            tod = house_tod(now, store.get_setting(conn, "timezone"))   # house wall-clock, NOT the box's (UTC)
             scene = store.get_scene(conn, DEFAULT_SCENE)        # whole-house Home/Away/Sleep
             pols = store.all_policies(conn)
             # devices that set a ventilation FLOOR (the dehumidifier) tick before the device they floor (the
