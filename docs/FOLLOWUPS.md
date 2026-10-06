@@ -25,7 +25,9 @@ node-secret LUTs synced (12 = 12). run_all 785/15 (the 15 pre-existing).
    fixed v9; OTA re-proven on v10). Link verified after reinstall (36/36, code 0). Experiments ready (v8+ ops):
    `force` on=00 + relay closed (does DH matter in REMOTE?), `force` on=02 dryness 1 (Model 76 Test Mode?),
    `mute`. **RESULTS 2026-10-06:** relay ignored in REMOTE; `on=02` force-runs regardless of dryness (Test Mode?);
-   mute → E3 in 5 s, off. Open: does `02` time out / honor inlet limits? Use `02` for calls? (Hugh). Surface `unit_err`/`unit_running` in the PWA + an E-code alert; prefer `unit_running` over
+   mute → E3 in 5 s, off. `02` held 17 min stable → **SHIPPED: Boost = force-run** (v11 + server @1d70f88,
+   deployed); PWA running = `unit_running`, E-code alarm. Open: Boost end-to-end from the PWA (Hugh to try);
+   whether `02` honors the 50–105 °F inlet limits; automation implications (Hugh to discuss). Surface `unit_err`/`unit_running` in the PWA + an E-code alert; prefer `unit_running` over
    `dh_call` for "running"; settle VENT mode (stays ON — see REVISIT below).
 2. **.210 ha-2-failover instance stale** (code + registry) — section 🔴 below. Now also lacks erv_attic /
    dehum_attic / dehum_pm / erv_pm and the Outdoor area.

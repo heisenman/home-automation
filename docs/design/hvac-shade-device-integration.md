@@ -516,6 +516,10 @@ pollutes the attic's canonical RH). Mode switching over the wire: no known R-fra
    563 W. Incoming air at 44–47 % RH cannot have a 65 °F dew point at these temps, so `02` ran regardless of
    setpoint. Unknown: whether `02` self-times-out (Model 76 Test Mode does, 5 min) and whether the 50–105 °F inlet
    limits still apply. Normal control still uses `on=01` + dryness 7 (unit keeps the final dew-point say).
+2b. **`on=02` is a stable force-run**: held 17 min continuous (04:08–04:25), no timeout, no error; the unit
+   idles within 2 s of `02` ending — so the Model 76's 5-min Test Mode limit lives in the remote. **Shipped
+   2026-10-06** (v11 + server): the PWA's existing **Boost** override = `dehum_call {force:true}` → R `on=02`
+   for the lease; rule calls stay `on=01` + dryness 7. The card's "running" now comes from `unit_running`.
 3. **Mute → E3 in 5 s**, unit RUNNING → idle in 6 s, compressor off ≤30 s; replies resume → code 0 in 2 s.
 
 Originally kept as a documented future upgrade. Notes from then: the prior-art repo does **not** document whether the
