@@ -65,7 +65,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v5-apr-txtest"
+#define HA_FW_VERSION "v6-apr-reply"
 #endif
 
 static const char *TAG = "ha_dehum";
@@ -200,6 +200,16 @@ static bool on_cmd(const cJSON *cmd, void *user) {
         const char *r = aprilaire_sniff_txtest(cJSON_IsNumber(sv) ? sv->valueint : 5,
                                                cJSON_IsNumber(bv) ? bv->valueint : 0);
         ha_mqtt_log("apr-txtest: request -> %s", r);
+        return true;
+    }
+    if (strcmp(op->valuestring, "apr_reply") == 0) {   // Model 76 emulation: {secs, on, dryness, rh_x10}
+        const cJSON *sv = cJSON_GetObjectItem(cmd, "secs"), *ov = cJSON_GetObjectItem(cmd, "on"),
+                    *dv = cJSON_GetObjectItem(cmd, "dryness"), *rv = cJSON_GetObjectItem(cmd, "rh_x10");
+        const char *r = aprilaire_sniff_reply(cJSON_IsNumber(sv) ? sv->valueint : 60,
+                                              cJSON_IsNumber(ov) ? ov->valueint : 0,
+                                              cJSON_IsNumber(dv) ? dv->valueint : 4,
+                                              cJSON_IsNumber(rv) ? rv->valueint : 500);
+        ha_mqtt_log("apr-reply: request -> %s", r);
         return true;
     }
     if (strcmp(op->valuestring, "apr_sniff") == 0) {   // RS-485 A/B sniffer report now (also every 30 s)

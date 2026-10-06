@@ -21,3 +21,9 @@ void aprilaire_sniff_report(void);
 // any bytes the adapter echoes back. Then re-opens LISTEN-ONLY. Refused if the sniffer heard a frame in the
 // last 60 s — i.e. it will not fire onto a live E070 bus. Runs on the sniffer task; returns a status string.
 const char *aprilaire_sniff_txtest(int secs, int byte);
+
+// MODEL 76 EMULATION (experimental). For `secs` (1..600) answer every valid E070 M-frame with an R-frame
+// (prior art dwrice0/aprilaire_controller): `on` 0/1, `dryness` 1..7, `rh_x10` = our RH*10 (0..1000), temp
+// flagged NOT valid. Refused unless M-frames were heard in the last 5 s (only ever answers a live request).
+// Reports every 5 s; reverts to LISTEN-ONLY when the window ends.
+const char *aprilaire_sniff_reply(int secs, int on, int dryness, int rh_x10);

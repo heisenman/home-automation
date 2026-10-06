@@ -6,6 +6,7 @@
   python3 tools/dehum_cmd.py status       # log + publish relay state and lease remaining
   python3 tools/dehum_cmd.py sniff        # RS-485 A/B sniffer report now (v4+; also every 30 s on .../log)
   python3 tools/dehum_cmd.py txtest 10    # BENCH ONLY (v5+): stream 0x00 on A/B for 10 s (1..30), report echo
+  python3 tools/dehum_cmd.py reply 60 0 4 500   # v6+: emulate Model 76 for 60 s: on=0/1 dryness=1..7 rh_x10
 
 Watch:  mosquitto_sub -h 192.168.1.200 -v -t 'home/edge/dehum_c6/#'
 
@@ -36,6 +37,9 @@ def main() -> None:
         shade_cmd.send({"op": "dehum_call", "min": int(a[1])})
     elif a[:1] == ["txtest"] and len(a) == 2 and a[1].isdigit() and 1 <= int(a[1]) <= 30:
         shade_cmd.send({"op": "apr_txtest", "secs": int(a[1]), "byte": 0})
+    elif a[:1] == ["reply"] and len(a) == 5 and all(x.isdigit() for x in a[1:]):
+        shade_cmd.send({"op": "apr_reply", "secs": int(a[1]), "on": int(a[2]), "dryness": int(a[3]),
+                        "rh_x10": int(a[4])})
     elif a == ["sniff"]:
         shade_cmd.send({"op": "apr_sniff"})
     elif a == ["status"]:

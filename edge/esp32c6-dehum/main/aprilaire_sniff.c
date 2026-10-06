@@ -163,6 +163,83 @@ const char *aprilaire_sniff_txtest(int secs, int byte) {
     return "queued";
 }
 
+// ── Model 76 emulation ────────────────────────────────────────────────────────────────────────────
+static volatile int s_rp_req_secs;
+static int s_rp_on, s_rp_dry, s_rp_rh;
+
+static uint8_t apr_cs(const uint8_t *body, size_t len) {     // byte sum incl. STX (0x02), mod 256
+    uint32_t sum = 0x02;
+    for (size_t i = 0; i < len; i++) sum += body[i];
+    return (uint8_t)sum;
+}
+
+static int hexval(uint8_t c) {
+    return c >= '0' && c <= '9' ? c - '0' : c >= 'A' && c <= 'F' ? c - 'A' + 10 : c >= 'a' && c <= 'f' ? c - 'a' + 10 : -1;
+}
+
+static void run_reply(int secs) {
+    ha_rs485_deinit(&s_bus);
+    ha_rs485_cfg_t tx_cfg = bus_cfg(false);
+    if (ha_rs485_init(&s_bus, &tx_cfg) != ESP_OK) {
+        s_log("apr-reply: could not open TX");
+    } else {
+        uart_set_rx_timeout(SNIFF_UART, 2);                   // deliver bytes ~2 char times after the line idles
+        char body[16], frame[24];
+        snprintf(body, sizeof body, "R%02X%02X%04X%02X%02X", s_rp_on ? 1 : 0, s_rp_dry, s_rp_rh, 0x01, 0x00);
+        uint8_t cs = apr_cs((const uint8_t *)body, strlen(body));
+        int flen = snprintf(frame, sizeof frame, "%c%s%02X%c", 0x02, body, cs, 0x03);
+        s_log("apr-reply: MODEL 76 EMULATION ON for %d s — answering each M-frame with %s (on=%d dryness=%d rh=%d.%d%%)",
+              secs, body, s_rp_on, s_rp_dry, s_rp_rh / 10, s_rp_rh % 10);
+        uint8_t buf[32], rx[32];
+        size_t bl = 0;
+        bool in = false;
+        unsigned m_ok = 0, m_bad = 0, sent = 0, other = 0;
+        char last_m[12] = "-";
+        uint32_t end = now_ms() + (uint32_t)secs * 1000u, last_rep = now_ms();
+        while ((int32_t)(end - now_ms()) > 0) {
+            int n = ha_rs485_read(&s_bus, rx, sizeof rx, 5);
+            for (int i = 0; i < n; i++) {
+                uint8_t c = rx[i];
+                if (c == 0x02) { in = true; bl = 0; continue; }
+                if (!in) continue;
+                if (c != 0x03) { if (bl < sizeof buf) buf[bl++] = c; else in = false; continue; }
+                in = false;                                    // ETX: validate "M" + payload + 2 hex checksum
+                if (bl < 4) { m_bad++; continue; }
+                int hi = hexval(buf[bl - 2]), lo = hexval(buf[bl - 1]);
+                if (hi < 0 || lo < 0 || apr_cs(buf, bl - 2) != (uint8_t)(hi * 16 + lo)) { m_bad++; continue; }
+                if (buf[0] != 'M') { other++; continue; }
+                m_ok++;
+                size_t ml = bl - 2 < sizeof last_m - 1 ? bl - 2 : sizeof last_m - 1;
+                memcpy(last_m, buf, ml); last_m[ml] = 0;
+                if (ha_rs485_write(&s_bus, (const uint8_t *)frame, (size_t)flen, 100) == ESP_OK) sent++;
+            }
+            if ((uint32_t)(now_ms() - last_rep) >= 5000u) {
+                s_log("apr-reply: M ok=%u bad=%u other=%u | R sent=%u | last M=%s (cmd '?'=idle '!'=run; then RH hex, code)",
+                      m_ok, m_bad, other, sent, last_m);
+                last_rep = now_ms();
+            }
+        }
+        s_log("apr-reply: DONE — M ok=%u bad=%u other=%u R sent=%u last M=%s", m_ok, m_bad, other, sent, last_m);
+        ha_rs485_deinit(&s_bus);
+    }
+    ha_rs485_cfg_t lo_cfg = bus_cfg(true);
+    if (ha_rs485_init(&s_bus, &lo_cfg) == ESP_OK) s_log("apr-reply: back to LISTEN-ONLY");
+}
+
+const char *aprilaire_sniff_reply(int secs, int on, int dryness, int rh_x10) {
+    if (!s_bus.inited) return "REFUSED (sniffer not running)";
+    if (secs < 1 || secs > 600) return "REFUSED (secs must be 1..600)";
+    if (on < 0 || on > 1 || dryness < 1 || dryness > 7 || rh_x10 < 0 || rh_x10 > 1000)
+        return "REFUSED (on 0/1, dryness 1..7, rh_x10 0..1000)";
+    xSemaphoreTake(s_mu, portMAX_DELAY);
+    bool live = s_ring_n && (uint32_t)(now_ms() - s_last_ms) < 5000u;
+    xSemaphoreGive(s_mu);
+    if (!live) return "REFUSED (no M-frames in the last 5 s — is REMOTE on?)";
+    s_rp_on = on; s_rp_dry = dryness; s_rp_rh = rh_x10;
+    s_rp_req_secs = secs;
+    return "queued";
+}
+
 static void sniff_task(void *arg) {
     (void)arg;
     uint8_t chunk[64], frame[FRAME_MAX];
@@ -173,6 +250,12 @@ static void sniff_task(void *arg) {
             int secs = s_tx_req_secs;
             s_tx_req_secs = 0;
             run_txtest(secs, s_tx_req_byte);
+            flen = full = 0;
+        }
+        if (s_rp_req_secs) {
+            int secs = s_rp_req_secs;
+            s_rp_req_secs = 0;
+            run_reply(secs);
             flen = full = 0;
         }
         int n = ha_rs485_read(&s_bus, chunk, sizeof chunk, GAP_MS);
