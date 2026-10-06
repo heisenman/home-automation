@@ -65,7 +65,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v10-apr-mute"
+#define HA_FW_VERSION "v11-apr-boost"
 #endif
 
 static const char *TAG = "ha_dehum";
@@ -105,15 +105,19 @@ static void relay_init_safe(void) {
     gpio_set_level(DH_RELAY_GPIO, 0);
 }
 
+static volatile bool s_force_call;   // this lease is an operator Boost: answer on=0x02 over RS-485
+
 static void dh_backstop_cb(void *arg) {
     (void)arg;
     gpio_set_level(DH_RELAY_GPIO, 0);   // no lock, no ha_dout: this path exists for when those are wedged
     apr_bus_set_call(false);
+    apr_bus_set_force(false);
 }
 
 static void dh_apply(uint32_t t) {
     ha_dout_tick(&s_dh, t);
     bool on = ha_dout_level(&s_dh);
+    if (!on && s_force_call) { s_force_call = false; apr_bus_set_force(false); }   // lease ran out
     gpio_set_level(DH_RELAY_GPIO, on ? 1 : 0);
     apr_bus_set_call(on);   // the same call, over RS-485: the E070 obeys whichever mode it is in (EXTERNAL/REMOTE)
 }
@@ -130,9 +134,9 @@ static void publish_dehum(void) {
     uint32_t t = now_ms();
     apr_bus_status_t st;
     apr_bus_get_status(&st);
-    int k = snprintf(metrics, sizeof metrics, "{\"dh_call\":%s,\"call_left_s\":%ld,\"apr_link\":%s",
+    int k = snprintf(metrics, sizeof metrics, "{\"dh_call\":%s,\"call_left_s\":%ld,\"dh_force\":%s,\"apr_link\":%s",
                      gpio_get_level(DH_RELAY_GPIO) ? "true" : "false", (long)lease_left_s(t),
-                     st.link ? "true" : "false");
+                     (s_force_call && gpio_get_level(DH_RELAY_GPIO)) ? "true" : "false", st.link ? "true" : "false");
     if (st.link)   // the unit's own view — only while it is actually talking (REMOTE mode), never stale
         snprintf(metrics + k, sizeof metrics - k, ",\"unit_running\":%s,\"unit_rh_pct\":%u,\"unit_err\":%u}",
                  st.running ? "true" : "false", st.rh_pct, st.code);
@@ -154,7 +158,7 @@ static void dh_task(void *arg) {
         int lvl = gpio_get_level(DH_RELAY_GPIO);
         apr_bus_status_t st;
         apr_bus_get_status(&st);
-        int unit = (st.link ? 1 : 0) | (st.running ? 2 : 0) | (st.code << 2);
+        int unit = (st.link ? 1 : 0) | (st.running ? 2 : 0) | (s_force_call ? 4 : 0) | (st.code << 3);
         if (ha_mqtt_is_connected() && (lvl != last || unit != last_unit || (uint32_t)(t - last_pub) >= HEARTBEAT_MS)) {
             publish_dehum();                          // on every relay/unit change, and every 30 s
             last = lvl;
@@ -166,12 +170,14 @@ static void dh_task(void *arg) {
 }
 
 // minutes 0 = release (deferred to MIN_ON if just closed); 1..LEASE_MAX_MIN = call / renew for that long.
-static const char *dh_call(int minutes) {
+static const char *dh_call(int minutes, bool force) {
     if (minutes < 0 || minutes > (int)LEASE_MAX_MIN) return "REFUSED (min must be 0..60)";
     xSemaphoreTake(s_dh_mu, portMAX_DELAY);
     uint32_t t = now_ms();
     esp_timer_stop(s_dh_backstop);
     ha_dout_rc_t rc;
+    s_force_call = force && minutes > 0;
+    apr_bus_set_force(s_force_call);
     if (minutes == 0) {
         rc = ha_dout_set(&s_dh, false, t);
         if (rc == HA_DOUT_DEFERRED)
@@ -203,10 +209,12 @@ static bool on_cmd(const cJSON *cmd, void *user) {
     if (!cJSON_IsString(op)) return false;
 
     if (strcmp(op->valuestring, "dehum_call") == 0) {
-        const cJSON *m = cJSON_GetObjectItem(cmd, "min");
+        const cJSON *m = cJSON_GetObjectItem(cmd, "min"), *f = cJSON_GetObjectItem(cmd, "force");
         int minutes = cJSON_IsNumber(m) ? m->valueint : -1;
-        const char *r = dh_call(minutes);
-        ha_mqtt_log("dehum: dehum_call min=%d -> %s (relay=%d)", minutes, r, gpio_get_level(DH_RELAY_GPIO));
+        bool force = cJSON_IsTrue(f);
+        const char *r = dh_call(minutes, force);
+        ha_mqtt_log("dehum: dehum_call min=%d%s -> %s (relay=%d)", minutes, force ? " FORCE" : "", r,
+                    gpio_get_level(DH_RELAY_GPIO));
         publish_dehum();
         return true;
     }

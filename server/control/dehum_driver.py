@@ -54,17 +54,23 @@ class DehumEdgeTransport:
             return protocol.build_ack(cmd_id=cmd["id"], status="rejected",
                                       reason=f"dehum: unsupported {trait}/{action}")
         on = bool(args.get("on"))
+        force = on and bool(args.get("force"))   # Boost: node answers the E070 on=0x02 (run regardless)
         secret = (self.lut.get(node) or {}).get("cmd_secret")
         if not secret:
             return protocol.build_ack(cmd_id=cmd["id"], status="rejected",
                                       reason=f"dehum: no cmd_secret for node {node} in the LUT")
-        matches = (lambda m: bool(m.get("dh_call")) == on)
-        seen = send_and_confirm(self._mqtt, self.broker, self.port, node, secret,
-                                {"op": "dehum_call", "min": lease if on else 0},
+        # confirm the call pin, and the force flag where the node reports one (pre-v11 firmware does not)
+        matches = (lambda m: bool(m.get("dh_call")) == on
+                   and (not on or m.get("dh_force") is None or bool(m.get("dh_force")) == force))
+        payload = {"op": "dehum_call", "min": lease if on else 0}
+        if force:
+            payload["force"] = True
+        seen = send_and_confirm(self._mqtt, self.broker, self.port, node, secret, payload,
                                 f"home/edge/{node}/dehum/adv", matches, max(timeout, self.confirm_s),
                                 self.state_dir, device_id)
         if not seen:
             return None
         hit = next((m for m in reversed(seen) if matches(m)), seen[-1])
         return protocol.build_ack(cmd_id=cmd["id"], status="ok",
-                                  reported_state={"on": bool(hit.get("dh_call"))}, source="commanded")
+                                  reported_state={"on": bool(hit.get("dh_call")),
+                                                  "force": bool(hit.get("dh_force"))}, source="commanded")

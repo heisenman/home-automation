@@ -187,7 +187,7 @@ def test_boost_override_bypasses_the_gate(tmp_path):
     store.set_override(conn, "dehum_attic", "boost_on", NOW + 3600)
     conn.close()
     ctrl.tick(now=NOW)
-    assert ("dehum_attic", "switchable", {"on": True}) in iss.calls
+    assert ("dehum_attic", "switchable", {"on": True, "force": True}) in iss.calls
 
 
 def test_gate_api_validation():
@@ -199,3 +199,52 @@ def test_gate_api_validation():
     code, _ = handle_policy_update(conn, "dehum_attic", {"outdoor_gate": {"sensor": "switchbot_outdoor",
                                                                           "min_dewpoint_c": 4.4}})
     assert code == 200 and store.get_policy(conn, "dehum_attic")["outdoor_gate"]["sensor"] == "switchbot_outdoor"
+
+
+# ── Boost = FORCE-RUN over RS-485 (on=0x02), 2026-10-06 ─────────────────────────────────────────────────
+def _boost(db, until=NOW + 3600):
+    conn = sqlite3.connect(db)
+    store.set_override(conn, "dehum_attic", "boost_on", until)
+    conn.close()
+
+
+def test_rule_call_is_never_forced(tmp_path):
+    ctrl, iss, _ = _make(tmp_path, rh=(60, 62))
+    ctrl.tick(now=NOW)
+    calls = [a for d, t, a in iss.calls if d == "dehum_attic"]
+    assert {"on": True} in calls and not any(a.get("force") for a in calls)
+
+
+def test_boost_from_idle_issues_a_forced_call(tmp_path):
+    ctrl, iss, db = _make(tmp_path, rh=(30, 30))
+    _boost(db)
+    ctrl.tick(now=NOW)
+    assert ("dehum_attic", "switchable", {"on": True, "force": True}) in iss.calls
+
+
+def test_boost_while_already_running_switches_the_node_to_force(tmp_path):
+    ctrl, iss, db = _make(tmp_path, rh=(60, 62), dh_running=True, lease_left=500, erv_mode=11)
+    ctrl.on_message(None, None, _Msg("dehum_attic", {"dh_call": True, "call_left_s": 500, "dh_force": False}))
+    _boost(db)
+    ctrl.tick(now=NOW)
+    assert ("dehum_attic", "switchable", {"on": True, "force": True}) in iss.calls
+
+
+def test_boost_ending_drops_force_but_keeps_a_wanted_call(tmp_path):
+    ctrl, iss, db = _make(tmp_path, rh=(60, 62), dh_running=True, lease_left=500, erv_mode=11)
+    ctrl.on_message(None, None, _Msg("dehum_attic", {"dh_call": True, "call_left_s": 500, "dh_force": True}))
+    ctrl.tick(now=NOW)                    # no override any more; the house is still humid
+    assert ("dehum_attic", "switchable", {"on": True, "force": False}) in iss.calls
+
+
+def test_pre_v11_node_without_force_telemetry_is_left_alone(tmp_path):
+    ctrl, iss, _ = _make(tmp_path, rh=(60, 62), dh_running=True, lease_left=500, erv_mode=11)
+    ctrl.tick(now=NOW)
+    assert not [a for d, t, a in iss.calls if d == "dehum_attic"]
+
+
+def test_switchable_trait_passes_force_through():
+    from server.control.traits import get_trait
+    sw = get_trait("switchable").actions["set"]
+    assert sw({"on": True, "force": True}, {}) == {"on": True, "force": True}
+    assert sw({"on": False}, {}) == {"on": False}

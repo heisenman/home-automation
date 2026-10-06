@@ -27,6 +27,10 @@ bool apr_bus_start(void (*log)(const char *fmt, ...));
 // The call to relay to the unit (mirror of the DH relay level). Takes effect on the next reply.
 void apr_bus_set_call(bool on);
 
+// FORCE-RUN (operator Boost): while a call is active, answer on=0x02 instead of 0x01 — the unit then runs its
+// compressor regardless of the dryness/dew-point setpoint (observed 2026-10-06, ≈ Model 76 Test Mode).
+void apr_bus_set_force(bool force);
+
 void apr_bus_get_status(apr_bus_status_t *out);
 
 // Log counters + a verdict + the last few raw frames (also every 5 min on its own).

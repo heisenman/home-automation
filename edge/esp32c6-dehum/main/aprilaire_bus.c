@@ -25,6 +25,7 @@ static const char *TAG = "apr_bus";
 #define READ_WAIT_MS    20          // 2 ticks @100 Hz; the UART rx-timeout hands a frame over ~2 chars after ETX
 
 #define DRY_CALL        7           // 40 °F dew point
+#define ON_FORCE        0x02        // force-run: compressor regardless of setpoint (design §2.8 experiments)
 #define DRY_IDLE        1           // 65 °F — and the 1 -> 7 step on a call forces an immediate sample
 #define REMOTE_RH_X10   500         // what a Model 76 would show as its own RH; not used for the run decision
 
@@ -86,7 +87,9 @@ static ha_rs485_cfg_t bus_cfg(void) {
         .stop_bits = UART_STOP_BITS_1, .listen_only = false };
 }
 
+static volatile bool s_force_run;
 void apr_bus_set_call(bool on) { s_call = on; }
+void apr_bus_set_force(bool force) { s_force_run = force; }
 
 void apr_bus_get_status(apr_bus_status_t *out) {
     if (!s_mu) { memset(out, 0, sizeof *out); return; }   // called before apr_bus_start (dh_task starts first)
@@ -104,8 +107,9 @@ void apr_bus_report(void) {
         st.link ? (st.code ? "LINK UP — unit reports an error code (see manual Table 2)" : "LINK UP — answering as the unit's remote")
         : st.m_ok ? "LINK LOST — no M-frame for >5 s (REMOTE switched off? wiring?)"
                   : "NO M-FRAMES — unit in EXTERNAL mode (DH relay controls it) or A/B not wired";
-    s_log("apr-bus: %s%s | call=%d unit=%s rh=%u%% code=%u | M ok=%lu bad=%lu R sent=%lu",
-          verdict, s_mute ? " [MUTED]" : s_force ? " [FORCED R-frame]" : "", s_call ? 1 : 0, st.running ? "RUNNING" : "idle", st.rh_pct, st.code,
+    s_log("apr-bus: %s%s | call=%d%s unit=%s rh=%u%% code=%u | M ok=%lu bad=%lu R sent=%lu",
+          verdict, s_mute ? " [MUTED]" : s_force ? " [FORCED R-frame]" : "", s_call ? 1 : 0,
+          s_call && s_force_run ? " (FORCE-RUN)" : "", st.running ? "RUNNING" : "idle", st.rh_pct, st.code,
           (unsigned long)st.m_ok, (unsigned long)st.m_bad, (unsigned long)st.r_sent);
     xSemaphoreTake(s_mu, portMAX_DELAY);
     unsigned n = s_raw_n, shown = n < RAW_RING ? n : RAW_RING;
@@ -147,8 +151,11 @@ static void on_body(const uint8_t *body, size_t len) {
         } else {
             if (s_force && s_log) s_log("apr-bus: force window ended — back to the call mapping");
             s_force = false;
-            n = ha_apr_build_r(&(ha_apr_r_t){ .on = call, .dryness = call ? DRY_CALL : DRY_IDLE,
-                                              .rh_x10 = REMOTE_RH_X10 }, frame, sizeof frame);
+            if (call && s_force_run)   // Boost: run regardless of setpoint (raw byte; not in the strict codec)
+                n = build_raw_r(ON_FORCE, DRY_CALL, frame, sizeof frame);
+            else
+                n = ha_apr_build_r(&(ha_apr_r_t){ .on = call, .dryness = call ? DRY_CALL : DRY_IDLE,
+                                                  .rh_x10 = REMOTE_RH_X10 }, frame, sizeof frame);
         }
         if (n && ha_rs485_write(&s_bus, frame, n, 100) == ESP_OK) {
             xSemaphoreTake(s_mu, portMAX_DELAY);

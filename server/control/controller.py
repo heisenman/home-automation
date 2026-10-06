@@ -173,7 +173,8 @@ class Controller:
         if metrics.get("dh_call") is not None:
             with self._lock:
                 self.telemetry[did] = {"running": bool(metrics["dh_call"]), "fan": None,
-                                       "lease_left_s": metrics.get("call_left_s"), "ts": time.time()}
+                                       "lease_left_s": metrics.get("call_left_s"),
+                                       "force": metrics.get("dh_force"), "ts": time.time()}
         # level-mode actuators (the ERV) report their MODE; translate it to running + level for the resolver
         if metrics.get("fan_mode") is not None:
             lm = self._level_modes(did)
@@ -560,7 +561,7 @@ class Controller:
                 store.append_log(conn, device_id, False, "safety", "no telemetry yet", False, "no-status")
                 return
             st = {"running": tel.get("running"), "fan": tel.get("fan"), "fan_mode": tel.get("fan_mode"),
-                  "lease_left_s": tel.get("lease_left_s")}
+                  "lease_left_s": tel.get("lease_left_s"), "force": tel.get("force")}
             transport = "wifi-mqtt"
             lm = self._level_modes(device_id)
             if lm is not None and st["fan_mode"] in lm["external"]:
@@ -614,6 +615,10 @@ class Controller:
             top = len(lm["labels"])
             res = Resolution(True, dev_state.level != top, res.source, res.reason + f" -> level {top}",
                              level=top)
+        # an operator BOOST on a leased-call device (the Aprilaire) means FORCE-RUN: run regardless of the
+        # unit's own dew-point logic (RS-485 on=0x02). Normal calls leave the unit its final say.
+        want_force = bool(res.running and override is not None and override.action == "boost_on"
+                          and override.active(now) and st.get("lease_left_s") is not None)
         reason = res.reason + (f" (via fallback {used_id})" if via_fallback and res.source == "rule" else "")
         if lm is not None:
             # a level-mode device's "speed N"/"level N" are its MODES — log what the operator sees in the PWA
@@ -656,18 +661,31 @@ class Controller:
                 result = self.issuer.issue(device_id=device_id, trait="mode", action="set",
                                            args={"mode": target_mode})
             else:
-                result = self.issuer.issue(device_id=device_id, trait="switchable", action="set",
-                                           args={"on": res.running})
+                args = {"on": res.running}
+                if want_force:
+                    args["force"] = True
+                result = self.issuer.issue(device_id=device_id, trait="switchable", action="set", args=args)
             status = result.status
             if result.status == "ok" and res.running != dev_state.running:
                 store.record_transition(conn, device_id, res.running, now)
             self._emit(device_id, transport, ev.from_issue_status(result.status), res.reason)
         elif res.act and dry_run:
             status = "dry-run"
-        if (not res.act and not dry_run and res.running and dev_state.running
-                and st.get("lease_left_s") is not None and st["lease_left_s"] < LEASE_RENEW_BELOW_S):
+        leased = st.get("lease_left_s") is not None
+        if (not res.act and not dry_run and res.running and dev_state.running and leased
+                and st.get("force") is not None and bool(st["force"]) != want_force):
+            # Boost began (or ended) while the call was already running: re-issue so the node switches its
+            # RS-485 answer between force-run (0x02) and a normal call (0x01). Pre-v11 nodes report no force.
+            r = self.issuer.issue(device_id=device_id, trait="switchable", action="set",
+                                  args={"on": True, "force": want_force})
+            status = f"force->{want_force}:{r.status}"
+        elif (not res.act and not dry_run and res.running and dev_state.running and leased
+                and st["lease_left_s"] < LEASE_RENEW_BELOW_S):
             # a leased call (the Aprilaire's DH) runs out on its own unless renewed — that IS its fail-safe
-            r = self.issuer.issue(device_id=device_id, trait="switchable", action="set", args={"on": True})
+            args = {"on": True}
+            if want_force:
+                args["force"] = True
+            r = self.issuer.issue(device_id=device_id, trait="switchable", action="set", args=args)
             status = f"renewed:{r.status}"
         if pol.get("ventilation"):
             self._track_ventilation_demand(device_id, pol, bool(dev_state.running), res.running, now)

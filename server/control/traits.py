@@ -74,7 +74,12 @@ def _as_number_in_range(v: Any, field_name: str, lo: float, hi: float,
 
 # ── trait definitions ─────────────────────────────────────────────────────────────
 def _switchable_set(args, cfg):
-    return {"on": _as_bool(args.get("on"), "on")}
+    out = {"on": _as_bool(args.get("on"), "on")}
+    if args.get("force") is not None:
+        # FORCE-RUN on: a device-specific "run regardless of your own conditions" (the Aprilaire's Boost =
+        # R-frame on=0x02). Optional; a driver that has no such notion ignores it.
+        out["force"] = _as_bool(args.get("force"), "force")
+    return out
 
 
 def _ranged_set(args, cfg):
