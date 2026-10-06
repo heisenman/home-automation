@@ -40,6 +40,30 @@ static volatile uint8_t s_tx_req_byte;
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
+// experiment override (apr_bus_force): raw on/dryness bytes until s_force_end_ms
+static volatile uint32_t s_force_end_ms;
+static volatile bool     s_force;
+static volatile uint8_t  s_force_on, s_force_dry;
+
+static size_t build_raw_r(uint8_t on, uint8_t dry, uint8_t *out, size_t cap) {
+    char body[16];
+    int bl = snprintf(body, sizeof body, "R%02X%02X%04X%02X%02X", on, dry, REMOTE_RH_X10, 0x01u, 0x00u);
+    if (bl != 13 || cap < 18) return 0;
+    uint8_t cs = ha_apr_checksum((const uint8_t *)body, (size_t)bl);
+    return (size_t)snprintf((char *)out, cap, "%c%s%02X%c", HA_APR_STX, body, cs, HA_APR_ETX);
+}
+
+const char *apr_bus_force(int secs, int on, int dryness) {
+    if (secs == 0) { s_force = false; return "cancelled — back to the call mapping"; }
+    if (secs < 0 || secs > 900 || on < 0 || on > 255 || dryness < 0 || dryness > 255)
+        return "REFUSED (secs 1..900, on/dryness 0..255)";
+    s_force_on = (uint8_t)on;
+    s_force_dry = (uint8_t)dryness;
+    s_force_end_ms = (uint32_t)(esp_timer_get_time() / 1000) + (uint32_t)secs * 1000u;
+    s_force = true;
+    return "forcing";
+}
+
 static ha_rs485_cfg_t bus_cfg(void) {
     // listen_only = false: this node is the unit's remote. It writes ONLY in reply to a valid M-frame, so an
     // EXTERNAL-mode (silent) bus is never driven. The bench txtest is the one other writer, and it is refused
@@ -68,8 +92,8 @@ void apr_bus_report(void) {
         st.link ? (st.code ? "LINK UP — unit reports an error code (see manual Table 2)" : "LINK UP — answering as the unit's remote")
         : st.m_ok ? "LINK LOST — no M-frame for >5 s (REMOTE switched off? wiring?)"
                   : "NO M-FRAMES — unit in EXTERNAL mode (DH relay controls it) or A/B not wired";
-    s_log("apr-bus: %s | call=%d unit=%s rh=%u%% code=%u | M ok=%lu bad=%lu R sent=%lu",
-          verdict, s_call ? 1 : 0, st.running ? "RUNNING" : "idle", st.rh_pct, st.code,
+    s_log("apr-bus: %s%s | call=%d unit=%s rh=%u%% code=%u | M ok=%lu bad=%lu R sent=%lu",
+          verdict, s_force ? " [FORCED R-frame]" : "", s_call ? 1 : 0, st.running ? "RUNNING" : "idle", st.rh_pct, st.code,
           (unsigned long)st.m_ok, (unsigned long)st.m_bad, (unsigned long)st.r_sent);
     xSemaphoreTake(s_mu, portMAX_DELAY);
     unsigned n = s_raw_n, shown = n < RAW_RING ? n : RAW_RING;
@@ -100,8 +124,15 @@ static void on_body(const uint8_t *body, size_t len) {
                   s_call ? 1 : 0);
         bool call = s_call;
         uint8_t frame[24];
-        size_t n = ha_apr_build_r(&(ha_apr_r_t){ .on = call, .dryness = call ? DRY_CALL : DRY_IDLE,
-                                                 .rh_x10 = REMOTE_RH_X10 }, frame, sizeof frame);
+        size_t n;
+        if (s_force && (int32_t)(s_force_end_ms - now_ms()) > 0) {
+            n = build_raw_r(s_force_on, s_force_dry, frame, sizeof frame);
+        } else {
+            if (s_force && s_log) s_log("apr-bus: force window ended — back to the call mapping");
+            s_force = false;
+            n = ha_apr_build_r(&(ha_apr_r_t){ .on = call, .dryness = call ? DRY_CALL : DRY_IDLE,
+                                              .rh_x10 = REMOTE_RH_X10 }, frame, sizeof frame);
+        }
         if (n && ha_rs485_write(&s_bus, frame, n, 100) == ESP_OK) {
             xSemaphoreTake(s_mu, portMAX_DELAY);
             s_st.r_sent++;

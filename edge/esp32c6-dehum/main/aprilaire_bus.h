@@ -34,3 +34,8 @@ void apr_bus_report(void);
 
 // BENCH ONLY: stream `byte` for `secs` (1..30) to prove the TX path. Refused while the link is live.
 const char *apr_bus_txtest(int secs, int byte);
+
+// EXPERIMENT: for `secs` (1..900) reply with these RAW R-frame bytes instead of the call mapping — `on` and
+// `dryness` may be undocumented values (probing e.g. on=0x02 for Model 76 Test Mode). The DH relay is NOT
+// touched, so this also isolates the relay path. secs=0 cancels. Returns a status string.
+const char *apr_bus_force(int secs, int on, int dryness);

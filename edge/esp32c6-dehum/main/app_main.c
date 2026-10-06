@@ -65,7 +65,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v7-apr-remote"
+#define HA_FW_VERSION "v8-apr-force"
 #endif
 
 static const char *TAG = "ha_dehum";
@@ -214,6 +214,15 @@ static bool on_cmd(const cJSON *cmd, void *user) {
         const cJSON *sv = cJSON_GetObjectItem(cmd, "secs"), *bv = cJSON_GetObjectItem(cmd, "byte");
         const char *r = apr_bus_txtest(cJSON_IsNumber(sv) ? sv->valueint : 5, cJSON_IsNumber(bv) ? bv->valueint : 0);
         ha_mqtt_log("apr-txtest: request -> %s", r);
+        return true;
+    }
+    if (strcmp(op->valuestring, "apr_force") == 0) {   // EXPERIMENT: {secs 0..900, on, dryness} raw R-frame bytes
+        const cJSON *sv = cJSON_GetObjectItem(cmd, "secs"), *ov = cJSON_GetObjectItem(cmd, "on"),
+                    *dv = cJSON_GetObjectItem(cmd, "dryness");
+        const char *r = apr_bus_force(cJSON_IsNumber(sv) ? sv->valueint : 0, cJSON_IsNumber(ov) ? ov->valueint : 0,
+                                      cJSON_IsNumber(dv) ? dv->valueint : 1);
+        ha_mqtt_log("apr-force: secs=%d on=0x%02X dryness=0x%02X -> %s", cJSON_IsNumber(sv) ? sv->valueint : 0,
+                    cJSON_IsNumber(ov) ? ov->valueint : 0, cJSON_IsNumber(dv) ? dv->valueint : 1, r);
         return true;
     }
     if (strcmp(op->valuestring, "apr_status") == 0) {   // RS-485 link/unit report now (also every 5 min)
