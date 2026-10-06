@@ -50,7 +50,9 @@ E070's own intake instead of reaching the house — fresh air to the house drops
 = R `on=0` = blower fully off (3 W). Options (to discuss with Hugh, no behaviour change yet): keep the blower
 moving whenever the ERV supplies (fan-only — maybe an undocumented R `on` value; `on=01`+dryness 1 only samples
 intermittently), a backdraft damper / duct change at the E070 intake, or treat E070-off as reduced ventilation
-and compensate on the ERV.
+and compensate on the ERV. **2026-10-06 sweep: no RS-485 fan-only value exists and REMOTE does no VENT
+cycling (45 min, one sample only) ⇒ protocol can't fix it — needs a backdraft damper / duct change (Hugh).**
+Meanwhile automation uses force-run (`force_run: true`, deployed).
 
 ## 🟡 REVISIT — Aprilaire VENT (air-cycling) mode costs ~67 W net, adds no fresh air (2026-10-05)
 

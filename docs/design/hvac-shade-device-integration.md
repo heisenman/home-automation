@@ -520,6 +520,11 @@ pollutes the attic's canonical RH). Mode switching over the wire: no known R-fra
    idles within 2 s of `02` ending — so the Model 76's 5-min Test Mode limit lives in the remote. **Shipped
    2026-10-06** (v11 + server): the PWA's existing **Boost** override = `dehum_call {force:true}` → R `on=02`
    for the lease; rule calls stay `on=01` + dryness 7. The card's "running" now comes from `unit_running`.
+2c. **`on` byte sweep (2026-10-06, Hugh-authorized, 13 values, 0 error codes):** the unit reads TWO bits.
+   bit0 set (`01 03 05 07 FF`) = normal ON (3-min sample, dew-point decides); bit1 set with bit0 clear (`02 06`)
+   = FORCE-RUN (compressor regardless); neither (`00 04 08 10 20 40 80`) = OFF. No fan-only value exists.
+   45 min of `on=01` dryness 1: one 3-min sample, then 3 W for 42 min — no VENT/air-cycling in REMOTE.
+   ⇒ the ERV-backflow-through-a-stopped-E070 problem (FOLLOWUPS) cannot be solved over RS-485; physical fix.
 3. **Mute → E3 in 5 s**, unit RUNNING → idle in 6 s, compressor off ≤30 s; replies resume → code 0 in 2 s.
 
 Originally kept as a documented future upgrade. Notes from then: the prior-art repo does **not** document whether the
