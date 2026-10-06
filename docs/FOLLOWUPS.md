@@ -40,6 +40,16 @@ node-secret LUTs synced (12 = 12). run_all 785/15 (the 15 pre-existing).
    ADR-0036 node-born secret + LUT entry per unit; (c) the first panel still runs v114 (no need to OTA unless
    wanted — v115 is identical for it, no NVS node_id); (d) `bat_profile.c` log string still says d1001-beachhead.
 
+## 🟠 2026-10-06 — E070 blower OFF leaks ERV supply back out of the E070 intake (Hugh, observed in the attic)
+
+With the E070 in series on the ERV supply, a STOPPED E070 blower lets some/all ERV supply air escape out of the
+E070's own intake instead of reaching the house — fresh air to the house drops. Explains why the E070 blower
+"assists" supply (erv-airflow doc): it also blocks the backflow. Matters MORE under REMOTE control: "not called"
+= R `on=0` = blower fully off (3 W). Options (to discuss with Hugh, no behaviour change yet): keep the blower
+moving whenever the ERV supplies (fan-only — maybe an undocumented R `on` value; `on=01`+dryness 1 only samples
+intermittently), a backdraft damper / duct change at the E070 intake, or treat E070-off as reduced ventilation
+and compensate on the ERV.
+
 ## 🟡 REVISIT — Aprilaire VENT (air-cycling) mode costs ~67 W net, adds no fresh air (2026-10-05)
 
 Airflow test: the ERV meets its CFM targets without it; the dehum blower only offloads the ERV supply fan
