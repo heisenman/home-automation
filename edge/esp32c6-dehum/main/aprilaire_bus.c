@@ -22,6 +22,7 @@ static const char *TAG = "apr_bus";
 #define LINK_MS         5000u       // M-frame within this window = link up
 #define REPORT_MS       300000u     // periodic diagnostic report
 #define RAW_RING        4           // last raw bodies kept for the report
+#define READ_WAIT_MS    20          // 2 ticks @100 Hz; the UART rx-timeout hands a frame over ~2 chars after ETX
 
 #define DRY_CALL        7           // 40 °F dew point
 #define DRY_IDLE        1           // 65 °F — and the 1 -> 7 step on a call forces an immediate sample
@@ -180,7 +181,9 @@ static void bus_task(void *arg) {
             run_txtest(secs, s_tx_req_byte);
             memset(&fr, 0, sizeof fr);
         }
-        int n = ha_rs485_read(&s_bus, rx, sizeof rx, 5);
+        // ≥ 2 ticks: at CONFIG_FREERTOS_HZ=100 a 5 ms wait rounds to 0 ticks and this loop never blocks — v7
+        // did exactly that at priority 6 and starved the OTA/MQTT tasks (an OTA could not complete).
+        int n = ha_rs485_read(&s_bus, rx, sizeof rx, READ_WAIT_MS);
         for (int i = 0; i < n; i++)
             if (ha_apr_feed(&fr, rx[i])) on_body(fr.body, fr.len);
         apr_bus_status_t st;
@@ -206,7 +209,10 @@ bool apr_bus_start(void (*log)(const char *fmt, ...)) {
         return false;
     }
     uart_set_rx_timeout(BUS_UART, 2);   // hand bytes over ~2 char times after the line idles (prompt replies)
-    xTaskCreate(bus_task, "apr_bus", 4096, NULL, 6, NULL);
+    // Priority 4: BELOW ha_ota/ha_mqtt (5). The unit waits on the order of 10 ms for a reply, which this
+    // still meets; it must never be able to starve the OTA path that delivers its own fixes.
+    _Static_assert(READ_WAIT_MS >= 2 * (1000 / CONFIG_FREERTOS_HZ), "bus read must block for >= 2 ticks");
+    xTaskCreate(bus_task, "apr_bus", 4096, NULL, 4, NULL);
     ESP_LOGW(TAG, "Aprilaire Remote bus up: UART1 TX=GPIO%d RX=GPIO%d @%d 8N1 — answers M-frames",
              BUS_TX_GPIO, BUS_RX_GPIO, BUS_BAUD);
     return true;

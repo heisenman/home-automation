@@ -65,7 +65,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v8-apr-force"
+#define HA_FW_VERSION "v9-apr-fix"
 #endif
 
 static const char *TAG = "ha_dehum";
