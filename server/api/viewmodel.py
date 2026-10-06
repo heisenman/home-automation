@@ -710,6 +710,20 @@ def _external_modes(cfg: dict) -> list[dict]:
     return out
 
 
+REMOTE_LINK_FRESH_S = 120     # dehum_c6 publishes every 30 s; 4 missed = stale
+
+
+def unit_error_alert(actuator: dict) -> dict | None:
+    """The Aprilaire's own error code over its RS-485 Remote link (Model 76 manual Table 2). E3 = remote
+    comms loss (self-clears); E7 float, E8 inlet out of range, etc. The unit will not dehumidify meanwhile."""
+    code = actuator.get("unit_err")
+    if not code:
+        return None
+    return {"level": "alarm", "title": f"Aprilaire E{code}",
+            "text": f"The dehumidifier reports error E{code} (Model 76 manual, Table 2) and will not "
+                    f"dehumidify until it clears."}
+
+
 def external_mode_alert(traits_cfg: dict | None, actuator: dict) -> dict | None:
     """Loud alert when the device reports a mode it entered on its own (not commandable, ignores mode writes).
     None otherwise. Server-authored so every renderer (PWA, panel) says the same thing. A `clear` entry on a
@@ -958,6 +972,16 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
             actuator["boost_on"] = bool(boost[0])
         if dh is not None:
             actuator["call_on"] = bool(dh[0])
+        # the Aprilaire's OWN report over its RS-485 Remote link (dehum_c6 v7+): ground truth for "running",
+        # unlike call_on (what we asked for). Trusted only while the link reading is fresh.
+        apr = _latest_any(device_id, "apr_link")
+        if apr is not None and apr[0] >= 0.5 and (_age_s(apr[1], now) or 1e9) < REMOTE_LINK_FRESH_S:
+            ur, ue = _latest_any(device_id, "unit_running"), _latest_any(device_id, "unit_err")
+            actuator["remote_link"] = True
+            if ur is not None:
+                actuator["unit_running"] = bool(ur[0])
+            if ue is not None:
+                actuator["unit_err"] = int(ue[0])
 
     # command capabilities (traits + ranges) so the UI can render manual controls
     traits = None
@@ -969,9 +993,12 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
     # running state: the latest tick logged res.running, which mirrors the live device status each tick
     last = snap["last_decision"]
     running = bool(last["desired"]) if last else None
+    if actuator.get("unit_running") is not None:
+        running = actuator["unit_running"]            # the unit's own word beats our last decision
 
     stale_s = float(policy.get("sensor_stale_min", 10)) * 60.0
-    alert = external_mode_alert(traits, actuator) or verify_power_alert(hot_conn, device_id, traits, now)
+    alert = (external_mode_alert(traits, actuator) or unit_error_alert(actuator)
+             or verify_power_alert(hot_conn, device_id, traits, now))
     if alert and alert["level"] == "alarm":
         health = "alarm"
     elif manual:

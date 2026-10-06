@@ -248,3 +248,11 @@ def test_switchable_trait_passes_force_through():
     sw = get_trait("switchable").actions["set"]
     assert sw({"on": True, "force": True}, {}) == {"on": True, "force": True}
     assert sw({"on": False}, {}) == {"on": False}
+
+
+# ── PWA truth from the unit's own RS-485 report (2026-10-06) ──────────────────────────────────────────
+def test_unit_error_alert():
+    from server.api.viewmodel import unit_error_alert
+    assert unit_error_alert({"unit_err": 0}) is None and unit_error_alert({}) is None
+    a = unit_error_alert({"unit_err": 8})
+    assert a["level"] == "alarm" and a["title"] == "Aprilaire E8"
