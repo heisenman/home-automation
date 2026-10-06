@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # Deploy the files a commit changed to ha-2, behind the VIP inhibit, then restart the given services.
 #
-#   tools/ha2_deploy.sh <commit> <service> [service...]
+#   tools/ha2_deploy.sh <commit|A..B> <service> [service...]
 #   e.g. tools/ha2_deploy.sh 0bfcd70 ha-controller ha-api ha-api-tls
+#        tools/ha2_deploy.sh c164603^..1d70f88 ha-controller ha-api   # several commits: files as of B
 #
 # Run on .210 from the repo checkout. Steps: touch instance/.maintenance-fit on ha-2 (keepalived won't
 # flip the VIP while services restart) -> ship every file the commit touched in ONE tar stream ->
@@ -22,15 +23,23 @@ commit="$1"; shift
 services=("$@")
 
 cd "$(git rev-parse --show-toplevel)"
-git rev-parse --verify --quiet "$commit^{commit}" >/dev/null \
-  || { echo "ABORT: '$commit' is not a commit here (typo?). Recent commits:"; git log --oneline -5; exit 1; }
-mapfile -t files < <(git diff-tree --no-commit-id --name-only -r --diff-filter=AM "$commit")
+if [[ "$commit" == *..* ]]; then              # a range: every file A..B touched, at its state in B
+  base="${commit%%..*}"; tip="${commit##*..}"
+else
+  base="$commit^"; tip="$commit"
+fi
+for c in "$base" "$tip"; do
+  git rev-parse --verify --quiet "$c^{commit}" >/dev/null \
+    || { echo "ABORT: '$c' is not a commit here (typo?). Recent commits:"; git log --oneline -5; exit 1; }
+done
+mapfile -t files < <(git diff --name-only --diff-filter=AM "$base" "$tip")
+commit="$tip"
 [ ${#files[@]} -gt 0 ] || { echo "no added/modified files in $commit"; exit 1; }
 for f in "${files[@]}"; do
   git diff --quiet "$commit" -- "$f" || { echo "ABORT: $f differs from $commit in this checkout"; exit 1; }
 done
 
-echo "== deploying $(git log --oneline -1 "$commit") to $HA2"
+echo "== deploying $base..$tip (files as of $(git log --oneline -1 "$tip")) to $HA2"
 printf '   %s\n' "${files[@]}"
 
 ssh_ha2 "touch ~/$REMOTE_REPO/instance/.maintenance-fit"
