@@ -10,6 +10,9 @@ the transport is [`ha_rs485`](../ha_rs485/). Host test: `test/run.sh` (frames ar
   Dryness 1..7 = incoming-air dew-point setpoint 65 °F..40 °F; the unit runs when ON and its incoming air is
   above it (after a ~3-min sample; raising dryness triggers an immediate sample).
 
+- **Observed (not in the prior art):** `on=0x02` makes the unit run the compressor regardless of the dryness
+  setpoint (looks like Model 76 Test Mode). Undocumented: timeout/limits unknown — design §2.8 experiments.
+
 Sources: `dwrice0/aprilaire_controller` (prior art), the Model 76 installation manual (dryness, sequence of
 operation, error codes), and our live capture — `docs/design/hvac-shade-device-integration.md` §2.8.
 Consumer: `edge/esp32c6-dehum` (`main/aprilaire_bus.c`).

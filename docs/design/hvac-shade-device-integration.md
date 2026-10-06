@@ -509,6 +509,15 @@ same call, so switching the installer menu back to EXTERNAL needs no software ch
 Telemetry `apr_link`, `unit_running`, `unit_rh_pct`, `unit_err` (`unit_rh_pct` is NOT `humidity_pct`, so it never
 pollutes the attic's canonical RH). Mode switching over the wire: no known R-frame field — installer menu only.
 
+**Experiments 2026-10-06 (v10 `apr_force`/`apr_mute`, E070 in REMOTE):**
+1. **`DH` relay is ignored in REMOTE** — relay closed + R `on=00` for 5½ min: 3 W, no sample, no run.
+2. **`on=02` overrides the dew-point decision (≈ Model 76 Test Mode / force-run).** Same sequence, dryness 1
+   (65 °F DP): `on=01` → 3-min blower sample (88 W) → declines (3 W, never `M!`); `on=02` → same sample → `M!`,
+   563 W. Incoming air at 44–47 % RH cannot have a 65 °F dew point at these temps, so `02` ran regardless of
+   setpoint. Unknown: whether `02` self-times-out (Model 76 Test Mode does, 5 min) and whether the 50–105 °F inlet
+   limits still apply. Normal control still uses `on=01` + dryness 7 (unit keeps the final dew-point say).
+3. **Mute → E3 in 5 s**, unit RUNNING → idle in 6 s, compressor off ≤30 s; replies resume → code 0 in 2 s.
+
 Originally kept as a documented future upgrade. Notes from then: the prior-art repo does **not** document whether the
 MAX485 ground must bond to the E070 `−` terminal, nor whether that node is genuinely SELV — a real gap.
 Prefer an **isolated** transceiver to keep the galvanic separation the relay gives for free.
