@@ -480,7 +480,7 @@ different control sources and cannot coexist.
 we can detect **commanded on but drawing no power** — exactly how a silent `E8` dew-point lockout or an
 `E7` float trip presents. The control path alone can never see that.
 
-### 2.8 The RS-485 alternative (documented, not chosen)
+### 2.8 The RS-485 Remote path (CHOSEN 2026-10-06 — supersedes the relay as primary)
 
 Prior art is directly on our platform: `dwrice0/aprilaire_controller`, an **ESP32-C6 + MAX485** replacing
 the Model 76 on the E070's `A`/`B` terminals.
@@ -499,7 +499,17 @@ prior art shows as `"00"` read `"03"` while the display showed **E3** — almost
 (E3 ≈ no remote answering; inference). Checksum = byte sum **from STX through the code field**, mod 256 (0x65 ✓).
 With no R-frame reply the unit refuses to run. Polarity as wired is correct.
 
-Kept as a documented future upgrade. If pursued: the prior-art repo does **not** document whether the
+**Implemented 2026-10-06 (`dehum_c6` v7-apr-remote, `firmware/components/ha_aprilaire`).** In REMOTE mode the
+unit decides from its OWN incoming-air dew point vs the remote's dryness (1 = 65 °F … 7 = 40 °F; Model 76 manual
+p.3, p.19): ON only enables, a ~3-min blower sample precedes the compressor, and raising dryness forces a sample.
+(Live: `on=1` at dryness 4 with 43 % incoming RH → blower only, 88 W, never `M!`.) So the house-RH decision stays
+on the server as before, and the node maps it: **call → R `on=1`, dryness 7; no call → `on=0`, dryness 1.** The
+unit's own 40 °F floor coincides with our outdoor dew-point gate. The node keeps driving the `DH` relay with the
+same call, so switching the installer menu back to EXTERNAL needs no software change. Node dead → E3 → unit off.
+Telemetry `apr_link`, `unit_running`, `unit_rh_pct`, `unit_err` (`unit_rh_pct` is NOT `humidity_pct`, so it never
+pollutes the attic's canonical RH). Mode switching over the wire: no known R-frame field — installer menu only.
+
+Originally kept as a documented future upgrade. Notes from then: the prior-art repo does **not** document whether the
 MAX485 ground must bond to the E070 `−` terminal, nor whether that node is genuinely SELV — a real gap.
 Prefer an **isolated** transceiver to keep the galvanic separation the relay gives for free.
 
