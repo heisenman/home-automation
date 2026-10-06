@@ -160,7 +160,8 @@ def run(device: str, metric: str, value: float, *, dry_run: bool,
         if rung_db.exists():
             raw = device_raw_rows(hot, parquet_glob, device)
             if dry_run:                                   # nothing was deleted: preview what the rebuild sees
-                raw = [r for r in raw if (r[0], r[2]) not in _marked(raw, metric, value)]
+                marked = _marked(raw, metric, value)       # once — per-row was O(n^2) (hours on ha-2)
+                raw = [r for r in raw if (r[0], r[2]) not in marked]
             rc = sqlite3.connect(str(rung_db))
             try:
                 report["rungs"] = rebuild_device_rungs(rc, device, raw, now_epoch=now_epoch, dry_run=dry_run)
