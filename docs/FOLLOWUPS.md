@@ -56,6 +56,12 @@ Meanwhile automation uses force-run (`force_run: true`, deployed).
 
 ## 🟡 REVISIT — Aprilaire VENT (air-cycling) mode costs ~67 W net, adds no fresh air (2026-10-05)
 
+> **SUPERSEDED 2026-10-06:** "adds no fresh air" was measured AT THE ERV. With the E070 in series, a stopped E070
+> blower lets ERV supply escape out of its intake (Hugh, observed) — so VENT is what makes the ERV's air reach the
+> house. **Decision (Hugh): EXTERNAL + VENT, compressor via the `DH` relay** — continuous blower (no backflow),
+> immediate compressor on call, no unit veto. Trade: no RS-485 telemetry (bus silent in EXTERNAL); `dehum_pm`
+> stays the independent witness. No firmware change: v11 drives the relay on every call.
+
 Airflow test: the ERV meets its CFM targets without it; the dehum blower only offloads the ERV supply fan
 (Med 61→43 W) at 86 W. ≈1.6 kWh/day if continuous. Hugh's call (2026-10-05): **leave it ON for now**; once
 RS-485 digital control lands, find out whether vent can be switched digitally — if yes, drive it (e.g. only for

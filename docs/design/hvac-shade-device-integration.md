@@ -480,7 +480,12 @@ different control sources and cannot coexist.
 we can detect **commanded on but drawing no power** — exactly how a silent `E8` dew-point lockout or an
 `E7` float trip presents. The control path alone can never see that.
 
-### 2.8 The RS-485 Remote path (CHOSEN 2026-10-06 — supersedes the relay as primary)
+### 2.8 The RS-485 Remote path (built + characterised 2026-10-06; NOT the operating mode — see below)
+
+> **Operating decision 2026-10-06 (Hugh): EXTERNAL + VENT + `DH` relay.** REMOTE cannot keep the blower moving
+> (no fan-only `on` value, no air-cycling — sweep below), and a stopped E070 leaks ERV supply out of its intake.
+> EXTERNAL+VENT runs the blower continuously (86–88 W, airflow test Phase A) and the relay starts the compressor
+> in ~8 s. The RS-485 path stays fully built (v11 answers if REMOTE is ever re-enabled) — a menu flip away.
 
 Prior art is directly on our platform: `dwrice0/aprilaire_controller`, an **ESP32-C6 + MAX485** replacing
 the Model 76 on the E070's `A`/`B` terminals.
