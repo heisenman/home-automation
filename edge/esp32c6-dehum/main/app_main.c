@@ -65,7 +65,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v4-apr-sniff"
+#define HA_FW_VERSION "v5-apr-txtest"
 #endif
 
 static const char *TAG = "ha_dehum";
@@ -193,6 +193,13 @@ static bool on_cmd(const cJSON *cmd, void *user) {
         const char *r = dh_call(minutes);
         ha_mqtt_log("dehum: dehum_call min=%d -> %s (relay=%d)", minutes, r, gpio_get_level(DH_RELAY_GPIO));
         publish_dehum();
+        return true;
+    }
+    if (strcmp(op->valuestring, "apr_txtest") == 0) {   // BENCH ONLY: {secs:1..30, byte:0..255 (default 0)}
+        const cJSON *sv = cJSON_GetObjectItem(cmd, "secs"), *bv = cJSON_GetObjectItem(cmd, "byte");
+        const char *r = aprilaire_sniff_txtest(cJSON_IsNumber(sv) ? sv->valueint : 5,
+                                               cJSON_IsNumber(bv) ? bv->valueint : 0);
+        ha_mqtt_log("apr-txtest: request -> %s", r);
         return true;
     }
     if (strcmp(op->valuestring, "apr_sniff") == 0) {   // RS-485 A/B sniffer report now (also every 30 s)

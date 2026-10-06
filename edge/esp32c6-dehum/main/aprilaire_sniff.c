@@ -36,6 +36,17 @@ static unsigned     s_lead[256];               // histogram of each frame's firs
 
 static uint32_t now_ms(void) { return (uint32_t)(esp_timer_get_time() / 1000); }
 
+// bench TX self-test request, executed on the sniffer task so only one task ever touches s_bus
+static volatile int     s_tx_req_secs;
+static volatile uint8_t s_tx_req_byte;
+
+static ha_rs485_cfg_t bus_cfg(bool listen_only) {
+    return (ha_rs485_cfg_t){
+        .port = SNIFF_UART, .tx_gpio = SNIFF_TX_GPIO, .rx_gpio = SNIFF_RX_GPIO, .de_gpio = -1,
+        .baud = SNIFF_BAUD, .data_bits = UART_DATA_8_BITS, .parity = UART_PARITY_DISABLE,
+        .stop_bits = UART_STOP_BITS_1, .listen_only = listen_only };
+}
+
 static void frame_done(const uint8_t *buf, size_t len, size_t full_len) {
     xSemaphoreTake(s_mu, portMAX_DELAY);
     frame_t *f = &s_ring[s_ring_n % RING];
@@ -102,12 +113,68 @@ void aprilaire_sniff_report(void) {
     }
 }
 
+static void run_txtest(int secs, uint8_t pat) {
+    ha_rs485_deinit(&s_bus);
+    ha_rs485_cfg_t tx_cfg = bus_cfg(false);
+    if (ha_rs485_init(&s_bus, &tx_cfg) != ESP_OK) {
+        s_log("apr-txtest: could not open TX — back to listen-only");
+    } else {
+        s_log("apr-txtest: TX ENABLED — streaming 0x%02X for %d s (watch A-B on the meter)", pat, secs);
+        uint8_t burst[32], rx[64];
+        memset(burst, pat, sizeof burst);
+        uint64_t sent = 0, echoed = 0, match = 0;
+        uint32_t end = now_ms() + (uint32_t)secs * 1000u;
+        while ((int32_t)(end - now_ms()) > 0) {
+            if (ha_rs485_write(&s_bus, burst, sizeof burst, 200) == ESP_OK) sent += sizeof burst;
+            int n = ha_rs485_read(&s_bus, rx, sizeof rx, 2);
+            for (int i = 0; i < n; i++) { echoed++; if (rx[i] == pat) match++; }
+        }
+        int n;                                                     // drain the tail of the echo
+        while ((n = ha_rs485_read(&s_bus, rx, sizeof rx, 20)) > 0)
+            for (int i = 0; i < n; i++) { echoed++; if (rx[i] == pat) match++; }
+        const char *verdict =
+            sent == 0       ? "NOTHING SENT — UART write failed"
+          : echoed == 0     ? "SENT, NO ECHO — TX path OK if the meter swung; this adapter mutes its own receiver while "
+                              "driving, so RX is only provable against a real bus"
+          : match * 10 >= echoed * 9
+                            ? "SENT + CLEAN ECHO — TX and RX both proven (C6 -> adapter -> line -> adapter -> C6)"
+                            : "SENT + GARBLED ECHO — RX hears the line but bytes differ (bias/ground/baud?)";
+        s_log("apr-txtest: sent=%llu B echoed=%llu B (%llu match 0x%02X) | %s",
+              (unsigned long long)sent, (unsigned long long)echoed, (unsigned long long)match, pat, verdict);
+        ha_rs485_deinit(&s_bus);
+    }
+    ha_rs485_cfg_t lo_cfg = bus_cfg(true);
+    if (ha_rs485_init(&s_bus, &lo_cfg) != ESP_OK)
+        ESP_LOGE(TAG, "could not re-open listen-only after txtest");
+    else
+        s_log("apr-txtest: back to LISTEN-ONLY");
+}
+
+const char *aprilaire_sniff_txtest(int secs, int byte) {
+    if (!s_bus.inited) return "REFUSED (sniffer not running)";
+    if (secs < 1 || secs > 30) return "REFUSED (secs must be 1..30)";
+    if (byte < 0 || byte > 255) return "REFUSED (byte must be 0..255)";
+    xSemaphoreTake(s_mu, portMAX_DELAY);
+    bool live = s_ring_n && (uint32_t)(now_ms() - s_last_ms) < 60000u;
+    xSemaphoreGive(s_mu);
+    if (live) return "REFUSED (frames heard in the last 60 s — a live bus; bench-only test)";
+    s_tx_req_byte = (uint8_t)byte;
+    s_tx_req_secs = secs;
+    return "queued";
+}
+
 static void sniff_task(void *arg) {
     (void)arg;
     uint8_t chunk[64], frame[FRAME_MAX];
     size_t flen = 0, full = 0;
     uint32_t last_report = now_ms();
     for (;;) {
+        if (s_tx_req_secs) {
+            int secs = s_tx_req_secs;
+            s_tx_req_secs = 0;
+            run_txtest(secs, s_tx_req_byte);
+            flen = full = 0;
+        }
         int n = ha_rs485_read(&s_bus, chunk, sizeof chunk, GAP_MS);
         if (n > 0) {
             for (int i = 0; i < n; i++) {
@@ -128,10 +195,8 @@ static void sniff_task(void *arg) {
 bool aprilaire_sniff_start(void (*log)(const char *fmt, ...)) {
     s_log = log;
     s_mu = xSemaphoreCreateMutex();
-    esp_err_t err = ha_rs485_init(&s_bus, &(ha_rs485_cfg_t){
-        .port = SNIFF_UART, .tx_gpio = SNIFF_TX_GPIO, .rx_gpio = SNIFF_RX_GPIO, .de_gpio = -1,
-        .baud = SNIFF_BAUD, .data_bits = UART_DATA_8_BITS, .parity = UART_PARITY_DISABLE,
-        .stop_bits = UART_STOP_BITS_1, .listen_only = true });
+    ha_rs485_cfg_t cfg = bus_cfg(true);
+    esp_err_t err = ha_rs485_init(&s_bus, &cfg);
     if (err != ESP_OK) {
         ESP_LOGE(TAG, "ha_rs485_init failed: %s", esp_err_to_name(err));
         return false;
