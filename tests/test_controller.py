@@ -110,6 +110,45 @@ def test_garbled_status_skips_tick_without_command_publish_or_log():
         conn.close()
 
 
+STATUS_MODE_CONT_POWERED_OFF = STATUS_MODE_CONT.replace("running = True", "running = False")
+
+
+def _seed_transition(db, running, ts):
+    conn = sqlite3.connect(db)
+    store.record_transition(conn, "dehumidifier_office", running, ts)
+    conn.commit()
+    conn.close()
+
+
+def test_powered_off_unit_in_continuous_is_not_running():
+    """A unit that switched itself off still reports mode Continuous: that is NOT running. Above on_above
+    the controller powers it on and re-sets Continuous."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_mode(tmp, STATUS_MODE_CONT_POWERED_OFF)
+        ctrl.inject_reading("meter_pro_living_room", 60.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        assert [c["args"] for c in iss.calls] == [{"on": True}, {"mode": "continuous"}]
+
+
+def test_deadband_repowers_a_unit_that_switched_off_while_called():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_mode(tmp, STATUS_MODE_CONT_POWERED_OFF)
+        _seed_transition(db, True, NOW - 3600)               # our last transition was ON
+        ctrl.inject_reading("meter_pro_living_room", 42.0, ts=NOW - 30)   # deadband
+        ctrl.tick(now=NOW)
+        assert [c["args"] for c in iss.calls] == [{"on": True}, {"mode": "continuous"}]
+
+
+def test_deadband_leaves_a_unit_off_when_our_last_transition_was_off():
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_mode(tmp, STATUS_MODE_CONT_POWERED_OFF)
+        _seed_transition(db, True, NOW - 7200)
+        _seed_transition(db, False, NOW - 3600)              # we turned it off last
+        ctrl.inject_reading("meter_pro_living_room", 42.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        assert iss.calls == []
+
+
 def test_graceful_mode_publishes_current_mode():
     with tempfile.TemporaryDirectory() as tmp:
         ctrl, iss, db = _make_mode(tmp, STATUS_MODE_CONT)

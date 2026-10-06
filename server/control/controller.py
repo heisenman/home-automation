@@ -589,8 +589,10 @@ class Controller:
         # dehumidifying = the appliance is in its run_mode (Continuous), NOT merely powered — so the
         # rule drives the MODE (Set<->Continuous) and the compressor spins down gracefully on 'off'.
         mcfg = self._mode_cfg(device_id)
+        # ...and POWERED: a unit that switched itself off still reports its last mode (Hugh, 2026-10-06 — the
+        # Midea read Continuous/fan High for 10 min while silent, so the card said ON and nothing re-powered it).
         if mcfg and st.get("mode") is not None:
-            running_now = int(st["mode"]) == mcfg["run_val"]
+            running_now = int(st["mode"]) == mcfg["run_val"] and st.get("running") is not False
         else:
             running_now = bool(st.get("running"))
         dev_state = DeviceState(running=running_now, interlocks=tuple(interlocks),
@@ -607,6 +609,12 @@ class Controller:
         sched_off = schedule_off_now(pol.get("schedule"), tod)
 
         res = resolve(policy, now, sensor, dev_state, override, sched_off, scene_off, scene)
+        if (mcfg and st.get("running") is False and res.source == "rule" and not res.act and not res.running
+                and sensor is not None and policy.off_below < sensor.value < policy.on_above
+                and last_on is not None and (last_off is None or last_on > last_off)):
+            # deadband "hold" holds the DEVICE's state, but this OFF wasn't ours: our last transition was ON
+            # and the unit powered itself off (or was switched off at the unit). Keep the call: re-power it.
+            res = Resolution(True, True, "rule", f"{res.reason}; unit powered off while called -> ON")
         res = self._apply_airflow_interlock(conn, device_id, pol, res, dev_state, now)
         res = self._apply_outdoor_gate(pol, res, dev_state, now)
         lm = self._level_modes(device_id) if drv is None else None
