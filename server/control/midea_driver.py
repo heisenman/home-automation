@@ -60,6 +60,24 @@ def _parse_status(text: str) -> dict:
     return out
 
 
+class GarbledStatus(RuntimeError):
+    """The appliance answered, but with a frame that cannot be a real status (see _implausible)."""
+
+
+def _implausible(st: dict) -> str | None:
+    """Why a parsed status cannot be real, or None. The MAD50S1QWT intermittently (~0.5% of polls on ha-2,
+    2026-10) returns a mis-decoded frame — always mode 0, target 2%, RH 1%, fan 2, -20.7 C. Acting on it
+    re-commands a running unit (mode 0 != Continuous reads as 'not running') and it lands in hot.db as
+    data. Ranges are the A1 protocol's own: mode is 1-based, the setpoint floor is 35%."""
+    if st.get("mode") == 0:
+        return "mode 0"
+    if st.get("target") is not None and not 30 <= st["target"] <= 90:
+        return f"target {st['target']}%"
+    if st.get("temp") is not None and not -10.0 <= st["temp"] <= 60.0:
+        return f"temp {st['temp']}C"
+    return None
+
+
 class MideaDriver:
     """Wraps the proven midea-beautiful-air CLI for one appliance. `runner` runs argv → stdout text
     (default subprocess); injectable for tests."""
@@ -74,7 +92,11 @@ class MideaDriver:
         return [self.cli, sub, "--ip", self.ip, "--token", self.token, "--key", self.key, *extra]
 
     def status(self) -> dict:
-        return _parse_status(self._run(self._argv("status")))
+        st = _parse_status(self._run(self._argv("status")))
+        why = _implausible(st)
+        if why:
+            raise GarbledStatus(f"implausible status frame ({why})")
+        return st
 
     def set(self, **flags) -> dict:
         extra: list[str] = []

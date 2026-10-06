@@ -20,6 +20,7 @@ from pathlib import Path
 
 from server.comms import events as ev
 from server.control import actuator_state, bootstrap, control_store as store
+from server.control.midea_driver import GarbledStatus
 from server.control.registry import load_control_registry
 from server.util.psychro import dewpoint_c
 from server.util.registry_reload import RegistryReloader
@@ -549,6 +550,11 @@ class Controller:
         if drv is not None:
             try:
                 st = drv.status()                              # live interlocks + state (local driver)
+            except GarbledStatus as e:                         # it answered, with garbage: skip this tick.
+                # Not UNREACHABLE, and no control_log row: the PWA's "running" is the newest row's desired,
+                # so a desired=False row would flash the card OFF. The next tick is 45s away.
+                log.warning("%s %s -> skip tick", device_id, e)
+                return
             except Exception as e:                             # unreachable -> fail safe, don't act
                 log.warning("%s status failed: %s", device_id, e)
                 self._emit(device_id, "midea-lan", ev.UNREACHABLE, str(e))

@@ -90,6 +90,26 @@ def test_graceful_mode_deadband_holds_no_command():
         assert iss.calls == []                              # no mode churn in the deadband
 
 
+# the MAD50S1QWT's intermittent mis-decoded reply (ha-2, 2026-10): always this exact frame
+STATUS_GARBLED = ("  running = True\n  humid%  = 1\n  target% = 2\n  temp = -20.7\n  fan = 2\n"
+                  "  tank = False\n  error = 0\n  mode = 0\n")
+
+
+def test_garbled_status_skips_tick_without_command_publish_or_log():
+    """mode 0 used to read as 'not in Continuous' -> a needless ON re-command, a garbage row in hot.db, and
+    (via a log row) the PWA card flashing OFF. The tick must do nothing at all."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_mode(tmp, STATUS_GARBLED)
+        ctrl.mqtt = _FakeMqtt()
+        ctrl.inject_reading("meter_pro_living_room", 50.0, ts=NOW - 30)   # rule wants ON
+        ctrl.tick(now=NOW)
+        assert iss.calls == []
+        assert not [t for t, _ in ctrl.mqtt.published if t.endswith("/state")]
+        conn = sqlite3.connect(db)
+        assert store.recent_log(conn, "dehumidifier_office") == []
+        conn.close()
+
+
 def test_graceful_mode_publishes_current_mode():
     with tempfile.TemporaryDirectory() as tmp:
         ctrl, iss, db = _make_mode(tmp, STATUS_MODE_CONT)

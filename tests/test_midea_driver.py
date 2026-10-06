@@ -31,6 +31,26 @@ def test_parse_status_typed():
     assert s["temp"] == 23.0 and s["error"] == 0
 
 
+def test_status_rejects_the_garbled_frame():
+    garbled = SAMPLE.replace("humid%  = 30", "humid%  = 1").replace("target% = 35", "target% = 2") \
+        .replace("temp    = 23.0", "temp    = -20.7").replace("fan     = 40", "fan     = 2") \
+        .replace("mode    = 2", "mode    = 0")
+    drv = M.MideaDriver("ip", "t", "k", runner=lambda argv: garbled)
+    try:
+        drv.status()
+    except M.GarbledStatus as e:
+        assert "mode 0" in str(e)
+    else:
+        raise AssertionError("garbled frame accepted")
+
+
+def test_status_accepts_a_real_frame_and_each_check_stands_alone():
+    assert M.MideaDriver("ip", "t", "k", runner=lambda argv: SAMPLE).status()["mode"] == 2
+    assert M._implausible({"target": 2}) and M._implausible({"temp": -20.7})
+    assert M._implausible({"target": 35, "temp": 22.0, "mode": 1}) is None
+    assert M._implausible({}) is None                      # a sample missing fields is not garbled
+
+
 def test_driver_set_builds_argv():
     seen = {}
 
