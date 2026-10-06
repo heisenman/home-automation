@@ -34,6 +34,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
+#include "aprilaire_sniff.h"
 #include "ha_config.h"
 #include "ha_dout.h"
 #include "ha_mqtt.h"
@@ -64,7 +65,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v3-dehum-call"
+#define HA_FW_VERSION "v4-apr-sniff"
 #endif
 
 static const char *TAG = "ha_dehum";
@@ -194,6 +195,10 @@ static bool on_cmd(const cJSON *cmd, void *user) {
         publish_dehum();
         return true;
     }
+    if (strcmp(op->valuestring, "apr_sniff") == 0) {   // RS-485 A/B sniffer report now (also every 30 s)
+        aprilaire_sniff_report();
+        return true;
+    }
     if (strcmp(op->valuestring, "dehum_status") == 0) {
         ha_mqtt_log("dehum: relay GPIO%d=%d lease_left=%lds build=%s", DH_RELAY_GPIO,
                     gpio_get_level(DH_RELAY_GPIO), (long)lease_left_s(now_ms()), HA_FW_VERSION);
@@ -255,6 +260,9 @@ void app_main(void) {
     ha_mqtt_start(s_cfg.broker_uri, s_cfg.node_id);
 
     xTaskCreate(dh_task, "dehum_dh", 4096, NULL, 5, NULL);
+    // Listen-only sniff of the E070 Remote A/B bus (D10/D9, UART1). Independent of the DH relay: a failure
+    // here only loses the diagnostic, never control.
+    if (!aprilaire_sniff_start(ha_mqtt_log)) ESP_LOGE(TAG, "RS-485 sniffer failed to start (DH control unaffected)");
 
     ESP_LOGW(TAG, "dehum node up: node=%s broker=%s — DH relay GPIO%d, leased calls (1..%u min, "
                   "min-on %us, min-off %us)", s_cfg.node_id, s_cfg.broker_uri, DH_RELAY_GPIO,
