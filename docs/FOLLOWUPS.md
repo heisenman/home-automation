@@ -7,6 +7,26 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 🟠 2026-10-06 — ha-2 CPU + Midea state/data (dev2; all deployed to ha-2 via ha2_deploy.sh)
+
+- **FIXED @1a77316:** ha-api burned ~1.7 cores on PWA polls — `viewmodel._latest` scanned every row of a device
+  per miss; index `readings(device_id, metric, authoritative, ts)` → /rooms|/displays|/alerts 0.45 s → 0.01–0.04 s.
+- **FIXED @c6c9f27 + @2c9509d:** Midea garbled (mode 0 / target 2 / RH 1 / fan 2 / −20.7 °C) and stateless status
+  replies are skipped (`GarbledStatus`), not acted on — they caused ON re-commands + one-tick OFF flickers on the card.
+- **FIXED @4e30366 (Hugh: power-on + Continuous = running):** the Midea read as running from MODE alone, so a unit that
+  powered itself off still showed ON; now needs the power flag too, and a self-power-off in the deadband while our
+  last transition was ON is re-powered. Manual off = the PWA override (the unit's own button is undone in ≤45 s).
+- **PURGED (Hugh-approved) with `server/maintenance/purge_frames.py` @18a15c4:** 2,156 garbage frames (06-23 → 10-06)
+  from ha-2 hot.db + parquet, device rungs rebuilt; also .210 (34 frames). Verified 0 left; verify_hashes 10/10 both.
+  Backups: `instance/db/backups/purge-20261006T19*` on each box.
+- **OPEN — panel replicas keep the old garbage:** panels sync rungs by `since?after=<hwm>` (forward-only), so
+  re-derived OLD buckets never reach an already-seeded D1001; its long-range Midea charts stay wrong until its
+  local rungs.db is re-seeded from `full.db`. No invalidation in the sync contract — needs a design call (e.g. a
+  manifest `epoch`/generation that forces a re-seed).
+- **OPEN — Midea power meter:** Tasmota ESP32-C3 plugs (PG03V3-US16A-TAS-2) inbound; one meters the Midea →
+  reuse `switchable.verify_power {meter, min_w, grace_min}` (as `dehum_attic`/`dehum_pm`) for real running truth.
+  The Midea's own status has no compressor/real-fan state (power flag + fan SETTING only).
+
 ## 📌 CURRENT OPEN — 2026-10-05 checkpoint (authoritative; details in the dated sections below)
 
 Live + verified today on ha-2: Broan ERV `erv_attic` (hvac_c6 v9, RS-485 controller @0x11, manual + automation
