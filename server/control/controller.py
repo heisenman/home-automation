@@ -87,6 +87,8 @@ DEHUM_POLICY = {
     # during_level 1 (Low), not Med (2026-10-05): the dehum's own blower moves air through its coil, and less
     # fresh air means less humid outdoor air to remove in summer. Dry-out stays High (≈ Turbo's airflow here).
     "ventilation": {"device": None, "during_level": 1, "after_level": 3, "after_min": 15},
+    # every call is a FORCE-RUN (RS-485 on=0x02): run regardless of the E070's own dew-point setpoint.
+    "force_run": True,
     # Skip calling when the OUTDOOR dew point is below min_dewpoint_c (40 °F): that air is so dry that
     # ventilation alone dries the house, and it is where the E070's E8 inlet lockout starts. Outdoor dew point
     # is a deliberately conservative proxy — the unit's real inlet is post-ERV air (in cold weather the ERV
@@ -616,9 +618,12 @@ class Controller:
             res = Resolution(True, dev_state.level != top, res.source, res.reason + f" -> level {top}",
                              level=top)
         # an operator BOOST on a leased-call device (the Aprilaire) means FORCE-RUN: run regardless of the
-        # unit's own dew-point logic (RS-485 on=0x02). Normal calls leave the unit its final say.
-        want_force = bool(res.running and override is not None and override.action == "boost_on"
-                          and override.active(now) and st.get("lease_left_s") is not None)
+        # unit's own dew-point logic (RS-485 on=0x02).
+        # ...and with policy force_run (Hugh, 2026-10-06) EVERY automation call is a force-run: the house-RH
+        # decision is ours, the unit's dew-point logic must not veto it.
+        boosted = override is not None and override.action == "boost_on" and override.active(now)
+        want_force = bool(res.running and st.get("lease_left_s") is not None
+                          and (boosted or pol.get("force_run")))
         reason = res.reason + (f" (via fallback {used_id})" if via_fallback and res.source == "rule" else "")
         if lm is not None:
             # a level-mode device's "speed N"/"level N" are its MODES — log what the operator sees in the PWA

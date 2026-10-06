@@ -314,6 +314,12 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
                 return bad("outdoor_gate.min_dewpoint_c must be a number in -30..30 °C")
             cur["min_dewpoint_c"] = g["min_dewpoint_c"]
         pol["outdoor_gate"] = cur
+    if "force_run" in patch:
+        # leased-call devices (the Aprilaire): every automation call is a FORCE-RUN (RS-485 on=0x02 — run
+        # regardless of the unit's own dew-point logic). Hugh, 2026-10-06: the house-RH decision is ours.
+        if not isinstance(patch["force_run"], bool):
+            return bad("force_run must be true or false")
+        pol["force_run"] = patch["force_run"]
     if "sensor_stale_min" in patch:
         if not _is_num(patch["sensor_stale_min"]) or patch["sensor_stale_min"] <= 0:
             return bad("sensor_stale_min must be a positive number")

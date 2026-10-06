@@ -33,12 +33,13 @@ class _Msg:
         self.topic = f"home/attic/{did}/state"
 
 
-def _make(tmp_path, *, erv_enabled=True, rh=(60, 62), dh_running=False, lease_left=0, erv_mode=9):
+def _make(tmp_path, *, erv_enabled=True, rh=(60, 62), dh_running=False, lease_left=0, erv_mode=9,
+          force_run=False):
     db = str(tmp_path / "control.db")
     conn = sqlite3.connect(db)
     store.ensure_schema(conn)
     store.set_policy(conn, "erv_attic", {**C.ERV_POLICY, "enabled": erv_enabled, "source_sensors": ["gas_a"]})
-    store.set_policy(conn, "dehum_attic", {**C.DEHUM_POLICY, "enabled": True,
+    store.set_policy(conn, "dehum_attic", {**C.DEHUM_POLICY, "enabled": True, "force_run": force_run,
                                            "source_sensors": ["rh_a", "rh_b"],
                                            "ventilation": {**C.DEHUM_POLICY["ventilation"],
                                                            "device": "erv_attic"}})
@@ -208,8 +209,8 @@ def _boost(db, until=NOW + 3600):
     conn.close()
 
 
-def test_rule_call_is_never_forced(tmp_path):
-    ctrl, iss, _ = _make(tmp_path, rh=(60, 62))
+def test_rule_call_without_force_run_is_not_forced(tmp_path):
+    ctrl, iss, _ = _make(tmp_path, rh=(60, 62), force_run=False)
     ctrl.tick(now=NOW)
     calls = [a for d, t, a in iss.calls if d == "dehum_attic"]
     assert {"on": True} in calls and not any(a.get("force") for a in calls)
@@ -256,3 +257,21 @@ def test_unit_error_alert():
     assert unit_error_alert({"unit_err": 0}) is None and unit_error_alert({}) is None
     a = unit_error_alert({"unit_err": 8})
     assert a["level"] == "alarm" and a["title"] == "Aprilaire E8"
+
+
+def test_force_run_policy_forces_every_automation_call(tmp_path):
+    assert C.DEHUM_POLICY["force_run"] is True            # the shipped default (Hugh, 2026-10-06)
+    ctrl, iss, _ = _make(tmp_path, rh=(60, 62), force_run=True)
+    ctrl.tick(now=NOW)
+    assert ("dehum_attic", "switchable", {"on": True, "force": True}) in iss.calls
+
+
+def test_force_run_policy_validation():
+    from server.api.control import handle_policy_update
+    from server.control import control_store as store
+    conn = sqlite3.connect(":memory:")
+    store.ensure_schema(conn)
+    store.set_policy(conn, "dehum_attic", dict(C.DEHUM_POLICY))
+    assert handle_policy_update(conn, "dehum_attic", {"force_run": "yes"})[0] == 400
+    assert handle_policy_update(conn, "dehum_attic", {"force_run": False})[0] == 200
+    assert store.get_policy(conn, "dehum_attic")["force_run"] is False
