@@ -125,6 +125,12 @@ def _open_db(path: Path) -> sqlite3.Connection:
     conn.execute("PRAGMA foreign_keys=ON")
     conn.executescript(_DDL)
     _migrate(conn)
+    # Seek path for viewmodel._latest ("newest M from device D at trust level A"). Without it SQLite walks
+    # idx_readings_unique over EVERY row of the device; a miss (e.g. the auth=1 probe for a self-report-only
+    # actuator) cost 10-27 ms on ha-2, ~150 per /alerts|/displays|/rooms call -> ha-api burned ~1.7 cores
+    # serving PWA polls (2026-10-06). After _migrate: an old hot.db lacks `authoritative` until then.
+    conn.execute("CREATE INDEX IF NOT EXISTS idx_readings_latest "
+                 "ON readings (device_id, metric, authoritative, ts)")
     # Materialized latest-per-(device,metric) + its maintaining trigger (board sensors-query-unbounded).
     # Created here because the writer is the one component that opens hot.db read-WRITE; the API opens it
     # read-only and falls back to the O(rows) query until this has run.
