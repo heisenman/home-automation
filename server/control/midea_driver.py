@@ -69,6 +69,10 @@ def _implausible(st: dict) -> str | None:
     2026-10) returns a mis-decoded frame — always mode 0, target 2%, RH 1%, fan 2, -20.7 C. Acting on it
     re-commands a running unit (mode 0 != Continuous reads as 'not running') and it lands in hot.db as
     data. Ranges are the A1 protocol's own: mode is 1-based, the setpoint floor is 35%."""
+    if "running" not in st and "mode" not in st:
+        # an empty/stateless reply (~1 in 40 polls, 2026-10-06) parsed to {} -> bool(None) read as "not
+        # running": the card flickered OFF and, at >= on_above, the unit got re-commanded ON
+        return "no state fields"
     if st.get("mode") == 0:
         return "mode 0"
     if st.get("target") is not None and not 30 <= st["target"] <= 90:

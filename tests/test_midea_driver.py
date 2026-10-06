@@ -48,7 +48,18 @@ def test_status_accepts_a_real_frame_and_each_check_stands_alone():
     assert M.MideaDriver("ip", "t", "k", runner=lambda argv: SAMPLE).status()["mode"] == 2
     assert M._implausible({"target": 2}) and M._implausible({"temp": -20.7})
     assert M._implausible({"target": 35, "temp": 22.0, "mode": 1}) is None
-    assert M._implausible({}) is None                      # a sample missing fields is not garbled
+    assert M._implausible({}) == "no state fields"         # stateless reply: can't tell running from off
+    assert M._implausible({"running": True}) is None       # partial but stateful (e.g. no target) is fine
+
+
+def test_status_rejects_an_empty_reply():
+    drv = M.MideaDriver("ip", "t", "k", runner=lambda argv: "")
+    try:
+        drv.status()
+    except M.GarbledStatus as e:
+        assert "no state" in str(e)
+    else:
+        raise AssertionError("empty reply accepted")
 
 
 def test_driver_set_builds_argv():

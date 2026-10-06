@@ -120,6 +120,15 @@ def _seed_transition(db, running, ts):
     conn.close()
 
 
+def test_empty_status_reply_never_commands():
+    """An empty reply used to read as 'not running' -> ON re-command at >= on_above."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make_mode(tmp, "")
+        ctrl.inject_reading("meter_pro_living_room", 60.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        assert iss.calls == []
+
+
 def test_powered_off_unit_in_continuous_is_not_running():
     """A unit that switched itself off still reports mode Continuous: that is NOT running. Above on_above
     the controller powers it on and re-sets Continuous."""
