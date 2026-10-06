@@ -61,6 +61,11 @@ Meanwhile automation uses force-run (`force_run: true`, deployed).
 > house. **Decision (Hugh): EXTERNAL + VENT, compressor via the `DH` relay** — continuous blower (no backflow),
 > immediate compressor on call, no unit veto. Trade: no RS-485 telemetry (bus silent in EXTERNAL); `dehum_pm`
 > stays the independent witness. No firmware change: v11 drives the relay on every call.
+> **APPLIED 2026-10-06 ~17:11Z (Hugh at the unit):** REMOTE off, EXTERNAL on, VENT on at **50 min** (menu offers
+> 0–50 in 5-min steps — likely vent-minutes per hour ⇒ blower OFF ~10 min/h; verify from `dehum_pm`). Verified:
+> link down, blower 87 W, relay call → compressor 550 W at 17:15:34 (~3.5 min restart delay after power-up).
+> Display flashes **E9** (Table 2: outdoor temp sensor open/short — no 8052 on `ODT`; VENT wants it). Does NOT block
+> the compressor. Options: ignore / fit an 8052 / ~15.5 kΩ resistor on `ODT` (reads 60 °F, never locks VENT out).
 
 Airflow test: the ERV meets its CFM targets without it; the dehum blower only offloads the ERV supply fan
 (Med 61→43 W) at 86 W. ≈1.6 kWh/day if continuous. Hugh's call (2026-10-05): **leave it ON for now**; once
