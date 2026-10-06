@@ -16,7 +16,7 @@ Which module each **real firmware build** links. Pairs with [MODULES.md](MODULES
 | Module | esp32c3 | esp32c6 | esp32s3-eth | s3-shades | c6-hvac | c6-dehum | d1001-panel |
 |--------|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|:-----:|
 | `app_main` | fork | fork | fork | fork | fork | fork | fork |
-| `ha_rs485` | — | — | — | — | shared | — | — |
+| `ha_rs485` | — | — | — | — | shared | shared | — |
 | `ha_broan` | — | — | — | — | shared | — | — |
 | `ha_dout` | — | — | — | shared | shared | shared | — |
 | `ha_gaposa` | — | — | — | shared | — | — | — |

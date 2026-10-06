@@ -34,7 +34,7 @@
 #include "nvs.h"
 #include "nvs_flash.h"
 
-#include "aprilaire_sniff.h"
+#include "aprilaire_bus.h"
 #include "ha_config.h"
 #include "ha_dout.h"
 #include "ha_mqtt.h"
@@ -65,7 +65,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v6-apr-reply"
+#define HA_FW_VERSION "v7-apr-remote"
 #endif
 
 static const char *TAG = "ha_dehum";
@@ -108,11 +108,14 @@ static void relay_init_safe(void) {
 static void dh_backstop_cb(void *arg) {
     (void)arg;
     gpio_set_level(DH_RELAY_GPIO, 0);   // no lock, no ha_dout: this path exists for when those are wedged
+    apr_bus_set_call(false);
 }
 
 static void dh_apply(uint32_t t) {
     ha_dout_tick(&s_dh, t);
-    gpio_set_level(DH_RELAY_GPIO, ha_dout_level(&s_dh) ? 1 : 0);
+    bool on = ha_dout_level(&s_dh);
+    gpio_set_level(DH_RELAY_GPIO, on ? 1 : 0);
+    apr_bus_set_call(on);   // the same call, over RS-485: the E070 obeys whichever mode it is in (EXTERNAL/REMOTE)
 }
 
 static int32_t lease_left_s(uint32_t t) {
@@ -123,17 +126,25 @@ static int32_t lease_left_s(uint32_t t) {
 
 // home/edge/<node>/dehum/adv. `dh_call` is the PIN as read back, not what we asked for.
 static void publish_dehum(void) {
-    char metrics[96], reg[64];
+    char metrics[224], reg[64];
     uint32_t t = now_ms();
-    snprintf(metrics, sizeof metrics, "{\"dh_call\":%s,\"call_left_s\":%ld}",
-             gpio_get_level(DH_RELAY_GPIO) ? "true" : "false", (long)lease_left_s(t));
+    apr_bus_status_t st;
+    apr_bus_get_status(&st);
+    int k = snprintf(metrics, sizeof metrics, "{\"dh_call\":%s,\"call_left_s\":%ld,\"apr_link\":%s",
+                     gpio_get_level(DH_RELAY_GPIO) ? "true" : "false", (long)lease_left_s(t),
+                     st.link ? "true" : "false");
+    if (st.link)   // the unit's own view — only while it is actually talking (REMOTE mode), never stale
+        snprintf(metrics + k, sizeof metrics - k, ",\"unit_running\":%s,\"unit_rh_pct\":%u,\"unit_err\":%u}",
+                 st.running ? "true" : "false", st.rh_pct, st.code);
+    else
+        snprintf(metrics + k, sizeof metrics - k, "}");
     snprintf(reg, sizeof reg, "%s-dehum", s_cfg.node_id);
     ha_mqtt_publish_node_sensor_ex("dehum", reg, "dehum_call", "gpio", metrics);
 }
 
 static void dh_task(void *arg) {
     (void)arg;
-    int last = -1;
+    int last = -1, last_unit = -1;
     uint32_t last_pub = 0;
     for (;;) {
         uint32_t t = now_ms();
@@ -141,9 +152,13 @@ static void dh_task(void *arg) {
         dh_apply(t);
         xSemaphoreGive(s_dh_mu);
         int lvl = gpio_get_level(DH_RELAY_GPIO);
-        if (ha_mqtt_is_connected() && (lvl != last || (uint32_t)(t - last_pub) >= HEARTBEAT_MS)) {
-            publish_dehum();                          // on every change, and every 30 s
+        apr_bus_status_t st;
+        apr_bus_get_status(&st);
+        int unit = (st.link ? 1 : 0) | (st.running ? 2 : 0) | (st.code << 2);
+        if (ha_mqtt_is_connected() && (lvl != last || unit != last_unit || (uint32_t)(t - last_pub) >= HEARTBEAT_MS)) {
+            publish_dehum();                          // on every relay/unit change, and every 30 s
             last = lvl;
+            last_unit = unit;
             last_pub = t;
         }
         vTaskDelay(pdMS_TO_TICKS(200));
@@ -195,25 +210,15 @@ static bool on_cmd(const cJSON *cmd, void *user) {
         publish_dehum();
         return true;
     }
-    if (strcmp(op->valuestring, "apr_txtest") == 0) {   // BENCH ONLY: {secs:1..30, byte:0..255 (default 0)}
+    if (strcmp(op->valuestring, "apr_txtest") == 0) {   // BENCH ONLY: {secs:1..30, byte:0..255}; refused while linked
         const cJSON *sv = cJSON_GetObjectItem(cmd, "secs"), *bv = cJSON_GetObjectItem(cmd, "byte");
-        const char *r = aprilaire_sniff_txtest(cJSON_IsNumber(sv) ? sv->valueint : 5,
-                                               cJSON_IsNumber(bv) ? bv->valueint : 0);
+        const char *r = apr_bus_txtest(cJSON_IsNumber(sv) ? sv->valueint : 5, cJSON_IsNumber(bv) ? bv->valueint : 0);
         ha_mqtt_log("apr-txtest: request -> %s", r);
         return true;
     }
-    if (strcmp(op->valuestring, "apr_reply") == 0) {   // Model 76 emulation: {secs, on, dryness, rh_x10}
-        const cJSON *sv = cJSON_GetObjectItem(cmd, "secs"), *ov = cJSON_GetObjectItem(cmd, "on"),
-                    *dv = cJSON_GetObjectItem(cmd, "dryness"), *rv = cJSON_GetObjectItem(cmd, "rh_x10");
-        const char *r = aprilaire_sniff_reply(cJSON_IsNumber(sv) ? sv->valueint : 60,
-                                              cJSON_IsNumber(ov) ? ov->valueint : 0,
-                                              cJSON_IsNumber(dv) ? dv->valueint : 4,
-                                              cJSON_IsNumber(rv) ? rv->valueint : 500);
-        ha_mqtt_log("apr-reply: request -> %s", r);
-        return true;
-    }
-    if (strcmp(op->valuestring, "apr_sniff") == 0) {   // RS-485 A/B sniffer report now (also every 30 s)
-        aprilaire_sniff_report();
+    if (strcmp(op->valuestring, "apr_status") == 0) {   // RS-485 link/unit report now (also every 5 min)
+        apr_bus_report();
+        publish_dehum();
         return true;
     }
     if (strcmp(op->valuestring, "dehum_status") == 0) {
@@ -277,9 +282,9 @@ void app_main(void) {
     ha_mqtt_start(s_cfg.broker_uri, s_cfg.node_id);
 
     xTaskCreate(dh_task, "dehum_dh", 4096, NULL, 5, NULL);
-    // Listen-only sniff of the E070 Remote A/B bus (D10/D9, UART1). Independent of the DH relay: a failure
-    // here only loses the diagnostic, never control.
-    if (!aprilaire_sniff_start(ha_mqtt_log)) ESP_LOGE(TAG, "RS-485 sniffer failed to start (DH control unaffected)");
+    // E070 Remote (Model 76) RS-485 link on D10/D9, UART1 — answers the unit's M-frames with the same call the
+    // DH relay carries. Independent of the relay: if this fails, EXTERNAL-mode relay control is unaffected.
+    if (!apr_bus_start(ha_mqtt_log)) ESP_LOGE(TAG, "RS-485 bus failed to start (DH relay control unaffected)");
 
     ESP_LOGW(TAG, "dehum node up: node=%s broker=%s — DH relay GPIO%d, leased calls (1..%u min, "
                   "min-on %us, min-off %us)", s_cfg.node_id, s_cfg.broker_uri, DH_RELAY_GPIO,

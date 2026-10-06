@@ -12,6 +12,7 @@ set(EXTRA_COMPONENT_DIRS
     "${_shared}/ha_wifi"
     "${_shared}/ha_dout"
     "${_shared}/ha_rs485"
+    "${_shared}/ha_aprilaire"
     "${_shared}/ha_relay"
     "${_shared}/ha_reach"
     "${_shared}/switchbot_decode"
