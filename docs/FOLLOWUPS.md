@@ -66,6 +66,9 @@ Meanwhile automation uses force-run (`force_run: true`, deployed).
 > link down, blower 87 W, relay call → compressor 550 W at 17:15:34 (~3.5 min restart delay after power-up).
 > Display flashes **E9** (Table 2: outdoor temp sensor open/short — no 8052 on `ODT`; VENT wants it). Does NOT block
 > the compressor. Options: ignore / fit an 8052 / ~15.5 kΩ resistor on `ODT` (reads 60 °F, never locks VENT out).
+> **Hugh 2026-10-06:** some back-pressure into the attic during VENT-off minutes is acceptable (watch only that it
+> doesn't load the ERV fan motors). **TODO (Hugh): ask the HVAC head tech about a bypass loop** around the E070.
+> TODO (dev): confirm the VENT-50 on/off pattern from `dehum_pm` (expect ~10 min/h at 3 W).
 
 Airflow test: the ERV meets its CFM targets without it; the dehum blower only offloads the ERV supply fan
 (Med 61→43 W) at 86 W. ≈1.6 kWh/day if continuous. Hugh's call (2026-10-05): **leave it ON for now**; once
