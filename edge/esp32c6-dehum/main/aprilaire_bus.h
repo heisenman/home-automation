@@ -39,3 +39,7 @@ const char *apr_bus_txtest(int secs, int byte);
 // `dryness` may be undocumented values (probing e.g. on=0x02 for Model 76 Test Mode). The DH relay is NOT
 // touched, so this also isolates the relay path. secs=0 cancels. Returns a status string.
 const char *apr_bus_force(int secs, int on, int dryness);
+
+// Stop transmitting for `secs` (1..3600): frames are still parsed and reported, nothing is sent, so the unit
+// sees no remote (E3 after a few seconds, unit off). secs=0 resumes now. Expires on its own. Returns a status.
+const char *apr_bus_mute(int secs);

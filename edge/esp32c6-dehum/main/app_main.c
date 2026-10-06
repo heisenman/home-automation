@@ -65,7 +65,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v9-apr-fix"
+#define HA_FW_VERSION "v10-apr-mute"
 #endif
 
 static const char *TAG = "ha_dehum";
@@ -223,6 +223,12 @@ static bool on_cmd(const cJSON *cmd, void *user) {
                                       cJSON_IsNumber(dv) ? dv->valueint : 1);
         ha_mqtt_log("apr-force: secs=%d on=0x%02X dryness=0x%02X -> %s", cJSON_IsNumber(sv) ? sv->valueint : 0,
                     cJSON_IsNumber(ov) ? ov->valueint : 0, cJSON_IsNumber(dv) ? dv->valueint : 1, r);
+        return true;
+    }
+    if (strcmp(op->valuestring, "apr_mute") == 0) {    // {secs 0..3600}: stop answering the unit (0 = resume)
+        const cJSON *sv = cJSON_GetObjectItem(cmd, "secs");
+        int secs = cJSON_IsNumber(sv) ? sv->valueint : 0;
+        ha_mqtt_log("apr-mute: secs=%d -> %s", secs, apr_bus_mute(secs));
         return true;
     }
     if (strcmp(op->valuestring, "apr_status") == 0) {   // RS-485 link/unit report now (also every 5 min)

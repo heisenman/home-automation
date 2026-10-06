@@ -54,6 +54,17 @@ static size_t build_raw_r(uint8_t on, uint8_t dry, uint8_t *out, size_t cap) {
     return (size_t)snprintf((char *)out, cap, "%c%s%02X%c", HA_APR_STX, body, cs, HA_APR_ETX);
 }
 
+static volatile bool     s_mute;
+static volatile uint32_t s_mute_end_ms;
+
+const char *apr_bus_mute(int secs) {
+    if (secs == 0) { s_mute = false; return "unmuted — answering again"; }
+    if (secs < 0 || secs > 3600) return "REFUSED (secs 0..3600)";
+    s_mute_end_ms = (uint32_t)(esp_timer_get_time() / 1000) + (uint32_t)secs * 1000u;
+    s_mute = true;
+    return "muted";
+}
+
 const char *apr_bus_force(int secs, int on, int dryness) {
     if (secs == 0) { s_force = false; return "cancelled — back to the call mapping"; }
     if (secs < 0 || secs > 900 || on < 0 || on > 255 || dryness < 0 || dryness > 255)
@@ -94,7 +105,7 @@ void apr_bus_report(void) {
         : st.m_ok ? "LINK LOST — no M-frame for >5 s (REMOTE switched off? wiring?)"
                   : "NO M-FRAMES — unit in EXTERNAL mode (DH relay controls it) or A/B not wired";
     s_log("apr-bus: %s%s | call=%d unit=%s rh=%u%% code=%u | M ok=%lu bad=%lu R sent=%lu",
-          verdict, s_force ? " [FORCED R-frame]" : "", s_call ? 1 : 0, st.running ? "RUNNING" : "idle", st.rh_pct, st.code,
+          verdict, s_mute ? " [MUTED]" : s_force ? " [FORCED R-frame]" : "", s_call ? 1 : 0, st.running ? "RUNNING" : "idle", st.rh_pct, st.code,
           (unsigned long)st.m_ok, (unsigned long)st.m_bad, (unsigned long)st.r_sent);
     xSemaphoreTake(s_mu, portMAX_DELAY);
     unsigned n = s_raw_n, shown = n < RAW_RING ? n : RAW_RING;
@@ -123,6 +134,11 @@ static void on_body(const uint8_t *body, size_t len) {
         if (changed && s_log)
             s_log("apr-bus: unit %s rh=%u%% code=%u (call=%d)", m.running ? "RUNNING" : "idle", m.rh_pct, m.code,
                   s_call ? 1 : 0);
+        if (s_mute) {
+            if ((int32_t)(s_mute_end_ms - now_ms()) > 0) return;   // listen, report, never answer
+            s_mute = false;
+            if (s_log) s_log("apr-bus: mute window ended — answering again");
+        }
         bool call = s_call;
         uint8_t frame[24];
         size_t n;
