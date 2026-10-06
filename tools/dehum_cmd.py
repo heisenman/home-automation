@@ -4,6 +4,7 @@
   python3 tools/dehum_cmd.py call 20      # close DH (call for dehumidification) for 20 min (1..60); renew to extend
   python3 tools/dehum_cmd.py call 0       # release (deferred to the 60 s minimum on-time if just closed)
   python3 tools/dehum_cmd.py status       # log + publish relay state and lease remaining
+  python3 tools/dehum_cmd.py sniff        # RS-485 A/B sniffer report now (v4+; also every 30 s on .../log)
 
 Watch:  mosquitto_sub -h 192.168.1.200 -v -t 'home/edge/dehum_c6/#'
 
@@ -32,6 +33,8 @@ def main() -> None:
     a = sys.argv[1:]
     if a[:1] == ["call"] and len(a) == 2 and a[1].isdigit() and 0 <= int(a[1]) <= 60:
         shade_cmd.send({"op": "dehum_call", "min": int(a[1])})
+    elif a == ["sniff"]:
+        shade_cmd.send({"op": "apr_sniff"})
     elif a == ["status"]:
         shade_cmd.send({"op": "dehum_status"})
     else:
