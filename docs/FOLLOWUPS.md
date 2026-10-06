@@ -21,7 +21,10 @@ node-secret LUTs synced (12 = 12). run_all 785/15 (the 15 pre-existing).
    `STX M ? 2B 03 65 ETX` (idle, RH 43 %, err 03 = display E3), checksum verified — design §2.8. Wiring/polarity
    proven. **DECIDED + BUILT (Hugh: RS-485 preferred):** `dehum_c6` v7-apr-remote answers every M-frame; E070 now
    in `REMOTE`; call → on+dryness 7, release → off; relay still driven in parallel (EXTERNAL fallback = menu flip
-   only). Open: surface `unit_err`/`unit_running` in the PWA + an E-code alert; prefer `unit_running` over
+   only). **Now v10-apr-mute** (cable-flashed 2026-10-06: v7's bus task busy-looped at prio 6 and starved OTA —
+   fixed v9; OTA re-proven on v10). Link verified after reinstall (36/36, code 0). Experiments ready (v8+ ops):
+   `force` on=00 + relay closed (does DH matter in REMOTE?), `force` on=02 dryness 1 (Model 76 Test Mode?),
+   `mute`. Open: surface `unit_err`/`unit_running` in the PWA + an E-code alert; prefer `unit_running` over
    `dh_call` for "running"; settle VENT mode (stays ON — see REVISIT below).
 2. **.210 ha-2-failover instance stale** (code + registry) — section 🔴 below. Now also lacks erv_attic /
    dehum_attic / dehum_pm / erv_pm and the Outdoor area.
