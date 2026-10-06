@@ -14,8 +14,11 @@ on 3 averaged AQ sensors, levels low/med/high); Aprilaire `dehum_attic` (dehum_c
 on living-room RH + outdoor dew-point gate, floors the ERV); plugs `erv_pm` + `dehum_pm`; Outdoor area + sensor;
 node-secret LUTs synced (12 = 12). run_all 785/15 (the 15 pre-existing).
 
-1. **Aprilaire RS-485 (Model 76 emulation)** — 2nd isolated TTL→RS485 (C) on order. Bench-test → listen-only on
-   `A`/`B` → decide control; then settle VENT mode (stays ON until then — see REVISIT below).
+1. **Aprilaire RS-485 (Model 76 emulation)** — adapter wired to `dehum_c6` (D10/D9 UART1) and **BENCH-PROVEN
+   2026-10-06** on v5-apr-txtest: TX = 18 KB/20 s, A–B idle +3.4 V swung negative on a meter; RX = AA-battery
+   taps (+B/−A) → 37 B, other polarity silent, RX LED agrees. No self-echo (adapter mutes RX while driving).
+   NEXT: install on E070 `A`/`B`, `PE`→Remote `−`, `+` unconnected → read the listen-only sniff verdict
+   (`tools/dehum_cmd.py sniff`) → decide control; then settle VENT mode (stays ON until then — see REVISIT below).
 2. **.210 ha-2-failover instance stale** (code + registry) — section 🔴 below. Now also lacks erv_attic /
    dehum_attic / dehum_pm / erv_pm and the Outdoor area.
 3. **Wall-control switch** (FET on the Broan wall control's 12 V) — research only, nothing on hand (Hugh: last).
