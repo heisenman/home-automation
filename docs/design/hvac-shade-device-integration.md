@@ -491,6 +491,14 @@ the Model 76 on the E070's `A`/`B` terminals.
 - **R-frame** (controller → E070, within ~2 ms): `STX 'R' on[2] dryness[2] rh[4] sep[2] temp[2] cs[2] ETX`
   — `on` = 01/00, `dryness` = setpoint 1–7.
 
+**✅ LIVE CAPTURE 2026-10-06 (our E070, `dehum_c6` v5 listen-only, isolated Waveshare (C), `A+`→`A`, `B-`→`B`,
+`PE`→Remote `−`, `+` open):** with `REMOTE` **OFF** (External mode) the bus is **silent** — the unit does not talk
+on `A`/`B` at all. With `REMOTE` **ON** it sends an M-frame at **1 Hz** (60 in 58 s), e.g.
+`02 4D 3F 32 42 30 33 36 35 03` = `STX 'M' '?' "2B" "03" "65" ETX`: `?` idle; RH `0x2B` = 43 %; the field the
+prior art shows as `"00"` read `"03"` while the display showed **E3** — almost certainly the unit's error code
+(E3 ≈ no remote answering; inference). Checksum = byte sum **from STX through the code field**, mod 256 (0x65 ✓).
+With no R-frame reply the unit refuses to run. Polarity as wired is correct.
+
 Kept as a documented future upgrade. If pursued: the prior-art repo does **not** document whether the
 MAX485 ground must bond to the E070 `−` terminal, nor whether that node is genuinely SELV — a real gap.
 Prefer an **isolated** transceiver to keep the galvanic separation the relay gives for free.
