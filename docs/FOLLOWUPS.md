@@ -19,10 +19,14 @@
 - **PURGED (Hugh-approved) with `server/maintenance/purge_frames.py` @18a15c4:** 2,156 garbage frames (06-23 → 10-06)
   from ha-2 hot.db + parquet, device rungs rebuilt; also .210 (34 frames). Verified 0 left; verify_hashes 10/10 both.
   Backups: `instance/db/backups/purge-20261006T19*` on each box.
-- **OPEN — panel replicas keep the old garbage:** panels sync rungs by `since?after=<hwm>` (forward-only), so
-  re-derived OLD buckets never reach an already-seeded D1001; its long-range Midea charts stay wrong until its
-  local rungs.db is re-seeded from `full.db`. No invalidation in the sync contract — needs a design call (e.g. a
-  manifest `epoch`/generation that forces a re-seed).
+- **DONE @33c4234 (Hugh: add a manifest epoch):** rung manifest `epoch`; panels (v117-rung-epoch, both OTA'd)
+  re-seed from `full.db` when it differs. Contract: `docs/design/rollup-ladder-and-replica-sync.md` §4 "Epoch".
+  **+ @ca588f6:** `full.db` now streams a consistent sqlite-backup snapshot — the live 124 MB file outgrew its
+  Content-Length during every ~5-min panel pull (ha-rollup writes every 5 min), so ALL seeds were failing.
+  **Verified 2026-10-07:** d1001-beachhead re-seeded 04:16 (rungs.db 86 → 130 MB = snapshot, epoch 1791343162).
+  **d1001_2 has NO SD card** (fs df → ESP_ERR_INVALID_STATE) → no replica at all; insert one if it should chart offline.
+- **Panel sync quirk (not fixed):** `replica_task` runs the files lane on the SAME task right after the rung sync,
+  so a big files-lane pull (e.g. 5 parquet re-copies after a purge, ~15 min) delays the next rung sync.
 - **OPEN — Midea power meter:** Tasmota ESP32-C3 plugs (PG03V3-US16A-TAS-2) inbound; one meters the Midea →
   reuse `switchable.verify_power {meter, min_w, grace_min}` (as `dehum_attic`/`dehum_pm`) for real running truth.
   The Midea's own status has no compressor/real-fan state (power flag + fan SETTING only).
