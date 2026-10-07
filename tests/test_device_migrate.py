@@ -100,6 +100,24 @@ def test_run_migration_rename_report(tmp_path):
     assert rep["verify_old_id_local"]["hot"] == 0
 
 
+def test_run_migration_bumps_rung_epoch_only_when_rungs_change(tmp_path):
+    import sqlite3
+    from server.storage import rollup as R
+    hot = _hot(tmp_path, [("t1", "old", "eco2", 1.0)])
+    rdb = str(tmp_path / "rungs.db")
+    c = sqlite3.connect(rdb)
+    R.ensure_schema(c)
+    c.execute(R._UPSERT, ("1hour", "old", "eco2", 3600, 1.0, 1.0, 1.0, 1, 1.0))
+    c.commit()
+    c.close()
+    kw = dict(hot_db=hot, rung_db=rdb, parquet_glob=str(tmp_path / "none" / "*.parquet"),
+              do_peer=False, do_mqtt=False, backup=False)
+    assert "rung_epoch" not in D.run_migration("rename", "old", "new", dry_run=True, **kw)
+    rep = D.run_migration("rename", "old", "new", dry_run=False, **kw)
+    assert rep["rung_epoch"] == R.get_epoch(sqlite3.connect(rdb))
+    assert "rung_epoch" not in D.run_migration("rename", "old", "new", dry_run=False, **kw)   # 0 rows: no bump
+
+
 def test_run_migration_rename_requires_new_id(tmp_path):
     hot = _hot(tmp_path, [("t1", "old", "eco2", 1.0)])
     with raises(ValueError):

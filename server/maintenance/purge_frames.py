@@ -118,6 +118,8 @@ def rebuild_device_rungs(rung_conn: sqlite3.Connection, device: str, raw_rows: l
         with rung_conn:
             rung_conn.execute("DELETE FROM rung WHERE device_id=?", (device,))
             rung_conn.executemany(rollup._UPSERT, keep)
+        out = {"before": before, "after": len(keep), "epoch": rollup.bump_epoch(rung_conn, now_epoch)}
+        return out                                     # old buckets changed: seeded panels must re-seed
     return {"before": before, "after": len(keep)}
 
 

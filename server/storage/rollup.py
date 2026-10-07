@@ -143,6 +143,30 @@ def _meta_set(conn, k, v):
                  (k, str(v)))
 
 
+# ── replica epoch (panel re-seed signal) ───────────────────────────────────────────────────────────
+# Panels sync rungs FORWARD-ONLY (`since?after=<hwm>`), so a rewrite of OLD buckets (a garbage purge, a
+# device rename/retire) never reaches an already-seeded replica. Anything that rewrites history bumps the
+# epoch; the manifest publishes it, and a panel whose local rungs.db carries a different one re-seeds from
+# full.db. Stored IN rungs.db, so a seeded copy carries the epoch it was cut at — no panel-side state.
+def get_epoch(conn: sqlite3.Connection) -> int | None:
+    try:
+        v = _meta_get(conn, "epoch")
+    except sqlite3.OperationalError:                  # no rollup_meta yet (a db never rolled up)
+        return None
+    return int(v) if v is not None else None
+
+
+def bump_epoch(conn: sqlite3.Connection, now_epoch: int | None = None) -> int:
+    """Mark history as rewritten: every seeded replica must re-seed. Returns the new epoch (strictly
+    greater than the old one, even within the same second)."""
+    import time
+    ensure_schema(conn)
+    new = max(int(time.time()) if now_epoch is None else int(now_epoch), (get_epoch(conn) or 0) + 1)
+    _meta_set(conn, "epoch", str(new))
+    conn.commit()
+    return new
+
+
 def rollup_minute(raw_conn: sqlite3.Connection, rung_conn: sqlite3.Connection,
                   since_ts: str, until_ts: str) -> int:
     """Recompute 1min buckets from raw readings in [since_ts, until_ts) and upsert. Returns rows written."""
@@ -298,6 +322,8 @@ def _main() -> int:
     p.add_argument("--raw", default="instance/db/hot.db", help="raw readings sqlite (hot.db)")
     p.add_argument("--rung", default="instance/db/rungs.db", help="output rung sqlite")
     p.add_argument("--full", action="store_true", help="reprocess from epoch 0 (initial seed)")
+    p.add_argument("--bump-epoch", action="store_true",
+                   help="only mark history rewritten so seeded panel replicas re-seed (no rollup pass)")
     p.add_argument("--parquet", nargs="?", const="instance/db/parquet/year=*/month=*/*.parquet", default=None,
                    help="one-time history seed from the parquet archive (glob), then top up from --raw hot.db")
     p.add_argument("--now", type=int, default=None, help="override now (epoch s); default = wall clock")
@@ -306,6 +332,13 @@ def _main() -> int:
     logging.basicConfig(level=getattr(logging, a.log_level), format="%(asctime)s %(levelname)s %(name)s — %(message)s")
     now_epoch = a.now if a.now is not None else int(time.time())
     t0 = time.time()
+    if a.bump_epoch:
+        rung = sqlite3.connect(a.rung)
+        try:
+            print(f"rollup epoch -> {bump_epoch(rung, now_epoch)} ({a.rung}); seeded replicas will re-seed")
+        finally:
+            rung.close()
+        return 0
     if a.parquet:
         rung = sqlite3.connect(a.rung)
         try:

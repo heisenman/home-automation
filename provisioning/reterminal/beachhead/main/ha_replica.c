@@ -128,6 +128,27 @@ static long local_hwm(const char *res)
     return hwm;
 }
 
+// The rollup epoch the local rungs.db was seeded at (server rollup.bump_epoch, kept in rollup_meta and so
+// carried inside full.db). -1 = none (seeded before epochs existed, or never bumped). Caller holds s_db_mutex.
+static long long local_epoch(void)
+{
+    long long e = -1;
+    sqlite3 *db = NULL;
+    if (sqlite3_open_v2(s_db_path, &db, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK) {
+        sqlite3_stmt *st = NULL;
+        if (sqlite3_prepare_v2(db, "SELECT v FROM rollup_meta WHERE k='epoch'", -1, &st, NULL) == SQLITE_OK) {
+            if (sqlite3_step(st) == SQLITE_ROW && sqlite3_column_type(st, 0) != SQLITE_NULL)
+                e = strtoll((const char *)sqlite3_column_text(st, 0), NULL, 10);
+            sqlite3_finalize(st);
+        }
+        sqlite3_close(db);
+    }
+    return e;
+}
+
+static long sd_free_mb(const char *mp);
+#define SD_FREE_FLOOR_MB 64                 // don't fetch a new artifact below this free-space floor (logged)
+
 // Pull `res` rows with bucket_start >= `after` (INCLUSIVE — the boundary bucket keeps updating until
 // it closes, so it is always re-sent and re-upserted) and upsert them into the local rung table.
 // Network stream → temp NDJSON file (no lock), then a single locked upsert transaction. Returns rows
@@ -214,17 +235,46 @@ static void sync_once(void)
 
     // 2. cold start (no local db) → one-time full.db seed via temp + atomic swap; incremental takes
     //    over on the next cycle. (Seeding the whole 1min rung over NDJSON would be far larger.)
+    //    EPOCH: `since` is forward-only, so when the server rewrote OLD buckets (garbage purge, device
+    //    rename/retire) it bumps `epoch`; a local db cut at a different epoch re-seeds the same way. The
+    //    seeded file carries the server's epoch in rollup_meta, so the two converge with no SD-side state.
+    //    null epoch (older server / never bumped) → never re-seeds.
     struct stat stt;
     bool db_present = (stat(db, &stt) == 0 && stt.st_size > 0);
-    if (!db_present) {
-        ESP_LOGI(TAG, "cold start — seeding via full.db");
+    bool reseed = false;
+    cJSON *ep = cJSON_GetObjectItem(j, "epoch");
+    if (db_present && cJSON_IsNumber(ep)) {
+        long long server_epoch = (long long) ep->valuedouble;
+        if (s_db_mutex) xSemaphoreTake(s_db_mutex, portMAX_DELAY);
+        long long mine = local_epoch();
+        if (s_db_mutex) xSemaphoreGive(s_db_mutex);
+        if (mine != server_epoch) {
+            // the old copy keeps serving charts until the swap → need room for BOTH; skip (logged) rather
+            // than re-pull a ~100 MB file every cycle only to fail on a full card
+            cJSON *sz = cJSON_GetObjectItem(j, "size_bytes");
+            long need_mb = (cJSON_IsNumber(sz) ? (long)(sz->valuedouble / (1024 * 1024)) : 0) + SD_FREE_FLOOR_MB;
+            long free_mb = sd_free_mb(mp);
+            if (free_mb >= 0 && free_mb < need_mb) {
+                ESP_LOGW(TAG, "epoch %lld -> %lld needs re-seed but SD has %ld MB free (< %ld) — SKIP, keeping "
+                              "current replica", mine, server_epoch, free_mb, need_mb);
+            } else {
+                ESP_LOGI(TAG, "server epoch %lld != local %lld — history rewritten, re-seeding", server_epoch, mine);
+                reseed = true;
+            }
+        }
+    }
+    if (!db_present || reseed) {
+        if (!reseed) ESP_LOGI(TAG, "cold start — seeding via full.db");
         snprintf(url, sizeof url, "%s/api/v1/rung/full.db", s_base);
         if (http_get_to_file(url, tmp)) {
             if (s_db_mutex) xSemaphoreTake(s_db_mutex, portMAX_DELAY);
             remove(db);
-            if (rename(tmp, db) == 0) s_db_ready = true; else remove(tmp);
+            bool ok = (rename(tmp, db) == 0);
+            s_db_ready = ok;                   // a failed swap after remove() leaves NO db (re-seed case)
+            if (!ok) remove(tmp);
             if (s_db_mutex) xSemaphoreGive(s_db_mutex);
-            if (s_db_ready) ESP_LOGI(TAG, "seed complete -> %s", db);
+            if (ok) ESP_LOGI(TAG, "seed complete -> %s", db);
+            else    ESP_LOGE(TAG, "seed swap failed — replica empty until next cycle");
         } else remove(tmp);
         cJSON_Delete(j);
         return;
@@ -266,7 +316,6 @@ static void sync_once(void)
                                             // config + parquet still sync every files run (cheap / immutable).
 #define REPLICA_DIR      "replica"
 #define PROV_NAME        "PROVENANCE.json"
-#define SD_FREE_FLOOR_MB 64                 // don't fetch a new artifact below this free-space floor (logged)
 
 // flatten a possibly-slashed artifact name ("2026/07/x.parquet") into one SD filename
 static void flat_name(const char *kind, const char *name, char *out, int cap)

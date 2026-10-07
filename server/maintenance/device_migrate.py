@@ -249,6 +249,14 @@ def run_migration(op: str, old_id: str, new_id: str | None = None, *,
     report["hot"] = apply_sqlite(hot_db, HOT_TABLES, old_id, new_id, retire=retire, dry_run=dry_run)
     report["rungs"] = apply_sqlite(rung_db, RUNG_TABLES, old_id, new_id, retire=retire, dry_run=dry_run) \
         if Path(rung_db).exists() else {}
+    if not dry_run and any(report["rungs"].values()):
+        # history rewritten under an old key: the panels' forward-only rung sync can't see that — re-seed them
+        from server.storage import rollup
+        rc = sqlite3.connect(rung_db)
+        try:
+            report["rung_epoch"] = rollup.bump_epoch(rc)
+        finally:
+            rc.close()
     try:
         report["parquet"] = apply_parquet(parquet_glob, old_id, new_id, retire=retire, dry_run=dry_run)
         if report["parquet"]:

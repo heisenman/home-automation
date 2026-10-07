@@ -1223,7 +1223,10 @@ def display_viewmodel(device_id: str):
 @app.get("/api/v1/rung/manifest.json", include_in_schema=True)
 def rung_manifest():
     """ADR-0022 replica sync: per-rung {latest_bucket_start, rows} + the file's sha256/size, so the panel
-    ha_replica can tell if it's behind without pulling the whole DB. Mirrors the parquet manifest pattern."""
+    ha_replica can tell if it's behind without pulling the whole DB. Mirrors the parquet manifest pattern.
+    `epoch` (rollup.bump_epoch) changes whenever OLD buckets were rewritten — the forward-only `since` sync
+    can't carry that, so a replica whose local epoch differs re-seeds from full.db. null = never bumped."""
+    from server.storage import rollup
     if not RUNG_DB.exists():
         raise HTTPException(status_code=404, detail="rungs.db not built yet")
     import hashlib
@@ -1234,12 +1237,13 @@ def rung_manifest():
         for (res,) in conn.execute("SELECT DISTINCT res FROM rung"):
             n, hi = conn.execute("SELECT COUNT(*), MAX(bucket_start) FROM rung WHERE res=?", (res,)).fetchone()
             rungs[res] = {"rows": n, "latest_bucket_start": hi}
+        epoch = rollup.get_epoch(conn)
     finally:
         conn.close()
     return {"sha256": hashlib.sha256(data).hexdigest(), "size_bytes": len(data),
             "updated_ts": datetime.fromtimestamp(RUNG_DB.stat().st_mtime, timezone.utc)
                           .strftime("%Y-%m-%dT%H:%M:%SZ"),
-            "rungs": rungs}
+            "epoch": epoch, "rungs": rungs}
 
 
 @app.get("/api/v1/rung/full.db", include_in_schema=True)

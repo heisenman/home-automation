@@ -60,6 +60,7 @@ def test_dry_run_counts_and_writes_nothing():
         assert r["hot"] == 2 and r["parquet"] == {"2026-09.parquet": 2}
         assert sqlite3.connect(d / "hot.db").execute("SELECT count(*) FROM readings").fetchone()[0] == 5
         assert not (d / "bk").exists()
+        assert rollup.get_epoch(sqlite3.connect(d / "rungs.db")) is None         # dry run: no re-seed
 
 
 def test_purge_removes_frames_everywhere_and_rebuilds_device_rungs():
@@ -85,6 +86,7 @@ def test_purge_removes_frames_everywhere_and_rebuilds_device_rungs():
                           (DEV, NOW - 7 * 86400)).fetchone()[0] == 2
         assert rc.execute("SELECT count(*) FROM rung WHERE device_id='other'").fetchone()[0] > 0   # untouched
         assert (Path(r["backup"]) / "hot.db").exists() and (Path(r["backup"]) / "2026-09.parquet").exists()
+        assert rollup.get_epoch(rc) == r["rungs"]["epoch"] >= NOW               # seeded panels re-seed
 
 
 if __name__ == "__main__":

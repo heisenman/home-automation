@@ -95,3 +95,28 @@ def test_rung_since_rejects_bad_res(tmp_path):
     from tests._harness import raises
     with raises(HTTPException):
         M.rung_since(res="5min", after=0, limit=10)                              # not a rung → 400
+
+
+# ── replica epoch: the re-seed signal for forward-only panel sync ──────────────────────────────────────
+def test_epoch_absent_then_bumped_strictly_increasing(tmp_path):
+    c = sqlite3.connect(str(_mk_rungs(tmp_path)))
+    assert R.get_epoch(c) is None                                                # never bumped / no meta
+    e1 = R.bump_epoch(c, 1000)
+    assert e1 == 1000 and R.get_epoch(c) == 1000
+    assert R.bump_epoch(c, 1000) == 1001                                         # same second still moves
+    c.close()
+
+
+def test_manifest_publishes_epoch(tmp_path):
+    p = _mk_rungs(tmp_path)
+    old = M.RUNG_DB
+    M.RUNG_DB = p
+    try:
+        assert M.rung_manifest()["epoch"] is None                                # back-compat: null = no re-seed
+        c = sqlite3.connect(str(p))
+        R.bump_epoch(c, 1234)
+        c.close()
+        m = M.rung_manifest()
+        assert m["epoch"] == 1234 and m["rungs"]["1hour"]["rows"] == 3
+    finally:
+        M.RUNG_DB = old
