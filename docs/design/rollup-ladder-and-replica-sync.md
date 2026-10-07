@@ -116,6 +116,14 @@ over HTTP; panel pulls with `esp_http_client` (already in the panel for OTA). LA
 Presence-gated on the SD card (ADR-0019). Charts read the **local** rung DB via the sqlite3 VFS — instant,
 offline, no server round-trip on tap.
 
+**Epoch — re-seed on rewritten history (2026-10-06, @33c4234, panel v117-rung-epoch).** `since` is forward-only:
+a rewrite of OLD buckets (garbage purge, device rename/retire) never reaches a seeded replica. `manifest.json`
+carries `epoch` (int, or `null` = never bumped), stored in `rungs.db` `rollup_meta` — so `full.db` carries the
+epoch it was cut at. Panel: local `rollup_meta.epoch` ≠ manifest `epoch` → re-seed from `full.db` (temp + swap;
+the old copy serves charts until the swap; skipped with a log if SD can't hold both). Bumped by
+`purge_frames`, `device_migrate` (when rung rows change), and by hand: `python -m server.storage.rollup
+--bump-epoch`. **Any new tool that rewrites past buckets MUST call `rollup.bump_epoch()`.**
+
 **Incremental semantics** reuse the reconcile-history idea (windowed `WHERE bucket_start > hwm`), keyed
 idempotently so an overlapping re-pull is a no-op.
 

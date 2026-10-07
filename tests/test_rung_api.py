@@ -120,3 +120,47 @@ def test_manifest_publishes_epoch(tmp_path):
         assert m["epoch"] == 1234 and m["rungs"]["1hour"]["rows"] == 3
     finally:
         M.RUNG_DB = old
+
+
+def _full_db_body(resp):
+    async def drain():
+        return b"".join([c async for c in resp.body_iterator])
+    return asyncio.run(drain())
+
+
+def test_full_db_is_a_consistent_snapshot_with_exact_length(tmp_path):
+    p = _mk_rungs(tmp_path)
+    old = M.RUNG_DB
+    M.RUNG_DB = p
+    try:
+        resp = M.rung_full_db()
+        c = sqlite3.connect(str(p))                                 # live writes AFTER the cut (ha-rollup)
+        c.executemany(R._UPSERT, [("1min", "d1", "t", i * 60, 1.0, 1.0, 1.0, 1, 1.0) for i in range(5000)])
+        c.commit()
+        c.close()
+        body = _full_db_body(resp)
+        assert len(body) == int(resp.headers["content-length"])   # was: grew past it mid-stream -> abort
+        out = tmp_path / "seeded.db"
+        out.write_bytes(body)
+        s = sqlite3.connect(str(out))
+        assert s.execute("PRAGMA integrity_check").fetchone()[0] == "ok"
+        assert s.execute("SELECT count(*) FROM rung WHERE res='1min'").fetchone()[0] == 0   # pre-write cut
+        s.close()
+    finally:
+        M.RUNG_DB = old
+
+
+def test_full_db_snapshot_recut_when_epoch_moves(tmp_path):
+    p = _mk_rungs(tmp_path)
+    old = M.RUNG_DB
+    M.RUNG_DB = p
+    try:
+        _full_db_body(M.rung_full_db())                             # cut at epoch None
+        c = sqlite3.connect(str(p))
+        R.bump_epoch(c, 4242)
+        c.close()
+        out = tmp_path / "seeded.db"
+        out.write_bytes(_full_db_body(M.rung_full_db()))            # < max age, but epoch moved -> re-cut
+        assert R.get_epoch(sqlite3.connect(str(out))) == 4242       # else the panel re-seeds forever
+    finally:
+        M.RUNG_DB = old

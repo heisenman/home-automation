@@ -21,6 +21,8 @@ import json
 import logging
 import os
 import sqlite3
+import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -1246,13 +1248,61 @@ def rung_manifest():
             "epoch": epoch, "rungs": rungs}
 
 
+_RUNG_SNAPSHOT_MAX_AGE_S = 600
+_rung_snapshot_lock = threading.Lock()
+
+
+def _rung_snapshot() -> Path:
+    """A CONSISTENT copy of rungs.db for full.db. Streaming the live file broke every seed once it reached
+    ~124 MB: a panel pulls at ~0.4 MB/s (5+ min) and ha-rollup writes every 5 min, so the file outgrew the
+    declared Content-Length mid-stream ("Response content longer than Content-Length", 2026-10-07) — and
+    a pull that did finish could be a torn copy of a live sqlite file. The snapshot (sqlite backup API: one
+    read transaction) is reused for up to 10 min, but re-cut at once if the live epoch moved, else a panel
+    would re-seed from a pre-bump copy and loop."""
+    from server.storage import rollup
+    snap = RUNG_DB.with_name("rungs.snapshot.db")
+    with _rung_snapshot_lock:
+        live = sqlite3.connect(f"file:{RUNG_DB}?mode=ro", uri=True)
+        try:
+            live_epoch = rollup.get_epoch(live)
+            stale = True
+            if snap.exists() and time.time() - snap.stat().st_mtime < _RUNG_SNAPSHOT_MAX_AGE_S:
+                sc = sqlite3.connect(f"file:{snap}?mode=ro", uri=True)
+                try:
+                    stale = rollup.get_epoch(sc) != live_epoch
+                finally:
+                    sc.close()
+            if stale:
+                tmp = snap.with_suffix(".tmp")
+                tmp.unlink(missing_ok=True)
+                dst = sqlite3.connect(str(tmp))
+                try:
+                    live.backup(dst)
+                finally:
+                    dst.close()
+                os.replace(tmp, snap)       # an in-flight download keeps its open fd on the old inode
+        finally:
+            live.close()
+    return snap
+
+
 @app.get("/api/v1/rung/full.db", include_in_schema=True)
 def rung_full_db():
     """ADR-0022 seed pull: the whole compact rung sqlite. The panel copies it to SD and queries locally
-    (offline, instant charts). Small (MB); a full re-pull is cheap. Incremental 'since' is Phase 2."""
+    (offline, instant charts). Served from a consistent snapshot (_rung_snapshot), opened BEFORE the
+    length is taken so a concurrent re-cut can't change what this response streams."""
     if not RUNG_DB.exists():
         raise HTTPException(status_code=404, detail="rungs.db not built yet")
-    return FileResponse(str(RUNG_DB), media_type="application/octet-stream", filename="rungs.db")
+    f = open(_rung_snapshot(), "rb")
+    size = os.fstat(f.fileno()).st_size
+
+    def gen():
+        with f:
+            while chunk := f.read(1 << 20):
+                yield chunk
+    return StreamingResponse(gen(), media_type="application/octet-stream",
+                             headers={"Content-Length": str(size),
+                                      "Content-Disposition": 'attachment; filename="rungs.db"'})
 
 
 _RUNG_COLS = ["device_id", "metric", "bucket_start", "vmin", "vmax", "vmean", "vcount", "vlast"]
