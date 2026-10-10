@@ -36,6 +36,7 @@ full summary note.
 | `aranet_history.py`, `import_*_csv.py` | History backfill/import |
 | `gen_tls.py`, `gen_vapid.py` | Cert / key generation |
 | `power_report.py`, `mesh_probe.py`, `gap_watcher.py` | Diagnostics |
+| `aq_experiment_report.py` (+ `.sh`) | Daily AQ v2 shadow-experiment report — runs on ha-2 read-only, filed on .210 under `instance/aq-experiment/reports/` by `ha-aq-experiment-report.timer` (SENSOR-METHODOLOGY §9.5) |
 | `host-leds.sh` | Box operability LEDs |
 | `gen_module_matrix.py` | Generate/`--check` the firmware device×module matrix (`edge/MATRIX.md`) from each build's `CMakeLists` (ADR-0020 drift-guard; pinned by `tests/test_module_matrix.py`) |
 

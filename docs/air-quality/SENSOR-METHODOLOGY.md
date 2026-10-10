@@ -7,6 +7,8 @@
 outputs can be legitimately normalized onto ONE directly-comparable scale, and the
 recommended fusion strategy.
 
+> **Latest: [§9 Study 2 (2026-10-10)](#9-study-2-2026-10-10--three-months-of-data-is-the-eastwest-aq-difference-real) — east/west difference is mostly instrument; v2 shadow experiment running.**
+>
 > **Read this first if you are adding a NEW gas sensor.** This document is written to
 > be a reusable template. The conclusions matter, but so does the *path* — especially
 > the [dead ends](#5-dead-ends--rejected-approaches-and-why). Jump to
@@ -353,3 +355,100 @@ Internal:
 - `server/api/viewmodel.py` — `METRIC_CATALOG`, `NORMAL_RANGES`
 - `firmware/components/{sgp30,sgp40,bme680,ha_gas}/` — firmware sources & published metrics
 - `edge/esp32c6/nodes.yaml`, `edge/esp32s3-eth/nodes.yaml`, `instance/devices.yaml` — node→device→area registry
+
+---
+
+## 9. Study 2 (2026-10-10) — three months of data: is the east/west AQ difference real?
+
+**Directive (Hugh, 2026-10-10):** "We've got enough data now … the mechanical room has two types of gas
+sensors, which gives a good direct comparison … one side of the house has mostly one type of sensor while the
+other side has mostly another. Correlate with time of day / temperature / humidity in proximity, and give me a
+plan to improve AQ algorithms to better characterize the real air quality of each room."
+
+**Verdict:** the east/west difference is **mostly instrument and math, not air.** West (kitchen + C suite) is
+Sensirion (SGP30/SGP40); east (H suite) is BME680 (north = up in `house-geometry.json`, small x = west). The
+mechanical closet (west wall) holds one of each — the controlled comparison.
+
+### 9.1 Method (reproducible)
+
+- **Data:** ha-2 is the system of record (`.210`'s gas history stops in July — the fleet moved to the air-gap
+  net). Copied ha-2's `instance/db/parquet/year=2026/month=07..10` + `weather.db` read-only to a scratch dir
+  (215 MB) so the analysis put no load on prod. Window 2026-07-12 → 2026-10-09; mech-closet SGP41 from 08-02.
+- **Frame:** 5-min means per (device, metric) via duckdb, pivoted; joined to Open-Meteo outdoor T/RH;
+  indexed in America/Los_Angeles. Analysis in a throwaway venv (pandas/numpy/scipy) — **not** the shared repo
+  venv (esphome pins paho<2; adding packages there breaks tooling).
+- **Tests run:** stored-band shares; mech-closet head-to-head (Spearman, band crosstab, event hit-rate);
+  hour-of-day profiles (score and raw, raw normalized to the day's median); OLS of raw signal on co-located
+  T/RH + outdoor T/RH + a time-trend term (1 h means, z-scored); per-day "afternoon rise vs that day's
+  temperature rise"; weekly medians (drift); cross-room Spearman of 72 h-detrended raw signals; BME680 index
+  recomputed under 2 h / 24 h / 48 h / 7 d baselines; T/RH vs absolute-humidity correction fits.
+- The ongoing version of these measurements is `tools/aq_experiment_report.py` (§9.5).
+
+### 9.2 Findings
+
+| # | Finding | Evidence |
+|---|---|---|
+| F1 | **Same air, different verdicts.** Mech closet: BME680 Excellent 87 % / Good 13 %; SGP41 Excellent 55 % / Good 30 % / Fair+ 15 %. Band agreement **53 %**. The closet BME680 correlates more with the *other* BME680s (ρ 0.60) than with the SGP41 beside it (ρ 0.29). | Aug 3 – Oct 9, 5-min bins |
+| F2 | **v1 BME680 baseline was ~2 h, not 24–48 h.** `_gas_baseline` took `LIMIT 720` rows; BME680s publish ~8.3k samples/day → 2.1 h. Slow changes were absorbed into "clean". With a 24 h/48 h/7 d time window the east rooms go from 88–93 % Excellent to 44–60 % Excellent / 38–53 % Good. Backfill used whole-history p95 — a third, inconsistent baseline. | `viewmodel.py` `_gas_baseline` |
+| F3 | **BME680 resistance rose ~5× in 3 months** (mech 58→299 kΩ, h_office 89→566 kΩ, h_bed 60→314 kΩ) while the SGP41 beside it moved ~2 %. Conditioning drift, not air. Slowing by October (+6…+20 %/week). | weekly medians |
+| F4 | **The BME680 is a weak VOC sensor here.** When SGP41 VOC Index > 200 (15 % of bins), the BME v1 score barely moves (89 vs 92). They agree only on large spikes (BME < 60 → SGP41 ≈ 407). v1 event hit-rate (SGP41 > 200 → BME < 80): **9 %**. | head-to-head |
+| F5 | **West side: synchronized afternoon worsening.** All four Sensirion sensors: score ~88 overnight → ~60 at 14–17 h; detrended cross-room ρ 0.65–0.86. **Not a T/RH artifact:** per-day afternoon rise does not track that day's indoor or outdoor temperature rise (ρ ≈ 0–0.35); indoor RH flat 39–42 % all day. Weekday-dependent (kitchen 13–18 h median: Mon 236 … Fri 151). Kitchen has no separate dinner peak. Read: a real house-wide pattern (activity/occupancy or air movement). East BME rooms show only a faint version (h_bed −4 % R). | diurnal + per-day regression |
+| F6 | **Sensirion compensation disabled in firmware.** SGP40/41 `measure_raw` gets the fixed 50 %RH/25 °C defaults (`ha_gas.c:174,189`); SGP30 gets no absolute-humidity input. Across the season voc_raw ↔ T ρ −0.5…−0.6. Not the cause of F5, but free accuracy left unused. | firmware grep |
+| F7 | **SGP30 "absolute" claim doesn't hold.** Weekly median TVOC 99–301 ppb, 3× swings week-to-week. | weekly medians |
+| F8 | **Mech-closet BME borrowed a flapping reference.** No same-room meter → `_resolve_ambient_ref` picks the freshest "pro" meter on the floor (living room / c_office / h_bed). | resolver code |
+| F9 | **NOx: nothing to tune.** Index flat at 1 for two months; one spike to 456 on 09-14 15:15, the same 5-min bin the VOC Index fell to 69 — looks like a node-restart transient, **unverified**. | event scan |
+| F10 | **PM2.5 is invisible to the AQ index.** Living-room purifier sits at its 1 µg/m³ floor 95 % of the time, but real episodes (09-15 daily mean 41, peak 650; 10-04/10-05 peaks 77–131) left every room "Excellent". | purifier PM |
+| F11 | **Absolute humidity from the BME's own die beats any reference meter.** Self-heating changes RH, not water-vapour content; MOX R tracks water vapour. Detrended (48 h) fits: die-AH explains 42 / 44 / 28 % (h_bed / h_office / mech) vs ref-meter T+RH 40 / 37 / 13 %. One shared k = 0.10 ln-R per g/m³ is within a few points of per-node fits (0.073–0.14). Temperature term ≈ 0 once humidity is absolute. | §9.3 dead end D2 |
+
+### 9.3 Dead ends (don't repeat)
+
+- **D1 — "the afternoon dip is just temperature."** Plausible (uncompensated firmware, ρ(voc_raw, outdoor T)
+  up to −0.81 season-wide) but wrong: day-by-day, the size of the afternoon rise doesn't scale with that day's
+  temperature rise. Season-wide correlation with temperature is confounded with the seasonal decline itself.
+- **D2 — correcting the BME680 with a reference meter's T/RH.** v1's approach (and the first fit here). Worse
+  than the node's own die absolute humidity everywhere, and it creates a cross-device dependency (F8). The die's
+  *RH* is wrong for ambient, but the vapour content it implies is right.
+- **D3 — trusting `LIMIT N rows` as a time window.** Row-count windows silently change length with sample
+  rate. Use a time bound.
+- **D4 — hot.db for multi-day windows.** hot.db holds only today (compactor cutoff = today 00:00 UTC); a 48 h
+  baseline must come from the 1-min rollup rung (`rungs.db`, 7 d retention).
+- **D5 — day-median detrending for the humidity refit.** It removed part of the signal and gave k ≈ 0.06; the
+  48 h rolling-median detrend matches the original fit (≈ 0.07–0.10). The reporter uses the rolling version.
+- **D6 — duckdb `//` on a double (v1.1.3) doesn't floor**, so 5-min binning silently did nothing. Use
+  `floor(x / n) * n`. And ha-2 has no duckdb sqlite extension (air-gapped, can't download) → read hot.db with
+  `sqlite3`.
+
+### 9.4 Plan (ADR-0035 amendment 2026-10-10)
+
+Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stays live until the report says switch.
+
+- **Phase 0 (shipped 2026-10-10, shadow):** BME680 v2 = 48 h time-window p95 baseline from the 1-min rung +
+  absolute-humidity correction from the node's own die T/RH (no reference meter). Band cuts unchanged.
+  `server/gas_compensation.py` (`bme680_*_v2`), `gas_quality_persist.py` (`_bme680_v2`); Sensirion nodes carry
+  v1 into `air_quality_v2` so the series is complete. Catalog: `air_quality_v2`.
+- **Phase 1 — cross-calibrate in the mech closet.** Quantile-map the corrected BME ratio onto the SGP41 VOC
+  Index scale over the overlap. Target: band agreement ≥ 75 % (v1 53 %), better event hit-rate (v1 9 %). Score
+  the SGP30 relative to its own rolling baseline. Ceiling is limited by F4 — this is why hardware matters.
+- **Phase 2 — house-wide vs room-local.** House common-mode from the relative sensors; per-room excess over it;
+  per-room hour-of-day expectation, so a recurring afternoon rise reads "typical, house-wide" and a room-only
+  excursion reads as the event it is.
+- **Phase 3 — PM2.5 into the area band** (worst-of gas vs PM, EPA breakpoints, absolute basis) for rooms with
+  a purifier.
+- **Phase 4 — firmware: real T/RH into SGP `measure_raw` + SGP30 absolute humidity** (downlinked from the room
+  meter as a signed command, or a local SHT4x).
+
+**Hardware (recommendation, not yet decided):** (1) swap the three BME680s for SGP41 + SHT4x — removes the
+cross-family problem at its root; (2) real CO₂ (SCD41) in bedrooms/offices — nothing in the house measures CO₂
+(SGP30 eCO2 is VOC-derived); (3) SGP30 → SGP41; or (1–3) in one module: a Sensirion SEN66 per occupied room
+(PM + VOC + NOx + T/RH + CO₂). A T/RH meter in the mech closet is a cheap independent fix for F8.
+
+### 9.5 The running experiment
+
+- **Reporter:** `tools/aq_experiment_report.py` runs on ha-2 (read-only; stdlib + duckdb), covering the
+  trailing 7 d: flags, v2 write health, v1-vs-v2 band shares, head-to-head for any area with two gas families,
+  diurnal, drift, humidity-coefficient refit, NOx/PM2.5/VOC events (house-wide vs single-room).
+- **Schedule:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) → `tools/aq_experiment_report.sh` →
+  `instance/aq-experiment/reports/<date>.md` + `latest.md`; failures append to `failures.log`.
+- **Check-in:** read `latest.md`; the **Flags** section lists anything worth raising (promotion candidate,
+  sampler gap, refit drift, NOx/PM events, BME drift flattening).
+- **Baselines to beat (7 d ending 10-10, v1):** mech band agreement 60 %, Pearson 0.21, event hit-rate 9 %.

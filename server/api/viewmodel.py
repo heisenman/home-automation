@@ -53,6 +53,7 @@ METRIC_CATALOG: dict[str, dict] = {
     "humidity_pct":  {"label": "Humidity",    "unit": "%RH",   "color": "#4aa3ff", "precision": 1, "graph": True},
     "dewpoint_c":    {"label": "Dew point",   "unit": "°C",    "color": "#22d3ee", "precision": 1, "graph": True},
     "air_quality":   {"label": "Air Quality", "unit": "AQ",    "color": "#4ade80", "precision": 0, "graph": True},
+    "air_quality_v2": {"label": "Air Quality v2 (shadow)", "unit": "AQ", "color": "#a3e635", "precision": 0, "graph": True},
     "co2_ppm":       {"label": "CO₂",         "unit": "ppm",   "color": "#fbbf24", "precision": 0, "graph": True},
     "radon_bqm3":    {"label": "Radon",       "unit": "Bq",    "color": "#a78bfa", "precision": 0, "graph": True},
     "pressure_hpa":  {"label": "Pressure",    "unit": "hPa",   "color": "#34d399", "precision": 0, "graph": True},

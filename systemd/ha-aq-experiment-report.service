@@ -1,0 +1,16 @@
+# AQ v2 shadow-experiment daily report (ADR-0035 amendment 2026-10-10). Oneshot on .210, fired by
+# ha-aq-experiment-report.timer: ssh-runs tools/aq_experiment_report.py on ha-2 (read-only) and files the
+# markdown under instance/aq-experiment/reports/. Code-driven so the experiment is tracked without a session.
+[Unit]
+Description=AQ v2 shadow experiment — daily report from ha-2
+Documentation=file:///home/visko/home_automation/docs/air-quality/SENSOR-METHODOLOGY.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=visko
+WorkingDirectory=/home/visko/home_automation
+ExecStart=/home/visko/home_automation/tools/aq_experiment_report.sh
+Nice=15
+TimeoutStartSec=600

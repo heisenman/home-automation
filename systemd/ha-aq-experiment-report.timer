@@ -1,0 +1,12 @@
+# Daily at 14:30 UTC (07:30 Pacific, DST) — the report covers the trailing 7 d. Persistent: a run missed while
+# .210 was down fires on boot.
+[Unit]
+Description=Daily AQ v2 shadow-experiment report
+
+[Timer]
+OnCalendar=*-*-* 14:30:00 UTC
+Persistent=true
+RandomizedDelaySec=120
+
+[Install]
+WantedBy=timers.target

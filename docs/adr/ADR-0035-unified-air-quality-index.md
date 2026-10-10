@@ -1,6 +1,6 @@
 # ADR-0035 — Unified air-quality index across heterogeneous gas sensors
 
-**Status:** Accepted (2026-07-11, Hugh — "I accept, continue all of it"). The 5 open
+**Status:** Accepted (2026-07-11; **amended 2026-10-10** — v2 shadow experiment, see below; Hugh — "I accept, continue all of it"). The 5 open
 questions are resolved to their proposed answers (Q1 native SGP40 banding, Q2 shadow-tune
 before implement, Q3 defer SGP30 drift-correction, Q4 backfill BME680 history, Q5
 generalize `air_quality`). Thresholds below are the pre-tuning proposal; the **Shadow-tune**
@@ -230,6 +230,41 @@ this is substantially **baseline drift**, not a persistently dirty bedroom. Cons
   follow-up after v1 ships." Tracked; v1 still bands on raw ppb + the mandatory caveat.
 
 No threshold values changed from the §Decision proposal.
+
+## Amendment 2026-10-10 — Study 2, the v1 BME680 defects, and the v2 shadow experiment
+
+Hugh: "revisit the AQ algorithms … give me a plan to better characterize the real air quality of each room."
+Full study: [`SENSOR-METHODOLOGY.md` §9](../air-quality/SENSOR-METHODOLOGY.md#9-study-2-2026-10-10--three-months-of-data-is-the-eastwest-aq-difference-real).
+
+**Finding that changes this ADR:** the east (BME680) / west (Sensirion) difference is mostly instrument + math.
+In the mech closet (one of each, same air) v1 bands agree 53 % of the time. Two v1 BME680 defects:
+
+1. **Baseline window.** The "24–48 h p95" above was implemented as the last 720 rows ≈ **2.1 h** at the
+   BME680's sample rate, so slow degradation was absorbed into "clean" (east rooms ~90 % Excellent).
+   The shadow-tune of 2026-07-11 validated the cuts *against that 2 h baseline*, which is why it looked fine.
+2. **Humidity correction.** The ±15 % comfort-curve correction fed a borrowed meter's RH has the wrong shape
+   for MOX and, for the mech closet, a flapping reference. Absolute humidity from the node's **own die T/RH**
+   fits better everywhere and needs no reference.
+
+**Decision (Hugh, 2026-10-10: "document it and start Phase 0"):** a phased rework, each phase **shadow-first**
+as a parallel `air_quality_v2` series; v1 stays the live index until the daily experiment report
+(`tools/aq_experiment_report.py`, `.210` `ha-aq-experiment-report.timer`) supports promotion.
+
+- **Phase 0 (shipped, shadow):** BME680 v2 = 48 h *time*-window p95 from the 1-min rollup rung (hot.db holds
+  only today) + `ln R + k·(AH − 8.5)`, k = 0.10/(g/m³), from the die's own T/RH. Band cuts unchanged.
+  Sensirion families carry v1 into `air_quality_v2`. The `bme680_air_quality` "Humidity compensation stays (uses
+  the co-located `ambient_ref`…)" text above describes **v1** and is superseded by v2 on promotion.
+- **Phase 1:** cross-calibrate BME → SGP41 scale in the mech closet (target band agreement ≥ 75 %); SGP30 to a
+  relative basis (its "absolute" TVOC swings 3× week-to-week).
+- **Phase 2:** house-wide common-mode vs room-local excess + per-room hour-of-day expectation (the west side's
+  synchronized afternoon rise is real and house-wide, not a T/RH artifact).
+- **Phase 3:** PM2.5 into the area band (worst-of, absolute EPA breakpoints).
+- **Phase 4:** firmware feeds real T/RH to SGP40/41 `measure_raw` and SGP30 absolute humidity (currently
+  fixed 50 %RH / 25 °C defaults).
+
+**Promotion criterion (v2 → `air_quality`):** ≥ 2 weeks of v2 with no sampler gaps, mech-closet band
+agreement and event hit-rate both better than v1 (7 d ending 2026-10-10: 60 % / 9 %), then backfill v2 history.
+Hardware recommendations (SGP41+SHT4x for the BME680s, SCD41 CO₂, or SEN66 per room) are in the study, open.
 
 ## Consequences
 

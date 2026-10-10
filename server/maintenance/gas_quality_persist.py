@@ -3,7 +3,8 @@
 (graphs + history), per the data-storage-is-primary directive. `air_quality` is otherwise computed only in
 the read path (the viewmodel fusion), so it never lands on disk. Two modes:
 
-  --once      Compute air_quality NOW for every BME680 gas node and write one reading each. This is the
+  --once      Compute air_quality NOW for every gas node and write one reading each, plus the SHADOW
+              `air_quality_v2` (ADR-0035 amendment 2026-10-10; BME680 differs, Sensirion carries v1). This is the
               FORWARD sampler — run on a timer (systemd ha-gas-quality-sampler.timer).
   --backfill  One-time: reconstruct air_quality across the WHOLE stored gas_ohm history — joining the
               reference sensor's humidity at each timestamp — so the graph shows the sensor's full life.
@@ -23,7 +24,8 @@ REPO = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(REPO))
 from server.api.viewmodel import build_sensor_list          # noqa: E402  (reuses the fusion + auto-reference)
 from server.gas_compensation import (air_quality_for, sgp30_air_quality, sgp40_air_quality,  # noqa: E402
-                                     sgp41_air_quality, bme680_air_quality, clean_air_baseline)
+                                     sgp41_air_quality, bme680_air_quality, clean_air_baseline,
+                                     bme680_air_quality_v2, bme680_v2_baseline, BME_V2_WINDOW_S)
 
 # family (from device_type substring) → the RAW signal that drives its air-quality + freshness gate.
 # The SGP41's gate is voc_index, not nox_index: the NOx pixel is legitimately absent for the first hours
@@ -38,6 +40,7 @@ def _family(device_type: str):
     return next((fam for fam in FAMILY_RAW if fam in dt), None)
 
 HOT = REPO / "instance/db/hot.db"
+RUNGS = REPO / "instance/db/rungs.db"   # 1-min rollup rung (7 d) — the only store holding the v2 48 h window
 JOIN_TOLERANCE_S = 900       # a gas point without a reference-humidity sample within 15 min is skipped
 FRESHNESS_S = 600            # forward sampler: skip a node whose raw gas_ohm is older than this (10 min).
                             # Guards against fabricating a "fresh" derived point from a FROZEN raw input —
@@ -50,11 +53,11 @@ def _epoch(ts: str) -> float:
     return time.mktime(time.strptime(ts, "%Y-%m-%dT%H:%M:%SZ"))
 
 
-def _write(conn, device_id, device_type, area, ts, value):
+def _write(conn, device_id, device_type, area, ts, value, metric="air_quality"):
     conn.execute(
         "INSERT OR IGNORE INTO readings (ts, device_id, device_type, area, transport, metric, value, unit, "
         "schema_v, authoritative) VALUES (?,?,?,?,?,?,?,?,?,?)",
-        (ts, device_id, device_type or "gas", area or "unknown", "derived", "air_quality",
+        (ts, device_id, device_type or "gas", area or "unknown", "derived", metric,
          float(value), "", 1, 1))
 
 
@@ -78,7 +81,7 @@ def sample_once(conn) -> int:
     n = 0
     for d in build_sensor_list(conn, now_ep):
         fam = _family(d.get("device_type"))
-        if fam is None or d["metrics"].get("air_quality") is None:
+        if fam is None:
             continue
         raw = FAMILY_RAW[fam]
         age = _raw_age_s(conn, d["device_id"], raw, now_ep)
@@ -86,10 +89,50 @@ def sample_once(conn) -> int:
             print(f"  {d['device_id']}: raw {raw} stale ({'none' if age is None else f'{age:.0f}s'} "
                   f"> {FRESHNESS_S}s) — skipping (not fabricating a fresh air_quality)")
             continue
-        _write(conn, d["device_id"], d.get("device_type"), d.get("area"), iso, d["metrics"]["air_quality"])
-        n += 1
+        v1 = d["metrics"].get("air_quality")
+        if v1 is not None:
+            _write(conn, d["device_id"], d.get("device_type"), d.get("area"), iso, v1)
+            n += 1
+        # SHADOW v2 (ADR-0035 amendment 2026-10-10): only the BME680 differs in Phase 0; the Sensirion
+        # families carry v1 through so air_quality_v2 is a complete series to compare room-to-room.
+        v2 = _bme680_v2(conn, d["device_id"], now_ep) if fam == "bme680" else v1
+        if v2 is not None:
+            _write(conn, d["device_id"], d.get("device_type"), d.get("area"), iso, v2, "air_quality_v2")
     conn.commit()
     return n
+
+
+def _bme680_v2(conn, gid, now_ep, rungs_path=None):
+    """v2 score for one BME680 node now: latest raw payload (gas_ohm + its own die T/RH, same ts) against a
+    48 h p95 baseline from the 1-min rung. None (nothing written) when the rung is unavailable or the
+    baseline is still forming — the gap is the honest record of 'no v2 yet'."""
+    row = conn.execute("SELECT max(ts) FROM readings WHERE device_id=? AND metric='gas_ohm' AND authoritative=1",
+                       (gid,)).fetchone()
+    if not row or not row[0]:
+        return None
+    m = dict(conn.execute("SELECT metric, value FROM readings WHERE device_id=? AND ts=? AND authoritative=1 "
+                          "AND metric IN ('gas_ohm','temperature_c','humidity_pct','gas_valid')",
+                          (gid, row[0])).fetchall())
+    path = Path(rungs_path or RUNGS)
+    if not path.exists():
+        return None
+    rc = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        by_b: dict[int, dict] = {}
+        for b, metric, v in rc.execute(
+                "SELECT bucket_start, metric, vmean FROM rung WHERE res='1min' AND device_id=? "
+                "AND metric IN ('gas_ohm','temperature_c','humidity_pct') AND bucket_start >= ?",
+                (gid, int(now_ep - BME_V2_WINDOW_S))):
+            by_b.setdefault(b, {})[metric] = v
+    finally:
+        rc.close()
+    samples = [(x.get("gas_ohm"), x.get("temperature_c"), x.get("humidity_pct")) for x in by_b.values()]
+    base, cov = bme680_v2_baseline(samples, BME_V2_WINDOW_S // 60)
+    rep = bme680_air_quality_v2(m.get("gas_ohm"), m.get("temperature_c"), m.get("humidity_pct"), base, cov,
+                                m.get("gas_valid", 1))
+    if rep["air_quality"] is None:
+        print(f"  {gid}: v2 {rep['air_quality_conf']} — {rep['explanation']}")
+    return rep["air_quality"]
 
 
 def _backfill_bme680(conn, gid, dtype, ref, area) -> int:

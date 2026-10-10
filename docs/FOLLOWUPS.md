@@ -7,6 +7,20 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 🟢 2026-10-10 — Air-quality Study 2 + v2 shadow experiment (dev2; Hugh: "document it and start Phase 0")
+
+- **Study:** [`docs/air-quality/SENSOR-METHODOLOGY.md` §9](air-quality/SENSOR-METHODOLOGY.md) — east (BME680) vs
+  west (Sensirion) AQ difference is mostly instrument + math. v1 BME680 baseline was `LIMIT 720` rows ≈ 2.1 h
+  (not 24–48 h) → east rooms ~90 % Excellent. ADR-0035 amended with a 5-phase plan.
+- **Phase 0 SHIPPED (shadow):** `air_quality_v2` written every minute by `ha-gas-quality-sampler` on ha-2 —
+  BME680 = 48 h rung baseline + own-die absolute-humidity correction; Sensirion = v1 carried.
+- **Experiment tracking:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) →
+  `instance/aq-experiment/reports/latest.md` (Flags section first). Promotion criterion in the ADR amendment.
+- **OPEN (Hugh decides):** hardware — SGP41+SHT4x for the 3 BME680s, SCD41 CO₂ for bedrooms/offices, or SEN66 per
+  room; T/RH meter for the mech closet. **OPEN:** NOx spike 09-14 15:15 likely a restart transient — unverified.
+- **NOT updated:** the `.210` air-gap-standby checkout (`~/ha-airgap-standby`, `ha-ag-gas-quality-sampler`) still
+  runs v1 only — dev convenience, not needed for the experiment.
+
 ## 🟠 2026-10-06 — ha-2 CPU + Midea state/data (dev2; all deployed to ha-2 via ha2_deploy.sh)
 
 - **FIXED @1a77316:** ha-api burned ~1.7 cores on PWA polls — `viewmodel._latest` scanned every row of a device

@@ -265,3 +265,65 @@ def air_quality_for(device_type, metrics, *, ambient_rh_pct=None, gas_baseline_o
         return bme680_air_quality(m.get("gas_ohm"), ambient_rh_pct, gas_baseline_ohm,
                                   m.get("gas_valid", 1), baseline_ready)
     return None
+
+
+# ── BME680 v2 — SHADOW (ADR-0035 amendment 2026-10-10) ───────────────────────────────────────────────
+# Written as `air_quality_v2` next to v1; v1 stays the live index until the shadow experiment says switch.
+# Two v1 defects this replaces (docs/air-quality/SENSOR-METHODOLOGY.md §9):
+#   1. BASELINE WINDOW. v1's baseline was the last 720 rows of gas_ohm — ~2.1 h at the BME680's ~8.3k
+#      samples/day, not the 24–48 h ADR-0035 specifies — so any change slower than ~1 h was absorbed into
+#      "clean" (east-side rooms read Excellent ~90 % of the time). v2 = p95 over a 48 h TIME window, read from
+#      the 1-min rollup rung (hot.db only holds today, so it can't supply 48 h).
+#   2. HUMIDITY CORRECTION. v1 scaled gas_ohm by a 40 %RH comfort curve (peaks mid-range — wrong shape for
+#      MOX) fed a BORROWED meter's RH (the mech closet's flapped between rooms). MOX resistance tracks WATER
+#      VAPOUR, i.e. absolute humidity, which the node's own die T+RH give exactly (self-heating changes RH,
+#      not the vapour content). Fit 2026-10-10 on detrended 48 h data: ln R ∝ −k·AH, k = 0.073–0.14 per g/m³
+#      across 3 nodes; die-AH explained ≥ as much variance as any reference-meter model (mech closet 28 % vs
+#      13 %). So v2 needs NO reference sensor. Band cuts (_BME_X/_BME_Y) are unchanged — cross-calibrating them
+#      to the SGP41 is Phase 1.
+BME_V2_K_AH = 0.10               # ln-resistance per g/m³ of absolute humidity (shared; per-node refit = experiment)
+BME_V2_AH_REF = 8.5              # g/m³ — house median; cancels in the ratio, kept so corrected values read sanely
+BME_V2_WINDOW_S = 48 * 3600      # clean-air baseline window
+BME_V2_MIN_COVERAGE = 0.5        # fraction of the window's 1-min buckets required, else conf=burn_in
+
+
+def absolute_humidity_gm3(t_c: float, rh_pct: float) -> float:
+    """Water-vapour density (g/m³) from temperature + RH (Magnus). Invariant to the BME's self-heating."""
+    return 6.112 * _math.exp(17.67 * t_c / (t_c + 243.5)) * rh_pct * 2.1674 / (273.15 + t_c)
+
+
+def bme680_corrected_log_r(gas_ohm, die_t_c, die_rh_pct):
+    """ln(gas_ohm) normalized to BME_V2_AH_REF water vapour. None if any input is missing/invalid."""
+    if not gas_ohm or gas_ohm <= 0 or die_t_c is None or die_rh_pct is None:
+        return None
+    return _math.log(gas_ohm) + BME_V2_K_AH * (absolute_humidity_gm3(die_t_c, die_rh_pct) - BME_V2_AH_REF)
+
+
+def bme680_v2_baseline(samples, window_buckets: int):
+    """(baseline_log_r, coverage) from [(gas_ohm, die_t, die_rh)] 1-min means over the window. Baseline = p95
+    of the corrected ln R (reuses clean_air_baseline's percentile; ln is monotonic so p95 commutes)."""
+    vals = [v for v in (bme680_corrected_log_r(*s) for s in samples) if v is not None]
+    if not vals:
+        return None, 0.0
+    # clean_air_baseline drops non-positive values; shift into positive space and back.
+    lo = min(vals) - 1.0
+    return clean_air_baseline([v - lo for v in vals]) + lo, len(vals) / max(1, window_buckets)
+
+
+def bme680_air_quality_v2(gas_ohm, die_t_c, die_rh_pct, baseline_log_r, coverage, gas_valid=1) -> dict:
+    """BME680 v2 → RELATIVE band on r = exp(corrected ln R − 48 h p95 corrected ln R)."""
+    if gas_ohm is None or not gas_valid:
+        return _stale_report("BME680", "gas resistance", "stale", "No valid gas-resistance reading.")
+    if baseline_log_r is None or coverage < BME_V2_MIN_COVERAGE:
+        return _stale_report("BME680", "gas resistance", "burn_in",
+                             f"48 h clean-air baseline still forming ({coverage * 100:.0f}% of window).")
+    c = bme680_corrected_log_r(gas_ohm, die_t_c, die_rh_pct)
+    if c is None:
+        return _stale_report("BME680", "gas resistance", "stale", "No die temperature/humidity with this reading.")
+    r = _math.exp(c - baseline_log_r)
+    score = _interp(r, _BME_X, _BME_Y)
+    b, label = band_for_score(score)
+    expl = (f"{label}. Humidity-corrected gas resistance at {min(r, 1.0) * 100:.0f}% of this room's 48 h "
+            f"clean-air baseline; a relative measure, not comparable to other rooms.")
+    return _report(score, "relative", "BME680", "gas resistance", round(gas_ohm, 0), expl,
+                   ratio=round(r, 3), baseline_coverage=round(coverage, 2))
