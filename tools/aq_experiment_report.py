@@ -12,6 +12,7 @@ What it measures (each section answers a question the experiment exists to settl
   Health      — is v2 actually being written, per node, at the expected ~1/min?
   Bands       — v1 vs v2 band share per gas node (did v2 un-saturate the BME680 rooms?)
   Rooms       — per-area worst-of: gas v1 vs gas v2 ⊕ PM2.5 (Phase 3: how often particles set the band)
+  Context     — Phase 2: room-only vs house-wide episodes, and how often a room is unusual for the hour
   Head-to-head— areas with two gas families (mech_closet): band agreement + event hit-rate, v1 vs v2
   Diurnal     — median v2 score by local hour (the house-wide afternoon dip — real or artifact?)
   Drift       — BME680 gas resistance growth/week; SGP30 TVOC daily medians
@@ -33,8 +34,9 @@ from zoneinfo import ZoneInfo
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
-from server.gas_compensation import (BME_V2_K_AH, PM25_WINDOW_S, absolute_humidity_gm3,  # noqa: E402
-                                     band_for_score, pm25_air_quality)
+from server.gas_compensation import (AQ_HOUSE_POOR, AQ_LOCAL_THR, AQ_UNUSUAL_THR, BME_V2_K_AH,  # noqa: E402
+                                     PM25_WINDOW_S, absolute_humidity_gm3, area_worst, band_for_score,
+                                     house_median, pm25_air_quality)
 
 HOT = REPO / "instance/db/hot.db"
 PARQUET = REPO / "instance/db/parquet"
@@ -42,7 +44,7 @@ TZ = ZoneInfo("America/Los_Angeles")
 BIN_S = 300
 BANDS = ["Excellent", "Good", "Fair", "Poor", "Very Poor"]
 GAS_FAMS = ("sgp30", "sgp40", "sgp41", "bme680")
-METRICS = ("air_quality", "air_quality_v2", "air_quality_pm25", "gas_ohm", "temperature_c", "humidity_pct", "voc_index",
+METRICS = ("air_quality", "air_quality_v2", "air_quality_pm25", "aq_local_excess", "aq_hour_anomaly", "gas_ohm", "temperature_c", "humidity_pct", "voc_index",
            "nox_index", "tvoc", "pm25_ugm3")
 
 
@@ -216,6 +218,58 @@ def main():
         P(f"| {ar} | {', '.join(g_ids + p_ids)} | {len(r2)} | {fmt_share(band_share(r1))} | "
           f"{fmt_share(band_share(r2))} | {pm_won} |")
 
+    # ── Context (Phase 2) ──
+    fmt_t = lambda k: datetime.fromtimestamp(k, TZ).strftime("%a %m-%d %H:%M")   # noqa: E731
+
+    def runs(series, pred, min_bins):
+        ks = sorted(k for k, v in series.items() if pred(v))
+        eps, cur = [], []
+        for k in ks:
+            if cur and k - cur[-1] > BIN_S:
+                eps.append(cur)
+                cur = []
+            cur.append(k)
+        if cur:
+            eps.append(cur)
+        return [e for e in eps if len(e) >= min_bins]
+
+    P(f"\n## Context (Phase 2), last {a.days} d — room-only = local_excess ≤ {AQ_LOCAL_THR:.0f} for ≥ 15 min; "
+      f"unusual = hour_anomaly ≤ {AQ_UNUSUAL_THR:.0f}\n")
+    P("| node | bins | local_excess p10 / med | room-only episodes (start hours) | unusual-for-hour share |")
+    P("|---|---|---|---|---|")
+    recent = []
+    for d, f, ar in gas:
+        le, ha = S(d, "aq_local_excess"), S(d, "aq_hour_anomaly")
+        if not le and not ha:
+            P(f"| {d} | 0 | — (history still banking) | — | — |")
+            continue
+        vals = sorted(le.values())
+        eps = runs(le, lambda v: v <= AQ_LOCAL_THR, 3)
+        hrs = defaultdict(int)
+        for e in eps:
+            hrs[local_hour(e[0])] += 1
+            recent.append((e[0], e[-1], d, min(le[x] for x in e)))
+        unusual = 100.0 * sum(v <= AQ_UNUSUAL_THR for v in ha.values()) / len(ha) if ha else None
+        P(f"| {d} | {len(le)} | {vals[len(vals) // 10]:.0f} / {st.median(vals):.0f} | {len(eps)} "
+          f"({', '.join(f'{h:02d}h×{n}' for h, n in sorted(hrs.items()))}) | "
+          f"{'—' if unusual is None else f'{unusual:.0f}%'} |")
+    if recent:
+        P("\nMost recent room-only episodes:")
+        for s0, s1, d, mn in sorted(recent)[-8:]:
+            P(f"- {fmt_t(s0)}–{fmt_t(s1)[-5:]} **{d}** (down to {mn:.0f} pts vs house)")
+    # house-wide: the median of per-area worst v2, per 5-min bin
+    node_area = {d: ar for d, f, ar in gas}
+    v2 = {d: S(d, "air_quality_v2") for d, f, ar in gas}
+    hb = {k: house_median(area_worst({d: v2[d].get(k) for d in v2}, node_area))
+          for k in sorted({k for x in v2.values() for k in x})}
+    hb = {k: v for k, v in hb.items() if v is not None}
+    heps = runs(hb, lambda v: v < AQ_HOUSE_POOR, 6)
+    hh = defaultdict(int)
+    for e in heps:
+        hh[local_hour(e[0])] += 1
+    P(f"\nHouse-wide episodes (house median < {AQ_HOUSE_POOR:.0f} for ≥ 30 min): {len(heps)} "
+      f"({', '.join(f'{h:02d}h×{n}' for h, n in sorted(hh.items())) or '—'})")
+
     # ── Head-to-head: any area with ≥2 gas families ──
     by_area = defaultdict(list)
     for d, f, ar in gas:
@@ -321,7 +375,6 @@ def main():
         if cur:
             eps.append(cur)
         return [(e[0], e[-1], max(series[x] for x in e)) for e in eps if len(e) >= min_bins]
-    fmt_t = lambda k: datetime.fromtimestamp(k, TZ).strftime("%a %m-%d %H:%M")   # noqa: E731
     any_ev = False
     for d, f, ar in gas:
         if f == "sgp41":

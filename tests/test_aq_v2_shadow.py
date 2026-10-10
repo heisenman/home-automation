@@ -100,3 +100,51 @@ def test_sampler_pm25_is_count_weighted_hour_mean():
         rc.close()
         # (9*3 + 9*3 + 35.4*1) / 7 = 12.77 µg/m³ → Good, just under 80
         assert 75.0 < P._pm25_score("p", now, rungs_path=rp) < 80.0
+
+
+def test_house_median_and_area_worst():
+    from server.gas_compensation import area_worst, house_median
+    a = area_worst({"k": 50, "m1": 90, "m2": 60, "b": 80}, {"k": "kitchen", "m1": "mech", "m2": "mech", "b": "bed"})
+    assert a == {"kitchen": 50, "mech": 60, "bed": 80}
+    assert house_median(a) == 60
+    assert house_median({"a": 1, "b": 2}) is None                       # < 3 areas → no house
+
+
+def test_aq_context_verdicts():
+    from server.gas_compensation import aq_context
+    room = aq_context(40, house=85, offset=0, typical=80)
+    assert room["locality"] == "room" and room["timing"] == "unusual" and room["local_excess"] == -45
+    assert "something local" in room["note"]
+    # the bedroom-at-night pattern: local but recurring
+    assert "recurring" in aq_context(55, house=85, offset=0, typical=58)["note"]
+    house = aq_context(55, house=55, offset=0, typical=60)
+    assert house["locality"] == "house" and house["timing"] == "typical"
+    # a constant sensor-family offset is NOT "this room only"
+    assert aq_context(77, house=85, offset=-8, typical=78)["locality"] == "none"
+    assert aq_context(80, house=None, offset=None, typical=None)["timing"] == "unknown"
+
+
+def test_sampler_contexts_from_hourly_rung():
+    """10 days of hourly history: kitchen sits 10 below the house every hour (its offset), so a reading 10
+    below is NOT local; a reading 40 below is."""
+    now = time.time()
+    areas = {"g_k": "kitchen", "g_o": "office", "g_b": "bed"}
+    fams = {"g_k": "sgp40", "g_o": "sgp40", "g_b": "sgp30"}
+    with tempfile.TemporaryDirectory() as td:
+        rp = Path(td) / "rungs.db"
+        rc = sqlite3.connect(rp)
+        rc.executescript(RUNG_DDL)
+        h0 = int(now) // 3600 * 3600
+        rows = []
+        for i in range(1, 240):
+            b = h0 - i * 3600
+            for d, v in (("g_k", 70.0), ("g_o", 80.0), ("g_b", 85.0)):
+                rows.append(("1hour", d, "air_quality", b, None, None, v, 60, v))
+        rc.executemany("INSERT INTO rung VALUES (?,?,?,?,?,?,?,?,?)", rows)
+        rc.commit()
+        rc.close()
+        ctx = P._aq_contexts({"g_k": 70.0, "g_o": 80.0, "g_b": 85.0}, areas, fams, now, rungs_path=rp, tz="UTC")
+        assert ctx["g_k"]["local_excess"] == 0.0 and ctx["g_k"]["locality"] == "none"
+        assert ctx["g_k"]["timing"] == "typical"
+        ctx = P._aq_contexts({"g_k": 40.0, "g_o": 80.0, "g_b": 85.0}, areas, fams, now, rungs_path=rp, tz="UTC")
+        assert ctx["g_k"]["locality"] == "room" and ctx["g_k"]["timing"] == "unusual"

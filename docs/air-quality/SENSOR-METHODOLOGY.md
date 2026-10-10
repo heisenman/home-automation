@@ -429,9 +429,25 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
 - **Phase 1 — cross-calibrate in the mech closet.** Quantile-map the corrected BME ratio onto the SGP41 VOC
   Index scale over the overlap. Target: band agreement ≥ 75 % (v1 53 %), better event hit-rate (v1 9 %). Score
   the SGP30 relative to its own rolling baseline. Ceiling is limited by F4 — this is why hardware matters.
-- **Phase 2 — house-wide vs room-local.** House common-mode from the relative sensors; per-room excess over it;
-  per-room hour-of-day expectation, so a recurring afternoon rise reads "typical, house-wide" and a room-only
-  excursion reads as the event it is.
+- **Phase 2 (shipped 2026-10-10, shadow) — house-wide vs room-local.** Per gas node each minute:
+  `aq_local_excess` = (node v2 − house median) − the node's usual offset from the house (28 d median, from the
+  1-hour rung), and `aq_hour_anomaly` = node v2 − its 28 d median for this house-local hour. House median =
+  median over areas of each area's worst node (≥ 3 areas). `gas_compensation.aq_context` turns them into
+  locality (room / house / none) + timing (typical / unusual) + a one-line note for the explanation layer.
+  Sensirion nodes use their long `air_quality` history (v2 = v1 there); BME680s use their own v2 history, so
+  they read "not enough history" until ~3 d (offset) / ~7 d (hour profile) of v2 has banked.
+
+  **Shadow-tune (offline, profile Aug 3–Sep 7, tested Sep 8–Oct 9):**
+  - The per-node offset is required: median room−house was SGP30 c_bed −8, BME680 rooms +6…+8 — sensor-family
+    bias, not air. Without removing it, c_bed would read "worse than the house" half the time.
+  - Room-only at ≤ −20 for ≥ 15 min gave interpretable episodes: **kitchen** starts cluster 12–13 h and 17–20 h
+    (meals); **c_office** 11–14 h (in use); **c_bed 22–06 h** (occupied bedroom at night — the bioeffluent /
+    CO₂-proxy signature; strengthens the SCD41 recommendation); **h_office 03–07 h** (unexplained — suspect
+    BME680 artifact, watch). ≤ −10 was noise (c_bed 141 episodes/month at all hours).
+  - The hour profile explains 21–34 % of variance for kitchen / c_office / mech_closet but ~0 for c_bed and
+    the BME680 rooms — "unusual for this time" is meaningful mainly on the Sensirion rooms.
+  - House median by hour: ~85 overnight → ~60 at 16–17 h; 34 house-wide episodes (< 60 for ≥ 30 min) in the
+    test month, starting 12–17 h.
 - **Phase 3 (shipped 2026-10-10, shadow) — PM2.5 into the area band.** Any device with the PM2.5 ability
   (today the three Levoit purifiers: living_room, c_bed, c_office) gets `air_quality_pm25` each minute: the 1 h
   count-weighted mean from the 1-min rung, banded on EPA's 2024 PM2.5 AQI breakpoints (≤ 9.0 / 35.4 / 55.4 /
@@ -452,7 +468,8 @@ cross-family problem at its root; (2) real CO₂ (SCD41) in bedrooms/offices —
 
 - **Reporter:** `tools/aq_experiment_report.py` runs on ha-2 (read-only; stdlib + duckdb), covering the
   trailing 7 d: flags, v2 + PM write health, v1-vs-v2 band shares, per-room worst-of (gas v1 vs gas v2 ⊕
-  PM2.5, PM replayed from raw so it has history), head-to-head for any area with two gas families,
+  PM2.5, PM replayed from raw so it has history), Phase 2 context (room-only / house-wide episodes,
+  unusual-for-hour share), head-to-head for any area with two gas families,
   diurnal, drift, humidity-coefficient refit, NOx/PM2.5/VOC events (house-wide vs single-room).
 - **Schedule:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) → `tools/aq_experiment_report.sh` →
   `instance/aq-experiment/reports/<date>.md` + `latest.md`; failures append to `failures.log`.

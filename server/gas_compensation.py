@@ -353,3 +353,70 @@ def pm25_air_quality(pm25_1h_ugm3, n_buckets=PM25_MIN_BUCKETS) -> dict:
     expl = (f"{label}. PM2.5 {pm25_1h_ugm3:.1f} µg/m³ (1 h mean) on the EPA AQI breakpoints — an absolute "
             f"measure, comparable across rooms.")
     return _report(score, "absolute", "PM2.5", "PM2.5", round(float(pm25_1h_ugm3), 1), expl)
+
+
+# ── Phase 2: house-wide vs room-local + hour-of-day expectation — SHADOW (ADR-0035 amendment 2026-10-10) ──
+# Study 2 F5: the west side's afternoon dip is real and HOUSE-WIDE; reporting it as each room's own "Fair"
+# hides what's actually local. Two context numbers per gas node, both in score points (higher = cleaner):
+#   local_excess = (node − house median) − node's usual offset from the house. The offset removes the constant
+#                  sensor-family bias (shadow-tune: SGP30 ≈ −8, BME680 rooms ≈ +7 vs house) so "this room
+#                  only" means unusual for THIS room, not "a different sensor family".
+#   hour_anomaly = node − its typical score for this house-local hour (trailing 28 d).
+# Thresholds from the offline shadow-tune (profile on Aug 3–Sep 7, tested Sep 8–Oct 9): local ≤ −20 for ≥ 15 min
+# gave meaningful episodes — kitchen at 12–13 h and 17–20 h (meals), c_office 11–14 h (in use), c_bed 22–06 h
+# (occupied bedroom) — while ≤ −10 was noise. The hour profile explains 21–34 % of variance for kitchen /
+# c_office / mech_closet, ~0 for c_bed and the BME680 rooms, so "unusual for this time" is weaker there.
+AQ_CTX_WINDOW_S = 28 * 86400
+AQ_LOCAL_THR = -20.0          # local_excess at/below → "this room only"
+AQ_UNUSUAL_THR = -20.0        # hour_anomaly at/below → "worse than usual for this time"
+AQ_HOUSE_POOR = 60.0          # house median below Good → "house-wide"
+AQ_MIN_AREAS = 3              # a house median needs ≥ 3 areas
+AQ_PROFILE_MIN_N = 7          # ≥ 7 past days at this hour before a typical value counts
+AQ_OFFSET_MIN_N = 72          # ≥ 72 house-paired hours before a node's offset counts
+
+
+def house_median(area_scores: dict):
+    """Median of per-area scores (an area = worst of its nodes). None with < AQ_MIN_AREAS areas."""
+    vals = sorted(v for v in area_scores.values() if v is not None)
+    if len(vals) < AQ_MIN_AREAS:
+        return None
+    m = len(vals) // 2
+    return vals[m] if len(vals) % 2 else (vals[m - 1] + vals[m]) / 2
+
+
+def area_worst(node_scores: dict, node_area: dict) -> dict:
+    """{node: score} → {area: worst (min) score} — the same worst-of rule the room band uses."""
+    out: dict = {}
+    for n, v in node_scores.items():
+        if v is not None:
+            a = node_area.get(n)
+            out[a] = v if a not in out else min(out[a], v)
+    return out
+
+
+def aq_context(score, house, offset, typical) -> dict:
+    """Context for one node's score now: local_excess, hour_anomaly, the locality/timing verdicts and a
+    one-line note for the explanation layer. Any input may be None (not enough history) → that part unknown."""
+    local = None if score is None or house is None or offset is None else score - house - offset
+    anom = None if score is None or typical is None else score - typical
+    locality = ("room" if local is not None and local <= AQ_LOCAL_THR else
+                "house" if house is not None and house < AQ_HOUSE_POOR else
+                "none" if local is not None else "unknown")
+    timing = ("unusual" if anom is not None and anom <= AQ_UNUSUAL_THR else
+              "typical" if anom is not None else "unknown")
+    if locality == "room":
+        note = ("Only this room, and worse than usual for this time — something local." if timing == "unusual" else
+                "Only this room, but typical for this time of day — a recurring local pattern (e.g. occupancy).")
+    elif locality == "house":
+        note = ("The whole house is like this right now, more than usual for this time." if timing == "unusual" else
+                "The whole house is like this — typical for this time of day.")
+    elif timing == "unusual":
+        note = "Worse than usual for this time of day."
+    elif timing == "typical":
+        note = "Typical for this time of day."
+    else:
+        note = "Not enough history yet for context."
+    return {"local_excess": None if local is None else round(local, 1),
+            "hour_anomaly": None if anom is None else round(anom, 1),
+            "house": None if house is None else round(house, 1),
+            "locality": locality, "timing": timing, "note": note}

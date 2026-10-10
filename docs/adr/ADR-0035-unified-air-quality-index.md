@@ -256,8 +256,10 @@ as a parallel `air_quality_v2` series; v1 stays the live index until the daily e
   the co-located `ambient_ref`…)" text above describes **v1** and is superseded by v2 on promotion.
 - **Phase 1:** cross-calibrate BME → SGP41 scale in the mech closet (target band agreement ≥ 75 %); SGP30 to a
   relative basis (its "absolute" TVOC swings 3× week-to-week).
-- **Phase 2:** house-wide common-mode vs room-local excess + per-room hour-of-day expectation (the west side's
-  synchronized afternoon rise is real and house-wide, not a T/RH artifact).
+- **Phase 2 (shipped 2026-10-10, shadow):** per node `aq_local_excess` (vs house median, minus the node's usual
+  offset) + `aq_hour_anomaly` (vs its 28 d typical for this hour) → `aq_context` locality/timing/note.
+  Thresholds (−20 / −20 / house < 60) from an out-of-sample shadow-tune (SENSOR-METHODOLOGY §9.4). On promotion
+  the note joins the room explanation.
 - **Phase 3 (shipped 2026-10-10, shadow):** `air_quality_pm25` for any PM2.5-capable device — 1 h mean on EPA's
   2024 PM2.5 AQI breakpoints (absolute basis); room v2 = worst-of gas v2 and PM. On promotion,
   `resolve_room_air_quality` takes the PM report as one more candidate (its absolute basis already wins ties).

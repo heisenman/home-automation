@@ -6,7 +6,8 @@ the read path (the viewmodel fusion), so it never lands on disk. Two modes:
   --once      Compute air_quality NOW for every gas node and write one reading each, plus the SHADOW
               `air_quality_v2` (ADR-0035 amendment 2026-10-10; BME680 differs, Sensirion carries v1). This is the
               FORWARD sampler — run on a timer (systemd ha-gas-quality-sampler.timer). Also writes the
-              SHADOW `air_quality_pm25` for any PM2.5-capable device (Phase 3).
+              SHADOW `air_quality_pm25` for any PM2.5-capable device (Phase 3) and the Phase 2 context
+              `aq_local_excess` / `aq_hour_anomaly` per gas node.
   --backfill  One-time: reconstruct air_quality across the WHOLE stored gas_ohm history — joining the
               reference sensor's humidity at each timestamp — so the graph shows the sensor's full life.
 
@@ -27,7 +28,9 @@ from server.api.viewmodel import build_sensor_list          # noqa: E402  (reuse
 from server.gas_compensation import (air_quality_for, sgp30_air_quality, sgp40_air_quality,  # noqa: E402
                                      sgp41_air_quality, bme680_air_quality, clean_air_baseline,
                                      bme680_air_quality_v2, bme680_v2_baseline, BME_V2_WINDOW_S,
-                                     pm25_air_quality, PM25_WINDOW_S)
+                                     pm25_air_quality, PM25_WINDOW_S,
+                                     AQ_CTX_WINDOW_S, AQ_OFFSET_MIN_N, AQ_PROFILE_MIN_N, aq_context,
+                                     area_worst, house_median)
 
 # family (from device_type substring) → the RAW signal that drives its air-quality + freshness gate.
 # The SGP41's gate is voc_index, not nox_index: the NOx pixel is legitimately absent for the first hours
@@ -82,6 +85,7 @@ def sample_once(conn) -> int:
     iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_ep))
     n = 0
     devices = build_sensor_list(conn, now_ep)
+    now_scores, node_area, node_fam = {}, {}, {}
     for d in devices:
         fam = _family(d.get("device_type"))
         if fam is None:
@@ -101,6 +105,14 @@ def sample_once(conn) -> int:
         v2 = _bme680_v2(conn, d["device_id"], now_ep) if fam == "bme680" else v1
         if v2 is not None:
             _write(conn, d["device_id"], d.get("device_type"), d.get("area"), iso, v2, "air_quality_v2")
+            now_scores[d["device_id"]] = v2
+            node_area[d["device_id"]] = d.get("area")
+            node_fam[d["device_id"]] = (fam, d.get("device_type"))
+    # SHADOW Phase 2: house-wide vs room-local + hour-of-day expectation, per gas node.
+    for did, ctx in _aq_contexts(now_scores, node_area, {k: v[0] for k, v in node_fam.items()}, now_ep).items():
+        for metric, key in (("aq_local_excess", "local_excess"), ("aq_hour_anomaly", "hour_anomaly")):
+            if ctx[key] is not None:
+                _write(conn, did, node_fam[did][1], node_area[did], iso, ctx[key], metric)
     # SHADOW Phase 3: any device with the PM2.5 ability (by metric, not by type — conform by ability).
     for d in devices:
         if d["metrics"].get("pm25_ugm3") is None:
@@ -113,6 +125,61 @@ def sample_once(conn) -> int:
             _write(conn, d["device_id"], d.get("device_type"), d.get("area"), iso, pm, "air_quality_pm25")
     conn.commit()
     return n
+
+
+def _house_tz() -> str:
+    """The house `timezone` setting (PWA) — the dictator's clock is UTC, so hour-of-day must come from here."""
+    from server.control.automation import HOUSE_TZ_DEFAULT, valid_tz
+    try:
+        from server.control import control_store as store
+        cdb = REPO / "instance/db/control.db"
+        if cdb.exists():
+            cc = sqlite3.connect(f"file:{cdb}?mode=ro", uri=True)
+            try:
+                tz = store.get_setting(cc, "timezone")
+            finally:
+                cc.close()
+            if valid_tz(tz):
+                return tz
+    except Exception:
+        pass
+    return HOUSE_TZ_DEFAULT
+
+
+def _aq_contexts(now_scores, node_area, node_fam, now_ep, rungs_path=None, tz=None) -> dict:
+    """{node: aq_context(...)} from the 1-hour rung over AQ_CTX_WINDOW_S. History metric per node: the
+    Sensirion families' v2 IS v1, so their long `air_quality` history serves; the BME680 uses its own v2 history
+    (short at first → offset/typical stay None until enough has banked — that's the honest 'unknown')."""
+    from datetime import datetime
+    from statistics import median
+    from zoneinfo import ZoneInfo
+    path = Path(rungs_path or RUNGS)
+    if not now_scores or not path.exists():
+        return {}
+    zone = ZoneInfo(tz or _house_tz())
+    hist: dict[str, dict[int, float]] = {}
+    rc = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        for did in now_scores:
+            metric = "air_quality_v2" if node_fam.get(did) == "bme680" else "air_quality"
+            hist[did] = dict(rc.execute(
+                "SELECT bucket_start, vmean FROM rung WHERE res='1hour' AND device_id=? AND metric=? "
+                "AND bucket_start >= ? AND vmean IS NOT NULL", (did, metric, int(now_ep - AQ_CTX_WINDOW_S))))
+    finally:
+        rc.close()
+    buckets = sorted({b for h in hist.values() for b in h})
+    house_h = {b: house_median(area_worst({d: h.get(b) for d, h in hist.items()}, node_area)) for b in buckets}
+    house_now = house_median(area_worst(now_scores, node_area))
+    hour_now = datetime.fromtimestamp(now_ep, zone).hour
+    out = {}
+    for did, score in now_scores.items():
+        h = hist.get(did, {})
+        ex = [v - house_h[b] for b, v in h.items() if house_h.get(b) is not None]
+        same_hour = [v for b, v in h.items() if datetime.fromtimestamp(b, zone).hour == hour_now]
+        offset = median(ex) if len(ex) >= AQ_OFFSET_MIN_N else None
+        typical = median(same_hour) if len(same_hour) >= AQ_PROFILE_MIN_N else None
+        out[did] = aq_context(score, house_now, offset, typical)
+    return out
 
 
 def _pm25_score(did, now_ep, rungs_path=None):
