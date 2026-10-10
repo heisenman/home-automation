@@ -18,9 +18,10 @@
   room worst-of gas v2 ⊕ PM.
 - **Phase 2 SHIPPED (shadow):** `aq_local_excess` / `aq_hour_anomaly` per gas node → room-only vs house-wide +
   unusual-for-hour. Tune found **c_bed worse than the house 22–06 h** (occupied-bedroom signature → CO₂ case) and
-  **F12: h_office has been Hugh's bedroom the whole time, yet its BME680 shows ~no occupancy signal** (raw R
-  flat ±2 %) → BME680 effectively blind to an occupied bedroom; leans to SWAP after a short SGP41 side-by-side
-  (place it near the bed); CO₂ is the top add for h_office. BME680 context needs ~3–7 d of v2. **Next:** Phase 1 after the SGP41
+  **F12 (corrected):** room meters' water vapour sees both sleepers overnight (c_bed door shut +0.46 g/m³,
+  h_office door open +0.20, empty h_bed ≈ 0); gas sensors mostly don't (c_bed's signal is only RELATIVE to the
+  house; h_office BME680 shows nothing). CO₂ is the real bedroom metric (c_bed first). **ASKED Hugh:** add an
+  overnight-AH "ventilation/stuffiness" shadow metric as an interim proxy? BME680 context needs ~3–7 d of v2. **Next:** Phase 1 after the SGP41
   pairs land; Phase 4 rides the hardware decision.
 - **Experiment tracking:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) →
   `instance/aq-experiment/reports/latest.md` (Flags section first). Promotion criterion in the ADR amendment.

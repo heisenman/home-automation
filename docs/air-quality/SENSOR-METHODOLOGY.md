@@ -443,12 +443,16 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
   - Room-only at ≤ −20 for ≥ 15 min gave interpretable episodes: **kitchen** starts cluster 12–13 h and 17–20 h
     (meals); **c_office** 11–14 h (in use); **c_bed 22–06 h** (occupied bedroom at night — the bioeffluent /
     CO₂-proxy signature; strengthens the SCD41 recommendation); **h_office 03–07 h** (few, weak episodes).
-    **h_office has been Hugh's bedroom for the whole record** (Hugh, 2026-10-10) — yet its BME680 shows
-    essentially no occupancy signal: raw R flat ±2 % across the day, no consistent overnight drop, no overnight
-    AH build-up. **F12: the BME680 is effectively blind to an occupied bedroom**, the core thing a bedroom AQ
-    sensor must see, while c_bed's SGP30 shows a clear 22–06 h pattern. This weighs toward SWAPPING the
-    BME680s (not calibrating them — Phase 1 can't recover an absent signal) after a short SGP41 side-by-side,
-    and makes a CO₂ sensor the highest-value addition for h_office. ≤ −10 was noise (c_bed 141 episodes/month at all hours).
+    **F12 — occupancy (Hugh, 2026-10-10: h_office = Hugh's bedroom, door OPEN; c_bed = Catherine's, door SHUT,
+    every night, whole record).** An independent tracer — water vapour from the room T/RH meters, vs the house,
+    03–07 h minus 13–17 h, 68 nights — sees both sleepers: c_bed **+0.46 g/m³**, h_office **+0.20**, unoccupied
+    h_bed −0.03, kitchen/living ≈ +0.07. The shut door traps ~2.3× the open one. The gas sensors mostly don't:
+    c_bed's SGP30 TVOC actually falls ~25 % overnight in absolute terms — its "worse than the house 22–06 h"
+    is RELATIVE (the house clears to ~85 overnight, the shut room clears less); h_office's BME680 shows nothing
+    (ln R 03–07 h vs day median = 0.000) despite the AH rise. Read: MOX VOC sensors are not occupancy sensors —
+    a sleeper adds CO₂ + moisture. The BME680 is the weakest (doesn't even show the humidity nudge), but the
+    open door halves what it could see. Implications: CO₂ is the real bedroom metric (c_bed first — shut door
+    accumulates); overnight AH build-up is a free interim ventilation/occupancy proxy (proposed to Hugh). ≤ −10 was noise (c_bed 141 episodes/month at all hours).
   - The hour profile explains 21–34 % of variance for kitchen / c_office / mech_closet but ~0 for c_bed and
     the BME680 rooms — "unusual for this time" is meaningful mainly on the Sensirion rooms.
   - House median by hour: ~85 overnight → ~60 at 16–17 h; 34 house-wide episodes (< 60 for ≥ 30 min) in the
