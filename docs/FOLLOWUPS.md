@@ -25,6 +25,13 @@
   `vent_ah_excess`); flags c_bed (shut) 43/68 nights vs h_office (open) 19/68 — a proxy, not a door detector.
   Gas coupling to be re-tested once the SGP41s land. Optional: a door contact sensor on c_bed for ground truth. BME680 context needs ~3–7 d of v2. **Next:** Phase 1 after the SGP41
   pairs land; Phase 4 rides the hardware decision.
+- **2nd same-air pair LIVE 2026-10-10 15:36 PDT:** spare SGP41 `sgp41_stdby2` (board = old `bench_c6`,
+  MAC a0:f2:62:86:f5:74, fw v27-sgp41id) adopted via the ADR-0036 intake on ha-2 → `gas_h_office_sgp41` in
+  h_office (TOFU-claimed, relocate job 4bf132c4dadb clean). Report auto-adds the h_office head-to-head; first 24 h
+  excluded as baseline learning. The room's LIVE map band is now worst-of BME+SGP41 → expect h_office to read
+  worse (more sensitive sensor, not dirtier air). **Loose ends (not blocking):** `edge/esp32c6/nodes.yaml` still
+  lists `bench_c6` (board now `sgp41_stdby2`) and lacks `sgp41_mech` + `sgp41_stdby2` — the OTA/flash identity
+  gate will want them before either is OTA'd; stale retained `hello`s for sgp40_stdby1/2/3 + bench_c6 linger.
 - **Experiment tracking:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) →
   `instance/aq-experiment/reports/latest.md` (Flags section first). Promotion criterion in the ADR amendment.
 - **OPEN (Hugh decides):** hardware — SGP41+SHT4x for the 3 BME680s, SCD41 CO₂ for bedrooms/offices, or SEN66 per

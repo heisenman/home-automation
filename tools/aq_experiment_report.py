@@ -44,6 +44,7 @@ HOT = REPO / "instance/db/hot.db"
 PARQUET = REPO / "instance/db/parquet"
 TZ = ZoneInfo("America/Los_Angeles")
 BIN_S = 300
+SETTLE_S = 24 * 3600            # a new Sensirion node's baseline-learning period, excluded from head-to-heads
 BANDS = ["Excellent", "Good", "Fair", "Poor", "Very Poor"]
 GAS_FAMS = ("sgp30", "sgp40", "sgp41", "bme680")
 METRICS = ("air_quality", "air_quality_v2", "air_quality_pm25", "aq_local_excess", "aq_hour_anomaly", "vent_coupling", "vent_ah_excess", "gas_ohm", "temperature_c", "humidity_pct", "voc_index",
@@ -309,8 +310,15 @@ def main():
             continue
         b, s = bme[0], sgp[0]
         P(f"\n## Head-to-head — {ar}: {b} (BME680) vs {s} (Sensirion), last {a.days} d\n")
-        ref = S(s, "air_quality")
+        # A newly installed Sensirion node spends ~its first day learning its own baseline (the VOC Index is
+        # relative to it) — exclude its first SETTLE_S from the comparison so warm-up isn't scored as disagreement.
+        first = min(data.get((s, "voc_index"), {}) or [0])
+        settle_until = first + SETTLE_S if first > since - 2 * 86400 + BIN_S else 0
+        ref = {k: v for k, v in S(s, "air_quality").items() if k >= settle_until}
         vi = S(s, "voc_index")
+        if settle_until > since:
+            P(f"_{s} first seen {fmt_t(first)}; its first {SETTLE_S // 3600} h (to {fmt_t(settle_until)}) "
+              f"are excluded as baseline learning._\n")
         P("| BME series | bins | band agreement | pearson | event hit-rate (VOC Idx>200 → BME<80) | false alarms (BME<60, VOC Idx<150) |")
         P("|---|---|---|---|---|---|")
         res = {}
