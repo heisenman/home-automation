@@ -11,6 +11,7 @@ What it measures (each section answers a question the experiment exists to settl
   Flags       — anything worth raising with Hugh (the top of the report; empty = nothing new)
   Health      — is v2 actually being written, per node, at the expected ~1/min?
   Bands       — v1 vs v2 band share per gas node (did v2 un-saturate the BME680 rooms?)
+  Rooms       — per-area worst-of: gas v1 vs gas v2 ⊕ PM2.5 (Phase 3: how often particles set the band)
   Head-to-head— areas with two gas families (mech_closet): band agreement + event hit-rate, v1 vs v2
   Diurnal     — median v2 score by local hour (the house-wide afternoon dip — real or artifact?)
   Drift       — BME680 gas resistance growth/week; SGP30 TVOC daily medians
@@ -32,7 +33,8 @@ from zoneinfo import ZoneInfo
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
-from server.gas_compensation import BME_V2_K_AH, absolute_humidity_gm3, band_for_score  # noqa: E402
+from server.gas_compensation import (BME_V2_K_AH, PM25_WINDOW_S, absolute_humidity_gm3,  # noqa: E402
+                                     band_for_score, pm25_air_quality)
 
 HOT = REPO / "instance/db/hot.db"
 PARQUET = REPO / "instance/db/parquet"
@@ -40,7 +42,7 @@ TZ = ZoneInfo("America/Los_Angeles")
 BIN_S = 300
 BANDS = ["Excellent", "Good", "Fair", "Poor", "Very Poor"]
 GAS_FAMS = ("sgp30", "sgp40", "sgp41", "bme680")
-METRICS = ("air_quality", "air_quality_v2", "gas_ohm", "temperature_c", "humidity_pct", "voc_index",
+METRICS = ("air_quality", "air_quality_v2", "air_quality_pm25", "gas_ohm", "temperature_c", "humidity_pct", "voc_index",
            "nox_index", "tvoc", "pm25_ugm3")
 
 
@@ -71,9 +73,9 @@ def load(since_ep):
             (since_iso,)):
         out[(d, m)][int(b)] = v
     devs = {d: (t, a) for d, t, a in h.execute("SELECT device_id, device_type, area FROM device_last_seen")}
-    v2_rows = dict(h.execute("SELECT device_id, count(*) FROM readings WHERE metric='air_quality_v2' "
-                             "AND ts >= ? GROUP BY 1", (time.strftime("%Y-%m-%dT%H:%M:%SZ",
-                                                                      time.gmtime(time.time() - 86400)),)))
+    v2_rows = {(d, m): n for d, m, n in h.execute(
+        "SELECT device_id, metric, count(*) FROM readings WHERE metric IN ('air_quality_v2','air_quality_pm25') "
+        "AND ts >= ? GROUP BY 1, 2", (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 86400)),))}
     h.close()
     return out, devs, v2_rows
 
@@ -151,11 +153,18 @@ def main():
     P("## Health — v2 rows written, last 24 h (expect ~1440/node at 1/min)\n")
     P("| node | family | area | v2 rows | v1 rows (5-min bins) |\n|---|---|---|---|---|")
     for d, f, ar in gas:
-        n2 = v2_rows.get(d, 0)
+        n2 = v2_rows.get((d, "air_quality_v2"), 0)
         n1 = sum(1 for b in data.get((d, "air_quality"), {}) if b >= now - 86400)
         P(f"| {d} | {f} | {ar} | {n2} | {n1} |")
         if n1 > 100 and n2 < 1000:
             flags.append(f"**{d}**: only {n2} v2 rows in 24 h (v1 is live) — v2 sampler gap or BME burn-in.")
+
+    pm_devs = sorted({d for (d, m) in data if m == "pm25_ugm3"})
+    for d in pm_devs:
+        n = v2_rows.get((d, "air_quality_pm25"), 0)
+        P(f"| {d} | PM2.5 | {devs.get(d, ('', '?'))[1]} | {n} (air_quality_pm25) | — |")
+        if n < 500:
+            flags.append(f"**{d}**: only {n} air_quality_pm25 rows in 24 h — PM sampler gap or sparse purifier feed.")
 
     # ── Bands ──
     P(f"\n## Band share, last {a.days} d — v1 (live) vs v2 (shadow)\n")
@@ -163,6 +172,49 @@ def main():
     for d, f, ar in gas:
         s1, s2 = band_share(S(d, "air_quality")), band_share(S(d, "air_quality_v2"))
         P(f"| {d} ({f}) | {fmt_share(s1)} | {fmt_share(s2)} |")
+
+    # ── Rooms: worst-of per area (Phase 3) ──
+    # PM is REPLAYED from raw pm25 (trailing 1 h of 5-min bins, the sampler's formula) so the comparison has
+    # history from day one; the stored air_quality_pm25 series is checked under Health.
+    P(f"\n## Rooms — worst-of per area, last {a.days} d: gas v1 (live) vs gas v2 ⊕ PM2.5 (shadow)\n")
+    P("| area | sensors | bins | room v1 | room v2 ⊕ PM | bins PM set the band |\n|---|---|---|---|---|---|")
+    pm_score = {}
+    for d in pm_devs:
+        raw = data[(d, "pm25_ugm3")]
+        ks = sorted(raw)
+        sc = {}
+        for i, k in enumerate(ks):
+            win = [raw[x] for x in ks[max(0, i - 12):i + 1] if x > k - PM25_WINDOW_S]
+            r = pm25_air_quality(st.mean(win), len(win))["air_quality"] if win else None
+            if r is not None and k >= since:
+                sc[k] = r
+        pm_score[d] = sc
+    areas = sorted({ar for _, _, ar in gas} | {devs[d][1] for d in pm_devs if d in devs})
+    for ar in areas:
+        g_ids = [d for d, f, a2 in gas if a2 == ar]
+        p_ids = [d for d in pm_devs if devs.get(d, (None, None))[1] == ar]
+        r1, r2, pm_won = {}, {}, 0
+        for d in g_ids:
+            for k, v in S(d, "air_quality").items():
+                r1[k] = min(v, r1.get(k, 101))
+            for k, v in S(d, "air_quality_v2").items():
+                r2[k] = min(v, r2.get(k, 101))
+        # like-for-like: a room with gas sensors is scored only on bins where ALL its gas nodes have v2
+        # (and v1 on those same bins); a PM-only room on its PM bins
+        if g_ids:
+            keep = set.intersection(*(set(S(d, "air_quality_v2")) for d in g_ids))
+            r1 = {k: v for k, v in r1.items() if k in keep}
+            r2 = {k: v for k, v in r2.items() if k in keep}
+        for d in p_ids:
+            for k, v in pm_score[d].items():
+                if g_ids and k not in r2:
+                    continue
+                if v < r2.get(k, 101):
+                    if k in r2 and band(v) != band(r2[k]):
+                        pm_won += 1
+                    r2[k] = v
+        P(f"| {ar} | {', '.join(g_ids + p_ids)} | {len(r2)} | {fmt_share(band_share(r1))} | "
+          f"{fmt_share(band_share(r2))} | {pm_won} |")
 
     # ── Head-to-head: any area with ≥2 gas families ──
     by_area = defaultdict(list)

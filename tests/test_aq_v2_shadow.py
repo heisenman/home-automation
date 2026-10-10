@@ -72,3 +72,31 @@ def test_sampler_v2_reads_the_rung_window():
         rc.close()
         assert P._bme680_v2(hot, "gas_x", now, rungs_path=rp) == 50.0       # r = 0.6 → score 50
         assert P._bme680_v2(hot, "gas_x", now, rungs_path=Path(td) / "missing.db") is None
+
+
+def test_pm25_bands_on_epa_2024_breakpoints():
+    from server.gas_compensation import pm25_air_quality
+    assert pm25_air_quality(1.0)["air_quality_band_label"] == "Excellent"     # ≤ 9.0 Good (EPA)
+    assert pm25_air_quality(9.0)["air_quality"] == 80.0
+    assert pm25_air_quality(20.0)["air_quality_band_label"] == "Good"         # Moderate (EPA)
+    assert pm25_air_quality(40.0)["air_quality_band_label"] == "Fair"         # USG
+    assert pm25_air_quality(100.0)["air_quality_band_label"] == "Poor"        # Unhealthy
+    assert pm25_air_quality(300.0)["air_quality"] == 0.0                      # beyond Very Unhealthy
+    assert pm25_air_quality(5.0)["air_quality_basis"] == "absolute"
+    assert pm25_air_quality(5.0, n_buckets=2)["air_quality"] is None          # too sparse an hour
+
+
+def test_sampler_pm25_is_count_weighted_hour_mean():
+    now = time.time()
+    with tempfile.TemporaryDirectory() as td:
+        rp = Path(td) / "rungs.db"
+        rc = sqlite3.connect(rp)
+        rc.executescript(RUNG_DDL)
+        b0 = int(now) - 1800
+        rc.executemany("INSERT INTO rung VALUES ('1min','p','pm25_ugm3',?,NULL,NULL,?,?,NULL)",
+                       [(b0, 9.0, 3), (b0 + 60, 9.0, 3), (b0 + 120, 35.4, 0),          # vcount 0 → weight 1
+                        (int(now) - 7200, 500.0, 5)])                                # outside the hour
+        rc.commit()
+        rc.close()
+        # (9*3 + 9*3 + 35.4*1) / 7 = 12.77 µg/m³ → Good, just under 80
+        assert 75.0 < P._pm25_score("p", now, rungs_path=rp) < 80.0

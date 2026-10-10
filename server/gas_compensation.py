@@ -327,3 +327,29 @@ def bme680_air_quality_v2(gas_ohm, die_t_c, die_rh_pct, baseline_log_r, coverage
             f"clean-air baseline; a relative measure, not comparable to other rooms.")
     return _report(score, "relative", "BME680", "gas resistance", round(gas_ohm, 0), expl,
                    ratio=round(r, 3), baseline_coverage=round(coverage, 2))
+
+
+# ── PM2.5 → band — SHADOW (ADR-0035 amendment 2026-10-10, Phase 3) ──────────────────────────────────────
+# The gas index is blind to particles (Study 2 F10: the 09-15 smoke-level day read "Excellent" everywhere).
+# Any device with the PM2.5 ability (today: the Levoit purifiers) gets `air_quality_pm25`, and a room's v2
+# band = the WORSE of its gas and PM bands (the regulatory dominant-pollutant rule, as for SGP41 NOx).
+# ABSOLUTE basis: EPA's PM2.5 AQI breakpoints, 2024 revision (Good ≤ 9.0, Moderate ≤ 35.4, USG ≤ 55.4,
+# Unhealthy ≤ 125.4, Very Unhealthy ≤ 225.4 µg/m³; EPA "Final Updates to the AQI for Particulate Matter",
+# 2024-02). Our 5 bands map 1:1 with USG→Fair and Very Unhealthy+Hazardous→Very Poor; linear within a band,
+# like the AQI. Deviation: EPA bands a 24 h mean (NowCast for hourly); indoors we band a 1 h mean — rooms
+# change fast and a day-long average would hide a cooking/smoke episode until it was over.
+_PM25_X = [0.0, 9.0, 35.4, 55.4, 125.4, 225.4]
+_PM25_Y = [100.0, 80.0, 60.0, 40.0, 20.0, 0.0]
+PM25_WINDOW_S = 3600
+PM25_MIN_BUCKETS = 3               # purifiers report ~17×/h; < 3 one-minute buckets in the hour → no score
+
+
+def pm25_air_quality(pm25_1h_ugm3, n_buckets=PM25_MIN_BUCKETS) -> dict:
+    """1 h mean PM2.5 (µg/m³) → ABSOLUTE band on EPA breakpoints."""
+    if pm25_1h_ugm3 is None or n_buckets < PM25_MIN_BUCKETS:
+        return _stale_report("PM2.5", "PM2.5", "stale", "Not enough PM2.5 readings in the last hour.")
+    score = _interp(float(pm25_1h_ugm3), _PM25_X, _PM25_Y)
+    b, label = band_for_score(score)
+    expl = (f"{label}. PM2.5 {pm25_1h_ugm3:.1f} µg/m³ (1 h mean) on the EPA AQI breakpoints — an absolute "
+            f"measure, comparable across rooms.")
+    return _report(score, "absolute", "PM2.5", "PM2.5", round(float(pm25_1h_ugm3), 1), expl)

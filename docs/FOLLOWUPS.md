@@ -14,6 +14,8 @@
   (not 24–48 h) → east rooms ~90 % Excellent. ADR-0035 amended with a 5-phase plan.
 - **Phase 0 SHIPPED (shadow):** `air_quality_v2` written every minute by `ha-gas-quality-sampler` on ha-2 —
   BME680 = 48 h rung baseline + own-die absolute-humidity correction; Sensirion = v1 carried.
+- **Phase 3 SHIPPED (shadow):** `air_quality_pm25` per purifier (1 h mean, EPA 2024 breakpoints); report shows
+  room worst-of gas v2 ⊕ PM. **Next: Phase 2** (house-wide vs room-local + hour-of-day expectation).
 - **Experiment tracking:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) →
   `instance/aq-experiment/reports/latest.md` (Flags section first). Promotion criterion in the ADR amendment.
 - **OPEN (Hugh decides):** hardware — SGP41+SHT4x for the 3 BME680s, SCD41 CO₂ for bedrooms/offices, or SEN66 per

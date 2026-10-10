@@ -269,7 +269,7 @@ def test_ui_metric_catalog_matches_pwa_graphable_contract():
     so the refactor is a byte-for-byte swap. If GRAPHABLE changes, update METRIC_CATALOG in lockstep."""
     cat = V.ui_metric_catalog()
     assert [c["key"] for c in cat] == [
-        "temperature_c", "humidity_pct", "dewpoint_c", "air_quality", "air_quality_v2", "co2_ppm",
+        "temperature_c", "humidity_pct", "dewpoint_c", "air_quality", "air_quality_v2", "air_quality_pm25", "co2_ppm",
         "radon_bqm3", "pressure_hpa", "pm25_ugm3", "aqi", "voc_index", "voc_raw",
         "nox_index", "nox_raw", "eco2", "tvoc", "gas_ohm", "power_w", "energy_today_kwh",
         "supply_cfm", "exhaust_cfm", "supply_rpm", "exhaust_rpm", "supply_temp_c"]

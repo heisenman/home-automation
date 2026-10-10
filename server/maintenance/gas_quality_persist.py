@@ -5,7 +5,8 @@ the read path (the viewmodel fusion), so it never lands on disk. Two modes:
 
   --once      Compute air_quality NOW for every gas node and write one reading each, plus the SHADOW
               `air_quality_v2` (ADR-0035 amendment 2026-10-10; BME680 differs, Sensirion carries v1). This is the
-              FORWARD sampler — run on a timer (systemd ha-gas-quality-sampler.timer).
+              FORWARD sampler — run on a timer (systemd ha-gas-quality-sampler.timer). Also writes the
+              SHADOW `air_quality_pm25` for any PM2.5-capable device (Phase 3).
   --backfill  One-time: reconstruct air_quality across the WHOLE stored gas_ohm history — joining the
               reference sensor's humidity at each timestamp — so the graph shows the sensor's full life.
 
@@ -25,7 +26,8 @@ sys.path.insert(0, str(REPO))
 from server.api.viewmodel import build_sensor_list          # noqa: E402  (reuses the fusion + auto-reference)
 from server.gas_compensation import (air_quality_for, sgp30_air_quality, sgp40_air_quality,  # noqa: E402
                                      sgp41_air_quality, bme680_air_quality, clean_air_baseline,
-                                     bme680_air_quality_v2, bme680_v2_baseline, BME_V2_WINDOW_S)
+                                     bme680_air_quality_v2, bme680_v2_baseline, BME_V2_WINDOW_S,
+                                     pm25_air_quality, PM25_WINDOW_S)
 
 # family (from device_type substring) → the RAW signal that drives its air-quality + freshness gate.
 # The SGP41's gate is voc_index, not nox_index: the NOx pixel is legitimately absent for the first hours
@@ -79,7 +81,8 @@ def sample_once(conn) -> int:
     now_ep = time.time()
     iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now_ep))
     n = 0
-    for d in build_sensor_list(conn, now_ep):
+    devices = build_sensor_list(conn, now_ep)
+    for d in devices:
         fam = _family(d.get("device_type"))
         if fam is None:
             continue
@@ -98,8 +101,34 @@ def sample_once(conn) -> int:
         v2 = _bme680_v2(conn, d["device_id"], now_ep) if fam == "bme680" else v1
         if v2 is not None:
             _write(conn, d["device_id"], d.get("device_type"), d.get("area"), iso, v2, "air_quality_v2")
+    # SHADOW Phase 3: any device with the PM2.5 ability (by metric, not by type — conform by ability).
+    for d in devices:
+        if d["metrics"].get("pm25_ugm3") is None:
+            continue
+        age = _raw_age_s(conn, d["device_id"], "pm25_ugm3", now_ep)
+        if age is None or age > FRESHNESS_S:
+            continue
+        pm = _pm25_score(d["device_id"], now_ep)
+        if pm is not None:
+            _write(conn, d["device_id"], d.get("device_type"), d.get("area"), iso, pm, "air_quality_pm25")
     conn.commit()
     return n
+
+
+def _pm25_score(did, now_ep, rungs_path=None):
+    """1 h mean PM2.5 from the 1-min rung (count-weighted) → EPA-banded score, or None."""
+    path = Path(rungs_path or RUNGS)
+    if not path.exists():
+        return None
+    rc = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        rows = rc.execute("SELECT vmean, vcount FROM rung WHERE res='1min' AND device_id=? AND metric='pm25_ugm3' "
+                          "AND bucket_start >= ? AND vmean IS NOT NULL", (did, int(now_ep - PM25_WINDOW_S))).fetchall()
+    finally:
+        rc.close()
+    w = sum(c or 1 for _, c in rows)
+    mean = sum(v * (c or 1) for v, c in rows) / w if rows else None
+    return pm25_air_quality(mean, len(rows))["air_quality"]
 
 
 def _bme680_v2(conn, gid, now_ep, rungs_path=None):

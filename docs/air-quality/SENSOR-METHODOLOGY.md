@@ -432,8 +432,14 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
 - **Phase 2 — house-wide vs room-local.** House common-mode from the relative sensors; per-room excess over it;
   per-room hour-of-day expectation, so a recurring afternoon rise reads "typical, house-wide" and a room-only
   excursion reads as the event it is.
-- **Phase 3 — PM2.5 into the area band** (worst-of gas vs PM, EPA breakpoints, absolute basis) for rooms with
-  a purifier.
+- **Phase 3 (shipped 2026-10-10, shadow) — PM2.5 into the area band.** Any device with the PM2.5 ability
+  (today the three Levoit purifiers: living_room, c_bed, c_office) gets `air_quality_pm25` each minute: the 1 h
+  count-weighted mean from the 1-min rung, banded on EPA's 2024 PM2.5 AQI breakpoints (≤ 9.0 / 35.4 / 55.4 /
+  125.4 / 225.4 µg/m³ → Excellent / Good / Fair / Poor / Very Poor; absolute basis). Room v2 band = worst-of gas
+  v2 and PM. **Deviation from EPA:** a 1 h mean, not 24 h — indoors a day-long average hides a cooking/smoke
+  episode until it's over. The living room gets an AQ band for the first time (no gas sensor there).
+  Caveat: purifier PM sensors are consumer-grade (floor 1 µg/m³, coarse) — fine for episodes, not for
+  fine distinctions near the Excellent/Good edge.
 - **Phase 4 — firmware: real T/RH into SGP `measure_raw` + SGP30 absolute humidity** (downlinked from the room
   meter as a signed command, or a local SHT4x).
 
@@ -445,7 +451,8 @@ cross-family problem at its root; (2) real CO₂ (SCD41) in bedrooms/offices —
 ### 9.5 The running experiment
 
 - **Reporter:** `tools/aq_experiment_report.py` runs on ha-2 (read-only; stdlib + duckdb), covering the
-  trailing 7 d: flags, v2 write health, v1-vs-v2 band shares, head-to-head for any area with two gas families,
+  trailing 7 d: flags, v2 + PM write health, v1-vs-v2 band shares, per-room worst-of (gas v1 vs gas v2 ⊕
+  PM2.5, PM replayed from raw so it has history), head-to-head for any area with two gas families,
   diurnal, drift, humidity-coefficient refit, NOx/PM2.5/VOC events (house-wide vs single-room).
 - **Schedule:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) → `tools/aq_experiment_report.sh` →
   `instance/aq-experiment/reports/<date>.md` + `latest.md`; failures append to `failures.log`.

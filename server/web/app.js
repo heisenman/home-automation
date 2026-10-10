@@ -980,6 +980,7 @@ const GRAPHABLE = [
   { key: "dewpoint_c", unit: "°C", color: "#22d3ee", label: "Dew point" },
   { key: "air_quality", unit: "AQ", color: "#4ade80", label: "Air Quality" },  // gas index (0-100, higher=cleaner); "AQ" identifies the bare number on the map glance
   { key: "air_quality_v2", unit: "AQ", color: "#a3e635", label: "Air Quality v2 (shadow)" },  // ADR-0035 amendment 2026-10-10 shadow series
+  { key: "air_quality_pm25", unit: "AQ", color: "#f472b6", label: "PM2.5 Air Quality (shadow)" },  // EPA-banded 1 h PM2.5 (Phase 3 shadow)
   { key: "co2_ppm", unit: "ppm", color: "#fbbf24", label: "CO₂" },
   { key: "radon_bqm3", unit: "Bq", color: "#a78bfa", label: "Radon" },
   { key: "pressure_hpa", unit: "hPa", color: "#34d399", label: "Pressure" },
