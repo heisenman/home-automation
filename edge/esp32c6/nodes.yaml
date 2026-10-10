@@ -62,14 +62,17 @@ nodes:
     broker: "mqtt://192.168.0.210:1883"
     ota_host: "192.168.0.210"
 
-  bench_c6:
+  sgp41_stdby2:
     mac: "A0:F2:62:86:F5:74"
     target: esp32c6
-    sensor: sgp40            # Sensirion SGP40 — VOC index. BENCH unit (2026-08-01).
-    area: standby
-    broker: "mqtt://192.168.0.210:1883"   # DEV-contained per ADR-0036 "first tryout is .210-dev-contained"
-    ota_host: "192.168.0.210"
-    # ADR-0036 Layer 0 PROOF UNIT — deliberately flashed with NO compile-time HA_CMD_SECRET, so it mints
-    # its own on first boot and the dictator learns it via the TOFU claim at intake. Do NOT run
-    # enroll_node.py against this node: minting a build-time secret here would defeat the very thing it
-    # exists to test. It is absent from node_secrets.enc BY DESIGN until the claim lands.
+    sensor: sgp41            # Sensirion SGP41 — VOC + NOx index — H office, PERMANENT (Hugh, 2026-10-10), the
+                             # same-air partner of hoffice_c6's BME680 (AQ Study 2, SENSOR-METHODOLOGY §9).
+    area: h_office
+    broker: "mqtt://192.168.1.200:1883"   # PROD (air-gap ha-2). Unlike the entries above (stale baked .0.210,
+    ota_host: "192.168.1.210"             # rescued by their NVS repoint overlay) this board was re-flashed with
+                                          # the generic image, so don't assume an overlay: bake the real targets.
+    # History: this board was `bench_c6` (SGP40), the ADR-0036 Layer-0 proof unit (2026-08-01), then
+    # `sgp40_stdby1`; re-fitted with an SGP41 and re-flashed v27-sgp41id as `sgp41_stdby2`. Node-born secret,
+    # TOFU-claimed at intake on ha-2 2026-10-10 (secret lives only in ha-2's node LUT) — so do NOT run
+    # enroll_node.py against it (that would mint a build-time secret and defeat the node-born claim).
+    # Device: gas_h_office_sgp41.

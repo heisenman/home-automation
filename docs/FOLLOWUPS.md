@@ -29,9 +29,13 @@
   MAC a0:f2:62:86:f5:74, fw v27-sgp41id) adopted via the ADR-0036 intake on ha-2 → `gas_h_office_sgp41` in
   h_office (TOFU-claimed, relocate job 4bf132c4dadb clean). Report auto-adds the h_office head-to-head; first 24 h
   excluded as baseline learning. The room's LIVE map band is now worst-of BME+SGP41 → expect h_office to read
-  worse (more sensitive sensor, not dirtier air). **Loose ends (not blocking):** `edge/esp32c6/nodes.yaml` still
-  lists `bench_c6` (board now `sgp41_stdby2`) and lacks `sgp41_mech` + `sgp41_stdby2` — the OTA/flash identity
-  gate will want them before either is OTA'd; stale retained `hello`s for sgp40_stdby1/2/3 + bench_c6 linger.
+  worse (more sensitive sensor, not dirtier air). **PERMANENT** (Hugh). **Cleaned 2026-10-10:** manifest
+  `bench_c6` → `sgp41_stdby2` (sgp41, h_office, PROD broker .1.200 / ota_host .1.210 baked — not the stale .0.210);
+  dead retained topics cleared (ha-2: sgp40_stdby1, sgp40_stdby3; .210: bench_c6 hello/status/relay, sgp40_stdby1).
+  Kept: `sgp40_stdby2` (board 10:bd:a3:a1:6e:3c, offline, fw v25-generic — if this is the 2nd spare SGP41 it
+  needs a v27-sgp41id reflash before intake, or it misreads as SGP40 and drops NOx), `shades_s3` (real, off).
+  **Still open:** `sgp41_mech` (10:bd:a3:a0:96:bc) is not in the manifest; .210's broker keeps pre-air-gap
+  retained status/relay for the live fleet (stale, harmless — fleet is on ha-2's broker).
 - **Experiment tracking:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) →
   `instance/aq-experiment/reports/latest.md` (Flags section first). Promotion criterion in the ADR amendment.
 - **OPEN (Hugh decides):** hardware — SGP41+SHT4x for the 3 BME680s, SCD41 CO₂ for bedrooms/offices, or SEN66 per
