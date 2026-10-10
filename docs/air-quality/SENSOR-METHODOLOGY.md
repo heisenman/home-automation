@@ -442,10 +442,13 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
     bias, not air. Without removing it, c_bed would read "worse than the house" half the time.
   - Room-only at ≤ −20 for ≥ 15 min gave interpretable episodes: **kitchen** starts cluster 12–13 h and 17–20 h
     (meals); **c_office** 11–14 h (in use); **c_bed 22–06 h** (occupied bedroom at night — the bioeffluent /
-    CO₂-proxy signature; strengthens the SCD41 recommendation); **h_office 03–07 h** — h_office is currently
-    Hugh's bedroom (2026-10-10), so likely the same occupancy signal; the BME680 is too weak to confirm (raw R
-    flat ±2 %, no overnight AH build-up; a faint −1.6 % 03–07 h dip only in the last two weeks). The co-located
-    SGP41 (placed near the bed) resolves it; a CO₂ sensor would show it directly. ≤ −10 was noise (c_bed 141 episodes/month at all hours).
+    CO₂-proxy signature; strengthens the SCD41 recommendation); **h_office 03–07 h** (few, weak episodes).
+    **h_office has been Hugh's bedroom for the whole record** (Hugh, 2026-10-10) — yet its BME680 shows
+    essentially no occupancy signal: raw R flat ±2 % across the day, no consistent overnight drop, no overnight
+    AH build-up. **F12: the BME680 is effectively blind to an occupied bedroom**, the core thing a bedroom AQ
+    sensor must see, while c_bed's SGP30 shows a clear 22–06 h pattern. This weighs toward SWAPPING the
+    BME680s (not calibrating them — Phase 1 can't recover an absent signal) after a short SGP41 side-by-side,
+    and makes a CO₂ sensor the highest-value addition for h_office. ≤ −10 was noise (c_bed 141 episodes/month at all hours).
   - The hour profile explains 21–34 % of variance for kitchen / c_office / mech_closet but ~0 for c_bed and
     the BME680 rooms — "unusual for this time" is meaningful mainly on the Sensirion rooms.
   - House median by hour: ~85 overnight → ~60 at 16–17 h; 34 house-wide episodes (< 60 for ≥ 30 min) in the
