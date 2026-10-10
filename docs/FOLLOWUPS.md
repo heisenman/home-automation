@@ -34,8 +34,12 @@
   dead retained topics cleared (ha-2: sgp40_stdby1, sgp40_stdby3; .210: bench_c6 hello/status/relay, sgp40_stdby1).
   Kept: `sgp40_stdby2` (board 10:bd:a3:a1:6e:3c, offline, fw v25-generic — if this is the 2nd spare SGP41 it
   needs a v27-sgp41id reflash before intake, or it misreads as SGP40 and drops NOx), `shades_s3` (real, off).
-  **Still open:** `sgp41_mech` (10:bd:a3:a0:96:bc) is not in the manifest; .210's broker keeps pre-air-gap
-  retained status/relay for the live fleet (stale, harmless — fleet is on ha-2's broker).
+  Manifest also gained `sgp41_mech` (10:BD:A3:A0:96:BC, mech_closet, same prod broker/ota_host). .210's broker
+  keeps pre-air-gap retained status/relay for the live fleet (stale, harmless — fleet is on ha-2's broker).
+  **Node-LUT drift (structural, open):** an intake on ha-2 writes only ha-2's LUT (ha-2 can't reach .210 inbound),
+  so `sgp41_stdby2` was missing on .210 until `tools/sync_node_secrets.py` ran (now 13/13, in sync). Same thing
+  happened to `sgp41_mech` (fixed by hand in 4aa6d86). Candidate fix: a .210 timer running the (union-only,
+  backup-keeping, never-resolves-conflicts) sync after intakes — not built yet.
 - **Experiment tracking:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) →
   `instance/aq-experiment/reports/latest.md` (Flags section first). Promotion criterion in the ADR amendment.
 - **OPEN (Hugh decides):** hardware — SGP41+SHT4x for the 3 BME680s, SCD41 CO₂ for bedrooms/offices, or SEN66 per
