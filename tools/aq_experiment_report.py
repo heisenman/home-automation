@@ -13,6 +13,7 @@ What it measures (each section answers a question the experiment exists to settl
   Bands       — v1 vs v2 band share per gas node (did v2 un-saturate the BME680 rooms?)
   Rooms       — per-area worst-of: gas v1 vs gas v2 ⊕ PM2.5 (Phase 3: how often particles set the band)
   Context     — Phase 2: room-only vs house-wide episodes, and how often a room is unusual for the hour
+  Ventilation — Phase 2b: humidity "accumulating / closed off" share by hour + flagged nights per room meter
   Head-to-head— areas with two gas families (mech_closet): band agreement + event hit-rate, v1 vs v2
   Diurnal     — median v2 score by local hour (the house-wide afternoon dip — real or artifact?)
   Drift       — BME680 gas resistance growth/week; SGP30 TVOC daily medians
@@ -34,6 +35,7 @@ from zoneinfo import ZoneInfo
 
 REPO = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(REPO))
+from server.room_ventilation import COUPLING_THR, EXCESS_THR, ventilation_state  # noqa: E402
 from server.gas_compensation import (AQ_HOUSE_POOR, AQ_LOCAL_THR, AQ_UNUSUAL_THR, BME_V2_K_AH,  # noqa: E402
                                      PM25_WINDOW_S, absolute_humidity_gm3, area_worst, band_for_score,
                                      house_median, pm25_air_quality)
@@ -44,7 +46,7 @@ TZ = ZoneInfo("America/Los_Angeles")
 BIN_S = 300
 BANDS = ["Excellent", "Good", "Fair", "Poor", "Very Poor"]
 GAS_FAMS = ("sgp30", "sgp40", "sgp41", "bme680")
-METRICS = ("air_quality", "air_quality_v2", "air_quality_pm25", "aq_local_excess", "aq_hour_anomaly", "gas_ohm", "temperature_c", "humidity_pct", "voc_index",
+METRICS = ("air_quality", "air_quality_v2", "air_quality_pm25", "aq_local_excess", "aq_hour_anomaly", "vent_coupling", "vent_ah_excess", "gas_ohm", "temperature_c", "humidity_pct", "voc_index",
            "nox_index", "tvoc", "pm25_ugm3")
 
 
@@ -269,6 +271,32 @@ def main():
         hh[local_hour(e[0])] += 1
     P(f"\nHouse-wide episodes (house median < {AQ_HOUSE_POOR:.0f} for ≥ 30 min): {len(heps)} "
       f"({', '.join(f'{h:02d}h×{n}' for h, n in sorted(hh.items())) or '—'})")
+
+    # ── Ventilation (Phase 2b) ──
+    P(f"\n## Ventilation (Phase 2b), last {a.days} d — accumulating = mixing r < {COUPLING_THR} AND moisture "
+      f"build-up > +{EXCESS_THR} g/m³\n")
+    P("Ground truth (Hugh, 2026-10-10): c_bed door SHUT every night (Catherine); h_office door OPEN (Hugh); "
+      "h_bed meter sits in the closet. Shadow-tune: c_bed 43/68 nights flagged ≥ 1 h (00–07 h), h_office 19/68.\n")
+    P("| meter | area | accumulating share by hour (00/04/08/12/16/20) | nights flagged ≥ 1 h (00–07 h) | now |")
+    P("|---|---|---|---|---|")
+    vent_devs = sorted({d for (d, m) in data if m == "vent_coupling"})
+    for d in vent_devs:
+        cp, ex = S(d, "vent_coupling"), S(d, "vent_ah_excess")
+        flag = {k: ventilation_state(cp[k], ex[k])["state"] == "accumulating" for k in cp if k in ex}
+        if not flag:
+            continue
+        byh = defaultdict(list)
+        nights = defaultdict(int)
+        for k, f in flag.items():
+            byh[local_hour(k) // 4 * 4].append(f)
+            if local_hour(k) < 7:
+                nights[local_day(k)] += f
+        shares = " / ".join(f"{100.0 * sum(byh[h]) / len(byh[h]):.0f}%" if byh[h] else "—" for h in range(0, 24, 4))
+        last = max(flag)
+        P(f"| {d} | {devs.get(d, ('', '?'))[1]} | {shares} | {sum(1 for n in nights.values() if n >= 12)}/{len(nights)} "
+          f"| {'accumulating' if flag[last] else 'mixed'} |")
+    if not vent_devs:
+        P("- no ventilation data yet")
 
     # ── Head-to-head: any area with ≥2 gas families ──
     by_area = defaultdict(list)

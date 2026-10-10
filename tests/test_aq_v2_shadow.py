@@ -148,3 +148,32 @@ def test_sampler_contexts_from_hourly_rung():
         assert ctx["g_k"]["timing"] == "typical"
         ctx = P._aq_contexts({"g_k": 40.0, "g_o": 80.0, "g_b": 85.0}, areas, fams, now, rungs_path=rp, tz="UTC")
         assert ctx["g_k"]["locality"] == "room" and ctx["g_k"]["timing"] == "unusual"
+
+
+def test_ventilation_coupling_and_state():
+    from server.room_ventilation import coupling, house_series, ventilation_state
+    base = 1_000_000 // 900 * 900
+    house_moves = {base + i * 900: 8.0 + (0.3 if i % 2 else 0.0) for i in range(9)}
+    assert coupling({b: v + 1.0 for b, v in house_moves.items()}, house_moves) > 0.99   # moves with the house
+    drifting = {base + i * 900: 8.0 + 0.05 * i for i in range(9)}
+    assert abs(coupling(drifting, house_moves)) < 0.3                                    # drifts on its own
+    assert coupling({base: 1.0}, {base: 1.0}) is None
+    hs = house_series({"a": {1: 1.0}, "b": {1: 3.0}, "c": {1: 2.0}, "room": {1: 9.0}}, "room")
+    assert hs == {1: 2.0}
+    assert house_series({"a": {1: 1.0}, "room": {1: 9.0}}, "room") == {}                # < 3 others
+    assert ventilation_state(0.05, 0.3)["state"] == "accumulating"
+    assert ventilation_state(0.6, 0.3)["state"] == "mixed"
+    assert ventilation_state(None, 0.3)["state"] == "unknown"
+
+
+def test_room_meters_prefers_pro_and_skips_wet_rooms_and_gas():
+    meta = {"bed": {"level": "main_floor", "type": "bedroom"}, "bath": {"level": "main_floor", "type": "bathroom"},
+            "attic": {"level": "attic", "type": "monolithic"}}
+    th = {"temperature_c": 21.0, "humidity_pct": 40.0}
+    devs = [{"device_id": "meter_bed", "device_type": "switchbot_meter", "area": "bed", "ts": "2026-10-10T10:00:00Z", "metrics": th},
+            {"device_id": "meter_pro_bed", "device_type": "switchbot_meter", "area": "bed", "ts": "2026-10-10T09:00:00Z", "metrics": th},
+            {"device_id": "gas_bed", "device_type": "bme680_gas", "area": "bed", "ts": "2026-10-10T11:00:00Z", "metrics": th},
+            {"device_id": "meter_bath", "device_type": "switchbot_meter", "area": "bath", "metrics": th},
+            {"device_id": "meter_attic", "device_type": "switchbot_meter", "area": "attic", "metrics": th}]
+    m = P._room_meters(devs, meta)
+    assert list(m) == ["bed"] and m["bed"]["device_id"] == "meter_pro_bed"

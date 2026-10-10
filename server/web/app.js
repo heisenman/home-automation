@@ -983,6 +983,8 @@ const GRAPHABLE = [
   { key: "air_quality_pm25", unit: "AQ", color: "#f472b6", label: "PM2.5 Air Quality (shadow)" },  // EPA-banded 1 h PM2.5 (Phase 3 shadow)
   { key: "aq_local_excess", unit: "pts", color: "#38bdf8", label: "AQ vs house (shadow)" },  // Phase 2: <0 = worse than the house, beyond this room's usual offset
   { key: "aq_hour_anomaly", unit: "pts", color: "#c084fc", label: "AQ vs usual for hour (shadow)" },  // Phase 2: <0 = worse than usual for this hour
+  { key: "vent_coupling", unit: "r", color: "#2dd4bf", label: "Mixing with house (shadow)" },  // Phase 2b: room water-vapour changes vs the house's (low = closed off)
+  { key: "vent_ah_excess", unit: "g/m³", color: "#60a5fa", label: "Moisture build-up (shadow)" },  // Phase 2b: room vs house water vapour beyond its usual
   { key: "co2_ppm", unit: "ppm", color: "#fbbf24", label: "CO₂" },
   { key: "radon_bqm3", unit: "Bq", color: "#a78bfa", label: "Radon" },
   { key: "pressure_hpa", unit: "hPa", color: "#34d399", label: "Pressure" },

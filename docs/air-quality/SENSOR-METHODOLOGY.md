@@ -452,11 +452,22 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
     (ln R 03–07 h vs day median = 0.000) despite the AH rise. Read: MOX VOC sensors are not occupancy sensors —
     a sleeper adds CO₂ + moisture. The BME680 is the weakest (doesn't even show the humidity nudge), but the
     open door halves what it could see. Implications: CO₂ is the real bedroom metric (c_bed first — shut door
-    accumulates); overnight AH build-up is a free interim ventilation/occupancy proxy (proposed to Hugh). ≤ −10 was noise (c_bed 141 episodes/month at all hours).
+    accumulates); overnight AH build-up + humidity coupling is the free interim proxy → Phase 2b. ≤ −10 was noise (c_bed 141 episodes/month at all hours).
   - The hour profile explains 21–34 % of variance for kitchen / c_office / mech_closet but ~0 for c_bed and
     the BME680 rooms — "unusual for this time" is meaningful mainly on the Sensirion rooms.
   - House median by hour: ~85 overnight → ~60 at 16–17 h; 34 house-wide episodes (< 60 for ≥ 30 min) in the
     test month, starting 12–17 h.
+- **Phase 2b (shipped 2026-10-10, shadow) — is the room closed off / accumulating?** Hugh: "humidity readings
+  should correlate alongside gas readings for door status indication." `server/room_ventilation.py`: per
+  main-floor living-area meter (bathrooms/closets/mechanical/attic excluded), `vent_coupling` = correlation of
+  the room's 15-min water-vapour changes with the house median's over 2 h, and `vent_ah_excess` = room − house
+  water vapour minus its 28 d usual. Accumulating = coupling < 0.2 AND excess > +0.15 g/m³.
+  **Shadow-tune (Aug 3–Oct 9):** overnight humidity coupling c_bed (shut) 0.08–0.22 vs h_office (open)
+  0.33–0.49; nights flagged ≥ 1 h (00–07 h): c_bed 43/68, h_office 19/68, h_bed 15/68 (closet meter), kitchen
+  10/68. It discriminates, but it is **not a door detector**: it also fires on local moisture (kitchen ~20 h
+  cooking, c_office midday in use) and on an enclosed meter. **Gas coupling did NOT separate shut from open**
+  with today's bedroom sensors (SGP30, BME680) — it is dominated by house-wide swings; re-test with the SGP41s.
+  A door contact sensor on c_bed for ~2 weeks would give per-night ground truth to validate against.
 - **Phase 3 (shipped 2026-10-10, shadow) — PM2.5 into the area band.** Any device with the PM2.5 ability
   (today the three Levoit purifiers: living_room, c_bed, c_office) gets `air_quality_pm25` each minute: the 1 h
   count-weighted mean from the 1-min rung, banded on EPA's 2024 PM2.5 AQI breakpoints (≤ 9.0 / 35.4 / 55.4 /
@@ -478,7 +489,7 @@ cross-family problem at its root; (2) real CO₂ (SCD41) in bedrooms/offices —
 - **Reporter:** `tools/aq_experiment_report.py` runs on ha-2 (read-only; stdlib + duckdb), covering the
   trailing 7 d: flags, v2 + PM write health, v1-vs-v2 band shares, per-room worst-of (gas v1 vs gas v2 ⊕
   PM2.5, PM replayed from raw so it has history), Phase 2 context (room-only / house-wide episodes,
-  unusual-for-hour share), head-to-head for any area with two gas families,
+  unusual-for-hour share), ventilation (accumulating share by hour + flagged nights), head-to-head for any area with two gas families,
   diurnal, drift, humidity-coefficient refit, NOx/PM2.5/VOC events (house-wide vs single-room).
 - **Schedule:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) → `tools/aq_experiment_report.sh` →
   `instance/aq-experiment/reports/<date>.md` + `latest.md`; failures append to `failures.log`.

@@ -260,6 +260,9 @@ as a parallel `air_quality_v2` series; v1 stays the live index until the daily e
   offset) + `aq_hour_anomaly` (vs its 28 d typical for this hour) → `aq_context` locality/timing/note.
   Thresholds (−20 / −20 / house < 60) from an out-of-sample shadow-tune (SENSOR-METHODOLOGY §9.4). On promotion
   the note joins the room explanation.
+- **Phase 2b (shipped 2026-10-10, shadow; Hugh: humidity alongside gas for door status):** per room meter
+  `vent_coupling` + `vent_ah_excess` → "accumulating / closed off" (`server/room_ventilation.py`). A humidity
+  proxy for occupancy/ventilation until CO₂ exists; explicitly not a door detector (fires on any local moisture).
 - **Phase 3 (shipped 2026-10-10, shadow):** `air_quality_pm25` for any PM2.5-capable device — 1 h mean on EPA's
   2024 PM2.5 AQI breakpoints (absolute basis); room v2 = worst-of gas v2 and PM. On promotion,
   `resolve_room_air_quality` takes the PM report as one more candidate (its absolute basis already wins ties).

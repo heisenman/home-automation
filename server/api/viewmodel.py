@@ -57,6 +57,8 @@ METRIC_CATALOG: dict[str, dict] = {
     "air_quality_pm25": {"label": "PM2.5 Air Quality (shadow)", "unit": "AQ", "color": "#f472b6", "precision": 0, "graph": True},
     "aq_local_excess": {"label": "AQ vs house (shadow)", "unit": "pts", "color": "#38bdf8", "precision": 0, "graph": True},
     "aq_hour_anomaly": {"label": "AQ vs usual for hour (shadow)", "unit": "pts", "color": "#c084fc", "precision": 0, "graph": True},
+    "vent_coupling": {"label": "Mixing with house (shadow)", "unit": "r", "color": "#2dd4bf", "precision": 2, "graph": True},
+    "vent_ah_excess": {"label": "Moisture build-up (shadow)", "unit": "g/m³", "color": "#60a5fa", "precision": 2, "graph": True},
     "co2_ppm":       {"label": "CO₂",         "unit": "ppm",   "color": "#fbbf24", "precision": 0, "graph": True},
     "radon_bqm3":    {"label": "Radon",       "unit": "Bq",    "color": "#a78bfa", "precision": 0, "graph": True},
     "pressure_hpa":  {"label": "Pressure",    "unit": "hPa",   "color": "#34d399", "precision": 0, "graph": True},
@@ -185,7 +187,7 @@ _AREA_META_CACHE = None
 
 
 def _area_meta() -> dict:
-    """{area: {zone, level}} from instance/areas.yaml (ADR-0026) — for proximity tiering. Cached; a
+    """{area: {zone, level, type}} from instance/areas.yaml (ADR-0026) — for proximity tiering. Cached; a
     restart (or registry reload) refreshes it. Empty on any error → falls back to house-wide search."""
     global _AREA_META_CACHE
     if _AREA_META_CACHE is None:
@@ -194,7 +196,8 @@ def _area_meta() -> dict:
             import yaml
             with open(os.environ.get("HA_AREAS", "instance/areas.yaml")) as f:
                 d = yaml.safe_load(f) or {}
-            _AREA_META_CACHE = {k: {"zone": (v or {}).get("zone"), "level": (v or {}).get("level")}
+            _AREA_META_CACHE = {k: {"zone": (v or {}).get("zone"), "level": (v or {}).get("level"),
+                                    "type": (v or {}).get("type")}
                                 for k, v in (d.get("areas") or {}).items()}
         except Exception:
             _AREA_META_CACHE = {}

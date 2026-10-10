@@ -20,8 +20,10 @@
   unusual-for-hour. Tune found **c_bed worse than the house 22–06 h** (occupied-bedroom signature → CO₂ case) and
   **F12 (corrected):** room meters' water vapour sees both sleepers overnight (c_bed door shut +0.46 g/m³,
   h_office door open +0.20, empty h_bed ≈ 0); gas sensors mostly don't (c_bed's signal is only RELATIVE to the
-  house; h_office BME680 shows nothing). CO₂ is the real bedroom metric (c_bed first). **ASKED Hugh:** add an
-  overnight-AH "ventilation/stuffiness" shadow metric as an interim proxy? BME680 context needs ~3–7 d of v2. **Next:** Phase 1 after the SGP41
+  house; h_office BME680 shows nothing). CO₂ is the real bedroom metric (c_bed first).
+- **Phase 2b SHIPPED (shadow):** humidity "accumulating / closed off" per room meter (`vent_coupling`,
+  `vent_ah_excess`); flags c_bed (shut) 43/68 nights vs h_office (open) 19/68 — a proxy, not a door detector.
+  Gas coupling to be re-tested once the SGP41s land. Optional: a door contact sensor on c_bed for ground truth. BME680 context needs ~3–7 d of v2. **Next:** Phase 1 after the SGP41
   pairs land; Phase 4 rides the hardware decision.
 - **Experiment tracking:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) →
   `instance/aq-experiment/reports/latest.md` (Flags section first). Promotion criterion in the ADR amendment.

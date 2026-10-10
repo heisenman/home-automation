@@ -113,6 +113,12 @@ def sample_once(conn) -> int:
         for metric, key in (("aq_local_excess", "local_excess"), ("aq_hour_anomaly", "hour_anomaly")):
             if ctx[key] is not None:
                 _write(conn, did, node_fam[did][1], node_area[did], iso, ctx[key], metric)
+    # SHADOW Phase 2b: humidity-based "room closed off / accumulating" proxy, per main-floor room meter.
+    for did, (area, dtype, coup, excess) in _ventilation(devices, now_ep).items():
+        if coup is not None:
+            _write(conn, did, dtype, area, iso, round(coup, 3), "vent_coupling")
+        if excess is not None:
+            _write(conn, did, dtype, area, iso, round(excess, 3), "vent_ah_excess")
     # SHADOW Phase 3: any device with the PM2.5 ability (by metric, not by type — conform by ability).
     for d in devices:
         if d["metrics"].get("pm25_ugm3") is None:
@@ -179,6 +185,75 @@ def _aq_contexts(now_scores, node_area, node_fam, now_ep, rungs_path=None, tz=No
         offset = median(ex) if len(ex) >= AQ_OFFSET_MIN_N else None
         typical = median(same_hour) if len(same_hour) >= AQ_PROFILE_MIN_N else None
         out[did] = aq_context(score, house_now, offset, typical)
+    return out
+
+
+def _room_meters(devices, area_meta) -> dict:
+    """{area: meter device} — one reliable T/RH meter per main-floor living area (same preference as the
+    ambient-ref resolver: a 'pro' meter, then the freshest). Gas nodes are self-heated → never a meter."""
+    from server.room_ventilation import EXCLUDED_TYPES
+    best: dict = {}
+    for d in devices:
+        dt = (d.get("device_type") or "").lower()
+        m = d.get("metrics") or {}
+        if "gas" in dt or "bme680" in dt or m.get("temperature_c") is None or m.get("humidity_pct") is None:
+            continue
+        meta = area_meta.get(d.get("area")) or {}
+        if meta.get("level") != "main_floor" or meta.get("type") in EXCLUDED_TYPES:
+            continue
+        cur = best.get(d["area"])
+        if cur is None or _meter_rank(d) < _meter_rank(cur):
+            best[d["area"]] = d
+    return best
+
+
+def _meter_rank(d):
+    """Lower is better: a 'pro' meter first, then the freshest reading."""
+    ts = d.get("ts")
+    return (0 if "pro" in d["device_id"] else 1, -_epoch(ts) if ts else 0.0)
+
+
+def _ventilation(devices, now_ep, rungs_path=None, area_meta=None) -> dict:
+    """{meter_id: (area, device_type, coupling, excess)} — Phase 2b (server/room_ventilation.py)."""
+    from server.api.viewmodel import _area_meta
+    from server.room_ventilation import (COUPLING_WINDOW_S, EXCESS_MIN_N, EXCESS_WINDOW_S, STEP_S, ah_series,
+                                         coupling, house_series, median)
+    path = Path(rungs_path or RUNGS)
+    meters = _room_meters(devices, area_meta if area_meta is not None else _area_meta())
+    if len(meters) < 4 or not path.exists():                  # a room + ≥ 3 others for the house
+        return {}
+    since15, sinceH = int(now_ep - COUPLING_WINDOW_S - STEP_S), int(now_ep - EXCESS_WINDOW_S)
+    ah15, ahH = {}, {}
+    rc = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        for area, d in meters.items():
+            raw = {"temperature_c": {}, "humidity_pct": {}}
+            for b, metric, v in rc.execute(
+                    "SELECT bucket_start, metric, vmean FROM rung WHERE res='1min' AND device_id=? "
+                    "AND metric IN ('temperature_c','humidity_pct') AND bucket_start >= ? AND vmean IS NOT NULL",
+                    (d["device_id"], since15)):
+                raw[metric].setdefault(b // STEP_S * STEP_S, []).append(v)
+            ah15[area] = ah_series({b: sum(v) / len(v) for b, v in raw["temperature_c"].items()},
+                                   {b: sum(v) / len(v) for b, v in raw["humidity_pct"].items()})
+            hr = {"temperature_c": {}, "humidity_pct": {}}
+            for b, metric, v in rc.execute(
+                    "SELECT bucket_start, metric, vmean FROM rung WHERE res='1hour' AND device_id=? "
+                    "AND metric IN ('temperature_c','humidity_pct') AND bucket_start >= ? AND vmean IS NOT NULL",
+                    (d["device_id"], sinceH)):
+                hr[metric][b] = v
+            ahH[area] = ah_series(hr["temperature_c"], hr["humidity_pct"])
+    finally:
+        rc.close()
+    out = {}
+    for area, d in meters.items():
+        h15 = house_series(ah15, area)
+        coup = coupling(ah15[area], h15)
+        hH = house_series(ahH, area)
+        diffs = [v - hH[b] for b, v in ahH[area].items() if b in hH]
+        offset = median(diffs) if len(diffs) >= EXCESS_MIN_N else None
+        common = sorted(set(ah15[area]) & set(h15))
+        excess = (ah15[area][common[-1]] - h15[common[-1]] - offset) if common and offset is not None else None
+        out[d["device_id"]] = (area, d.get("device_type"), coup, excess)
     return out
 
 
