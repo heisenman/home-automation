@@ -71,12 +71,25 @@ def load(since_ep):
                 f"device_id, metric, avg(value) FROM read_parquet([{flist}]) "
                 f"WHERE ts >= ? AND metric IN ({mlist}) GROUP BY ALL", [since_iso]).fetchall():
             out[(d, m)][int(b)] = v
+        # Phase 4b: compensated − default from the SAME message (same ts), then binned. Binning each metric first
+        # would mix in default-only readings (pre-OTA, ambient stale) and bias the difference.
+        for b, d, v in c.execute(
+                f"SELECT CAST(floor(epoch(strptime(a.ts, '%Y-%m-%dT%H:%M:%SZ')) / {BIN_S}) * {BIN_S} AS BIGINT), a.device_id, "
+                f"avg(a.value - r.value) FROM read_parquet([{flist}]) a JOIN read_parquet([{flist}]) r "
+                f"ON a.device_id = r.device_id AND a.ts = r.ts AND r.metric = 'voc_raw' "
+                f"WHERE a.metric = 'voc_raw_comp' AND a.ts >= ? GROUP BY ALL", [since_iso]).fetchall():
+            out[(d, "comp_delta")][int(b)] = v
     h = sqlite3.connect(f"file:{HOT}?mode=ro", uri=True)
     for b, d, m, v in h.execute(
             f"SELECT (CAST(strftime('%s', ts) AS INTEGER) / {BIN_S}) * {BIN_S}, device_id, metric, avg(value) "
             f"FROM readings WHERE ts >= ? AND authoritative=1 AND metric IN ({mlist}) GROUP BY 1, 2, 3",
             (since_iso,)):
         out[(d, m)][int(b)] = v
+    for b, d, v in h.execute(
+            f"SELECT (CAST(strftime('%s', a.ts) AS INTEGER) / {BIN_S}) * {BIN_S}, a.device_id, avg(a.value - r.value) "
+            f"FROM readings a JOIN readings r ON r.device_id = a.device_id AND r.ts = a.ts AND r.metric = 'voc_raw' "
+            f"WHERE a.metric = 'voc_raw_comp' AND a.ts >= ? GROUP BY 1, 2", (since_iso,)):
+        out[(d, "comp_delta")][int(b)] = v
     devs = {d: (t, a) for d, t, a in h.execute("SELECT device_id, device_type, area FROM device_last_seen")}
     v2_rows = {(d, m): n for d, m, n in h.execute(
         "SELECT device_id, metric, count(*) FROM readings WHERE metric IN ('air_quality_v2','air_quality_v3','air_quality_tc','air_quality_pm25') "
@@ -409,13 +422,13 @@ def main():
       "+ kRH·(RH − 50), and Δ vs absolute humidity. Compare kT with the −90 ticks/°C the server-side correction assumes (F16).\n")
     any_comp = False
     for d, f, ar in sgp4:
-        raw, comp = S(d, "voc_raw"), S(d, "voc_raw_comp")
+        delta = S(d, "comp_delta")                      # per-message pairs, binned (see load)
         tt, rr = S(d, "comp_t_c"), S(d, "comp_rh_pct")
-        ks = sorted(set(raw) & set(comp) & set(tt) & set(rr))
+        ks = sorted(set(delta) & set(tt) & set(rr))
         if not ks:
             continue
         any_comp = True
-        dl = [comp[k] - raw[k] for k in ks]
+        dl = [delta[k] for k in ks]
         xt = [tt[k] - 25.0 for k in ks]
         xr = [rr[k] - 50.0 for k in ks]
         ah = [absolute_humidity_gm3(tt[k], rr[k]) for k in ks]
