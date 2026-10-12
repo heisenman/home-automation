@@ -75,7 +75,10 @@ ha_cmd_result_t ha_cmd_verify(const char *payload, int len, const char *secret, 
     const cJSON *op = cJSON_GetObjectItem(inner, "op");
     long window = (cJSON_IsString(op) && strcmp(op->valuestring, "ota") == 0) ? 86400 : 300;
     const cJSON *ts = cJSON_GetObjectItem(inner, "ts");
-    if (cJSON_IsNumber(ts)) {
+    // ts is MANDATORY (2026-10-12): without it freshness AND anti-replay were skipped, so a captured signed
+    // command without ts replayed forever. Every signer stamps one (tools/edge_sign.py wrap).
+    if (!cJSON_IsNumber(ts)) { cJSON_Delete(inner); cJSON_Delete(root); return HA_CMD_NO_TS; }
+    {
         long mts = (long)ts->valuedouble;
         long dt = (long)time(NULL) - mts;
         if (dt < -window || dt > window) { cJSON_Delete(inner); cJSON_Delete(root); return HA_CMD_STALE; }
@@ -88,7 +91,6 @@ ha_cmd_result_t ha_cmd_verify(const char *payload, int len, const char *secret, 
         }
         s_repl_ts = mts; s_repl_seq = mseq; replay_store(mts, mseq);
     }
-    // else: no ts -> no freshness/replay gate (matches the edge node; a signed op without ts still acts).
 
     cJSON_Delete(root);
     if (inner_out) *inner_out = inner; else cJSON_Delete(inner);
@@ -105,6 +107,7 @@ const char *ha_cmd_result_str(ha_cmd_result_t r)
         case HA_CMD_BAD_SIG:   return "bad-sig";
         case HA_CMD_STALE:     return "stale";
         case HA_CMD_REPLAY:    return "replay";
+        case HA_CMD_NO_TS:     return "no-ts";
         default:               return "?";
     }
 }

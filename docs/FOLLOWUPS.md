@@ -54,13 +54,16 @@
   from ha-2, all confirmed); ha-2 pushes signed same-room T/RH each minute (kill switch `instance/aq-ambient.off`);
   nodes publish voc_raw + voc_raw_comp; the report fits the chip's correction. Each OTA restarted that node's VOC
   Index learning (~hours of warm-up on the live AQ). **Open:**
-  - `sgp41_mech` is CLOCK-LOCKED (F17: never synced, rejects every signed command). Recovery = the same v29 generic
-    image via an OTA stamped on its own clock (scratch wrapper used for sgp41_stdby2 — worth a `--node-clock-offset`
-    flag in edge_ota.py). Needs Hugh's go.
+  - Clock-locked recovery used a one-off wrapper (OTA stamped on the node's own clock) — worth a
+    `--node-clock-offset` flag in edge_ota.py if it recurs.
   - The NTP broker-host fallback is wired only in the c6 + s3-eth app_mains; dehum/hvac/shades/c3 still lack it.
-  - Security once-over: `handle_cmd` skips freshness AND anti-replay when a signed command carries no `ts` — every
-    signer we ship sends one, but a captured no-ts command would replay forever. Make `ts` mandatory (except
-    the TOFU claim, which is unsigned anyway).
+  - `sgp41_mech` RECOVERED 2026-10-12 (v29 via a node-clock-stamped OTA; its weak closet Wi-Fi drops ~⅓ of
+    readings and lost the OTA's log lines — edge_ota reported "rolled back" while it had in fact landed).
+  - **ts now MANDATORY on signed commands — firmware COMMITTED, NOT SHIPPED (Hugh: "do it, don't push now").**
+    `ha_mqtt` handle_cmd + shared `ha_cmd` (panel) refuse a signed command without `ts` (it used to skip freshness
+    AND anti-replay → a captured one replayed forever). Server side already deployed: `battery_refresh` (the one
+    signer that sent no ts) now stamps via `edge_cmd.signed_command`. Ships with each node's next OTA; the
+    D1001 panels with their next panel build.
 - **Experiment tracking:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) →
   `instance/aq-experiment/reports/latest.md` (Flags section first). Promotion criterion in the ADR amendment.
 - **OPEN (Hugh decides):** hardware — SGP41+SHT4x for the 3 BME680s, SCD41 CO₂ for bedrooms/offices, or SEN66 per

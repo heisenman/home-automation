@@ -200,7 +200,14 @@ static void handle_cmd(const char *data, int len) {
         long window = (cJSON_IsString(op) && (strcmp(op->valuestring, "ota") == 0
                                            || strcmp(op->valuestring, "batt_refresh") == 0)) ? 86400 : 300;
         const cJSON *ts = cJSON_GetObjectItem(inner, "ts");      // freshness (clock is SNTP-synced)
-        if (cJSON_IsNumber(ts)) {
+        // ts is MANDATORY (2026-10-12). Without it, freshness AND anti-replay were both skipped, so any captured
+        // signed command without ts replayed forever. Every server signer stamps one (edge_sign.wrap,
+        // edge_cmd.signed_command; batt_refresh since the same date).
+        if (!cJSON_IsNumber(ts)) {
+            ha_mqtt_log("cmd rejected: no ts (signed commands must carry ts/seq)");
+            cJSON_Delete(inner); cJSON_Delete(root); return;
+        }
+        {
             long dt = (long)time(NULL) - (long)ts->valuedouble;
             if (dt < -window || dt > window) {
                 ha_mqtt_log("cmd rejected: stale (dt=%lds win=%lds)", dt, window);

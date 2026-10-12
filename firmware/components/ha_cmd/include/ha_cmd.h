@@ -26,6 +26,7 @@ typedef enum {
     HA_CMD_BAD_SIG,       // HMAC mismatch (forged / wrong secret / tampered p)
     HA_CMD_STALE,         // |now - ts| exceeds the freshness window
     HA_CMD_REPLAY,        // (ts,seq) not strictly newer than the last acted-on command
+    HA_CMD_NO_TS,         // signed but no "ts" — refused: without it there is no freshness or replay gate
 } ha_cmd_result_t;
 
 // Verify a signed-command envelope. `payload`/`len` = the raw MQTT message; `secret` = this device's
