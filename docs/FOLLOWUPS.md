@@ -46,6 +46,10 @@
   rise" is mostly its own temperature response (per-day ρ −0.95; closet warms ~5 °C on warm afternoons) — west
   side unaffected. → Phase 4 (real T/RH into SGP `measure_raw`) is now the bigger accuracy lever. **Open:** SGP30
   relative basis; whether SGP index 100 should keep landing exactly on the 80 Excellent/Good cut (F15).
+- **Phase 4a SHIPPED 2026-10-12 (shadow) — `air_quality_tc`:** SGP40/41 corrected server-side for same-room
+  temperature (−90 ticks/°C). Back-calc (F16): temperature explains ~¼ of c_office's afternoon swing, little of
+  the kitchen's, most of the closet's in October — the house-wide afternoon rise survives. Caveat: room-meter T,
+  not the node's own. **Phase 4b (open, Hugh):** an SHT4x on each SGP node → real on-chip compensation.
 - **Experiment tracking:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) →
   `instance/aq-experiment/reports/latest.md` (Flags section first). Promotion criterion in the ADR amendment.
 - **OPEN (Hugh decides):** hardware — SGP41+SHT4x for the 3 BME680s, SCD41 CO₂ for bedrooms/offices, or SEN66 per

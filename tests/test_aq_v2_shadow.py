@@ -236,3 +236,48 @@ def test_sampler_v3_replays_the_rung():
         hot = hot_with(100_000)
         assert P._bme680_v3(hot, "gas_x", now, rungs_path=rp) < clean
         assert P._bme680_v3(hot, "gas_x", now, rungs_path=Path(td) / "missing.db") is None
+
+
+def test_tc_removes_a_pure_temperature_swing():
+    """voc_raw that moves ONLY with room temperature (at the shadow coefficient) must index flat once corrected;
+    uncorrected, the warm afternoon reads as a VOC event."""
+    import math
+    from server.gas_compensation import SGP_TC_K_T, sgp_air_quality_tc, sgp_tc_voc_index
+    temps = [22.0 + 3.0 * max(0.0, math.sin((i % 1440) / 1440 * 2 * math.pi)) for i in range(4320)]
+    raw = [30000 + SGP_TC_K_T * (t - 22.0) for t in temps]
+    warm = max(range(2880, 4320), key=lambda i: temps[i])
+    corrected, cov = sgp_tc_voc_index(list(zip(raw[:warm + 1], temps[:warm + 1])), 4320)
+    uncorrected, _ = sgp_tc_voc_index([(r, 25.0) for r in raw[:warm + 1]], 4320)
+    assert 90 <= corrected <= 110 and uncorrected > 130
+    assert sgp_air_quality_tc(corrected, cov)["air_quality_band_label"] in ("Excellent", "Good")
+    assert sgp_air_quality_tc(corrected, 0.1)["air_quality"] is None
+
+
+def test_temp_source_is_same_room_only():
+    th = {"temperature_c": 21.0, "humidity_pct": 40.0}
+    devs = [{"device_id": "gas_k", "device_type": "sgp40_gas", "area": "kitchen", "metrics": {"voc_index": 100}},
+            {"device_id": "meter_kitchen", "device_type": "switchbot_meter", "area": "kitchen", "ts": "2026-10-12T00:00:00Z", "metrics": th},
+            {"device_id": "meter_pro_living", "device_type": "switchbot_meter", "area": "living", "ts": "2026-10-12T00:00:00Z", "metrics": th},
+            {"device_id": "gas_mech", "device_type": "bme680_gas", "area": "mech", "ts": "2026-10-12T00:00:00Z", "metrics": th},
+            {"device_id": "gas_mech_sgp41", "device_type": "sgp41_gas", "area": "mech", "metrics": {"voc_index": 100}}]
+    assert P._temp_source(devs, "kitchen", "gas_k")["device_id"] == "meter_kitchen"
+    assert P._temp_source(devs, "mech", "gas_mech_sgp41")["device_id"] == "gas_mech"      # BME die as fallback
+    assert P._temp_source(devs, "office", "gas_o") is None                                 # never another room
+
+
+def test_sampler_tc_carries_temperature_forward():
+    from server.gas_compensation import SGP_TC_WINDOW_S
+    now = time.time()
+    with tempfile.TemporaryDirectory() as td:
+        rp = Path(td) / "rungs.db"
+        rc = sqlite3.connect(rp)
+        rc.executescript(RUNG_DDL)
+        start = int(now) - SGP_TC_WINDOW_S + 60
+        rc.executemany("INSERT INTO rung VALUES ('1min','g','voc_raw',?,NULL,NULL,30000,1,30000)",
+                       [(b,) for b in range(start, int(now), 60)])
+        rc.executemany("INSERT INTO rung VALUES ('1min','m','temperature_c',?,NULL,NULL,21.0,1,21.0)",
+                       [(b,) for b in range(start, int(now), 300)])                    # a meter every 5 min
+        rc.commit()
+        rc.close()
+        assert P._sgp_tc("g", "m", now, rungs_path=rp) == 80.0                           # flat → index 100 → 80
+        assert P._sgp_tc("g", "nobody", now, rungs_path=rp) is None                      # no temperature → nothing

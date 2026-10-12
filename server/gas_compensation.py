@@ -380,6 +380,45 @@ def bme680_air_quality_v3(voc_index, coverage, gas_valid=1) -> dict:
                    baseline_coverage=round(coverage, 2))
 
 
+# ── SGP40/41 temperature compensation, server-side — SHADOW (Phase 4a, 2026-10-12) ─────────────────────────
+# Study 2 F6/F13: the nodes give the SGP's measure_raw the fixed 25 °C / 50 %RH defaults, so voc_raw carries the
+# sensor's temperature response. Until the nodes have their own T/RH (Phase 4b: on-chip compensation, the real
+# fix), the server subtracts a linear temperature term from voc_raw, using a SAME-ROOM temperature, and replays
+# Sensirion's algorithm (server/gas_index_algorithm.py) over 3 d of the 1-min rung — the v3 pattern.
+# Coefficient (F16): night-only fits −63 / −92 / −158 ticks/°C (closet / kitchen / c_office); the closet's Oct
+# day-to-day slope −138, but the same sensor's Aug–Sep slope +44. −90 left the least residual day-to-day
+# temperature coupling across the three, without the over-correction −135 shows in Aug–Sep. No humidity term: its
+# fitted sign flips between sensors (−318…+86 ticks per g/m³), so it isn't identified from this data.
+SGP_TC_K_T = -90.0               # voc_raw ticks per °C of same-room temperature
+SGP_TC_T_REF = 25.0              # °C — what the firmware tells the chip today; the algorithm is offset-free anyway
+SGP_TC_WINDOW_S = 3 * 86400
+SGP_TC_MIN_COVERAGE = 0.5
+
+
+def sgp_tc_voc_index(samples, window_buckets: int):
+    """(VOC Index of the LAST sample, coverage) from time-ordered [(voc_raw, room_t_c)] 1-min pairs."""
+    from server.gas_index_algorithm import VocIndex
+    alg = VocIndex(sampling_interval=60.0)
+    idx, n = 0, 0
+    for sraw, t in samples:
+        if sraw is None or t is None:
+            continue
+        idx = alg.process(int(round(sraw - SGP_TC_K_T * (t - SGP_TC_T_REF))))
+        n += 1
+    return (idx or None), n / max(1, window_buckets)
+
+
+def sgp_air_quality_tc(voc_index, coverage, family="SGP4x") -> dict:
+    """Temperature-compensated SGP VOC Index → band, on the same curve as v1's SGP40/41 scoring."""
+    if voc_index is None or coverage < SGP_TC_MIN_COVERAGE:
+        return _stale_report(family, "VOC Index", "burn_in",
+                             f"Temperature-compensated index still learning ({coverage * 100:.0f}% of a 3 d window).")
+    rep = sgp40_air_quality(voc_index)
+    rep["explanation"] += " Corrected for this room's temperature."
+    rep["air_quality_conf"] = "ok"
+    return rep
+
+
 # ── PM2.5 → band — SHADOW (ADR-0035 amendment 2026-10-10, Phase 3) ──────────────────────────────────────
 # The gas index is blind to particles (Study 2 F10: the 09-15 smoke-level day read "Excellent" everywhere).
 # Any device with the PM2.5 ability (today: the Levoit purifiers) gets `air_quality_pm25`, and a room's v2

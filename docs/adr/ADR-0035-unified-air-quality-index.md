@@ -272,8 +272,11 @@ as a parallel `air_quality_v2` series; v1 stays the live index until the daily e
 - **Phase 3 (shipped 2026-10-10, shadow):** `air_quality_pm25` for any PM2.5-capable device — 1 h mean on EPA's
   2024 PM2.5 AQI breakpoints (absolute basis); room v2 = worst-of gas v2 and PM. On promotion,
   `resolve_room_air_quality` takes the PM report as one more candidate (its absolute basis already wins ties).
-- **Phase 4:** firmware feeds real T/RH to SGP40/41 `measure_raw` and SGP30 absolute humidity (currently
-  fixed 50 %RH / 25 °C defaults).
+- **Phase 4a (shipped 2026-10-12, shadow):** `air_quality_tc` — SGP40/41 voc_raw corrected server-side for a
+  SAME-ROOM temperature (−90 ticks/°C), re-indexed with the ported algorithm. Back-calculation (§9 F16): it removes
+  a share of the afternoon cycle (c_office ~¼, closet in October most of it), not the house-wide rise.
+- **Phase 4b:** firmware feeds real T/RH to SGP40/41 `measure_raw` and SGP30 absolute humidity (currently
+  fixed 50 %RH / 25 °C defaults) — Sensirion's own compensation, needs a T/RH source at each node (SHT4x).
 
 **Promotion criterion (v2 or v3 → `air_quality`):** ≥ 2 weeks of v2 with no sampler gaps, mech-closet band
 agreement and event hit-rate both better than v1 (7 d ending 2026-10-10: 60 % / 9 %), then backfill v2 history.

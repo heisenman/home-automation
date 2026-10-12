@@ -981,6 +981,7 @@ const GRAPHABLE = [
   { key: "air_quality", unit: "AQ", color: "#4ade80", label: "Air Quality" },  // gas index (0-100, higher=cleaner); "AQ" identifies the bare number on the map glance
   { key: "air_quality_v2", unit: "AQ", color: "#a3e635", label: "Air Quality v2 (shadow)" },  // ADR-0035 amendment 2026-10-10 shadow series
   { key: "air_quality_v3", unit: "AQ", color: "#facc15", label: "Air Quality v3 (shadow)" },  // Phase 1: BME680 via Sensirion's VOC Index algorithm
+  { key: "air_quality_tc", unit: "AQ", color: "#fb923c", label: "Air Quality temp-corrected (shadow)" },  // Phase 4a: SGP voc_raw corrected for same-room temperature
   { key: "air_quality_pm25", unit: "AQ", color: "#f472b6", label: "PM2.5 Air Quality (shadow)" },  // EPA-banded 1 h PM2.5 (Phase 3 shadow)
   { key: "aq_local_excess", unit: "pts", color: "#38bdf8", label: "AQ vs house (shadow)" },  // Phase 2: <0 = worse than the house, beyond this room's usual offset
   { key: "aq_hour_anomaly", unit: "pts", color: "#c084fc", label: "AQ vs usual for hour (shadow)" },  // Phase 2: <0 = worse than usual for this hour

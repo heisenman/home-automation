@@ -47,7 +47,7 @@ BIN_S = 300
 SETTLE_S = 24 * 3600            # a new Sensirion node's baseline-learning period, excluded from head-to-heads
 BANDS = ["Excellent", "Good", "Fair", "Poor", "Very Poor"]
 GAS_FAMS = ("sgp30", "sgp40", "sgp41", "bme680")
-METRICS = ("air_quality", "air_quality_v2", "air_quality_v3", "air_quality_pm25", "aq_local_excess", "aq_hour_anomaly", "vent_coupling", "vent_ah_excess", "gas_ohm", "temperature_c", "humidity_pct", "voc_index", "voc_raw",
+METRICS = ("air_quality", "air_quality_v2", "air_quality_v3", "air_quality_tc", "air_quality_pm25", "aq_local_excess", "aq_hour_anomaly", "vent_coupling", "vent_ah_excess", "gas_ohm", "temperature_c", "humidity_pct", "voc_index", "voc_raw",
            "nox_index", "tvoc", "pm25_ugm3")
 
 
@@ -79,7 +79,7 @@ def load(since_ep):
         out[(d, m)][int(b)] = v
     devs = {d: (t, a) for d, t, a in h.execute("SELECT device_id, device_type, area FROM device_last_seen")}
     v2_rows = {(d, m): n for d, m, n in h.execute(
-        "SELECT device_id, metric, count(*) FROM readings WHERE metric IN ('air_quality_v2','air_quality_v3','air_quality_pm25') "
+        "SELECT device_id, metric, count(*) FROM readings WHERE metric IN ('air_quality_v2','air_quality_v3','air_quality_tc','air_quality_pm25') "
         "AND ts >= ? GROUP BY 1, 2", (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 86400)),))}
     h.close()
     return out, devs, v2_rows
@@ -342,6 +342,14 @@ def main():
             nbins[name] = len(common)
             P(f"| {name} | {len(common)} | {agree:.0f}% | {'—' if r is None else f'{r:.2f}'} | "
               f"{'—' if hit is None else f'{hit:.0f}% of {len(ev)}'} | {'—' if fa_pct is None else f'{fa_pct:.0f}% of {len(fa)}'} |")
+        ref_tc = {k: v for k, v in S(s, "air_quality_tc").items() if k >= settle_until}
+        bs = S(b, "air_quality_v3")
+        common = sorted(set(bs) & set(ref_tc))
+        if common:
+            agree = 100.0 * sum(band(bs[k]) == band(ref_tc[k]) for k in common) / len(common)
+            r = pearson([bs[k] for k in common], [ref_tc[k] for k in common])
+            P(f"| air_quality_v3 vs {s} temp-corrected (Phase 4a) | {len(common)} | {agree:.0f}% | "
+              f"{'—' if r is None else f'{r:.2f}'} | — | — |")
         if "air_quality" in res:
             P("\nPhase-1 target: band agreement ≥ 75 % (baseline 2026-10-10: v1 53 %). "
               + " · ".join(f"{n[-2:]} − v1 = {res[n] - res['air_quality']:+.0f} pts" for n in ("air_quality_v2", "air_quality_v3") if n in res)
@@ -375,6 +383,25 @@ def main():
                 flags.append(f"**{ar}**: {s}'s afternoon VOC rise tracks the afternoon temperature rise (ρ {rr:+.2f}, "
                              f"{len(days_ok)} d) — the reference is temperature-contaminated; read this head-to-head "
                              f"with care (Study 2 F13; Phase 4 fixes it at the source).")
+
+    # ── Phase 4a: does the daily cycle survive a same-room temperature correction? ──
+    sgp4 = [(d, f, ar) for d, f, ar in gas if f in ("sgp40", "sgp41")]
+    P(f"\n## Temperature correction (Phase 4a), last {a.days} d — median score by local hour, live (v1) vs temp-corrected, on the bins both have\n")
+    P("Study 2 F16: with room-meter temperature the correction removes ~¼–⅓ of the c_office afternoon swing and almost "
+      "none of the kitchen's; the closet's October swing is mostly temperature. Swing = best − worst hourly median.\n")
+    P("| node | series | 04 | 08 | 12 | 14 | 16 | 20 | swing | tc rows 24 h |\n|---|---|---|---|---|---|---|---|---|---|")
+    for d, f, ar in sgp4:
+        tc_bins = set(S(d, "air_quality_tc"))
+        for name in ("air_quality", "air_quality_tc"):
+            ser = {k: v for k, v in S(d, name).items() if k in tc_bins}      # like-for-like: the same bins
+            byh = defaultdict(list)
+            for k, v in ser.items():
+                byh[local_hour(k)].append(v)
+            med = {h: st.median(v) for h, v in byh.items()}
+            cells = " | ".join(f"{med[h]:.0f}" if h in med else "—" for h in (4, 8, 12, 14, 16, 20))
+            sw = f"{max(med.values()) - min(med.values()):.0f}" if len(med) >= 20 else "—"
+            n = v2_rows.get((d, "air_quality_tc"), 0) if name == "air_quality_tc" else ""
+            P(f"| {d} | {'v1' if name == 'air_quality' else 'temp-corrected'} | {cells} | {sw} | {n} |")
 
     # ── Diurnal ──
     P(f"\n## Diurnal — median score by local hour, last {a.days} d (v2; Sensirion = v1 carried)\n")

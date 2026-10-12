@@ -5,7 +5,8 @@ the read path (the viewmodel fusion), so it never lands on disk. Two modes:
 
   --once      Compute air_quality NOW for every gas node and write one reading each, plus the SHADOW
               `air_quality_v2` (ADR-0035 amendment 2026-10-10; BME680 differs, Sensirion carries v1) and
-              `air_quality_v3` (Phase 1: the BME680 through Sensirion's VOC Index algorithm). This is the
+              `air_quality_v3` (Phase 1: the BME680 through Sensirion's VOC Index algorithm) and
+              `air_quality_tc` (Phase 4a: SGP40/41 corrected for a same-room temperature). This is the
               FORWARD sampler — run on a timer (systemd ha-gas-quality-sampler.timer). Also writes the
               SHADOW `air_quality_pm25` for any PM2.5-capable device (Phase 3) and the Phase 2 context
               `aq_local_excess` / `aq_hour_anomaly` per gas node.
@@ -31,6 +32,7 @@ from server.gas_compensation import (air_quality_for, sgp30_air_quality, sgp40_a
                                      sgp41_air_quality, bme680_air_quality, clean_air_baseline,
                                      bme680_air_quality_v2, bme680_v2_baseline, BME_V2_WINDOW_S,
                                      bme680_air_quality_v3, bme680_voc_index, BME_V3_WINDOW_S,
+                                     sgp_air_quality_tc, sgp_tc_voc_index, SGP_TC_WINDOW_S,
                                      pm25_air_quality, PM25_WINDOW_S,
                                      AQ_CTX_WINDOW_S, AQ_OFFSET_MIN_N, AQ_PROFILE_MIN_N, aq_context,
                                      area_worst, house_median)
@@ -115,6 +117,12 @@ def sample_once(conn) -> int:
         v3 = _bme680_v3(conn, d["device_id"], now_ep) if fam == "bme680" else v1
         if v3 is not None:
             _write(conn, d["device_id"], d.get("device_type"), d.get("area"), iso, v3, "air_quality_v3")
+        # SHADOW Phase 4a (2026-10-12): SGP40/41 voc_raw corrected for a same-room temperature, re-indexed.
+        if fam in ("sgp40", "sgp41"):
+            src = _temp_source(devices, d.get("area"), d["device_id"])
+            tc = _sgp_tc(d["device_id"], src["device_id"], now_ep) if src else None
+            if tc is not None:
+                _write(conn, d["device_id"], d.get("device_type"), d.get("area"), iso, tc, "air_quality_tc")
     # SHADOW Phase 2: house-wide vs room-local + hour-of-day expectation, per gas node.
     for did, ctx in _aq_contexts(now_scores, node_area, {k: v[0] for k, v in node_fam.items()}, now_ep).items():
         for metric, key in (("aq_local_excess", "local_excess"), ("aq_hour_anomaly", "hour_anomaly")):
@@ -344,6 +352,49 @@ def _bme680_v3(conn, gid, now_ep, rungs_path=None):
     rep = bme680_air_quality_v3(idx, cov, gas_valid)
     if rep["air_quality"] is None:
         print(f"  {gid}: v3 {rep['air_quality_conf']} — {rep['explanation']}")
+    return rep["air_quality"]
+
+
+def _temp_source(devices, area, exclude_id):
+    """A SAME-ROOM temperature for SGP compensation, or None — never another room's (that was F8's flapping
+    reference). A plain T/RH meter first (_meter_rank: 'pro', then freshest); else a BME680 in the room — its die
+    runs warm, but only the temperature CHANGE matters (the VOC Index algorithm is offset-free)."""
+    cands = [d for d in devices if d.get("area") == area and d["device_id"] != exclude_id
+             and (d.get("metrics") or {}).get("temperature_c") is not None]
+    meters = [d for d in cands if "gas" not in (d.get("device_type") or "").lower()
+              and "bme680" not in (d.get("device_type") or "").lower()]
+    if meters:
+        return min(meters, key=_meter_rank)
+    bmes = [d for d in cands if "bme680" in (d.get("device_type") or "").lower()]
+    return min(bmes, key=_meter_rank) if bmes else None
+
+
+def _sgp_tc(gid, t_source, now_ep, rungs_path=None):
+    """Phase 4a score for one SGP40/41 node: its voc_raw minus SGP_TC_K_T × the same-room temperature, through
+    Sensirion's algorithm over the last 3 d of the 1-min rung. Temperature is carried forward ≤ 30 min (meters
+    report every few minutes). Stateless, like v3."""
+    path = Path(rungs_path or RUNGS)
+    if not path.exists():
+        return None
+    since = int(now_ep - SGP_TC_WINDOW_S)
+    q = ("SELECT bucket_start, vmean FROM rung WHERE res='1min' AND device_id=? AND metric=? AND bucket_start >= ? "
+         "AND vmean IS NOT NULL ORDER BY bucket_start")
+    rc = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        raw = rc.execute(q, (gid, "voc_raw", since)).fetchall()
+        temp = rc.execute(q, (t_source, "temperature_c", since - 1800)).fetchall()
+    finally:
+        rc.close()
+    samples, j, last_t, last_b = [], 0, None, None
+    for b, sraw in raw:
+        while j < len(temp) and temp[j][0] <= b:
+            last_b, last_t = temp[j]
+            j += 1
+        samples.append((sraw, last_t if last_b is not None and b - last_b <= 1800 else None))
+    idx, cov = sgp_tc_voc_index(samples, SGP_TC_WINDOW_S // 60)
+    rep = sgp_air_quality_tc(idx, cov)
+    if rep["air_quality"] is None:
+        print(f"  {gid}: tc {rep['air_quality_conf']} — {rep['explanation']}")
     return rep["air_quality"]
 
 
