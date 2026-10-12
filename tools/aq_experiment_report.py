@@ -164,9 +164,9 @@ def main():
         P(f"| {d} | {f} | {ar} | {n2} | {n3} | {n1} |")
         if n1 > 100 and n2 < 1000:
             flags.append(f"**{d}**: only {n2} v2 rows in 24 h (v1 is live) — v2 sampler gap or BME burn-in.")
-        if n1 > 100 and n3 < 1000:
-            flags.append(f"**{d}**: only {n3} v3 rows in 24 h (v1 is live) — v3 sampler gap, or < 24 h since v3 shipped "
-                         f"(2026-10-12; a BME needs ≥ 1.5 d of rung for v3).")
+        v3_first = min(data.get((d, "air_quality_v3"), {}) or [now])
+        if n1 > 100 and n3 < 1000 and v3_first < now - 86400:      # v3 shipped 2026-10-12; no flag on its 1st day
+            flags.append(f"**{d}**: only {n3} v3 rows in 24 h (v1 is live) — v3 sampler gap or BME burn-in.")
 
     pm_devs = sorted({d for (d, m) in data if m == "pm25_ugm3"})
     for d in pm_devs:
@@ -325,7 +325,7 @@ def main():
               f"are excluded as baseline learning._\n")
         P("| BME series | bins | band agreement | pearson | event hit-rate (VOC Idx>200 → BME<80) | false alarms (BME<60, VOC Idx<150) |")
         P("|---|---|---|---|---|---|")
-        res = {}
+        res, nbins = {}, {}
         for name in ("air_quality", "air_quality_v2", "air_quality_v3"):
             bs = S(b, name)
             common = sorted(set(bs) & set(ref))
@@ -339,19 +339,20 @@ def main():
             fa = [k for k in common if bs[k] < 60]
             fa_pct = 100.0 * sum(vi.get(k, 999) < 150 for k in fa) / len(fa) if fa else None
             res[name] = agree
+            nbins[name] = len(common)
             P(f"| {name} | {len(common)} | {agree:.0f}% | {'—' if r is None else f'{r:.2f}'} | "
               f"{'—' if hit is None else f'{hit:.0f}% of {len(ev)}'} | {'—' if fa_pct is None else f'{fa_pct:.0f}% of {len(fa)}'} |")
         if "air_quality" in res:
             P("\nPhase-1 target: band agreement ≥ 75 % (baseline 2026-10-10: v1 53 %). "
               + " · ".join(f"{n[-2:]} − v1 = {res[n] - res['air_quality']:+.0f} pts" for n in ("air_quality_v2", "air_quality_v3") if n in res)
-              + ". Most disagreement is one band apart around the 80 cut, where an SGP index of 100 lands (Study 2 F14).")
+              + ". Most disagreement is one band apart around the 80 cut, where an SGP index of 100 lands (Study 2 F15).")
             for n in ("air_quality_v2", "air_quality_v3"):
-                if res.get(n, 0) >= 75:
+                if res.get(n, 0) >= 75 and nbins.get(n, 0) >= 5 * 288:     # ≥ 5 d of bins before it means anything
                     flags.append(f"**{ar}**: {n} band agreement {res[n]:.0f}% ≥ 75 % target — candidate to promote.")
         # Is the Sensirion reference itself temperature-driven here? (Study 2 F13: in the closet, Oct 2026, each
         # day's afternoon voc_raw drop tracked that day's temperature rise, ρ −0.95 — an uncompensated SGP41.)
         # Per local day: (13–17 h mean) − (02–06 h mean) of the BME's die temperature vs the SGP's voc_raw.
-        tb, sr = S(b, "temperature_c"), S(s, "voc_raw")
+        tb, sr = data.get((b, "temperature_c"), {}), data.get((s, "voc_raw"), {})   # all loaded days, not just 7
         win = lambda ser, h0, h1: {k: v for k, v in ser.items() if h0 <= local_hour(k) < h1}  # noqa: E731
         def daymean(ser):
             byd = defaultdict(list)
@@ -363,7 +364,10 @@ def main():
         if len(days_ok) >= 5:
             dT = [aT[x] - nT[x] for x in days_ok]
             dS = [aS[x] - nS[x] for x in days_ok]
-            rr = pearson(dT, dS)
+            try:
+                rr = st.correlation(dT, dS)
+            except st.StatisticsError:
+                rr = None
             P(f"\nReference check — per-day afternoon temperature rise vs {s} voc_raw change, {len(days_ok)} days: "
               f"median ΔT {st.median(dT):+.1f} °C, ρ = {'—' if rr is None else f'{rr:+.2f}'} "
               f"(≤ −0.7 → the SGP's afternoon 'worsening' here is mostly its own temperature response).")
