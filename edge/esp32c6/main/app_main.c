@@ -127,6 +127,7 @@ void app_main(void) {
     if (!ha_config_ensure_node_secret(&cfg))
         ESP_LOGE(TAG, "no command secret — node will reject every signed command (incl. OTA)");
 
+    ha_sntp_set_fallback_from_uri(cfg.broker_uri);   // NTP falls back to the broker host (ha_sntp.c)
     if (!ha_sntp_sync(cfg.ntp_server, 15000)) {
         ESP_LOGW(TAG, "SNTP not synced — readings ship without ts; mapper stamps on ingest");
     }

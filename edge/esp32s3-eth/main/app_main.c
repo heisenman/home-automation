@@ -222,6 +222,7 @@ void app_main(void) {
     if (!ha_mqtt_has_cmd_secret())
         ha_led_set(HA_LED_FATAL);    // still no command secret → can't accept commands/OTA; RED solid
 
+    ha_sntp_set_fallback_from_uri(cfg.broker_uri);   // NTP falls back to the broker host (ha_sntp.c)
     if (!ha_sntp_sync(cfg.ntp_server, 15000)) {
         ESP_LOGW(TAG, "SNTP not synced — readings ship without ts; mapper stamps on ingest");
     }

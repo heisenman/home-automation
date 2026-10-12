@@ -382,6 +382,7 @@ def provision_defaults() -> dict:
             "wifi_ssid": p.get("wifi_ssid", ""),
             "broker_uri": p.get("broker_uri", ""),
             "ota_host": p.get("ota_host", ""),
+            "ntp_server": p.get("ntp_server") or cfg.get("ntp_server", "pool.ntp.org"),
             "has_psk": bool(p.get("wifi_psk")),
             "warn": p.get("warn") or None,
         })
@@ -405,6 +406,11 @@ def apply_defaults(spec: dict) -> dict:
         for key in ("wifi_ssid", "wifi_psk", "broker_uri", "ota_host"):
             if not out.get(key):
                 out[key] = p.get(key, "")
+        # Time is part of the network too: an air-gap node can't reach pool.ntp.org, and a node without a clock
+        # rejects every signed command, OTA included (sgp41_stdby2/sgp41_mech, 2026-10-12). A profile may name
+        # its own NTP host; the firmware also falls back to the broker host (ha_sntp).
+        if p.get("ntp_server") and not out.get("ntp_server"):
+            out["ntp_server"] = p["ntp_server"]
         if p.get("warn"):
             out.setdefault("_warn", p["warn"])
     out.setdefault("ntp_server", cfg.get("ntp_server", "pool.ntp.org"))
