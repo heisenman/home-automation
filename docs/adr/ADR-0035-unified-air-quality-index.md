@@ -255,7 +255,13 @@ as a parallel `air_quality_v2` series; v1 stays the live index until the daily e
   Sensirion families carry v1 into `air_quality_v2`. The `bme680_air_quality` "Humidity compensation stays (uses
   the co-located `ambient_ref`…)" text above describes **v1** and is superseded by v2 on promotion.
 - **Phase 1:** cross-calibrate BME → SGP41 scale in the mech closet (target band agreement ≥ 75 %); SGP30 to a
-  relative basis (its "absolute" TVOC swings 3× week-to-week).
+  relative basis (its "absolute" TVOC swings 3× week-to-week). **BME part shipped 2026-10-12 (shadow,
+  `air_quality_v3`):** Sensirion's Gas Index Algorithm (pure-Python port, `server/gas_index_algorithm.py`) run on
+  the BME680's humidity-corrected ln R, banded like an SGP — on the SGP41's scale by construction, not by fit.
+  Beats v1 and v2 on correlation and event hit-rate in both pairs; the quantile map overfit (§9 D7). Two caveats from
+  the same study: the closet SGP41 reference is temperature-contaminated on warm afternoons (§9 F13 → Phase 4
+  priority), and exact-band agreement is capped by SGP index 100 → score 80 sitting on the Excellent/Good cut
+  (§9 F15) — a scale decision left open. SGP30 relative basis still open.
 - **Phase 2 (shipped 2026-10-10, shadow):** per node `aq_local_excess` (vs house median, minus the node's usual
   offset) + `aq_hour_anomaly` (vs its 28 d typical for this hour) → `aq_context` locality/timing/note.
   Thresholds (−20 / −20 / house < 60) from an out-of-sample shadow-tune (SENSOR-METHODOLOGY §9.4). On promotion
@@ -269,7 +275,7 @@ as a parallel `air_quality_v2` series; v1 stays the live index until the daily e
 - **Phase 4:** firmware feeds real T/RH to SGP40/41 `measure_raw` and SGP30 absolute humidity (currently
   fixed 50 %RH / 25 °C defaults).
 
-**Promotion criterion (v2 → `air_quality`):** ≥ 2 weeks of v2 with no sampler gaps, mech-closet band
+**Promotion criterion (v2 or v3 → `air_quality`):** ≥ 2 weeks of v2 with no sampler gaps, mech-closet band
 agreement and event hit-rate both better than v1 (7 d ending 2026-10-10: 60 % / 9 %), then backfill v2 history.
 Hardware recommendations (SGP41+SHT4x for the BME680s, SCD41 CO₂, or SEN66 per room) are in the study, open.
 

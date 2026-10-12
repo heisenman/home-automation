@@ -398,6 +398,9 @@ mechanical closet (west wall) holds one of each — the controlled comparison.
 | F8 | **Mech-closet BME borrowed a flapping reference.** No same-room meter → `_resolve_ambient_ref` picks the freshest "pro" meter on the floor (living room / c_office / h_bed). | resolver code |
 | F9 | **NOx: nothing to tune.** Index flat at 1 for two months; one spike to 456 on 09-14 15:15, the same 5-min bin the VOC Index fell to 69 — looks like a node-restart transient, **unverified**. | event scan |
 | F10 | **PM2.5 is invisible to the AQ index.** Living-room purifier sits at its 1 µg/m³ floor 95 % of the time, but real episodes (09-15 daily mean 41, peak 650; 10-04/10-05 peaks 77–131) left every room "Excellent". | purifier PM |
+| F13 | **The closet SGP41's October afternoon "worsening" is mostly its own temperature response** (2026-10-12). Per day, the 13–17 h minus 02–06 h change in its voc_raw tracks that day's closet temperature rise: ρ **−0.95** over Oct 1–11 (slope −136 ticks/°C), vs +0.17 in Aug–Sep. On cool days (10-09…11, ΔT +1.4…2.7 °C) the drop shrank to −240…−390 ticks; on warm days (ΔT +4.7…6.0) it was −640…−1000. The closet's afternoon swing doubled in October (2.2 → 4.7 °C) and follows outdoor afternoon highs (22–25 °C Oct 1–8, 12–15 °C after). Offline T+AH compensation of voc_raw, rerun through Sensirion's algorithm (which reproduces the node's own index on the raw), drops the October 14 h median index 227 → 118. **West side is NOT affected** (same per-day test, Oct: c_office ρ −0.26, kitchen −0.18) — F5 stands. Cause: F6 (no T/RH into `measure_raw`). | `p1d`/`p1e` (scratch), per-day regression |
+| F14 | **The BME680 does see the closet's VOCs — partial out T+AH and agreement goes UP.** Detrended 15-min ln R vs SGP41 voc_raw: ρ +0.65 → **+0.75** (Aug), +0.31 → +0.45 (Sep), +0.10 → +0.30 (Oct) after removing temperature and absolute humidity from both. So the shared signal is air, not a common humidity artifact (the hypothesis this disproved: D8). Agreement has weakened month on month — conditioning (F3) or the closet changing — watch it. | partial correlation |
+| F15 | **Phase 1 result: Sensirion's own algorithm on the BME680 beats any ratio mapping.** Feed the corrected ln R as a pseudo-SRAW (700 ticks per ln-unit) through the Gas Index Algorithm at a 60 s interval, band like an SGP. vs the T-compensated closet SGP41, Aug 5–Sep 30 / Oct: Pearson **0.63 / 0.41** (v1 0.29 / 0.29, v2 0.49 / 0.21); event hit-rate **82 % / 78 %** (v1 31 / 17, v2 58 / 76); false alarms 0 / 0; within one band 96–97 %. h_office (only 66 post-settle bins): agreement 76 %, hit 16/16, 0 false alarms. Scale flat over 400–1000; > 1000 adds h_office false alarms. Exact-band agreement stalls at ~56–64 % because both medians sit at 81–82 — on the 80 Excellent/Good cut, where SGP index 100 lands — so normal air flips bands on noise. A scale question for the ADR, not a sensor one. | `p1f`/`p1g` (scratch) |
 | F11 | **Absolute humidity from the BME's own die beats any reference meter.** Self-heating changes RH, not water-vapour content; MOX R tracks water vapour. Detrended (48 h) fits: die-AH explains 42 / 44 / 28 % (h_bed / h_office / mech) vs ref-meter T+RH 40 / 37 / 13 %. One shared k = 0.10 ln-R per g/m³ is within a few points of per-node fits (0.073–0.14). Temperature term ≈ 0 once humidity is absolute. | §9.3 dead end D2 |
 
 ### 9.3 Dead ends (don't repeat)
@@ -414,6 +417,14 @@ mechanical closet (west wall) holds one of each — the controlled comparison.
   baseline must come from the 1-min rollup rung (`rungs.db`, 7 d retention).
 - **D5 — day-median detrending for the humidity refit.** It removed part of the signal and gave k ≈ 0.06; the
   48 h rolling-median detrend matches the original fit (≈ 0.07–0.10). The reporter uses the rolling version.
+- **D7 — quantile-mapping the v2 ratio onto the SGP41 score (the original Phase-1 plan).** Fit Aug–Sep it
+  looked fine; out of sample (Oct) band agreement fell to **19 %** and false alarms to 51 %. A static
+  distribution map can't follow a drifting sensor or a reference whose distribution shifts with the weather (F13).
+- **D8 — "the BME and SGP41 only agree through humidity."** Tested 2026-10-12 and wrong: removing T+AH from both
+  *raises* their correlation (F14).
+- **D9 — the mech closet as an unconditional calibration bench.** With an uncompensated SGP41 and a closet that
+  warms 5 °C on warm afternoons, the "reference" carries a temperature artifact (F13). Score against a
+  T-compensated reference, or on cool days, until Phase 4.
 - **D6 — duckdb `//` on a double (v1.1.3) doesn't floor**, so 5-min binning silently did nothing. Use
   `floor(x / n) * n`. And ha-2 has no duckdb sqlite extension (air-gapped, can't download) → read hot.db with
   `sqlite3`.
@@ -426,7 +437,13 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
   absolute-humidity correction from the node's own die T/RH (no reference meter). Band cuts unchanged.
   `server/gas_compensation.py` (`bme680_*_v2`), `gas_quality_persist.py` (`_bme680_v2`); Sensirion nodes carry
   v1 into `air_quality_v2` so the series is complete. Catalog: `air_quality_v2`.
-- **Phase 1 — cross-calibrate in the mech closet.** Quantile-map the corrected BME ratio onto the SGP41 VOC
+- **Phase 1 (BME680 part shipped 2026-10-12, shadow) — `air_quality_v3`.** The BME680 runs through Sensirion's
+  Gas Index Algorithm (`server/gas_index_algorithm.py`, a pure-Python port of the vendored C, pinned against a
+  C-generated trace) on its humidity-corrected ln R as a pseudo-SRAW (`BME_V3_TICKS_PER_LN` = 700), banded like an
+  SGP40/41. Stateless: each sampler run replays the last 3 d of the 1-min rung (+ the newest raw sample), which
+  lands within 1 index point of an uninterrupted run. Sensirion nodes carry v1. Evidence F13–F15; the
+  quantile-map plan below was a dead end (D7). **Still open:** the SGP30 relative basis (no same-room reference to
+  validate against), and the band-cut question F15 raises. *Original plan:* Quantile-map the corrected BME ratio onto the SGP41 VOC
   Index scale over the overlap. Target: band agreement ≥ 75 % (v1 53 %), better event hit-rate (v1 9 %). Score
   the SGP30 relative to its own rolling baseline. Ceiling is limited by F4 — this is why hardware matters.
 - **Phase 2 (shipped 2026-10-10, shadow) — house-wide vs room-local.** Per gas node each minute:
@@ -477,7 +494,9 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
   Caveat: purifier PM sensors are consumer-grade (floor 1 µg/m³, coarse) — fine for episodes, not for
   fine distinctions near the Excellent/Good edge.
 - **Phase 4 — firmware: real T/RH into SGP `measure_raw` + SGP30 absolute humidity** (downlinked from the room
-  meter as a signed command, or a local SHT4x).
+  meter as a signed command, or a local SHT4x). **Priority raised 2026-10-12 (F13):** the uncompensated SGP41 is
+  the Phase-1 reference, and it reads a warm closet afternoon as VOCs. A local SHT4x per SGP node removes the
+  cross-device dependency a downlink would add (cf. F8), which favours the SGP41+SHT4x / SEN66 hardware options.
 
 **Hardware (recommendation, not yet decided):** (1) swap the three BME680s for SGP41 + SHT4x — removes the
 cross-family problem at its root; (2) real CO₂ (SCD41) in bedrooms/offices — nothing in the house measures CO₂

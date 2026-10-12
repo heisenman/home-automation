@@ -23,8 +23,8 @@
   house; h_office BME680 shows nothing). CO₂ is the real bedroom metric (c_bed first).
 - **Phase 2b SHIPPED (shadow):** humidity "accumulating / closed off" per room meter (`vent_coupling`,
   `vent_ah_excess`); flags c_bed (shut) 43/68 nights vs h_office (open) 19/68 — a proxy, not a door detector.
-  Gas coupling to be re-tested once the SGP41s land. Optional: a door contact sensor on c_bed for ground truth. BME680 context needs ~3–7 d of v2. **Next:** Phase 1 after the SGP41
-  pairs land; Phase 4 rides the hardware decision.
+  Gas coupling to be re-tested once the SGP41s land. Optional: a door contact sensor on c_bed for ground truth. BME680 context needs ~3–7 d of v2. **Next:** Phase 4 rides the
+  hardware decision (Phase 1 BME part shipped 2026-10-12, below).
 - **2nd same-air pair LIVE 2026-10-10 15:36 PDT:** spare SGP41 `sgp41_stdby2` (board = old `bench_c6`,
   MAC a0:f2:62:86:f5:74, fw v27-sgp41id) adopted via the ADR-0036 intake on ha-2 → `gas_h_office_sgp41` in
   h_office (TOFU-claimed, relocate job 4bf132c4dadb clean). Report auto-adds the h_office head-to-head; first 24 h
@@ -40,6 +40,12 @@
   so `sgp41_stdby2` was missing on .210 until `tools/sync_node_secrets.py` ran (now 13/13, in sync). Same thing
   happened to `sgp41_mech` (fixed by hand in 4aa6d86). Candidate fix: a .210 timer running the (union-only,
   backup-keeping, never-resolves-conflicts) sync after intakes — not built yet.
+- **Phase 1 (BME part) SHIPPED 2026-10-12 (shadow) — `air_quality_v3`:** BME680 through Sensirion's VOC Index
+  algorithm (pure-Python port, stateless 3 d rung replay). vs a T-compensated closet SGP41: Pearson 0.63 (v1 0.29),
+  event hit-rate 82 % (v1 31 %), 0 false alarms. **New finding F13:** the closet SGP41's October afternoon "VOC
+  rise" is mostly its own temperature response (per-day ρ −0.95; closet warms ~5 °C on warm afternoons) — west
+  side unaffected. → Phase 4 (real T/RH into SGP `measure_raw`) is now the bigger accuracy lever. **Open:** SGP30
+  relative basis; whether SGP index 100 should keep landing exactly on the 80 Excellent/Good cut (F15).
 - **Experiment tracking:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) →
   `instance/aq-experiment/reports/latest.md` (Flags section first). Promotion criterion in the ADR amendment.
 - **OPEN (Hugh decides):** hardware — SGP41+SHT4x for the 3 BME680s, SCD41 CO₂ for bedrooms/offices, or SEN66 per

@@ -329,6 +329,57 @@ def bme680_air_quality_v2(gas_ohm, die_t_c, die_rh_pct, baseline_log_r, coverage
                    ratio=round(r, 3), baseline_coverage=round(coverage, 2))
 
 
+# ── BME680 v3 — Sensirion's VOC Index algorithm over the corrected ln R — SHADOW (Phase 1, 2026-10-12) ──
+# Phase 1 asked: put the BME680 on the SGP41's scale. Quantile-mapping v2's ratio onto the SGP41 score overfit
+# (Study 2 D7). What worked: feed the BME680's humidity-corrected ln R, as a pseudo-SRAW, through the SAME
+# Gas Index Algorithm the SGP4x run on-chip (server/gas_index_algorithm.py), then band it exactly like an SGP40/41.
+# Against the closet SGP41 (temperature-corrected, F13), Aug 5–Sep 30: Pearson 0.29 (v1) / 0.49 (v2) → 0.63; event
+# hit-rate 31 % / 58 % → 82 %; 0 false alarms; 96 % within one band. The algorithm's adaptive mean also absorbs
+# the slow conditioning drift (F3) that v2's 48 h p95 lags behind. Scale: ticks per ln-unit is flat 400–1000 on
+# the closet; > 1000 starts false alarms on h_office → 700. Window: 3 d of 1-min rung recomputed each run (no
+# saved state) lands within 1 index point of an uninterrupted run.
+BME_V3_TICKS_PER_LN = 700.0
+BME_V3_LN_REF = 12.0             # ln Ω (~160 kΩ) → pseudo-SRAW 30000; offset-free algorithm, only keeps it in range
+BME_V3_WINDOW_S = 3 * 86400
+BME_V3_MIN_COVERAGE = 0.5
+
+
+def bme680_pseudo_sraw(gas_ohm, die_t_c, die_rh_pct):
+    """BME680 sample → an SGP-style SRAW tick count (higher = cleaner, like the SGP's), or None."""
+    c = bme680_corrected_log_r(gas_ohm, die_t_c, die_rh_pct)
+    return None if c is None else int(round(30000 + BME_V3_TICKS_PER_LN * (c - BME_V3_LN_REF)))
+
+
+def bme680_voc_index(samples, window_buckets: int):
+    """(VOC Index of the LAST sample, coverage) from time-ordered [(gas_ohm, die_t, die_rh)] 1-min means."""
+    from server.gas_index_algorithm import VocIndex
+    sraw = [s for s in (bme680_pseudo_sraw(*x) for x in samples) if s is not None]
+    if not sraw:
+        return None, 0.0
+    alg = VocIndex(sampling_interval=60.0)
+    idx = 0
+    for s in sraw:
+        idx = alg.process(s)
+    return (idx or None), len(sraw) / max(1, window_buckets)
+
+
+def bme680_air_quality_v3(voc_index, coverage, gas_valid=1) -> dict:
+    """BME680 v3 → RELATIVE band on the VOC Index, the same curve as SGP40/41 (100 = this room's normal → 80)."""
+    if not gas_valid:
+        return _stale_report("BME680", "gas resistance", "stale", "No valid gas-resistance reading.")
+    if voc_index is None or coverage < BME_V3_MIN_COVERAGE:
+        return _stale_report("BME680", "gas resistance", "burn_in",
+                             f"VOC Index still learning this room ({coverage * 100:.0f}% of a 3 d window).")
+    score = _interp(float(voc_index), _SGP40_X, _SGP40_Y)
+    b, label = band_for_score(score)
+    rel = ("at" if abs(voc_index - 100) < 5 else
+           f"{voc_index - 100:.0f} above" if voc_index > 100 else f"{100 - voc_index:.0f} below")
+    expl = (f"{label}. VOC Index {voc_index:.0f} — {rel} this room's recent baseline of 100 (Sensirion's algorithm "
+            f"run on the humidity-corrected gas resistance). A relative measure, not comparable to other rooms.")
+    return _report(score, "relative", "BME680", "VOC Index", round(float(voc_index), 0), expl,
+                   baseline_coverage=round(coverage, 2))
+
+
 # ── PM2.5 → band — SHADOW (ADR-0035 amendment 2026-10-10, Phase 3) ──────────────────────────────────────
 # The gas index is blind to particles (Study 2 F10: the 09-15 smoke-level day read "Excellent" everywhere).
 # Any device with the PM2.5 ability (today: the Levoit purifiers) gets `air_quality_pm25`, and a room's v2

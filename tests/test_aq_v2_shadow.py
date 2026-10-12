@@ -177,3 +177,62 @@ def test_room_meters_prefers_pro_and_skips_wet_rooms_and_gas():
             {"device_id": "meter_attic", "device_type": "switchbot_meter", "area": "attic", "metrics": th}]
     m = P._room_meters(devs, meta)
     assert list(m) == ["bed"] and m["bed"]["device_id"] == "meter_pro_bed"
+
+
+def test_voc_index_port_matches_sensirion_c():
+    """server/gas_index_algorithm.py vs the vendored C (firmware/components/sensirion_gas_index), compiled and
+    run on the same trace at a 60 s interval on 2026-10-12: all 2880 outputs identical; these are checkpoints."""
+    import math
+    from server.gas_index_algorithm import VocIndex
+    trace = [int(30000 + 60 * math.sin(i / 229.0) - (900 if 2400 <= i < 2440 else 0)) for i in range(2880)]
+    alg = VocIndex(60.0)
+    out = [alg.process(v) for v in trace]
+    expect = {10: 100, 100: 95, 1000: 134, 2399: 129, 2410: 492, 2420: 492, 2439: 492, 2500: 130, 2879: 94}
+    assert {i: out[i] for i in expect} == expect
+    assert VocIndex(60.0).process(30000) == 0                         # blackout
+
+
+def test_v3_bme680_on_the_voc_index_scale():
+    from server.gas_compensation import bme680_air_quality_v3, bme680_voc_index
+    steady = [(200_000, 30.0, 30.0)] * 2400
+    idx, cov = bme680_voc_index(steady, 4320)
+    assert 95 <= idx <= 105 and abs(cov - 2400 / 4320) < 1e-9
+    rep = bme680_air_quality_v3(idx, cov)
+    assert rep["air_quality_band_label"] in ("Excellent", "Good") and rep["air_quality_basis"] == "relative"
+    # a 30-min resistance drop (VOC event) after the baseline has learned → well above 100 → Fair or worse
+    idx, cov = bme680_voc_index(steady + [(100_000, 30.0, 30.0)] * 30, 2430)
+    assert idx > 250 and bme680_air_quality_v3(idx, cov)["air_quality"] < 60
+    # wetter air alone (same R corrected up) must NOT read as a VOC event
+    idx_wet, _ = bme680_voc_index(steady + [(200_000, 30.0, 45.0)] * 30, 2430)
+    assert idx_wet < 100
+    assert bme680_air_quality_v3(idx, 0.2)["air_quality_conf"] == "burn_in"
+    assert bme680_air_quality_v3(idx, 1.0, gas_valid=0)["air_quality"] is None
+
+
+def test_sampler_v3_replays_the_rung():
+    from server.gas_compensation import BME_V3_WINDOW_S
+    now = time.time()
+    iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+
+    def hot_with(gas_ohm):
+        h = sqlite3.connect(":memory:")
+        h.execute("CREATE TABLE readings (ts TEXT, device_id TEXT, metric TEXT, value REAL, authoritative INT)")
+        for m, v in (("gas_ohm", gas_ohm), ("temperature_c", 30.0), ("humidity_pct", 30.0), ("gas_valid", 1)):
+            h.execute("INSERT INTO readings VALUES (?,?,?,?,1)", (iso, "gas_x", m, v))
+        return h
+    with tempfile.TemporaryDirectory() as td:
+        rp = Path(td) / "rungs.db"
+        rc = sqlite3.connect(rp)
+        rc.executescript(RUNG_DDL)
+        start = int(now) - BME_V3_WINDOW_S + 120
+        rc.executemany("INSERT INTO rung VALUES (?,?,?,?,?,?,?,?,?)",
+                       [("1min", "gas_x", m, b, None, None, v, 1, v) for b in range(start, int(now) - 120, 60)
+                        for m, v in (("gas_ohm", 200_000), ("temperature_c", 30.0), ("humidity_pct", 30.0))])
+        rc.commit()
+        rc.close()
+        clean = P._bme680_v3(hot_with(200_000), "gas_x", now, rungs_path=rp)
+        assert clean is not None and clean >= 75
+        # the raw payload is newer than the last rung bucket → appended: a halved R moves the score at once
+        hot = hot_with(100_000)
+        assert P._bme680_v3(hot, "gas_x", now, rungs_path=rp) < clean
+        assert P._bme680_v3(hot, "gas_x", now, rungs_path=Path(td) / "missing.db") is None

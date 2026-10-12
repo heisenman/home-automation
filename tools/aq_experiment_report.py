@@ -47,7 +47,7 @@ BIN_S = 300
 SETTLE_S = 24 * 3600            # a new Sensirion node's baseline-learning period, excluded from head-to-heads
 BANDS = ["Excellent", "Good", "Fair", "Poor", "Very Poor"]
 GAS_FAMS = ("sgp30", "sgp40", "sgp41", "bme680")
-METRICS = ("air_quality", "air_quality_v2", "air_quality_pm25", "aq_local_excess", "aq_hour_anomaly", "vent_coupling", "vent_ah_excess", "gas_ohm", "temperature_c", "humidity_pct", "voc_index",
+METRICS = ("air_quality", "air_quality_v2", "air_quality_v3", "air_quality_pm25", "aq_local_excess", "aq_hour_anomaly", "vent_coupling", "vent_ah_excess", "gas_ohm", "temperature_c", "humidity_pct", "voc_index", "voc_raw",
            "nox_index", "tvoc", "pm25_ugm3")
 
 
@@ -79,7 +79,7 @@ def load(since_ep):
         out[(d, m)][int(b)] = v
     devs = {d: (t, a) for d, t, a in h.execute("SELECT device_id, device_type, area FROM device_last_seen")}
     v2_rows = {(d, m): n for d, m, n in h.execute(
-        "SELECT device_id, metric, count(*) FROM readings WHERE metric IN ('air_quality_v2','air_quality_pm25') "
+        "SELECT device_id, metric, count(*) FROM readings WHERE metric IN ('air_quality_v2','air_quality_v3','air_quality_pm25') "
         "AND ts >= ? GROUP BY 1, 2", (time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 86400)),))}
     h.close()
     return out, devs, v2_rows
@@ -155,28 +155,32 @@ def main():
     P = out.append
 
     # ── Health ──
-    P("## Health — v2 rows written, last 24 h (expect ~1440/node at 1/min)\n")
-    P("| node | family | area | v2 rows | v1 rows (5-min bins) |\n|---|---|---|---|---|")
+    P("## Health — shadow rows written, last 24 h (expect ~1440/node at 1/min)\n")
+    P("| node | family | area | v2 rows | v3 rows | v1 rows (5-min bins) |\n|---|---|---|---|---|---|")
     for d, f, ar in gas:
         n2 = v2_rows.get((d, "air_quality_v2"), 0)
+        n3 = v2_rows.get((d, "air_quality_v3"), 0)
         n1 = sum(1 for b in data.get((d, "air_quality"), {}) if b >= now - 86400)
-        P(f"| {d} | {f} | {ar} | {n2} | {n1} |")
+        P(f"| {d} | {f} | {ar} | {n2} | {n3} | {n1} |")
         if n1 > 100 and n2 < 1000:
             flags.append(f"**{d}**: only {n2} v2 rows in 24 h (v1 is live) — v2 sampler gap or BME burn-in.")
+        if n1 > 100 and n3 < 1000:
+            flags.append(f"**{d}**: only {n3} v3 rows in 24 h (v1 is live) — v3 sampler gap, or < 24 h since v3 shipped "
+                         f"(2026-10-12; a BME needs ≥ 1.5 d of rung for v3).")
 
     pm_devs = sorted({d for (d, m) in data if m == "pm25_ugm3"})
     for d in pm_devs:
         n = v2_rows.get((d, "air_quality_pm25"), 0)
-        P(f"| {d} | PM2.5 | {devs.get(d, ('', '?'))[1]} | {n} (air_quality_pm25) | — |")
+        P(f"| {d} | PM2.5 | {devs.get(d, ('', '?'))[1]} | {n} (air_quality_pm25) | — | — |")
         if n < 500:
             flags.append(f"**{d}**: only {n} air_quality_pm25 rows in 24 h — PM sampler gap or sparse purifier feed.")
 
     # ── Bands ──
-    P(f"\n## Band share, last {a.days} d — v1 (live) vs v2 (shadow)\n")
-    P("| node | v1 | v2 |\n|---|---|---|")
+    P(f"\n## Band share, last {a.days} d — v1 (live) vs v2, v3 (shadow)\n")
+    P("| node | v1 | v2 | v3 |\n|---|---|---|---|")
     for d, f, ar in gas:
-        s1, s2 = band_share(S(d, "air_quality")), band_share(S(d, "air_quality_v2"))
-        P(f"| {d} ({f}) | {fmt_share(s1)} | {fmt_share(s2)} |")
+        s1, s2, s3 = (band_share(S(d, m)) for m in ("air_quality", "air_quality_v2", "air_quality_v3"))
+        P(f"| {d} ({f}) | {fmt_share(s1)} | {fmt_share(s2)} | {fmt_share(s3)} |")
 
     # ── Rooms: worst-of per area (Phase 3) ──
     # PM is REPLAYED from raw pm25 (trailing 1 h of 5-min bins, the sampler's formula) so the comparison has
@@ -322,7 +326,7 @@ def main():
         P("| BME series | bins | band agreement | pearson | event hit-rate (VOC Idx>200 → BME<80) | false alarms (BME<60, VOC Idx<150) |")
         P("|---|---|---|---|---|---|")
         res = {}
-        for name in ("air_quality", "air_quality_v2"):
+        for name in ("air_quality", "air_quality_v2", "air_quality_v3"):
             bs = S(b, name)
             common = sorted(set(bs) & set(ref))
             if not common:
@@ -337,12 +341,36 @@ def main():
             res[name] = agree
             P(f"| {name} | {len(common)} | {agree:.0f}% | {'—' if r is None else f'{r:.2f}'} | "
               f"{'—' if hit is None else f'{hit:.0f}% of {len(ev)}'} | {'—' if fa_pct is None else f'{fa_pct:.0f}% of {len(fa)}'} |")
-        if "air_quality_v2" in res and "air_quality" in res:
-            P(f"\nPhase-1 target: band agreement ≥ 75 % (baseline 2026-10-10: v1 53 %). v2 − v1 = "
-              f"{res['air_quality_v2'] - res['air_quality']:+.0f} pts.")
-            if res["air_quality_v2"] >= 75:
-                flags.append(f"**{ar}**: v2 band agreement {res['air_quality_v2']:.0f}% ≥ 75 % target — "
-                             f"candidate to promote v2.")
+        if "air_quality" in res:
+            P("\nPhase-1 target: band agreement ≥ 75 % (baseline 2026-10-10: v1 53 %). "
+              + " · ".join(f"{n[-2:]} − v1 = {res[n] - res['air_quality']:+.0f} pts" for n in ("air_quality_v2", "air_quality_v3") if n in res)
+              + ". Most disagreement is one band apart around the 80 cut, where an SGP index of 100 lands (Study 2 F14).")
+            for n in ("air_quality_v2", "air_quality_v3"):
+                if res.get(n, 0) >= 75:
+                    flags.append(f"**{ar}**: {n} band agreement {res[n]:.0f}% ≥ 75 % target — candidate to promote.")
+        # Is the Sensirion reference itself temperature-driven here? (Study 2 F13: in the closet, Oct 2026, each
+        # day's afternoon voc_raw drop tracked that day's temperature rise, ρ −0.95 — an uncompensated SGP41.)
+        # Per local day: (13–17 h mean) − (02–06 h mean) of the BME's die temperature vs the SGP's voc_raw.
+        tb, sr = S(b, "temperature_c"), S(s, "voc_raw")
+        win = lambda ser, h0, h1: {k: v for k, v in ser.items() if h0 <= local_hour(k) < h1}  # noqa: E731
+        def daymean(ser):
+            byd = defaultdict(list)
+            for k, v in ser.items():
+                byd[local_day(k)].append(v)
+            return {dd: st.mean(v) for dd, v in byd.items() if len(v) >= 6}
+        aT, nT, aS, nS = daymean(win(tb, 13, 17)), daymean(win(tb, 2, 6)), daymean(win(sr, 13, 17)), daymean(win(sr, 2, 6))
+        days_ok = sorted(set(aT) & set(nT) & set(aS) & set(nS))
+        if len(days_ok) >= 5:
+            dT = [aT[x] - nT[x] for x in days_ok]
+            dS = [aS[x] - nS[x] for x in days_ok]
+            rr = pearson(dT, dS)
+            P(f"\nReference check — per-day afternoon temperature rise vs {s} voc_raw change, {len(days_ok)} days: "
+              f"median ΔT {st.median(dT):+.1f} °C, ρ = {'—' if rr is None else f'{rr:+.2f}'} "
+              f"(≤ −0.7 → the SGP's afternoon 'worsening' here is mostly its own temperature response).")
+            if rr is not None and rr <= -0.7:
+                flags.append(f"**{ar}**: {s}'s afternoon VOC rise tracks the afternoon temperature rise (ρ {rr:+.2f}, "
+                             f"{len(days_ok)} d) — the reference is temperature-contaminated; read this head-to-head "
+                             f"with care (Study 2 F13; Phase 4 fixes it at the source).")
 
     # ── Diurnal ──
     P(f"\n## Diurnal — median score by local hour, last {a.days} d (v2; Sensirion = v1 carried)\n")

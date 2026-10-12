@@ -4,7 +4,8 @@
 the read path (the viewmodel fusion), so it never lands on disk. Two modes:
 
   --once      Compute air_quality NOW for every gas node and write one reading each, plus the SHADOW
-              `air_quality_v2` (ADR-0035 amendment 2026-10-10; BME680 differs, Sensirion carries v1). This is the
+              `air_quality_v2` (ADR-0035 amendment 2026-10-10; BME680 differs, Sensirion carries v1) and
+              `air_quality_v3` (Phase 1: the BME680 through Sensirion's VOC Index algorithm). This is the
               FORWARD sampler — run on a timer (systemd ha-gas-quality-sampler.timer). Also writes the
               SHADOW `air_quality_pm25` for any PM2.5-capable device (Phase 3) and the Phase 2 context
               `aq_local_excess` / `aq_hour_anomaly` per gas node.
@@ -17,6 +18,7 @@ and safe to re-run; the existing compactor/rollup then downsamples air_quality l
 """
 import argparse
 import bisect
+import calendar
 import sqlite3
 import sys
 import time
@@ -28,6 +30,7 @@ from server.api.viewmodel import build_sensor_list          # noqa: E402  (reuse
 from server.gas_compensation import (air_quality_for, sgp30_air_quality, sgp40_air_quality,  # noqa: E402
                                      sgp41_air_quality, bme680_air_quality, clean_air_baseline,
                                      bme680_air_quality_v2, bme680_v2_baseline, BME_V2_WINDOW_S,
+                                     bme680_air_quality_v3, bme680_voc_index, BME_V3_WINDOW_S,
                                      pm25_air_quality, PM25_WINDOW_S,
                                      AQ_CTX_WINDOW_S, AQ_OFFSET_MIN_N, AQ_PROFILE_MIN_N, aq_context,
                                      area_worst, house_median)
@@ -108,6 +111,10 @@ def sample_once(conn) -> int:
             now_scores[d["device_id"]] = v2
             node_area[d["device_id"]] = d.get("area")
             node_fam[d["device_id"]] = (fam, d.get("device_type"))
+        # SHADOW v3 (Phase 1, 2026-10-12): BME680 on the SGP's VOC Index scale; Sensirion carries v1 again.
+        v3 = _bme680_v3(conn, d["device_id"], now_ep) if fam == "bme680" else v1
+        if v3 is not None:
+            _write(conn, d["device_id"], d.get("device_type"), d.get("area"), iso, v3, "air_quality_v3")
     # SHADOW Phase 2: house-wide vs room-local + hour-of-day expectation, per gas node.
     for did, ctx in _aq_contexts(now_scores, node_area, {k: v[0] for k, v in node_fam.items()}, now_ep).items():
         for metric, key in (("aq_local_excess", "local_excess"), ("aq_hour_anomaly", "hour_anomaly")):
@@ -303,6 +310,40 @@ def _bme680_v2(conn, gid, now_ep, rungs_path=None):
                                 m.get("gas_valid", 1))
     if rep["air_quality"] is None:
         print(f"  {gid}: v2 {rep['air_quality_conf']} — {rep['explanation']}")
+    return rep["air_quality"]
+
+
+def _bme680_v3(conn, gid, now_ep, rungs_path=None):
+    """v3 score for one BME680 node now: Sensirion's VOC Index algorithm replayed over the last 3 d of 1-min
+    rung buckets (gas_ohm + die T/RH), ending on the latest raw payload when that is newer than the rung.
+    Stateless — recomputed every run — so a restart or a missed run can't corrupt a saved baseline."""
+    path = Path(rungs_path or RUNGS)
+    if not path.exists():
+        return None
+    rc = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        by_b: dict[int, dict] = {}
+        for b, metric, v in rc.execute(
+                "SELECT bucket_start, metric, vmean FROM rung WHERE res='1min' AND device_id=? "
+                "AND metric IN ('gas_ohm','temperature_c','humidity_pct') AND bucket_start >= ?",
+                (gid, int(now_ep - BME_V3_WINDOW_S))):
+            by_b.setdefault(b, {})[metric] = v
+    finally:
+        rc.close()
+    samples = [(by_b[b].get("gas_ohm"), by_b[b].get("temperature_c"), by_b[b].get("humidity_pct")) for b in sorted(by_b)]
+    row = conn.execute("SELECT max(ts) FROM readings WHERE device_id=? AND metric='gas_ohm' AND authoritative=1",
+                       (gid,)).fetchone()
+    gas_valid = 1
+    if row and row[0] and (not by_b or calendar.timegm(time.strptime(row[0], "%Y-%m-%dT%H:%M:%SZ")) >= max(by_b) + 60):
+        m = dict(conn.execute("SELECT metric, value FROM readings WHERE device_id=? AND ts=? AND authoritative=1 "
+                              "AND metric IN ('gas_ohm','temperature_c','humidity_pct','gas_valid')",
+                              (gid, row[0])).fetchall())
+        samples.append((m.get("gas_ohm"), m.get("temperature_c"), m.get("humidity_pct")))
+        gas_valid = m.get("gas_valid", 1)
+    idx, cov = bme680_voc_index(samples, BME_V3_WINDOW_S // 60)
+    rep = bme680_air_quality_v3(idx, cov, gas_valid)
+    if rep["air_quality"] is None:
+        print(f"  {gid}: v3 {rep['air_quality_conf']} — {rep['explanation']}")
     return rep["air_quality"]
 
 
