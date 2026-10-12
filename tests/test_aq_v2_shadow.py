@@ -258,7 +258,8 @@ def test_temp_source_is_same_room_only():
     devs = [{"device_id": "gas_k", "device_type": "sgp40_gas", "area": "kitchen", "metrics": {"voc_index": 100}},
             {"device_id": "meter_kitchen", "device_type": "switchbot_meter", "area": "kitchen", "ts": "2026-10-12T00:00:00Z", "metrics": th},
             {"device_id": "meter_pro_living", "device_type": "switchbot_meter", "area": "living", "ts": "2026-10-12T00:00:00Z", "metrics": th},
-            {"device_id": "gas_mech", "device_type": "bme680_gas", "area": "mech", "ts": "2026-10-12T00:00:00Z", "metrics": th},
+            {"device_id": "gas_mech", "device_type": "bme680_gas", "area": "mech", "ts": "2026-10-12T00:00:00Z",
+             "metrics": {"gas_ohm": 300_000}},                  # as the sensor list shows it: no die T
             {"device_id": "gas_mech_sgp41", "device_type": "sgp41_gas", "area": "mech", "metrics": {"voc_index": 100}}]
     assert P._temp_source(devs, "kitchen", "gas_k")["device_id"] == "meter_kitchen"
     assert P._temp_source(devs, "mech", "gas_mech_sgp41")["device_id"] == "gas_mech"      # BME die as fallback

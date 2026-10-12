@@ -359,12 +359,13 @@ def _temp_source(devices, area, exclude_id):
     """A SAME-ROOM temperature for SGP compensation, or None — never another room's (that was F8's flapping
     reference). A plain T/RH meter first (_meter_rank: 'pro', then freshest); else a BME680 in the room — its die
     runs warm, but only the temperature CHANGE matters (the VOC Index algorithm is offset-free)."""
-    cands = [d for d in devices if d.get("area") == area and d["device_id"] != exclude_id
-             and (d.get("metrics") or {}).get("temperature_c") is not None]
+    cands = [d for d in devices if d.get("area") == area and d["device_id"] != exclude_id]
     meters = [d for d in cands if "gas" not in (d.get("device_type") or "").lower()
-              and "bme680" not in (d.get("device_type") or "").lower()]
+              and "bme680" not in (d.get("device_type") or "").lower()
+              and (d.get("metrics") or {}).get("temperature_c") is not None]
     if meters:
         return min(meters, key=_meter_rank)
+    # the sensor list hides a BME680's die temperature (self-heated), but the rung has it — type is enough here
     bmes = [d for d in cands if "bme680" in (d.get("device_type") or "").lower()]
     return min(bmes, key=_meter_rank) if bmes else None
 
