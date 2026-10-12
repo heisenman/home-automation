@@ -57,6 +57,8 @@ static const char *TAG = "ha_edge";
 
 // Operability-LED status hooks (S3-only): the shared ha_mqtt calls these on connect/disconnect and on an
 // OTA failure. Other boards pass NULL. Keeps the LED policy — an S3-specific peripheral — out of ha_mqtt.
+// Same-room T/RH from the dictator → the SGP4x on-chip humidity compensation experiment (ha_gas.h).
+static void s3_on_ambient(float t_c, float rh_pct, void *u) { (void)u; ha_gas_set_ambient(t_c, rh_pct); }
 static void s3_led_ok(void *u)        { (void)u; ha_led_set(HA_LED_OK); }          // relaying normally → LED off
 static void s3_led_mqtt_down(void *u) { (void)u; ha_led_set(HA_LED_MQTT_DOWN); }   // broker unreachable
 static void s3_led_ota_fail(void *u)  { (void)u; ha_led_set(HA_LED_OTA_FAIL); }
@@ -172,7 +174,8 @@ void app_main(void) {
         // NULL for a board with no sensor: that is a legitimate relay-only node, not a broken one.
         .abilities = ha_gas_device_type(gas),
         .enable_reach = true, .on_connected = s3_led_ok, .on_disconnected = s3_led_mqtt_down,
-        .ota_on_fail = s3_led_ota_fail });
+        .ota_on_fail = s3_led_ota_fail,
+        .on_ambient = (gas == HA_GAS_SENSOR_SGP40 || gas == HA_GAS_SENSOR_SGP41) ? s3_on_ambient : NULL });
 
     // Shared network init — exactly once; both transports attach to this stack + event loop.
     ESP_ERROR_CHECK(esp_netif_init());

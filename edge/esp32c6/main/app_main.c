@@ -68,6 +68,12 @@ static void edge_on_sighting(const uint8_t mac[6], int rssi, void *user) {
 // signal ha_ota uses for its trial-image self-test.
 static bool edge_repoint_healthy(void *user) { (void)user; return ha_mqtt_is_connected(); }
 
+// Same-room T/RH from the dictator → the SGP4x on-chip humidity compensation experiment (ha_gas.h).
+static void edge_on_ambient(float t_c, float rh_pct, void *user) {
+    (void)user;
+    ha_gas_set_ambient(t_c, rh_pct);
+}
+
 void app_main(void) {
     esp_err_t err = nvs_flash_init();
     if (err == ESP_ERR_NVS_NO_FREE_PAGES || err == ESP_ERR_NVS_NEW_VERSION_FOUND) {
@@ -157,7 +163,8 @@ void app_main(void) {
     // the compile-time value as the legacy fallback (ADR-0036 L0).
     ha_mqtt_init(&(ha_mqtt_cfg_t){ .cmd_secret = cfg.cmd_secret, .ota_host = cfg.ota_host,
         .mqtt_user = HA_MQTT_USER, .mqtt_pass = HA_MQTT_PASS, .fw_version = HA_FW_VERSION,
-        .abilities = node_abilities, .enable_reach = true });
+        .abilities = node_abilities, .enable_reach = true,
+        .on_ambient = (gas == HA_GAS_SENSOR_SGP40 || gas == HA_GAS_SENSOR_SGP41) ? edge_on_ambient : NULL });
     ha_mqtt_start(cfg.broker_uri, cfg.node_id);
     ha_ble_scan_cfg_t scan_cfg = {
         .controller_init = NULL,          // native controller (nimble_port_init brings it up)

@@ -14,6 +14,7 @@
 #include "nvs.h"
 #include <time.h>
 #include <stdbool.h>
+#include "esp_timer.h"
 
 static const char *TAG = "ha_gas";
 
@@ -119,15 +120,59 @@ static void sgp30_baseline_save(sgp30_t *s) {
     if (e == ESP_OK) ha_mqtt_log("SGP30 baseline persisted to NVS (eco2=0x%04X tvoc=0x%04X)", eco2b, tvocb);
 }
 
+// --- Ambient T/RH → SGP4x on-chip humidity compensation (Phase 4b experiment; see ha_gas.h) --------------
+// SGP41 datasheet v1.0 §3.2: compensation is ON when real RH/T words are sent with measure_raw, OFF with the
+// defaults; one measurement = 50 ms, 1 Hz with the heater left on. Alternating defaults/real every second
+// keeps that 1 Hz cadence and gives a default and a compensated reading of the same air, 1 s apart.
+#define AMBIENT_MAX_AGE_US (15LL * 60 * 1000000)
+static portMUX_TYPE s_amb_mux = portMUX_INITIALIZER_UNLOCKED;
+static float s_amb_t, s_amb_rh;
+static int64_t s_amb_at_us;                   // esp_timer time of the last accepted value; 0 = never
+
+void ha_gas_set_ambient(float t_c, float rh_pct) {
+    if (!(t_c >= -10.f && t_c <= 50.f) || !(rh_pct >= 0.f && rh_pct <= 100.f)) {   // datasheet Table 4
+        ha_mqtt_log("ambient refused: t=%.1f rh=%.1f out of range", t_c, rh_pct);
+        return;
+    }
+    taskENTER_CRITICAL(&s_amb_mux);
+    s_amb_t = t_c; s_amb_rh = rh_pct; s_amb_at_us = esp_timer_get_time();
+    taskEXIT_CRITICAL(&s_amb_mux);
+}
+
+static bool ambient_get(float *t_c, float *rh_pct) {
+    taskENTER_CRITICAL(&s_amb_mux);
+    bool fresh = s_amb_at_us && esp_timer_get_time() - s_amb_at_us <= AMBIENT_MAX_AGE_US;
+    *t_c = s_amb_t; *rh_pct = s_amb_rh;
+    taskEXIT_CRITICAL(&s_amb_mux);
+    return fresh;
+}
+
 static void gas_task(void *arg) {
     (void)arg;
     int since_pub = s_publish_every;        // publish the first sample promptly
     int64_t sgp30_secs = 0;                 // SGP30 runtime seconds (1 Hz loop) for settle/save timing
     int64_t sgp30_next_save_s = SGP30_SETTLE_S;   // first persist only after the ~12 h settle window
     bool sgp30_restore_tried = false;
+    // SGP4x compensation alternation state: the last DEFAULT reading (the VOC Index's input, held across a
+    // compensated second so the algorithm stays at 1 Hz) and the last COMPENSATED one.
+    bool comp_turn = false, comp_live = false;
+    uint16_t def_voc = 0, def_nox = 0, comp_voc = 0, comp_nox = 0;
+    float amb_t = 0.f, amb_rh = 0.f;
     for (;;) {
         vTaskDelay(pdMS_TO_TICKS(s_sample_ms));
-        char metrics[128];
+        char metrics[256];
+        char comp_json[96] = "";
+        if (s_sensor == HA_GAS_SENSOR_SGP40 || s_sensor == HA_GAS_SENSOR_SGP41) {
+            bool fresh = ambient_get(&amb_t, &amb_rh) && s_sgp41_cond_left == 0;
+            if (fresh != comp_live) {
+                comp_live = fresh;
+                comp_voc = comp_nox = 0;     // never pair a stale compensated reading with a new session
+                ha_mqtt_log(fresh ? "SGP4x compensation experiment ON (t=%.1f rh=%.1f) — alternating default/real"
+                                  : "SGP4x compensation experiment OFF (ambient stale %.1f/%.1f) — defaults only",
+                            amb_t, amb_rh);
+            }
+            comp_turn = fresh && def_voc && !comp_turn;     // never two compensated seconds in a row
+        }
         if (s_sensor == HA_GAS_SENSOR_SGP30) {
             // Restore the settled baseline once, as soon as the clock is trustworthy (app_main blocks on
             // SNTP before us, but guard its 15 s-timeout miss). Give up after ~2 min so a clockless node
@@ -170,10 +215,18 @@ static void gas_task(void *arg) {
                 e = sgp41_condition(&s_sgp41, SGP41_DEFAULT_RH, SGP41_DEFAULT_T, &sraw_voc);
                 if (e == ESP_OK && --s_sgp41_cond_left == 0)
                     ha_mqtt_log("SGP41 conditioning complete (%d s) — NOx pixel live", SGP41_CONDITION_SAMPLES);
+            } else if (comp_turn) {
+                e = sgp41_measure_raw(&s_sgp41, sgp41_rh_ticks(amb_rh), sgp41_t_ticks(amb_t), &sraw_voc, &sraw_nox);
             } else {
                 e = sgp41_measure_raw(&s_sgp41, SGP41_DEFAULT_RH, SGP41_DEFAULT_T, &sraw_voc, &sraw_nox);
             }
             if (e != ESP_OK) { ESP_LOGW(TAG, "sgp41 measure: %s", esp_err_to_name(e)); continue; }
+            if (comp_turn) {                 // keep the compensated pair; feed the algorithms the held default
+                comp_voc = sraw_voc; comp_nox = sraw_nox;
+                sraw_voc = def_voc;  sraw_nox = def_nox;
+            } else {
+                def_voc = sraw_voc;  def_nox = sraw_nox;
+            }
             int32_t voc = 0, nox = 0;
             GasIndexAlgorithm_process(&s_voc, (int32_t)sraw_voc, &voc);
             // NOx index settles at 1 in clean air (not 100 like VOC) and rises on a NOx event. Left at 0
@@ -181,17 +234,29 @@ static void gas_task(void *arg) {
             if (!conditioning)
                 GasIndexAlgorithm_process(&s_nox, (int32_t)sraw_nox, &nox);
             if (++since_pub < s_publish_every) continue;
+            if (comp_live && comp_voc)
+                snprintf(comp_json, sizeof(comp_json),
+                         ",\"voc_raw_comp\":%u,\"nox_raw_comp\":%u,\"comp_t_c\":%.2f,\"comp_rh_pct\":%.1f",
+                         (unsigned)comp_voc, (unsigned)comp_nox, amb_t, amb_rh);
             snprintf(metrics, sizeof(metrics),
-                     "{\"voc_index\":%ld,\"voc_raw\":%u,\"nox_index\":%ld,\"nox_raw\":%u}",
-                     (long)voc, (unsigned)sraw_voc, (long)nox, (unsigned)sraw_nox);
+                     "{\"voc_index\":%ld,\"voc_raw\":%u,\"nox_index\":%ld,\"nox_raw\":%u%s}",
+                     (long)voc, (unsigned)sraw_voc, (long)nox, (unsigned)sraw_nox, comp_json);
         } else {  // HA_GAS_SENSOR_SGP40
             uint16_t sraw = 0;
-            esp_err_t e = sgp40_measure_raw(&s_sgp40, SGP40_DEFAULT_RH, SGP40_DEFAULT_T, &sraw);
+            esp_err_t e = comp_turn
+                ? sgp40_measure_raw(&s_sgp40, sgp40_rh_ticks(amb_rh), sgp40_t_ticks(amb_t), &sraw)
+                : sgp40_measure_raw(&s_sgp40, SGP40_DEFAULT_RH, SGP40_DEFAULT_T, &sraw);
             if (e != ESP_OK) { ESP_LOGW(TAG, "measure_raw: %s", esp_err_to_name(e)); continue; }
+            if (comp_turn) { comp_voc = sraw; sraw = def_voc; }   // algorithm keeps the default stream
+            else           { def_voc = sraw; }
             int32_t voc = 0;                // 0 during the first ~45 s blackout, then 1..500 (100 = baseline)
             GasIndexAlgorithm_process(&s_voc, (int32_t)sraw, &voc);
             if (++since_pub < s_publish_every) continue;
-            snprintf(metrics, sizeof(metrics), "{\"voc_index\":%ld,\"voc_raw\":%u}", (long)voc, (unsigned)sraw);
+            if (comp_live && comp_voc)
+                snprintf(comp_json, sizeof(comp_json), ",\"voc_raw_comp\":%u,\"comp_t_c\":%.2f,\"comp_rh_pct\":%.1f",
+                         (unsigned)comp_voc, amb_t, amb_rh);
+            snprintf(metrics, sizeof(metrics), "{\"voc_index\":%ld,\"voc_raw\":%u%s}", (long)voc, (unsigned)sraw,
+                     comp_json);
         }
         since_pub = 0;
         ha_mqtt_publish_node_sensor(GAS_TOPIC_KEY, s_reg_key, s_dev_type, metrics);

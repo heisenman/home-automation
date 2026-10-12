@@ -52,3 +52,13 @@ void ha_gas_start(const char *node_id, ha_gas_sensor_t sensor, int sda_gpio, int
 
 // Which sensor ha_gas_start actually ended up running (resolved from AUTO), or NONE if the lane is down.
 ha_gas_sensor_t ha_gas_active(void);
+
+// Ambient T/RH for the SGP40/41's on-chip humidity compensation (ADR-0035 amendment, Phase 4b experiment).
+// The node has no T/RH of its own, so the dictator sends the SAME-ROOM meter's reading as a signed
+// "ambient" directive (ha_mqtt on_ambient). While a value is fresh (≤ 15 min), the SGP4x loop ALTERNATES its
+// 1 Hz measurements: one with the datasheet defaults (25 °C / 50 %RH — compensation off, the stream the VOC
+// Index has always been fed), the next with the real values (compensation on). Both raw signals are
+// published (voc_raw, voc_raw_comp, + the inputs) so the server can measure Sensirion's own correction
+// on the same air. Out-of-range values are refused. No-op for SGP30/BME680 nodes.
+void ha_gas_set_ambient(float t_c, float rh_pct);
+

@@ -145,6 +145,10 @@ def sample_once(conn) -> int:
         if pm is not None:
             _write(conn, d["device_id"], d.get("device_type"), d.get("area"), iso, pm, "air_quality_pm25")
     conn.commit()
+    # Phase 4b experiment: hand each SGP40/41 node its room's real T/RH for the on-chip compensation. After the
+    # commit, and it never raises — the AQ writes above must not depend on the broker.
+    from server.maintenance.sgp_ambient import run as push_ambient
+    push_ambient(devices)
     return n
 
 

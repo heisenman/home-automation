@@ -282,3 +282,32 @@ def test_sampler_tc_carries_temperature_forward():
         rc.close()
         assert P._sgp_tc("g", "m", now, rungs_path=rp) == 80.0                           # flat → index 100 → 80
         assert P._sgp_tc("g", "nobody", now, rungs_path=rp) is None                      # no temperature → nothing
+
+
+def test_ambient_targets_same_room_meter_only():
+    from server.maintenance.sgp_ambient import node_for_device, push, targets
+    reg = {"COFFICE_C6-GAS": {"device_id": "gas_c_office", "node_id": "coffice_c6"},
+           "C6-BENCH-GAS": {"device_id": "gas_c_office"},                      # stale twin: node_id entry wins
+           "S3-CRAWLSPACE-GAS": {"device_id": "gas_kitchen"},
+           "SGP41_MECH-GAS": {"device_id": "gas_mech_sgp41", "node_id": "sgp41_mech"}}
+    node_of = node_for_device(reg)
+    assert node_of == {"gas_c_office": "coffice_c6", "gas_kitchen": "s3-crawlspace", "gas_mech_sgp41": "sgp41_mech"}
+    th = {"temperature_c": 21.5, "humidity_pct": 44.0}
+    devs = [{"device_id": "gas_c_office", "device_type": "sgp40_gas", "area": "c_office", "metrics": {}},
+            {"device_id": "meter_pro_c_office", "device_type": "switchbot_meter_pro", "area": "c_office", "age_s": 30, "metrics": th},
+            {"device_id": "gas_kitchen", "device_type": "sgp40_gas", "area": "kitchen", "metrics": {}},
+            {"device_id": "meter_kitchen", "device_type": "switchbot_meter", "area": "kitchen", "age_s": 5000, "metrics": th},
+            {"device_id": "gas_mech_sgp41", "device_type": "sgp41_gas", "area": "mech", "metrics": {}},
+            {"device_id": "gas_mech", "device_type": "bme680_gas", "area": "mech", "metrics": th}]
+    # kitchen meter too old; mech has only a BME die → nothing for either
+    assert targets(devs, node_of) == [("coffice_c6", 21.5, 44.0, "meter_pro_c_office")]
+    out = []
+    sent = push(lambda t, pl: out.append((t, pl)), {"coffice_c6": {"cmd_secret": "k"}},
+                targets(devs, node_of), now=1_800_000_000)
+    assert sent == ["coffice_c6"] and out[0][0] == "home/edge/coffice_c6/ambient"
+    import hashlib, hmac, json
+    env = json.loads(out[0][1])
+    assert hmac.new(b"k", env["p"].encode(), hashlib.sha256).hexdigest() == env["s"]
+    assert json.loads(env["p"]) == {"op": "ambient", "ts": 1_800_000_000, "seq": 0, "t_c": 21.5, "rh_pct": 44.0,
+                                    "src": "meter_pro_c_office"}
+    assert push(lambda t, pl: out.append(t), {}, targets(devs, node_of)) == []        # no secret → nothing

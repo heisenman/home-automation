@@ -28,6 +28,9 @@ typedef struct {
     // verifying its own topic would advance that counter and make the two reject each other's commands.
     // A board that needs its own op extends dispatch here rather than standing up a parallel verifier.
     bool (*on_cmd)(const cJSON *cmd, void *user);
+    // Signed same-room ambient T/RH on home/edge/<node>/ambient (sig + 15 min freshness + RAM-only
+    // monotonic ts; never the NVS anti-replay mark — see handle_ambient). NULL ⇒ not subscribed.
+    void (*on_ambient)(float t_c, float rh_pct, void *user);
     void (*on_connected)(void *user);      // MQTT connected (S3: LED = OK). NULL ⇒ no-op.
     void (*on_disconnected)(void *user);   // MQTT dropped   (S3: LED = MQTT_DOWN). NULL ⇒ no-op.
     void (*ota_on_fail)(void *user);       // OTA reject/fail (S3: LED = OTA_FAIL). NULL ⇒ no-op.

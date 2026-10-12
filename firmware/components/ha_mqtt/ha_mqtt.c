@@ -38,6 +38,7 @@ static char s_status_topic[64];
 static char s_cmd_topic[64];
 static char s_relay_topic[64];        // home/edge/<node>/relay — signed Phase-B coverage directives
 static char s_reach_req_topic[64];    // home/edge/<node>/reach/req — signed census trigger (ADR-0023)
+static char s_ambient_topic[64];      // home/edge/<node>/ambient — signed same-room T/RH (SGP compensation)
 static char s_enroll_req_topic[72];   // home/edge/<node>/enroll/req — ADR-0036 L3 claim (UNSIGNED, one-shot)
 static char s_enroll_rep_topic[72];   // home/edge/<node>/enroll/reply — the one-time secret handover
 static char s_online_msg[64];     // "online <slot> <fwver>" — shows which OTA slot/version is running
@@ -261,6 +262,44 @@ static void handle_reach_req(const char *data, int len) {
     cJSON_Delete(root);
 }
 
+// A signed same-room T/RH on home/edge/<node>/ambient — the dictator's input to the SGP4x on-chip humidity
+// compensation (ADR-0035 amendment, Phase 4b). Inner: {"op":"ambient","ts":<unix>,"seq":<n>,"t_c":..,"rh_pct":..}.
+// Like relay/reach it is sig-only and does NOT touch ha_cmd's NVS (ts,seq) high-water mark: it arrives every
+// few minutes, so persisting it would wear flash and race real commands' anti-replay. Instead: fresh within
+// 15 min, and strictly newer than the last ambient accepted since boot (RAM). A replayed value can at worst
+// re-apply a reading < 15 min old to a measurement input — no actuation, nothing persisted.
+#define AMBIENT_WINDOW_S 900
+static long s_amb_ts = -1;
+static int s_amb_seq = -1;
+static void handle_ambient(const char *data, int len) {
+    cJSON *root = cJSON_ParseWithLength(data, len);
+    if (!root) return;
+    const cJSON *p = cJSON_GetObjectItem(root, "p");
+    const cJSON *s = cJSON_GetObjectItem(root, "s");
+    if (!cJSON_IsString(p) || !cJSON_IsString(s) || !cmd_sig_ok(p->valuestring, s->valuestring)) {
+        ha_mqtt_log("ambient rejected: bad-sig/unsigned");
+        cJSON_Delete(root); return;
+    }
+    cJSON *in = cJSON_Parse(p->valuestring);
+    cJSON_Delete(root);
+    if (!in) return;
+    const cJSON *op = cJSON_GetObjectItem(in, "op"), *ts = cJSON_GetObjectItem(in, "ts");
+    const cJSON *sq = cJSON_GetObjectItem(in, "seq");
+    const cJSON *t = cJSON_GetObjectItem(in, "t_c"), *rh = cJSON_GetObjectItem(in, "rh_pct");
+    if (!cJSON_IsString(op) || strcmp(op->valuestring, "ambient") != 0 || !cJSON_IsNumber(ts)
+        || !cJSON_IsNumber(t) || !cJSON_IsNumber(rh)) {
+        ha_mqtt_log("ambient rejected: malformed"); cJSON_Delete(in); return;
+    }
+    long mts = (long)ts->valuedouble, dt = (long)time(NULL) - mts;
+    int mseq = cJSON_IsNumber(sq) ? (int)sq->valuedouble : 0;
+    if (dt < -AMBIENT_WINDOW_S || dt > AMBIENT_WINDOW_S || mts < s_amb_ts || (mts == s_amb_ts && mseq <= s_amb_seq)) {
+        cJSON_Delete(in); return;                 // stale or not newer: quietly ignore (retained re-delivery)
+    }
+    s_amb_ts = mts; s_amb_seq = mseq;
+    if (s_cfg.on_ambient) s_cfg.on_ambient((float)t->valuedouble, (float)rh->valuedouble, s_cfg.user);
+    cJSON_Delete(in);
+}
+
 static void build_hello(const esp_partition_t *run);   // defined below; the claim re-publishes hello
 
 // ADR-0036 Layer 3 — the claim (TOFU handover). This is the ONE unsigned request this firmware honours,
@@ -328,6 +367,8 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
             esp_mqtt_client_subscribe(s_client, s_relay_topic, 1);   // Phase B coverage directives (retained)
             if (s_cfg.enable_reach)
                 esp_mqtt_client_subscribe(s_client, s_reach_req_topic, 1);   // ADR-0023 census trigger
+            if (s_cfg.on_ambient)
+                esp_mqtt_client_subscribe(s_client, s_ambient_topic, 1);     // SGP4x compensation input (retained)
             // ADR-0036 L3: only an UNCLAIMED node listens for a claim at all. Once claimed we don't even
             // subscribe — the one-shot latch is enforced in the handler too, but not being on the topic
             // makes the closed window structural rather than a code path someone could regress.
@@ -347,6 +388,9 @@ static void on_mqtt(void *handler_args, esp_event_base_t base, int32_t event_id,
             else if (s_cfg.enable_reach && e->topic_len == (int)strlen(s_reach_req_topic) &&
                      strncmp(e->topic, s_reach_req_topic, e->topic_len) == 0)
                 handle_reach_req(e->data, e->data_len);
+            else if (s_cfg.on_ambient && e->topic_len == (int)strlen(s_ambient_topic) &&
+                     strncmp(e->topic, s_ambient_topic, e->topic_len) == 0)
+                handle_ambient(e->data, e->data_len);
             else if (e->topic_len == (int)strlen(s_enroll_req_topic) &&
                      strncmp(e->topic, s_enroll_req_topic, e->topic_len) == 0)
                 handle_enroll_req(e->data, e->data_len);      // ADR-0036 L3 claim (one-shot, unsigned)
@@ -444,6 +488,7 @@ void ha_mqtt_start(const char *broker_uri, const char *node_id) {
     snprintf(s_cmd_topic, sizeof(s_cmd_topic), "home/edge/%s/cmd", s_node);
     snprintf(s_relay_topic, sizeof(s_relay_topic), "home/edge/%s/relay", s_node);
     snprintf(s_reach_req_topic, sizeof(s_reach_req_topic), "home/edge/%s/reach/req", s_node);
+    snprintf(s_ambient_topic, sizeof(s_ambient_topic), "home/edge/%s/ambient", s_node);
     snprintf(s_hello_topic, sizeof(s_hello_topic), "home/edge/%s/hello", s_node);
     snprintf(s_enroll_req_topic, sizeof(s_enroll_req_topic), "home/edge/%s/enroll/req", s_node);
     snprintf(s_enroll_rep_topic, sizeof(s_enroll_rep_topic), "home/edge/%s/enroll/reply", s_node);
