@@ -59,14 +59,20 @@ re-enroll for a fresh secret.
    of no-IP — recovers a wedged stack *and* re-runs auto-sense (so a cable plugged mid-outage is picked up).
 4. **Signed commands need enrollment.** `HA_CMD_SECRET ""` (the default) → the firmware **rejects every**
    command, including OTA. You MUST enroll (§5) so the node and the dictator share an HMAC secret.
-5. **OTA host pin must be reachable.** `ha_ota.c` pins downloads to `HA_OTA_HOST` (default `192.168.0.245`).
+5. **The clock must be settable on the node's network** (2026-10-12). Every signed command is freshness-checked,
+   so a node that never sets its clock rejects everything, OTA included — silently, its data still flows. A
+   generic image flashed for the air-gap carried `pool.ntp.org` (unreachable) and two nodes sat clock-locked for
+   days. `ha_sntp` now falls back to the MQTT broker's host; flasher profiles carry an `ntp_server`. To recover a
+   clock-locked node: OTA it with the command stamped on its own clock (offset from its "cmd rejected: stale
+   (dt=…)" log line).
+6. **OTA host pin must be reachable.** `ha_ota.c` pins downloads to `HA_OTA_HOST` (default `192.168.0.245`).
    Set it in `secrets.h` to a host the node can actually route to (e.g. the dictator IP it uses). The signed
    image-hash gate still applies on top.
-6. **Address the dictator by the VIP (`192.168.0.200`), not a box** — so the node follows failover. **BUT
+7. **Address the dictator by the VIP (`192.168.0.200`), not a box** — so the node follows failover. **BUT
    verify VIP reachability *per network segment*:** keepalived's VIP is a secondary IP; some Wi-Fi APs don't
    propagate ARP for it even on the same subnet (observed: `CTWap_24g` reaches `.210` but not `.200`). Wired
    nodes reach the VIP fine; a Wi-Fi node on such an AP must use the box IP until the network is fixed.
-7. **A radio is single-tenant:** OTA and GATT pulls **pause** the passive scan (`ha_ble_scan_pause`) so they
+8. **A radio is single-tenant:** OTA and GATT pulls **pause** the passive scan (`ha_ble_scan_pause`) so they
    don't fight Wi-Fi/the connection. Don't run two radio consumers at once.
 
 ## 4. Networking model

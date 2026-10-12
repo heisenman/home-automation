@@ -50,6 +50,17 @@
   temperature (−90 ticks/°C). Back-calc (F16): temperature explains ~¼ of c_office's afternoon swing, little of
   the kitchen's, most of the closet's in October — the house-wide afternoon rise survives. Caveat: room-meter T,
   not the node's own. **Phase 4b (open, Hugh):** an SHT4x on each SGP node → real on-chip compensation.
+- **Phase 4b experiment LIVE 2026-10-12:** fw v29-ambient-ntp on coffice_c6 / s3-crawlspace / sgp41_stdby2 (OTA'd
+  from ha-2, all confirmed); ha-2 pushes signed same-room T/RH each minute (kill switch `instance/aq-ambient.off`);
+  nodes publish voc_raw + voc_raw_comp; the report fits the chip's correction. Each OTA restarted that node's VOC
+  Index learning (~hours of warm-up on the live AQ). **Open:**
+  - `sgp41_mech` is CLOCK-LOCKED (F17: never synced, rejects every signed command). Recovery = the same v29 generic
+    image via an OTA stamped on its own clock (scratch wrapper used for sgp41_stdby2 — worth a `--node-clock-offset`
+    flag in edge_ota.py). Needs Hugh's go.
+  - The NTP broker-host fallback is wired only in the c6 + s3-eth app_mains; dehum/hvac/shades/c3 still lack it.
+  - Security once-over: `handle_cmd` skips freshness AND anti-replay when a signed command carries no `ts` — every
+    signer we ship sends one, but a captured no-ts command would replay forever. Make `ts` mandatory (except
+    the TOFU claim, which is unsigned anyway).
 - **Experiment tracking:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) →
   `instance/aq-experiment/reports/latest.md` (Flags section first). Promotion criterion in the ADR amendment.
 - **OPEN (Hugh decides):** hardware — SGP41+SHT4x for the 3 BME680s, SCD41 CO₂ for bedrooms/offices, or SEN66 per

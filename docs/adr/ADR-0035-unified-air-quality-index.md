@@ -275,6 +275,9 @@ as a parallel `air_quality_v2` series; v1 stays the live index until the daily e
 - **Phase 4a (shipped 2026-10-12, shadow):** `air_quality_tc` — SGP40/41 voc_raw corrected server-side for a
   SAME-ROOM temperature (−90 ticks/°C), re-indexed with the ported algorithm. Back-calculation (§9 F16): it removes
   a share of the afternoon cycle (c_office ~¼, closet in October most of it), not the house-wide rise.
+- **Phase 4b experiment (live 2026-10-12):** v29 nodes (c_office, kitchen, h_office) receive signed same-room
+  T/RH and alternate default/compensated measurements, publishing both, so the chip's own correction is measured
+  before anything switches over (SENSOR-METHODOLOGY §9.4).
 - **Phase 4b:** firmware feeds real T/RH to SGP40/41 `measure_raw` and SGP30 absolute humidity (currently
   fixed 50 %RH / 25 °C defaults) — Sensirion's own compensation, needs a T/RH source at each node (SHT4x).
 

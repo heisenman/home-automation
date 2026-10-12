@@ -47,7 +47,7 @@ BIN_S = 300
 SETTLE_S = 24 * 3600            # a new Sensirion node's baseline-learning period, excluded from head-to-heads
 BANDS = ["Excellent", "Good", "Fair", "Poor", "Very Poor"]
 GAS_FAMS = ("sgp30", "sgp40", "sgp41", "bme680")
-METRICS = ("air_quality", "air_quality_v2", "air_quality_v3", "air_quality_tc", "air_quality_pm25", "aq_local_excess", "aq_hour_anomaly", "vent_coupling", "vent_ah_excess", "gas_ohm", "temperature_c", "humidity_pct", "voc_index", "voc_raw",
+METRICS = ("air_quality", "air_quality_v2", "air_quality_v3", "air_quality_tc", "air_quality_pm25", "aq_local_excess", "aq_hour_anomaly", "vent_coupling", "vent_ah_excess", "gas_ohm", "temperature_c", "humidity_pct", "voc_index", "voc_raw", "voc_raw_comp", "comp_t_c", "comp_rh_pct",
            "nox_index", "tvoc", "pm25_ugm3")
 
 
@@ -402,6 +402,45 @@ def main():
             sw = f"{max(med.values()) - min(med.values()):.0f}" if len(med) >= 20 else "—"
             n = v2_rows.get((d, "air_quality_tc"), 0) if name == "air_quality_tc" else ""
             P(f"| {d} | {'v1' if name == 'air_quality' else 'temp-corrected'} | {cells} | {sw} | {n} |")
+
+    # ── Phase 4b: the chip's OWN compensation, measured (firmware v28+ alternates default / real T/RH) ──
+    P(f"\n## Chip compensation (Phase 4b), last {a.days} d — voc_raw_comp − voc_raw vs the T/RH the node was given\n")
+    P("Each pair is the same air 1 s apart (SGP41 datasheet §3.2: on-chip humidity compensation). Fit: Δ = c + kT·(T − 25) "
+      "+ kRH·(RH − 50), and Δ vs absolute humidity. Compare kT with the −90 ticks/°C the server-side correction assumes (F16).\n")
+    any_comp = False
+    for d, f, ar in sgp4:
+        raw, comp = S(d, "voc_raw"), S(d, "voc_raw_comp")
+        tt, rr = S(d, "comp_t_c"), S(d, "comp_rh_pct")
+        ks = sorted(set(raw) & set(comp) & set(tt) & set(rr))
+        if not ks:
+            continue
+        any_comp = True
+        dl = [comp[k] - raw[k] for k in ks]
+        xt = [tt[k] - 25.0 for k in ks]
+        xr = [rr[k] - 50.0 for k in ks]
+        ah = [absolute_humidity_gm3(tt[k], rr[k]) for k in ks]
+        line = (f"- **{d}**: {len(ks)} bins since {fmt_t(ks[0])}; Δ median {st.median(dl):+.0f} ticks; "
+                f"T {min(tt[k] for k in ks):.1f}–{max(tt[k] for k in ks):.1f} °C, RH {min(rr[k] for k in ks):.0f}–{max(rr[k] for k in ks):.0f} %")
+        if len(ks) >= 288 and st.pstdev(xt) > 0.3 and st.pstdev(xr) > 1.0:
+            # two-variable least squares via the normal equations (stdlib only)
+            n = len(ks)
+            mt, mr, md = st.mean(xt), st.mean(xr), st.mean(dl)
+            stt = sum((x - mt) ** 2 for x in xt); srr = sum((y - mr) ** 2 for y in xr)
+            str_ = sum((x - mt) * (y - mr) for x, y in zip(xt, xr))
+            std = sum((x - mt) * (z - md) for x, z in zip(xt, dl)); srd = sum((y - mr) * (z - md) for y, z in zip(xr, dl))
+            det = stt * srr - str_ ** 2
+            if det > 0:
+                kT, kRH = (std * srr - srd * str_) / det, (srd * stt - std * str_) / det
+                res = [z - md - kT * (x - mt) - kRH * (y - mr) for x, y, z in zip(xt, xr, dl)]
+                r2 = 1 - sum(e * e for e in res) / max(sum((z - md) ** 2 for z in dl), 1e-9)
+                rah = pearson(ah, dl)
+                line += (f"; fit kT {kT:+.0f} ticks/°C, kRH {kRH:+.1f} ticks/%RH (R² {r2:.2f}); "
+                         f"ρ(Δ, abs. humidity) {'—' if rah is None else f'{rah:+.2f}'}")
+        else:
+            line += "; fit waits for ≥ 1 d and some T/RH spread"
+        P(line)
+    if not any_comp:
+        P("- no paired readings yet (nodes need firmware v28+ and a same-room meter)")
 
     # ── Diurnal ──
     P(f"\n## Diurnal — median score by local hour, last {a.days} d (v2; Sensirion = v1 carried)\n")

@@ -500,6 +500,22 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
   the same room (`_temp_source`: a meter, else the room's BME680 die — its offset doesn't matter, the algorithm is
   offset-free); no same-room source → no tc. Evidence F16. The report tracks the hour-by-hour cycle, live vs
   corrected, and scores BME v3 against the corrected SGP.
+- **Phase 4b experiment (live 2026-10-12, Hugh: "send the correct temperature into the SGPs for a few days and …
+  figure out the coefficients").** Firmware **v29-ambient-ntp** on `coffice_c6` (c_office), `s3-crawlspace`
+  (kitchen), `sgp41_stdby2` (h_office). ha-2 signs each node its SAME-ROOM meter's T/RH every minute
+  (`server/maintenance/sgp_ambient.py`, retained on `home/edge/<node>/ambient`); the node alternates its 1 Hz
+  measurement between the datasheet defaults (the stream its VOC Index keeps using — nothing live changes) and the
+  real values (on-chip compensation ON), publishing `voc_raw` + `voc_raw_comp` (+ `nox_raw_comp`, `comp_t_c`,
+  `comp_rh_pct`). The gap between the two is Sensirion's own correction, measured on the same air; the daily report
+  fits it against T and RH. **Datasheet caveat (SGP41 v1.0 §3.2):** the chip calls it *humidity* compensation, with
+  temperature as an input — if the afternoon cycle is a pure temperature effect, the chip may not remove it, which
+  would itself answer F16's question. The mech-closet SGP41 is not in it: no ambient meter (a BME680 die is ~10 °C
+  warm and would mislead the chip). First pairs at 21–23 °C / 40–41 %RH: Δ ≈ −70…−140 ticks.
+  **F17 (found doing this):** the generic-flashed `sgp41_stdby2` and `sgp41_mech` had NEVER set their clocks — the
+  flasher's single global `ntp_server: pool.ntp.org` is unreachable on the air-gap — so they rejected every signed
+  command, OTA included, while their data flowed normally. Fixed structurally: `ha_sntp` falls back to the MQTT
+  broker's host (the dictator runs chrony), and `edge_flash` profiles carry their own `ntp_server`. `sgp41_stdby2`
+  was recovered by an OTA stamped on its own (wrong) clock; `sgp41_mech` is still clock-locked.
 - **Phase 4b — firmware: real T/RH into SGP `measure_raw` + SGP30 absolute humidity** (downlinked from the room
   meter as a signed command, or a local SHT4x). **Priority raised 2026-10-12 (F13):** the uncompensated SGP41 is
   the Phase-1 reference, and it reads a warm closet afternoon as VOCs. A local SHT4x per SGP node removes the
