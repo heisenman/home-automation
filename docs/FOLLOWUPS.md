@@ -53,7 +53,10 @@
 - **Phase 4b experiment LIVE 2026-10-12:** fw v29-ambient-ntp on coffice_c6 / s3-crawlspace / sgp41_stdby2 (OTA'd
   from ha-2, all confirmed); ha-2 pushes signed same-room T/RH each minute (kill switch `instance/aq-ambient.off`);
   nodes publish voc_raw + voc_raw_comp; the report fits the chip's correction. Each OTA restarted that node's VOC
-  Index learning (~hours of warm-up on the live AQ). **Open:**
+  Index learning (~hours of warm-up on the live AQ). **Result 2026-10-13 (F18):** the chip's compensation is
+  humidity-only (+35…+52 ticks per g/m³ AH, ρ ≈ +0.98), moves the index 1–3 pts, and leaves the temperature cycle
+  untouched → an SHT4x per node for on-chip compensation is not worth buying; T stays server-side (4a). Experiment
+  left running (harmless) to see a wider humidity range; switch off with `instance/aq-ambient.off`. **Open:**
   - Clock-locked recovery used a one-off wrapper (OTA stamped on the node's own clock) — worth a
     `--node-clock-offset` flag in edge_ota.py if it recurs.
   - The NTP broker-host fallback is wired only in the c6 + s3-eth app_mains; dehum/hvac/shades/c3 still lack it.

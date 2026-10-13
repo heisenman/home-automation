@@ -418,8 +418,9 @@ def main():
 
     # ── Phase 4b: the chip's OWN compensation, measured (firmware v28+ alternates default / real T/RH) ──
     P(f"\n## Chip compensation (Phase 4b), last {a.days} d — voc_raw_comp − voc_raw vs the T/RH the node was given\n")
-    P("Each pair is the same air 1 s apart (SGP41 datasheet §3.2: on-chip humidity compensation). Fit: Δ = c + kT·(T − 25) "
-      "+ kRH·(RH − 50), and Δ vs absolute humidity. Compare kT with the −90 ticks/°C the server-side correction assumes (F16).\n")
+    P("Each pair is the same air 1 s apart (SGP41 datasheet §3.2: on-chip humidity compensation — T is only an input to "
+      "absolute humidity). Fit: Δ = c + kAH·(AH − 11.5 g/m³), 11.5 = the chip's 25 °C/50 % default. Δ swing = how far the "
+      "chip's compensation moves the reading over the day, against the raw signal's own hourly swing (Study 2 F18).\n")
     any_comp = False
     for d, f, ar in sgp4:
         delta = S(d, "comp_delta")                      # per-message pairs, binned (see load)
@@ -429,28 +430,28 @@ def main():
             continue
         any_comp = True
         dl = [delta[k] for k in ks]
-        xt = [tt[k] - 25.0 for k in ks]
-        xr = [rr[k] - 50.0 for k in ks]
         ah = [absolute_humidity_gm3(tt[k], rr[k]) for k in ks]
         line = (f"- **{d}**: {len(ks)} bins since {fmt_t(ks[0])}; Δ median {st.median(dl):+.0f} ticks; "
                 f"T {min(tt[k] for k in ks):.1f}–{max(tt[k] for k in ks):.1f} °C, RH {min(rr[k] for k in ks):.0f}–{max(rr[k] for k in ks):.0f} %")
-        if len(ks) >= 288 and st.pstdev(xt) > 0.3 and st.pstdev(xr) > 1.0:
-            # two-variable least squares via the normal equations (stdlib only)
-            n = len(ks)
-            mt, mr, md = st.mean(xt), st.mean(xr), st.mean(dl)
-            stt = sum((x - mt) ** 2 for x in xt); srr = sum((y - mr) ** 2 for y in xr)
-            str_ = sum((x - mt) * (y - mr) for x, y in zip(xt, xr))
-            std = sum((x - mt) * (z - md) for x, z in zip(xt, dl)); srd = sum((y - mr) * (z - md) for y, z in zip(xr, dl))
-            det = stt * srr - str_ ** 2
-            if det > 0:
-                kT, kRH = (std * srr - srd * str_) / det, (srd * stt - std * str_) / det
-                res = [z - md - kT * (x - mt) - kRH * (y - mr) for x, y, z in zip(xt, xr, dl)]
-                r2 = 1 - sum(e * e for e in res) / max(sum((z - md) ** 2 for z in dl), 1e-9)
-                rah = pearson(ah, dl)
-                line += (f"; fit kT {kT:+.0f} ticks/°C, kRH {kRH:+.1f} ticks/%RH (R² {r2:.2f}); "
-                         f"ρ(Δ, abs. humidity) {'—' if rah is None else f'{rah:+.2f}'}")
+        if len(ks) >= 288 and st.pstdev(ah) > 0.2:
+            # one-variable least squares, stdlib only
+            ma, md = st.mean(ah), st.mean(dl)
+            saa = sum((x - ma) ** 2 for x in ah)
+            kAH = sum((x - ma) * (z - md) for x, z in zip(ah, dl)) / saa
+            c = md - kAH * (ma - 11.5)
+            rah = pearson(ah, dl)
+            hours = defaultdict(list)
+            raw = S(d, "voc_raw")
+            for k in ks:
+                if k in raw:
+                    hours[local_hour(k)].append((delta[k], raw[k]))
+            line += (f"; fit kAH {kAH:+.0f} ticks per g/m³ (c {c:+.0f}, ρ {'—' if rah is None else f'{rah:+.2f}'})")
+            if len(hours) >= 20:
+                hd = [st.median(v[0] for v in hv) for hv in hours.values()]
+                hr = [st.median(v[1] for v in hv) for hv in hours.values()]
+                line += f"; hourly swing: Δ {max(hd) - min(hd):.0f} ticks vs raw {max(hr) - min(hr):.0f} ticks"
         else:
-            line += "; fit waits for ≥ 1 d and some T/RH spread"
+            line += "; fit waits for ≥ 1 d and some humidity spread"
         P(line)
     if not any_comp:
         P("- no paired readings yet (nodes need firmware v28+ and a same-room meter)")

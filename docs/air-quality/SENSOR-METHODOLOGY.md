@@ -515,9 +515,21 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
   flasher's single global `ntp_server: pool.ntp.org` is unreachable on the air-gap — so they rejected every signed
   command, OTA included, while their data flowed normally. Fixed structurally: `ha_sntp` falls back to the MQTT
   broker's host (the dictator runs chrony), and `edge_flash` profiles carry their own `ntp_server`. `sgp41_stdby2`
-  was recovered by an OTA stamped on its own (wrong) clock; `sgp41_mech` is still clock-locked.
+  was recovered by an OTA stamped on its own (wrong) clock; `sgp41_mech` the same way later that day.
+  **F18 (2026-10-13, ~38 h of pairs on 3 nodes): the chip's own compensation is humidity-only and does NOT remove
+  the daily cycle.** Δ = `voc_raw_comp − voc_raw` follows absolute humidity alone (ρ +0.98…+0.99 on 10-min
+  medians): **+35 / +52 / +40 ticks per g/m³** (c_office / h_office / kitchen), ≈ 0 at the 25 °C/50 % default
+  (11.5 g/m³). Indoor AH barely moves over a day (6.3–8.7 g/m³ here), so the correction is a near-constant offset
+  of −120…−190 ticks that the adaptive baseline absorbs: its hourly swing is 37–56 ticks against a raw swing of
+  800–2600 ticks; ρ(raw, T) is unchanged (−0.57 → −0.55 c_office, −0.67 → −0.66 kitchen); and a VOC Index
+  replayed on each stream differs by a mean 1–3.5 points (max 22). The datasheet caveat above was right: the chip
+  removes humidity, not the MOX layer's temperature response. → Per-node SHT4x *for the chip's compensation* buys
+  ~nothing indoors; the temperature lever stays server-side (Phase 4a `air_quality_tc`) or a node-side T term.
+  The report now fits kAH (not kT/kRH — T and RH co-vary indoors, so a two-variable fit split one effect into two
+  misleading coefficients).
 - **Phase 4b — firmware: real T/RH into SGP `measure_raw` + SGP30 absolute humidity** (downlinked from the room
-  meter as a signed command, or a local SHT4x). **Priority raised 2026-10-12 (F13):** the uncompensated SGP41 is
+  meter as a signed command, or a local SHT4x). **Measured 2026-10-13 (F18): the on-chip part is humidity-only and
+  worth ~1–3 index points indoors — it does not touch F13's temperature cycle.** **Priority raised 2026-10-12 (F13):** the uncompensated SGP41 is
   the Phase-1 reference, and it reads a warm closet afternoon as VOCs. A local SHT4x per SGP node removes the
   cross-device dependency a downlink would add (cf. F8), which favours the SGP41+SHT4x / SEN66 hardware options.
 
