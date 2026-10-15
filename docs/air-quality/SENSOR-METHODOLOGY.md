@@ -527,6 +527,15 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
   ~nothing indoors; the temperature lever stays server-side (Phase 4a `air_quality_tc`) or a node-side T term.
   The report now fits kAH (not kT/kRH — T and RH co-vary indoors, so a two-variable fit split one effect into two
   misleading coefficients).
+  **Re-check 2026-10-15 (+2 d, 10 d of T data): nothing changes the model.** kAH unchanged (+35 / +52 / +39, ρ
+  ≥ +0.99). SGP temperature response, per-day afternoon-minus-morning across 10 days: closet SGP41 −151 ticks/°C
+  (ρ −0.91), detrended −119 — the same as F16's Oct closet figures; the occupied rooms still can't separate
+  temperature from activity (c_office per-day ρ −0.06, detrended −323). New point: the closet's BME680, in the same
+  air, shows almost no temperature response (−23 per day, +12 detrended, in v3 index-scaled ticks) and scores
+  *best* at 16 h — so a real heat-linked VOC source would have to be invisible to the BME. That favours "SGP
+  artifact" for the closet's afternoon rise, and puts the closet's own coefficient nearer −120…−150 than the global
+  −90. Not changed: one room, and its Aug–Sep slope was +44 (F16). The BME's humidity response, detrended, is −66
+  / −73 index-ticks per g/m³ (closet / h_office) ≈ the 0.100 constant × 700. (`tcoef.py`, scratch.)
 - **Phase 4b — firmware: real T/RH into SGP `measure_raw` + SGP30 absolute humidity** (downlinked from the room
   meter as a signed command, or a local SHT4x). **Measured 2026-10-13 (F18): the on-chip part is humidity-only and
   worth ~1–3 index points indoors — it does not touch F13's temperature cycle.** **Priority raised 2026-10-12 (F13):** the uncompensated SGP41 is
