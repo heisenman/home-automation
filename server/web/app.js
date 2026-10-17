@@ -1309,9 +1309,11 @@ function AdaptiveChart({ traces }) {
   const { series, tMin, tMax, spanH, x, yOf, yLabels, shared } = geo;
   const gridY = [pad, H / 2, H - pad];
   // x-axis labels sit under the day grid lines. A range that crosses < 2 midnights would be nearly
-  // unlabelled, so it also labels every 6th hour tick. Thinned to ≤ 7 so they don't collide on long ranges.
+  // unlabelled, so it also labels hour ticks — every 1/2/3/6/12 h, the finest step that keeps ≤ ~7.
+  // Thinned to ≤ 7 so they don't collide on long ranges.
   let ticks = geo.days.map((t) => ({ t, l: fmtMD(t) }));
-  if (ticks.length < 2) ticks = [...ticks, ...geo.hours.filter((t) => new Date(t).getHours() % 6 === 0)
+  const step = [1, 2, 3, 6, 12].find((n) => spanH / n <= 7) || 12;
+  if (ticks.length < 2) ticks = [...ticks, ...geo.hours.filter((t) => new Date(t).getHours() % step === 0)
     .map((t) => ({ t, l: fmtHM(t) }))].sort((a, b) => a.t - b.t);
   const every = Math.ceil(ticks.length / 7);
   const xLabels = ticks.filter((_, i) => i % every === 0);
