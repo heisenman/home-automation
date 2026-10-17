@@ -493,6 +493,12 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
   also stepped down ~6 °C from ~20:00 10-15 (37.5 → 31.5 °C, room steady) — consistent with it being moved or
   uncovered during the cleaning; the report's h_bed humidity-k flag (0.197) that week is this event, not a
   coefficient change.
+  **Context (Hugh): a LOT of moving things and cleaning house-wide before the guests (~10-14…10-16).** PM2.5 shows
+  it: living_room 79 / 65 min above 5 µg/m³ on 10-15 / 10-16 (quiet days 2–10), repeated spikes to ~50; c_office
+  one spike to 38 (10-15 22:00); c_bed's purifier barely moved. All cleared to ~1 µg/m³ between spikes. Cleaning
+  products are also a VOC source, so the c_bed SGP30 rise (night median 120–270 → 616 ppb by 10-16) and the
+  week's house-wide drift in Sensirion "Excellent" share can't be read as a ventilation or filter trend — treat
+  10-14…10-16 as a disturbed week, and re-judge the c_bed trend on a quiet one.
 - **Phase 3 (shipped 2026-10-10, shadow) — PM2.5 into the area band.** Any device with the PM2.5 ability
   (today the three Levoit purifiers: living_room, c_bed, c_office) gets `air_quality_pm25` each minute: the 1 h
   count-weighted mean from the 1-min rung, banded on EPA's 2024 PM2.5 AQI breakpoints (≤ 9.0 / 35.4 / 55.4 /
