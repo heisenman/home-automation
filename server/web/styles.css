@@ -254,8 +254,11 @@ details > summary { cursor: pointer; }
   display: flex; flex-direction: column; justify-content: space-between; align-items: flex-end;
   width: 46px; height: 140px; padding-right: 6px; font-size: 10px; color: var(--muted);
 }
-.xax { display: flex; justify-content: space-between; font-size: 10px; color: var(--muted); margin: 3px 0 0 52px; }
+.xax { position: relative; height: 13px; font-size: 10px; color: var(--muted); margin: 3px 0 0 52px; }
+.xax span { position: absolute; transform: translateX(-50%); white-space: nowrap; }
 .grid { stroke: var(--line); stroke-width: 1; opacity: .55; }
+.grid-day { stroke: var(--muted); opacity: .45; }
+.tick-hour { stroke: var(--muted); stroke-width: 1; opacity: .7; }
 .ax-note { margin-top: 4px; }
 
 /* per-point hover readout. The plot svg is stretched (preserveAspectRatio=none), so a circle drawn IN

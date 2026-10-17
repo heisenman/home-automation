@@ -157,11 +157,6 @@ function fmtAge(s) {
   return `${(s / 3600).toFixed(1)}h ago`;
 }
 const round1 = (v) => (v == null ? "—" : (Math.round(v * 10) / 10));
-// axis time label: clock for ≤2 days, else M/D
-function fmtClock(ms, spanH) {
-  const d = new Date(ms), p = (n) => String(n).padStart(2, "0");
-  return spanH <= 48 ? `${p(d.getHours())}:${p(d.getMinutes())}` : `${d.getMonth() + 1}/${d.getDate()}`;
-}
 // "8/6 14:32" — the hover readout needs the date; the x-axis labels get by without it.
 function fmtStamp(ms) {
   const d = new Date(ms), p = (n) => String(n).padStart(2, "0");
@@ -169,6 +164,7 @@ function fmtStamp(ms) {
 }
 const fmtHM = (ms) => { const d = new Date(ms), p = (n) => String(n).padStart(2, "0");
   return `${p(d.getHours())}:${p(d.getMinutes())}`; };
+const fmtMD = (ms) => { const d = new Date(ms); return `${d.getMonth() + 1}/${d.getDate()}`; };
 const range = (a, b) => Array.from({ length: b - a + 1 }, (_, i) => a + i);
 const steps = (a, b, step) => { const o = []; for (let v = a; v <= b; v += step) o.push(v); return o; };
 const isoNoMs = (d) => d.toISOString().replace(/\.\d+Z$/, "Z");
@@ -1272,7 +1268,13 @@ function AdaptiveChart({ traces }) {
     // A trace only reads out where it actually HAS a sample — else a sensor that went quiet mid-window
     // would keep reporting its last value across the rest of the chart as if it were still live.
     const tol = series.map((t) => Math.max(3 * medianGap(t.points), (tMax - tMin) * 0.005));
-    return { series, tMin, tMax, spanH: (tMax - tMin) / 3600000, x, yOf, yLabels, shared, tol };
+    // local-time hour boundaries in range: midnights → day grid lines, the rest → minor hour ticks.
+    // Stepped with setHours (not +3600000) so DST days come out at 23/25 h like the wall clock.
+    const days = [], hours = [];
+    const d = new Date(tMin); d.setMinutes(0, 0, 0);
+    if (+d < tMin) d.setHours(d.getHours() + 1);
+    for (; +d <= tMax; d.setHours(d.getHours() + 1)) (d.getHours() === 0 ? days : hours).push(+d);
+    return { series, tMin, tMax, spanH: (tMax - tMin) / 3600000, x, yOf, yLabels, shared, tol, days, hours };
   }, [key, unit]);
 
   useEffect(() => setHover(null), [geo]);              // new traces/range → the old readout is stale
@@ -1306,6 +1308,13 @@ function AdaptiveChart({ traces }) {
   if (!geo) return html`<div class="note">no data in range</div>`;
   const { series, tMin, tMax, spanH, x, yOf, yLabels, shared } = geo;
   const gridY = [pad, H / 2, H - pad];
+  // x-axis labels sit under the day grid lines. A range that crosses < 2 midnights would be nearly
+  // unlabelled, so it also labels every 6th hour tick. Thinned to ≤ 7 so they don't collide on long ranges.
+  let ticks = geo.days.map((t) => ({ t, l: fmtMD(t) }));
+  if (ticks.length < 2) ticks = [...ticks, ...geo.hours.filter((t) => new Date(t).getHours() % 6 === 0)
+    .map((t) => ({ t, l: fmtHM(t) }))].sort((a, b) => a.t - b.t);
+  const every = Math.ceil(ticks.length / 7);
+  const xLabels = ticks.filter((_, i) => i % every === 0);
   const tipPos = hover && {
     ...(hover.cx < hover.w / 2 ? { left: `${hover.cx + 12}px` } : { right: `${hover.w - hover.cx + 12}px` }),
     ...(hover.py < hover.h / 2 ? { bottom: "6px" } : { top: "6px" }),
@@ -1318,6 +1327,10 @@ function AdaptiveChart({ traces }) {
              onPointerLeave=${clear} onPointerCancel=${clear} onPointerUp=${clearTouch}>
           <svg ref=${svgRef} viewBox="0 0 ${W} ${H}" class="chart" preserveAspectRatio="none">
             ${gridY.map((yy) => html`<line x1="0" y1=${yy} x2=${W} y2=${yy} class="grid" />`)}
+            ${geo.days.map((t) => html`<line x1=${x(t)} x2=${x(t)} y1="0" y2=${H}
+              class="grid grid-day" vector-effect="non-scaling-stroke" />`)}
+            ${spanH <= 7 * 24 && geo.hours.map((t) => html`<line x1=${x(t)} x2=${x(t)} y1=${H - 10} y2=${H}
+              class="tick-hour" vector-effect="non-scaling-stroke" />`)}
             ${series.map((t, i) => html`<path fill="none" stroke=${t.color} stroke-width="1.5"
               d=${t.points.map((p, j) => `${j ? "L" : "M"}${x(p.t).toFixed(1)} ${yOf[i](p.v).toFixed(1)}`).join(" ")} />`)}
           </svg>
@@ -1337,9 +1350,7 @@ function AdaptiveChart({ traces }) {
         </div>
       </div>
       <div class="xax">
-        <span>${fmtClock(tMin, spanH)}</span>
-        <span>${fmtClock((tMin + tMax) / 2, spanH)}</span>
-        <span>${fmtClock(tMax, spanH)}</span>
+        ${xLabels.map(({ t, l }) => html`<span style=${{ left: `${(x(t) / W) * 100}%` }}>${l}</span>`)}
       </div>
       ${!shared && html`<div class="note ax-note">normalized · mixed units (hover for real values)</div>`}
       <div class="legend">
