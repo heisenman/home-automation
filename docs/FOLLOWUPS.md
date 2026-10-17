@@ -77,8 +77,8 @@
   (replay: night changes 183 → 66 over 2 wk). **Open:** (a) purifier_c_bed automation was DISABLED in the PWA at
   21:40 on 10-16 after the flashes — re-enable is the household's call; (b) if the remaining ~3/night (living
   room) still bother, options: a night minimum-dwell or step-up-only at night, or the Levoit's own sleep mode;
-  (c) run_all now has order-dependent failures in test_device_push / test_edge_flash_ntp /
-  test_required_services (all pass alone; present before 2822552) — a test leaking state, untriaged.
+  (c) ~~run_all order-dependent failures~~ RESOLVED 2026-10-17: not order-dependent — the harness lacked
+  pytest's `monkeypatch` fixture; added. run_all = ALL PASS (856).
 - **IDEA (Hugh, 2026-10-17): data-driven filter-replacement prompts — not started, design first.** Feasibility read
   (2026-10-17, scratch `filt.py`/`pmdecay.py`):
   - **ERV (`erv_attic`) — best physics signal.** It reports CFM, rpm and W per side; a loading filter needs more rpm/W

@@ -1,3 +1,5 @@
+// BREADCRUMB: firmware/components > ha_led - fault-only operability LED on an onboard WS2812 via RMT (off when healthy, colour + blink-count codes) + ha_led_blank to darken an unused latched WS2812. Contract: ADR-0020. Parent: firmware/AGENTS.md.
+// REUSE-WHEN: a node needs a human-readable fault light (codes in edge/FIRMWARE-GUIDE.md §6), or a board's unused RGB LED must be forced off.
 #pragma once
 #include <stdbool.h>
 // Operability LED for the edge node. Philosophy (Hugh): the eye only needs the LED when something is

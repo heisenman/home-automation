@@ -1,3 +1,5 @@
+// BREADCRUMB: firmware/components > bme680 - Bosch BME680 I2C driver: forced-mode T/RH/pressure + raw gas resistance with the datasheet compensation math (no BSEC blob). Contract: ADR-0020. Parent: firmware/AGENTS.md.
+// REUSE-WHEN: a board needs BME680 temperature/humidity/pressure or its gas resistance (the VOC signal) — don't re-port the Bosch compensation.
 // Bosch BME680 environmental + gas sensor — minimal ESP-IDF (new i2c_master) driver.
 //
 // Shared firmware component (ADR-0020): pure I2C transport + the Bosch compensation algorithm baked in,

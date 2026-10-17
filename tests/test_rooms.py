@@ -84,7 +84,9 @@ def test_noncanonical_area_surfaces_as_unlocated():
 
 def test_empty_inputs_do_not_error():
     out = V.build_rooms([], {})
+    legend = out.pop("air_quality_legend")              # ADR-0035 map key: always present, even with no rooms
     assert out == {"schema_version": 1, "levels": [], "zones": [], "rooms": [], "unlocated": []}
+    assert [b["band"] for b in legend] == [5, 4, 3, 2, 1] and legend[0]["label"] == "Excellent"
 
 
 # ── build_actuator_list: no controllable device silently disappears (the dehumidifier case) ──

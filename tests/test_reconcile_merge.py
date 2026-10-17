@@ -104,7 +104,11 @@ def test_script_export_merge_roundtrip_via_bash():
         import os
         env = {**os.environ, "HOT_DB": src}
         # export src's window (>= cutoff) -> snap
-        subprocess.run(["bash", str(script), "--export", snap, "2026-06-24T00:00:00Z"], env=env, check=True)
+        exp = subprocess.run(["bash", str(script), "--export", snap, "2026-06-24T00:00:00Z"], env=env, check=True,
+                             capture_output=True, text=True)
+        # exactly src's one windowed row — anything else means the script read some OTHER db (it once ignored
+        # HOT_DB and exported, then merged into, the live instance/db/hot.db)
+        assert exp.stdout.strip().splitlines()[-1] == "1", f"export read the wrong db: {exp.stdout!r}"
         env["HOT_DB"] = dst
         out = subprocess.run(["bash", str(script), "--merge", snap], env=env, check=True,
                              capture_output=True, text=True)

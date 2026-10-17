@@ -19,8 +19,12 @@
 #   reconcile-history.sh --merge  <snap>            (remote primitive) INSERT OR IGNORE a snapshot into local hot.db
 set -uo pipefail
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && pwd)"
+# A HOT_DB the CALLER set wins over the env files: reconcile-tuning.env assigns it plainly, which silently
+# re-pointed --export/--merge (and tests/test_reconcile_merge) at the LIVE instance/db/hot.db (2026-10-17).
+_CALLER_HOT_DB="${HOT_DB-}"
 [ -f "$REPO/instance/cluster.env" ] && . "$REPO/instance/cluster.env"
 [ -f "$REPO/instance/reconcile-tuning.env" ] && . "$REPO/instance/reconcile-tuning.env"
+[ -n "$_CALLER_HOT_DB" ] && HOT_DB="$_CALLER_HOT_DB"
 : "${PEER_HOST:=}"; : "${CLUSTER_KEY:=$HOME/.ssh/id_cluster}"; : "${CLUSTER_SSH_PORT:=22}"; : "${REMOTE_REPO:=/home/visko/home_automation}"
 : "${VIP:=192.168.0.200}"; : "${HOT_DB:=instance/db/hot.db}"
 # Tuned-state (SEEDED). Shadow tuner LOGS `proposed` only; the ACTIVE cadence stays RECONCILE_INTERVAL_S

@@ -1,3 +1,5 @@
+// BREADCRUMB: firmware/components > ha_wifi - Wi-Fi STA bring-up that reconnects forever, reboots after ~2 min without an IP, idempotent netif/event-loop init, optional link-status callback. Contract: ADR-0020. Parent: firmware/AGENTS.md.
+// REUSE-WHEN: any Wi-Fi node needs a self-healing station link (don't hand-roll esp_wifi init/reconnect).
 #pragma once
 #include <stdbool.h>
 #include "esp_err.h"
