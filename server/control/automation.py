@@ -64,6 +64,10 @@ class Policy:
     default_running: bool = False
     sensor_stale_s: float = 600.0
     bands: tuple = ()               # threshold_ranged: ({"max": float|None, "level": int}, ...) ascending
+    deadband: float = 0.0           # threshold_ranged: hold the current level until the sensor clears a band
+                                    # edge by this much (sensor units). Each speed change flashes a Levoit's
+                                    # panel even with the display off (2026-10-17), and a score sitting on an
+                                    # edge flip-flopped: ~60 % of night changes reversed within 15 min.
 
     @classmethod
     def from_dict(cls, d: dict) -> "Policy":
@@ -78,6 +82,9 @@ class Policy:
             default_running=bool((d.get("defaults", {}) or {}).get("running", False)),
             sensor_stale_s=float(d.get("sensor_stale_min", 10)) * 60.0,
             bands=tuple(c.get("bands", ()) or ()),
+            # 5 AQ points: a 2-week replay of the purifier logs cut speed changes 174→16 / 318→132 / 475→223
+            # (c_bed / c_office / living_room), night 183→66. Other metrics keep 0 unless configured.
+            deadband=float(c.get("deadband", 5.0 if c.get("metric") == "air_quality" else 0.0)),
         )
 
 
@@ -161,6 +168,12 @@ def resolve(policy: Policy, now: float, sensor: Reading | None, state: DeviceSta
             return Resolution(state.running, False, "default", "sensor stale/missing -> hold",
                               level=state.level)
         lvl = _level_for(sensor.value, policy.bands)
+        db = policy.deadband
+        if (state.running and state.level is not None and state.level != lvl and db > 0
+                and state.level in (_level_for(sensor.value - db, policy.bands),
+                                    _level_for(sensor.value + db, policy.bands))):
+            return Resolution(True, False, "rule", f"sensor {sensor.value:.0f} -> speed {lvl} within ±{db:g} of "
+                              f"the band edge -> hold {state.level} (no-op)", level=state.level)
         if state.running and state.level == lvl:
             return Resolution(True, False, "rule", f"sensor {sensor.value:.0f} -> speed {lvl} (no-op)",
                               level=lvl)

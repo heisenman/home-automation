@@ -255,6 +255,27 @@ def test_air_quality_ladder_matches_the_adr_0035_band_edges():
     assert _level_for(59.9, AQ_BANDS) == 2 and _level_for(60.0, AQ_BANDS) == 1
 
 
+def test_ranged_deadband_holds_near_a_band_edge():
+    """A score hovering on an edge must not flip the speed (each change flashes a Levoit panel at night):
+    hold until the sensor clears the edge by the deadband, in either direction; a big move still acts."""
+    pol = Policy.from_dict({"control": {"strategy": "threshold_ranged", "metric": "air_quality", "bands": AQ_BANDS}})
+    assert pol.deadband == 5.0
+    at2 = _state(True, level=2)
+    r = resolve(pol, NOW, fresh(61), at2)                 # just past the 60 edge (level 1) → hold 2
+    assert not r.act and r.level == 2 and "hold 2" in r.reason
+    r = resolve(pol, NOW, fresh(65), at2)                 # cleared by 5 → step down
+    assert r.act and r.level == 1
+    r = resolve(pol, NOW, fresh(38), at2)                 # 2 below the 40 edge (level 3) → hold
+    assert not r.act and r.level == 2
+    r = resolve(pol, NOW, fresh(10), at2)                 # a real event jumps straight to 4
+    assert r.act and r.level == 4
+    r = resolve(pol, NOW, fresh(61), _state(True, level=None))   # unknown level → act normally
+    assert r.act and r.level == 1
+    pm = Policy.from_dict({"control": {"strategy": "threshold_ranged", "metric": "pm25_ugm3", "bands": PM25_BANDS}})
+    assert pm.deadband == 0.0                             # other metrics unchanged unless configured
+    assert resolve(pm, NOW, fresh(13), _state(True, level=1)).act
+
+
 def test_a_pm25_ladder_pointed_at_air_quality_is_inverted():
     """Documents the failure the UI prevents by resetting cuts AND levels together."""
     assert _level_for(95, PM25_BANDS) == 4       # pristine air, full fan — the bug, if levels don't flip
