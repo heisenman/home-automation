@@ -575,6 +575,24 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
   median absorbs one room; the SGP raw signal carries its temperature response (−90…−150 ticks/°C), so a cold
   snap of a few °C at night moves it too; SGP30 tvoc is itself baseline-compensated on-chip, so it under-reads
   slow drift.
+  **Labelled event (Hugh, 2026-10-17): HVAC replacement + ERV install ~09-14…09-17** (old equipment cut out, new
+  installed). Backfilled house median: +135 / +104 / −14 / **+366** (09-17, the only other night ≥ +250 in 95) /
+  +174 / +43 / −91 / +120 / +43, normal from 09-23 — raw night voc_raw back in its pre-install range the same
+  night (kitchen ~32700, c_office ~32500). Strongest on the mech-closet SGP41 (+345…+864 every night
+  09-14…09-22); living_room PM2.5 spikes 240–330 µg/m³ 09-14…09-16 (cutting). Construction + sealant/adhesive
+  VOCs here lasted ~9 nights and peaked on day 4 — days, not weeks. The BME680s again barely registered (≤ +128).
+  **Known limit:** the reference is the previous 14 nights' median, so after ~7 elevated nights a lasting step
+  starts to become its own reference and the shift shrinks; for a weeks-long off-gassing, read the raw
+  `voc_night_base` against pre-event nights. (A lagged reference, e.g. nights 8–21 back, would hold a step ~2
+  weeks at the cost of slower seasonal adaptation — not done.)
+  **Before/after the install (Hugh: "expect faster removal … as long as we keep good filters"), scratch
+  `pmclean.py`/`vocrec.py`:** PM2.5 — clean living_room decays (peak ≥ 20 µg/m³, fit R² ≥ 0.8): pre-install
+  median **4.4 /h** (n 4, purifier fan 3–4), post **9.5 /h** (n 5, incl. 12 /h at fan 1) → ~2× faster particle
+  clearing even at lower purifier speeds; small n, and a single-sensor decay includes mixing into the rest of
+  the house. VOC — evening event (≥ 500 ticks below last night) half-recovery: kitchen 60 → 60 min (n 55 / 22),
+  c_office 60 → 125 min (n 41 / 21) — **not faster**; summer windows (pre) vs closed fall (post) confounds, and
+  filters don't remove VOCs: only the ERV's dilution does, at a continuous 67–92 cfm. Post-install PM decay
+  (~9–12 /h) is the clean-filter baseline for the filter-prompt idea (FOLLOWUPS).
 
 **Hardware (recommendation, not yet decided):** (1) swap the three BME680s for SGP41 + SHT4x — removes the
 cross-family problem at its root; (2) real CO₂ (SCD41) in bedrooms/offices — nothing in the house measures CO₂

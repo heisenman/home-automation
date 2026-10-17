@@ -82,6 +82,8 @@
     time-based or a deliberate test. Levoit `filter_life_pct` is runtime-based (living_room 88 %).
   - **Gas/VOC:** HEPA doesn't remove VOCs (the Levoit carbon layer a little), so the c_bed VOC rise reads as
     ventilation, not filter, until a filter change shows a step.
+  - **Clean-filter baseline (post-HVAC-install, 2026-10-17):** living_room PM2.5 decay ~9–12 /h (pre-install 4.4 /h).
+    VOC recovery did NOT speed up — ventilation (ERV boost on a VOC event?) is the VOC lever, not filters; Hugh's call.
   - **Cheapest first step:** log each filter change (date + which filter) as ground truth → before/after step in ERV
     rpm/CFM and PM decay calibrates the signal. Then a shadow series per filter, like the AQ experiment.
 - **Experiment tracking:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) →
