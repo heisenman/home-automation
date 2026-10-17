@@ -499,6 +499,16 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
   products are also a VOC source, so the c_bed SGP30 rise (night median 120–270 → 616 ppb by 10-16) and the
   week's house-wide drift in Sensirion "Excellent" share can't be read as a ventilation or filter trend — treat
   10-14…10-16 as a disturbed week, and re-judge the c_bed trend on a quiet one.
+  **More labels (Hugh): Thu 10-15 new furniture delivered into the living room; Fri 10-16 guests worked there most
+  of the day.** PM matches — Thu sharp spikes to ~50 µg/m³ (delivery/unpacking), Fri a steady 14–20 µg/m³ 08–16 h
+  (occupancy). The living room has no gas sensor, but the NIGHT baseline (01–05 h median, nobody active) of
+  every SGP hit its 3-week low the night after the delivery: voc_raw c_office 31906 (prior range 32267–33020),
+  kitchen 31849 (32408–33056), h_office SGP41 31189 (31440–31707), closet SGP41 32338 (32378–33459) — a
+  house-wide step of ~300–800 ticks toward more VOC, far beyond what night temperature (−90…−150 ticks/°C, < 1 °C
+  moved) or humidity (~40 ticks per g/m³, F18) can make. Consistent with new-furniture off-gassing (+ cleaning
+  products). If it is off-gassing it persists for weeks — and the VOC Index's adaptive baseline will absorb it
+  as "normal" within a day or two, so the live score recovers while the house air doesn't. Watch: whether the
+  night baselines stay low over the next nights (off-gassing) or bounce back (cleaning, transient).
 - **Phase 3 (shipped 2026-10-10, shadow) — PM2.5 into the area band.** Any device with the PM2.5 ability
   (today the three Levoit purifiers: living_room, c_bed, c_office) gets `air_quality_pm25` each minute: the 1 h
   count-weighted mean from the 1-min rung, banded on EPA's 2024 PM2.5 AQI breakpoints (≤ 9.0 / 35.4 / 55.4 /
