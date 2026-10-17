@@ -486,6 +486,13 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
   cooking, c_office midday in use) and on an enclosed meter. **Gas coupling did NOT separate shut from open**
   with today's bedroom sensors (SGP30, BME680) — it is dominated by house-wide swings; re-test with the SGP41s.
   A door contact sensor on c_bed for ~2 weeks would give per-night ground truth to validate against.
+  **Labelled event 2026-10-16 (Hugh): h_bed cleaned the evening of 10-15, guests slept ~02:00–06/07 with the door
+  shut.** The room's BME680 fell 315 → 135 kΩ (v3 85 → ~50, room-only −57 vs house) and the closet meter's water
+  vapour rose 7.6 → 9.7 g/m³ over that window, both recovering by ~10:00 — the occupied-shut-room signature
+  (breath VOCs + moisture), on a BME680, which the Aug–Oct shadow-tune could not show. The node's die temperature
+  also stepped down ~6 °C from ~20:00 10-15 (37.5 → 31.5 °C, room steady) — consistent with it being moved or
+  uncovered during the cleaning; the report's h_bed humidity-k flag (0.197) that week is this event, not a
+  coefficient change.
 - **Phase 3 (shipped 2026-10-10, shadow) — PM2.5 into the area band.** Any device with the PM2.5 ability
   (today the three Levoit purifiers: living_room, c_bed, c_office) gets `air_quality_pm25` each minute: the 1 h
   count-weighted mean from the 1-min rung, banded on EPA's 2024 PM2.5 AQI breakpoints (≤ 9.0 / 35.4 / 55.4 /

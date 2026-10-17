@@ -294,7 +294,9 @@ def main():
     P(f"\n## Ventilation (Phase 2b), last {a.days} d — accumulating = mixing r < {COUPLING_THR} AND moisture "
       f"build-up > +{EXCESS_THR} g/m³\n")
     P("Ground truth (Hugh, 2026-10-10): c_bed door SHUT every night (Catherine); h_office door OPEN (Hugh); "
-      "h_bed meter sits in the closet. Shadow-tune: c_bed 43/68 nights flagged ≥ 1 h (00–07 h), h_office 19/68.\n")
+      "h_bed meter sits in the closet. Shadow-tune: c_bed 43/68 nights flagged ≥ 1 h (00–07 h), h_office 19/68. "
+      "Labelled event (Hugh, 2026-10-17): h_bed cleaned Thu 10-15 evening, guests slept Fri 10-16 ~02:00–06/07, door "
+      "SHUT — BME680 315 → 135 kΩ (score 85 → ~50) and closet AH 7.6 → 9.7 g/m³ over exactly that window.\n")
     P("| meter | area | accumulating share by hour (00/04/08/12/16/20) | nights flagged ≥ 1 h (00–07 h) | now |")
     P("|---|---|---|---|---|")
     vent_devs = sorted({d for (d, m) in data if m == "vent_coupling"})

@@ -67,6 +67,20 @@
     AND anti-replay → a captured one replayed forever). Server side already deployed: `battery_refresh` (the one
     signer that sent no ts) now stamps via `edge_cmd.signed_command`. Ships with each node's next OTA; the
     D1001 panels with their next panel build.
+- **IDEA (Hugh, 2026-10-17): data-driven filter-replacement prompts — not started, design first.** Feasibility read
+  (2026-10-17, scratch `filt.py`/`pmdecay.py`):
+  - **ERV (`erv_attic`) — best physics signal.** It reports CFM, rpm and W per side; a loading filter needs more rpm/W
+    for the same CFM. 12 d of data (since 10-04) show no loading yet — at the 92 cfm setpoint supply rpm actually
+    FELL 1249 → 1148, so it must be normalised for outdoor temperature/pressure before it means anything; at the
+    ~67 cfm setting supply sits on its 600 rpm floor (uninformative). Its own `filter_life_s` is a timer (62 d left).
+  - **Purifiers — PM2.5 decay rate after a spike** (≈ clean-air delivery ÷ room volume) is the textbook measure.
+    Only living_room has enough spikes (cooking; 3.5 months); a naive per-peak fit is too noisy (continuing
+    emission) — needs a clean-decay event filter, per fan speed. Bedrooms/c_office purifiers see ~no spikes →
+    time-based or a deliberate test. Levoit `filter_life_pct` is runtime-based (living_room 88 %).
+  - **Gas/VOC:** HEPA doesn't remove VOCs (the Levoit carbon layer a little), so the c_bed VOC rise reads as
+    ventilation, not filter, until a filter change shows a step.
+  - **Cheapest first step:** log each filter change (date + which filter) as ground truth → before/after step in ERV
+    rpm/CFM and PM decay calibrates the signal. Then a shadow series per filter, like the AQ experiment.
 - **Experiment tracking:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) →
   `instance/aq-experiment/reports/latest.md` (Flags section first). Promotion criterion in the ADR amendment.
 - **OPEN (Hugh decides):** hardware — SGP41+SHT4x for the 3 BME680s, SCD41 CO₂ for bedrooms/offices, or SEN66 per
