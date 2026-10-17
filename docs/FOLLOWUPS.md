@@ -70,6 +70,15 @@
 - **Night VOC baseline tracker SHIPPED 2026-10-17 (shadow)** — `voc_night_base`/`voc_night_shift` per gas node,
   report section + house-wide flag (Study 2 §9). **Open:** tune NIGHT_STEP (250 ticks) after a few weeks; watch
   whether the 10-16 furniture step persists (off-gassing) or fades (cleaning).
+- **Levoit panel flashes at night on speed changes — mitigated 2026-10-17 @2822552.** The Vital 200S MCU lights
+  its panel 1–6 s on every fan-level change even with `display` OFF, then re-darkens itself (seen in `led_on`;
+  our controller sends nothing) — not fixable from the display switch. Cause of the volume: `threshold_ranged` had
+  no hysteresis (~60 % of night changes reversed within 15 min); now a 5-pt `deadband` on air_quality ladders
+  (replay: night changes 183 → 66 over 2 wk). **Open:** (a) purifier_c_bed automation was DISABLED in the PWA at
+  21:40 on 10-16 after the flashes — re-enable is the household's call; (b) if the remaining ~3/night (living
+  room) still bother, options: a night minimum-dwell or step-up-only at night, or the Levoit's own sleep mode;
+  (c) run_all now has order-dependent failures in test_device_push / test_edge_flash_ntp /
+  test_required_services (all pass alone; present before 2822552) — a test leaking state, untriaged.
 - **IDEA (Hugh, 2026-10-17): data-driven filter-replacement prompts — not started, design first.** Feasibility read
   (2026-10-17, scratch `filt.py`/`pmdecay.py`):
   - **ERV (`erv_attic`) — best physics signal.** It reports CFM, rpm and W per side; a loading filter needs more rpm/W
