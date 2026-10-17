@@ -61,6 +61,7 @@ METRIC_CATALOG: dict[str, dict] = {
     "aq_hour_anomaly": {"label": "AQ vs usual for hour (shadow)", "unit": "pts", "color": "#c084fc", "precision": 0, "graph": True},
     "vent_coupling": {"label": "Mixing with house (shadow)", "unit": "r", "color": "#2dd4bf", "precision": 2, "graph": True},
     "vent_ah_excess": {"label": "Moisture build-up (shadow)", "unit": "g/m³", "color": "#60a5fa", "precision": 2, "graph": True},
+    "voc_night_shift": {"label": "Night VOC shift (shadow)", "unit": "raw", "color": "#e879f9", "precision": 0, "graph": True},
     "co2_ppm":       {"label": "CO₂",         "unit": "ppm",   "color": "#fbbf24", "precision": 0, "graph": True},
     "radon_bqm3":    {"label": "Radon",       "unit": "Bq",    "color": "#a78bfa", "precision": 0, "graph": True},
     "pressure_hpa":  {"label": "Pressure",    "unit": "hPa",   "color": "#34d399", "precision": 0, "graph": True},

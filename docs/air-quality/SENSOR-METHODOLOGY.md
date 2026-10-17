@@ -564,6 +564,17 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
   worth ~1–3 index points indoors — it does not touch F13's temperature cycle.** **Priority raised 2026-10-12 (F13):** the uncompensated SGP41 is
   the Phase-1 reference, and it reads a warm closet afternoon as VOCs. A local SHT4x per SGP node removes the
   cross-device dependency a downlink would add (cf. F8), which favours the SGP41+SHT4x / SEN66 hardware options.
+- **Night baseline (shadow, 2026-10-17; Hugh: "build the night baseline tracker").** Why: the adaptive index
+  re-learns a lasting source as normal (see the 10-16 furniture event above). Once a night, per gas node, the
+  sampler writes `voc_night_base` = median of the 01:00–05:00 local hourly means of the RAW signal (SGP40/41
+  voc_raw; BME680 humidity-corrected pseudo-SRAW on the v3 tick scale; SGP30 tvoc ppb) and `voc_night_shift` =
+  the median of the previous 14 nights (≥ 5) minus tonight, oriented + = more VOC. Stamped 05:00 local, written
+  after 05:15 from the 1-hour rung (stateless; `--backfill-night` fills history once). The report pools SGP4x +
+  BME shifts into a house median and flags ≥ +250 ticks (a first guess from ~±200 night-to-night noise) with the
+  run length. Limits: occupied bedrooms aren't "quiet" at night (c_bed, h_bed with guests) — the pooled
+  median absorbs one room; the SGP raw signal carries its temperature response (−90…−150 ticks/°C), so a cold
+  snap of a few °C at night moves it too; SGP30 tvoc is itself baseline-compensated on-chip, so it under-reads
+  slow drift.
 
 **Hardware (recommendation, not yet decided):** (1) swap the three BME680s for SGP41 + SHT4x — removes the
 cross-family problem at its root; (2) real CO₂ (SCD41) in bedrooms/offices — nothing in the house measures CO₂

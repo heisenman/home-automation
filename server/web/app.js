@@ -987,6 +987,7 @@ const GRAPHABLE = [
   { key: "aq_hour_anomaly", unit: "pts", color: "#c084fc", label: "AQ vs usual for hour (shadow)" },  // Phase 2: <0 = worse than usual for this hour
   { key: "vent_coupling", unit: "r", color: "#2dd4bf", label: "Mixing with house (shadow)" },  // Phase 2b: room water-vapour changes vs the house's (low = closed off)
   { key: "vent_ah_excess", unit: "g/m³", color: "#60a5fa", label: "Moisture build-up (shadow)" },  // Phase 2b: room vs house water vapour beyond its usual
+  { key: "voc_night_shift", unit: "raw", color: "#e879f9", label: "Night VOC shift (shadow)" },  // 01–05 h raw baseline vs the room's previous nights; >0 = more VOC (one point a night)
   { key: "co2_ppm", unit: "ppm", color: "#fbbf24", label: "CO₂" },
   { key: "radon_bqm3", unit: "Bq", color: "#a78bfa", label: "Radon" },
   { key: "pressure_hpa", unit: "hPa", color: "#34d399", label: "Pressure" },

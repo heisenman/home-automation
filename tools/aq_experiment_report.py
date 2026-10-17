@@ -458,6 +458,43 @@ def main():
     if not any_comp:
         P("- no paired readings yet (nodes need firmware v28+ and a same-room meter)")
 
+    # ── Night baseline: the slow, house-wide drift the adaptive index absorbs (stored as voc_night_shift) ──
+    from server.gas_compensation import NIGHT_REF_N, NIGHT_STEP, night_shift
+    from server.maintenance.gas_quality_persist import NIGHT_SIGNAL, night_series
+    P(f"\n## Night baseline — raw 01–05 h median vs the room's previous {NIGHT_REF_N} nights (+ = more VOC)\n")
+    P("SGP40/41 voc_raw ticks and BME680 humidity-corrected pseudo-SRAW (same scale) feed the house median; the "
+      f"SGP30 is in tvoc ppb, shown but not pooled. House median ≥ +{NIGHT_STEP:.0f} = a house-wide step "
+      "(e.g. new-furniture off-gassing) the live index will have re-learned as normal.\n")
+    nights_shown, shifts = None, {}
+    for d, f, ar in gas:
+        bases = night_series(d, f, time.time() - (NIGHT_REF_N + 14) * 86400, TZ)
+        ns = sorted(bases)[-10:]
+        if not ns:
+            continue
+        nights_shown = sorted(set(nights_shown or []) | set(ns))[-10:]
+        shifts[d] = (f, {n: night_shift(bases, n, NIGHT_SIGNAL[f][1]) for n in ns})
+    if nights_shown:
+        P("| node | " + " | ".join(n.strftime("%m-%d") for n in nights_shown) + " |")
+        P("|---|" + "---|" * len(nights_shown))
+        fmt = lambda v: "—" if v is None else f"{v:+.0f}"            # noqa: E731
+        for d, (f, s) in shifts.items():
+            P(f"| {d} ({f}) | " + " | ".join(fmt(s.get(n)) for n in nights_shown) + " |")
+        house = {}
+        for n in nights_shown:
+            vs = [s.get(n) for f, s in shifts.values() if f != "sgp30" and s.get(n) is not None]
+            house[n] = st.median(vs) if len(vs) >= 3 else None
+        P("| **house median** | " + " | ".join(fmt(house[n]) for n in nights_shown) + " |")
+        run = 0
+        for n in reversed(nights_shown):
+            if house[n] is None or house[n] < NIGHT_STEP:
+                break
+            run += 1
+        if run:
+            flags.append(f"**house**: night VOC baseline up {house[nights_shown[-1]]:+.0f} ticks vs usual, {run} night(s) "
+                         "running — a lasting source (off-gassing?) the live index absorbs; see Night baseline.")
+    else:
+        P("- no night history in the 1-hour rung yet")
+
     # ── Diurnal ──
     P(f"\n## Diurnal — median score by local hour, last {a.days} d (v2; Sensirion = v1 carried)\n")
     P("| node | " + " | ".join(f"{h:02d}" for h in range(0, 24, 2)) + " |")

@@ -419,6 +419,49 @@ def sgp_air_quality_tc(voc_index, coverage, family="SGP4x") -> dict:
     return rep
 
 
+# ── Night baseline: the slow drift the VOC Index absorbs — SHADOW (2026-10-17) ─────────────────────────────────
+# The Sensirion index (and v3) re-learn "normal" over ~12 h, so a lasting source (new furniture off-gassing) reads
+# as normal again within a day or two. The raw signal in the quiet 01:00–05:00 local window doesn't adapt: its
+# nightly median, against the room's own previous nights, shows that drift (Study 2, 2026-10-16 labelled event:
+# every SGP hit a 3-week night low after a furniture delivery). Units are the family's raw signal, oriented so a
+# POSITIVE shift = more VOC: SGP40/41 voc_raw ticks and the BME680's humidity-corrected pseudo-SRAW (same tick
+# scale, BME_V3_TICKS_PER_LN) are comparable and feed the house median; the SGP30's tvoc stays in ppb, its own.
+NIGHT_HOURS = (1, 2, 3, 4)       # local hour buckets → the 01:00–05:00 window
+NIGHT_MIN_HOURS = 3
+NIGHT_REF_N = 14                 # reference = median of the previous 14 nights …
+NIGHT_REF_MIN = 5                # … needing at least 5
+NIGHT_STEP = 250.0               # house-median shift (ticks) at/above → a house-wide step (shadow-tune; night-to-
+                                 # night noise is ~±200 ticks per sensor, 2026-09-28…10-15)
+
+
+def night_bases(hourly: dict, zone) -> dict:
+    """{local night date: median of the NIGHT_HOURS buckets} from {bucket_start_ep: value}; a night needs
+    NIGHT_MIN_HOURS of them."""
+    from datetime import datetime
+    from statistics import median
+    by_night: dict = {}
+    for b, v in hourly.items():
+        if v is None:
+            continue
+        lt = datetime.fromtimestamp(b, zone)
+        if lt.hour in NIGHT_HOURS:
+            by_night.setdefault(lt.date(), []).append(v)
+    return {n: median(vs) for n, vs in by_night.items() if len(vs) >= NIGHT_MIN_HOURS}
+
+
+def night_shift(bases: dict, night, cleaner_is_higher: bool = True):
+    """This night's base minus the median of the previous NIGHT_REF_N nights, signed so positive = more VOC.
+    None without the night or enough reference nights."""
+    from statistics import median
+    if night not in bases:
+        return None
+    prior = [bases[n] for n in sorted(n for n in bases if n < night)[-NIGHT_REF_N:]]
+    if len(prior) < NIGHT_REF_MIN:
+        return None
+    ref = median(prior)
+    return ref - bases[night] if cleaner_is_higher else bases[night] - ref
+
+
 # ── PM2.5 → band — SHADOW (ADR-0035 amendment 2026-10-10, Phase 3) ──────────────────────────────────────
 # The gas index is blind to particles (Study 2 F10: the 09-15 smoke-level day read "Excellent" everywhere).
 # Any device with the PM2.5 ability (today: the Levoit purifiers) gets `air_quality_pm25`, and a room's v2

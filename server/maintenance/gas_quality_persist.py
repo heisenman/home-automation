@@ -9,9 +9,11 @@ the read path (the viewmodel fusion), so it never lands on disk. Two modes:
               `air_quality_tc` (Phase 4a: SGP40/41 corrected for a same-room temperature). This is the
               FORWARD sampler — run on a timer (systemd ha-gas-quality-sampler.timer). Also writes the
               SHADOW `air_quality_pm25` for any PM2.5-capable device (Phase 3) and the Phase 2 context
-              `aq_local_excess` / `aq_hour_anomaly` per gas node.
+              `aq_local_excess` / `aq_hour_anomaly` per gas node, and once a night the SHADOW
+              `voc_night_base` / `voc_night_shift` (the raw 01–05 h baseline vs the node's previous nights).
   --backfill  One-time: reconstruct air_quality across the WHOLE stored gas_ohm history — joining the
               reference sensor's humidity at each timestamp — so the graph shows the sensor's full life.
+  --backfill-night  One-time: the night series over the 1-hour rung's history (idempotent).
 
 Both reuse the viewmodel's fusion (auto-picked reference + server/gas_compensation), so a stored point is
 identical to what the live view shows. Writes are INSERT OR IGNORE on (device_id, ts, metric) → idempotent
@@ -33,6 +35,7 @@ from server.gas_compensation import (air_quality_for, sgp30_air_quality, sgp40_a
                                      bme680_air_quality_v2, bme680_v2_baseline, BME_V2_WINDOW_S,
                                      bme680_air_quality_v3, bme680_voc_index, BME_V3_WINDOW_S,
                                      sgp_air_quality_tc, sgp_tc_voc_index, SGP_TC_WINDOW_S,
+                                     bme680_pseudo_sraw, night_bases, night_shift, NIGHT_REF_N,
                                      pm25_air_quality, PM25_WINDOW_S,
                                      AQ_CTX_WINDOW_S, AQ_OFFSET_MIN_N, AQ_PROFILE_MIN_N, aq_context,
                                      area_worst, house_median)
@@ -144,6 +147,8 @@ def sample_once(conn) -> int:
         pm = _pm25_score(d["device_id"], now_ep)
         if pm is not None:
             _write(conn, d["device_id"], d.get("device_type"), d.get("area"), iso, pm, "air_quality_pm25")
+    # SHADOW night baseline (2026-10-17): once a night, the raw 01–05 h median vs the node's previous nights.
+    _night_baseline(conn, {did: (f, dt, node_area[did]) for did, (f, dt) in node_fam.items()}, now_ep)
     conn.commit()
     # Phase 4b experiment: hand each SGP40/41 node its room's real T/RH for the on-chip compensation. After the
     # commit, and it never raises — the AQ writes above must not depend on the broker.
@@ -359,6 +364,121 @@ def _bme680_v3(conn, gid, now_ep, rungs_path=None):
     return rep["air_quality"]
 
 
+# family → (raw hourly signal, higher = cleaner). The BME680 goes through the humidity-corrected pseudo-SRAW.
+NIGHT_SIGNAL = {"sgp40": ("voc_raw", True), "sgp41": ("voc_raw", True), "sgp30": ("tvoc", False),
+                "bme680": ("gas_ohm", True)}
+NIGHT_READY_MIN = 5 * 60 + 15    # local minute-of-day after which last night's 04:00 hour bucket is rolled up
+
+
+def night_series(gid, fam, since_ep, zone, rungs_path=None) -> dict:
+    """{local night date: night base} for one gas node, from the 1-hour rung (kept 730 d) — stateless, so the
+    report and a backfill get the full history the forward sampler would have written."""
+    path = Path(rungs_path or RUNGS)
+    if fam not in NIGHT_SIGNAL or not path.exists():
+        return {}
+    metric = NIGHT_SIGNAL[fam][0]
+    metrics = ("gas_ohm", "temperature_c", "humidity_pct") if fam == "bme680" else (metric,)
+    rc = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        by_b: dict[int, dict] = {}
+        for b, m, v in rc.execute(
+                f"SELECT bucket_start, metric, vmean FROM rung WHERE res='1hour' AND device_id=? "
+                f"AND metric IN ({','.join('?' * len(metrics))}) AND bucket_start >= ?", (gid, *metrics, int(since_ep))):
+            by_b.setdefault(b, {})[m] = v
+    finally:
+        rc.close()
+    if fam == "bme680":
+        hourly = {b: bme680_pseudo_sraw(m.get("gas_ohm"), m.get("temperature_c"), m.get("humidity_pct"))
+                  for b, m in by_b.items()}
+    else:
+        hourly = {b: m.get(metric) for b, m in by_b.items()}
+    return night_bases(hourly, zone)
+
+
+def _night_stamp(night, zone):
+    """(epoch, iso) of 05:00 local on that night — the end of the window, one fixed stamp per node per night."""
+    from datetime import datetime, time as dtime
+    ep = datetime.combine(night, dtime(5, 0), zone).timestamp()
+    return ep, time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(ep))
+
+
+def _night_written(conn, gid, ep, iso, rungs_path=None) -> bool:
+    """Already stored? hot.db holds it until the nightly compaction; after that the 1-hour rung still shows it."""
+    if conn.execute("SELECT 1 FROM readings WHERE device_id=? AND ts=? AND metric='voc_night_base'",
+                    (gid, iso)).fetchone():
+        return True
+    path = Path(rungs_path or RUNGS)
+    if not path.exists():
+        return False
+    rc = sqlite3.connect(f"file:{path}?mode=ro", uri=True)
+    try:
+        return rc.execute("SELECT 1 FROM rung WHERE res='1hour' AND device_id=? AND metric='voc_night_base' "
+                          "AND bucket_start=?", (gid, int(ep) // 3600 * 3600)).fetchone() is not None
+    finally:
+        rc.close()
+
+
+def _night_baseline(conn, nodes: dict, now_ep, rungs_path=None, tz=None) -> int:
+    """Once per night per gas node (after NIGHT_READY_MIN local): `voc_night_base` (raw units) + `voc_night_shift`
+    (vs the node's previous nights, positive = more VOC), stamped 05:00 local. nodes = {gid: (fam, dtype, area)}."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    zone = ZoneInfo(tz or _house_tz())
+    lt = datetime.fromtimestamp(now_ep, zone)
+    night = lt.date() if lt.hour * 60 + lt.minute >= NIGHT_READY_MIN else lt.date() - timedelta(days=1)
+    ep, iso = _night_stamp(night, zone)
+    n = 0
+    for gid, (fam, dtype, area) in nodes.items():
+        if fam not in NIGHT_SIGNAL or _night_written(conn, gid, ep, iso, rungs_path):
+            continue
+        bases = night_series(gid, fam, ep - (NIGHT_REF_N + 3) * 86400, zone, rungs_path)
+        if night not in bases:
+            continue                                   # window incomplete (node was down) — nothing to stamp
+        _write(conn, gid, dtype, area, iso, round(bases[night], 1), "voc_night_base")
+        shift = night_shift(bases, night, NIGHT_SIGNAL[fam][1])
+        if shift is not None:
+            _write(conn, gid, dtype, area, iso, round(shift, 1), "voc_night_shift")
+        n += 1
+    return n
+
+
+def backfill_night(conn, rungs_path=None, tz=None) -> int:
+    """One-time: the night series over the 1-hour rung's whole history, for nights before the first one already
+    stored (hot.db or the parquet archive) — so a re-run never duplicates. Tonight's is the forward sampler's."""
+    from datetime import datetime, timedelta
+    from zoneinfo import ZoneInfo
+    zone = ZoneInfo(tz or _house_tz())
+    stored: dict[str, str] = dict(conn.execute(
+        "SELECT device_id, min(ts) FROM readings WHERE metric='voc_night_base' GROUP BY 1").fetchall())
+    files = sorted((REPO / "instance/db/parquet").glob("year=*/month=*/*.parquet"))
+    if files:
+        import duckdb
+        flist = ",".join(f"'{f}'" for f in files)
+        for d, ts in duckdb.connect().execute(
+                f"SELECT device_id, min(ts) FROM read_parquet([{flist}]) WHERE metric='voc_night_base' GROUP BY 1").fetchall():
+            stored[d] = min(ts, stored.get(d, ts))
+    today = datetime.fromtimestamp(time.time(), zone).date()
+    n = 0
+    for d in build_sensor_list(conn, time.time()):
+        fam = _family(d.get("device_type"))
+        if fam not in NIGHT_SIGNAL:
+            continue
+        gid = d["device_id"]
+        bases = night_series(gid, fam, time.time() - 730 * 86400, zone, rungs_path)
+        first = stored.get(gid)
+        for night in sorted(bases):
+            ep, iso = _night_stamp(night, zone)
+            if night >= today or (first and iso >= first):
+                continue
+            _write(conn, gid, d.get("device_type"), d.get("area"), iso, round(bases[night], 1), "voc_night_base")
+            shift = night_shift(bases, night, NIGHT_SIGNAL[fam][1])
+            if shift is not None:
+                _write(conn, gid, d.get("device_type"), d.get("area"), iso, round(shift, 1), "voc_night_shift")
+            n += 1
+        conn.commit()
+    return n
+
+
 def _temp_source(devices, area, exclude_id):
     """A SAME-ROOM temperature for SGP compensation, or None — never another room's (that was F8's flapping
     reference). A plain T/RH meter first (_meter_rank: 'pro', then freshest); else a BME680 in the room — its die
@@ -497,10 +617,15 @@ def main():
     g = ap.add_mutually_exclusive_group(required=True)
     g.add_argument("--once", action="store_true", help="forward sampler: one air_quality point per gas node now")
     g.add_argument("--backfill", action="store_true", help="one-time: reconstruct air_quality over all history")
+    g.add_argument("--backfill-night", action="store_true",
+                   help="one-time: voc_night_base/shift over the 1-hour rung's history (before the first stored night)")
     ap.add_argument("--db", default=str(HOT))
     a = ap.parse_args()
     conn = sqlite3.connect(a.db)
     try:
+        if a.backfill_night:
+            print(f"backfilled {backfill_night(conn)} night baseline(s)")
+            return
         n = backfill(conn) if a.backfill else sample_once(conn)
         print(f"{'backfilled' if a.backfill else 'wrote'} {n} air_quality reading(s)")
     finally:

@@ -311,3 +311,69 @@ def test_ambient_targets_same_room_meter_only():
     assert json.loads(env["p"]) == {"op": "ambient", "ts": 1_800_000_000, "seq": 0, "t_c": 21.5, "rh_pct": 44.0,
                                     "src": "meter_pro_c_office"}
     assert push(lambda t, pl: out.append(t), {}, targets(devs, node_of)) == []        # no secret → nothing
+
+
+def test_night_bases_and_shift():
+    """01–05 h local buckets → one median a night (≥ 3 hours); shift vs the previous nights, + = more VOC."""
+    from datetime import datetime, timezone
+    from server.gas_compensation import night_bases, night_shift
+    d0 = 1_790_000_000 // 86400 * 86400                          # a UTC midnight
+    hourly = {}
+    for k in range(10):
+        for h in range(24):
+            hourly[d0 + k * 86400 + h * 3600] = 33000.0 if h in (1, 2, 3, 4) else 30000.0   # daytime ignored
+    hourly[d0 + 9 * 86400 + 2 * 3600] = 32400.0
+    hourly[d0 + 9 * 86400 + 3 * 3600] = 32400.0
+    hourly[d0 + 9 * 86400 + 4 * 3600] = 32400.0
+    del hourly[d0 + 8 * 86400 + 1 * 3600], hourly[d0 + 8 * 86400 + 2 * 3600]   # night 8: only 2 hours → dropped
+    b = night_bases(hourly, timezone.utc)
+    last = datetime.fromtimestamp(d0 + 9 * 86400 + 7200, timezone.utc).date()
+    assert len(b) == 9 and b[last] == 32400.0
+    assert night_shift(b, last) == 600.0                          # voc_raw fell → more VOC → positive
+    assert night_shift(b, last, cleaner_is_higher=False) == -600.0
+    assert night_shift(b, min(b)) is None                         # no previous nights yet
+
+
+def test_sampler_night_baseline_once_a_night():
+    """voc_raw (SGP), BME680 gas_ohm and SGP30 tvoc each step toward more VOC on the last night → positive
+    shifts, written once at 05:00 local; a second run the same day writes nothing."""
+    from server.gas_compensation import BME_V3_TICKS_PER_LN
+    import math
+    d0 = 1_790_000_000 // 86400 * 86400
+    now = d0 + 20 * 86400 + 6 * 3600                               # 06:00 UTC on day 20 → night 20 is complete
+    with tempfile.TemporaryDirectory() as td:
+        rp = Path(td) / "rungs.db"
+        rc = sqlite3.connect(rp)
+        rc.executescript(RUNG_DDL)
+        rows = []
+        for k in range(21):
+            last = k == 20
+            for h in (1, 2, 3, 4):
+                b = d0 + k * 86400 + h * 3600
+                for dev, m, v in (("g_sgp", "voc_raw", 32500.0 if last else 33000.0),
+                                  ("g_bme", "gas_ohm", 150_000.0 if last else 300_000.0),
+                                  ("g_bme", "temperature_c", 35.0), ("g_bme", "humidity_pct", 25.0),
+                                  ("g_30", "tvoc", 600.0 if last else 150.0)):
+                    rows.append(("1hour", dev, m, b, v, v, v, 60, v))
+        rc.executemany("INSERT INTO rung VALUES (?,?,?,?,?,?,?,?,?)", rows)
+        rc.commit()
+        rc.close()
+        hot = sqlite3.connect(":memory:")
+        hot.execute("CREATE TABLE readings (ts TEXT, device_id TEXT, device_type TEXT, area TEXT, transport TEXT, "
+                    "metric TEXT, value REAL, unit TEXT, schema_v INT, authoritative INT, PRIMARY KEY (device_id, ts, metric))")
+        nodes = {"g_sgp": ("sgp41", "sgp41_gas", "a"), "g_bme": ("bme680", "bme680_gas", "b"),
+                 "g_30": ("sgp30", "sgp30_gas", "c")}
+        assert P._night_baseline(hot, nodes, now, rungs_path=rp, tz="UTC") == 3
+        got = {(d, m): (ts, v) for ts, d, m, v in hot.execute("SELECT ts, device_id, metric, value FROM readings")}
+        stamp = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(d0 + 20 * 86400 + 5 * 3600))
+        assert got[("g_sgp", "voc_night_base")] == (stamp, 32500.0)
+        assert got[("g_sgp", "voc_night_shift")][1] == 500.0
+        assert abs(got[("g_bme", "voc_night_shift")][1] - BME_V3_TICKS_PER_LN * math.log(2)) < 1.0
+        assert got[("g_30", "voc_night_shift")][1] == 450.0                       # ppb, higher = more VOC
+        assert P._night_baseline(hot, nodes, now + 600, rungs_path=rp, tz="UTC") == 0   # once a night
+        # before 05:15 the latest complete night is the previous one — already in hot? no → it writes that one
+        early = d0 + 20 * 86400 + 4 * 3600
+        assert P._night_baseline(hot, nodes, early, rungs_path=rp, tz="UTC") == 3
+        prev = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(d0 + 19 * 86400 + 5 * 3600))
+        assert hot.execute("SELECT value FROM readings WHERE device_id='g_sgp' AND ts=? AND metric='voc_night_shift'",
+                           (prev,)).fetchone()[0] == 0.0

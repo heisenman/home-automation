@@ -67,6 +67,9 @@
     AND anti-replay → a captured one replayed forever). Server side already deployed: `battery_refresh` (the one
     signer that sent no ts) now stamps via `edge_cmd.signed_command`. Ships with each node's next OTA; the
     D1001 panels with their next panel build.
+- **Night VOC baseline tracker SHIPPED 2026-10-17 (shadow)** — `voc_night_base`/`voc_night_shift` per gas node,
+  report section + house-wide flag (Study 2 §9). **Open:** tune NIGHT_STEP (250 ticks) after a few weeks; watch
+  whether the 10-16 furniture step persists (off-gassing) or fades (cleaning).
 - **IDEA (Hugh, 2026-10-17): data-driven filter-replacement prompts — not started, design first.** Feasibility read
   (2026-10-17, scratch `filt.py`/`pmdecay.py`):
   - **ERV (`erv_attic`) — best physics signal.** It reports CFM, rpm and W per side; a loading filter needs more rpm/W
