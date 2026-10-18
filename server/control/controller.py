@@ -361,9 +361,13 @@ class Controller:
         (In-memory: a controller restart mid-dry-out drops the rest of that window — the coil still dries.)"""
         v = pol.get("ventilation") or {}
         partner = v.get("device")
-        if not partner:
-            return
         floors = self.__dict__.setdefault("_vent_floor", {})
+        if not partner:
+            # coupling removed (or re-pointed) mid-run: drop the floor this device left behind — an open
+            # 'during' floor has no expiry and nothing else would ever clear it
+            for k in [k for k, f in floors.items() if f[2] == device_id]:
+                floors.pop(k)
+            return
         if wants_running:
             floors[partner] = (int(v.get("during_level", 2)), None, device_id)
         elif partner in floors and floors[partner][1] is None:

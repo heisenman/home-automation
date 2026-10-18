@@ -12,8 +12,8 @@ preferred path)** with the `DH` relay driven in parallel as a no-software-change
   Aprilaire E070's `DH` input as a leased call (External mode; board `NC|NO` switch → `NO`). **2026-10-06:**
   `dehum_c6` v7 also answers the E070's Remote bus (`ha_aprilaire` codec) with the same call (on + dryness 7 /
   off); the unit is now in `REMOTE` mode and reports run state, own RH and error code (design §2.8). Both adopted on
-  ha-2 (`erv_attic`, `dehum_attic`) with metering plugs; the dehumidifier floors the ERV (Low while running, High
-  15 min after). Evidence: design doc §1.8, §2.5, §7.2; `docs/design/erv-airflow-2026-10-04.md`; runbook Entry 3.
+  ha-2 (`erv_attic`, `dehum_attic`) with metering plugs; the dehumidifier floored the ERV (Low while running, High
+  15 min after) until **2026-10-18**, when it was dropped: the ducts were separated 2026-10-17 (erv-airflow doc). Evidence: design doc §1.8, §2.5, §7.2; `docs/design/erv-airflow-2026-10-04.md`; runbook Entry 3.
 **Relates to:** ADR-0020 (shared firmware core / module-first), ADR-0014 (device-control conventions),
 ADR-0034 (Node / Ability / Entity), ADR-0027 (actuator telemetry + area contract)
 **Reference:** [docs/design/hvac-shade-device-integration.md](../design/hvac-shade-device-integration.md)

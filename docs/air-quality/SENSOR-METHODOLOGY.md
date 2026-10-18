@@ -593,6 +593,12 @@ Each phase runs **shadow first** — a parallel `air_quality_v2` series; v1 stay
   c_office 60 → 125 min (n 41 / 21) — **not faster**; summer windows (pre) vs closed fall (post) confounds, and
   filters don't remove VOCs: only the ERV's dilution does, at a continuous 67–92 cfm. Post-install PM decay
   (~9–12 /h) is the clean-filter baseline for the filter-prompt idea (FOLLOWUPS).
+  **Labelled event (Hugh, 2026-10-18): ERV and Aprilaire put on independent duct loops, 2026-10-17
+  ~09:40–11:30 PDT.** The ERV supply fan stopped tracking the Aprilaire blower and now works much harder for the
+  same airflow (Low 600 → ~2350 RPM at 66 cfm; Med pinned at 3000 RPM, 88 of 92 cfm); the dehumidifier→ERV
+  floor coupling was removed the next day. For VOC/PM work: house ventilation per ERV level is ~unchanged at Low
+  and ~4 % lower at Med; the Aprilaire's blower no longer pushes ERV fresh air through its loop. Detail:
+  `docs/design/erv-airflow-2026-10-04.md` (2026-10-17 section).
 
 **Hardware (recommendation, not yet decided):** (1) swap the three BME680s for SGP41 + SHT4x — removes the
 cross-family problem at its root; (2) real CO₂ (SCD41) in bedrooms/offices — nothing in the house measures CO₂

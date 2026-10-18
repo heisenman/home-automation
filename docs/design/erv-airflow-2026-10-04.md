@@ -29,3 +29,32 @@ comparison comes from the same afternoon's mode test (design §7.2 log): Med = s
    matters, so coil wetness isn't adding resistance worth designing around.
 
 Re-run: `tools/erv_airflow_test.sh --out docs/design/erv-airflow-<date>.md` (pauses + restores both automations).
+
+## 2026-10-17: ducts separated — ERV and Aprilaire on independent loops (Hugh, 2026-10-18)
+
+Labelled event: the Aprilaire was re-ducted onto its own loop, no longer in series with the ERV supply, on **Fri
+2026-10-17 ~09:40–11:30 PDT** (dehum_pm 0 W 09:45–11:10; ERV supply RPM on Low stepped 600 → 1600 at ~10:00 →
+2150 at 11:00 → ~2360 from 11:30). Read from the 1-min rungs on ha-2, before = 10-10 … 10-17 09:30, after =
+10-17 11:30 … 10-18 05:00 (~9 h of Low, ~1 h of Med); medians:
+
+| ERV mode | Aprilaire | supply RPM | supply CFM | ERV W |
+|---|---|---|---|---|
+| low | before, blower running | 600 (floor) | 68 | 22 |
+| low | before, off | 1613 | 66 | 33 |
+| low | **after, any state** | 2330–2360 | 66 | 46–53 |
+| med | before, blower running | 1168 | 92 | 41 |
+| med | before, off | 2060 | 92 | 61 |
+| med | **after, any state** | **3000 (max)** | **88** (target 92) | 89–96 |
+
+1. **The separation is real:** the ERV's supply fan no longer moves with the Aprilaire's state (before: the
+   Aprilaire blower pulled the ERV supply — §3 above; the 1600-RPM spikes at every Aprilaire stop were that).
+2. **The new supply path is more restrictive than the old one even with the Aprilaire off:** Low +40 % RPM,
+   Med pinned at the supply fan's 3000-RPM ceiling and ~4 % short of its CFM target, at ~1.5× the blower-off
+   power. ERV mean draw 34 → 61 W. Med is the top of the AQ automation's ladder, so Med now has no headroom;
+   High is now supply-limited too (not yet measured cleanly).
+3. **The Aprilaire is unaffected:** blower 87–88 W, compressor ~570 W (≈ 540 W before).
+4. **Coupling dropped (Hugh, 2026-10-18):** `dehum_attic` policy `ventilation.device` → null — no ERV floor
+   during/after a dehumidify run, no "ERV must be moving" interlock. The ERV runs on its AQ bands alone.
+
+Next (Hugh's call — "may need to rethink my flow path"): re-run `tools/erv_airflow_test.sh` for a clean
+after-table incl. High; check the new supply run (damper, crushed/kinked flex, a long run or a register restriction).

@@ -275,3 +275,19 @@ def test_force_run_policy_validation():
     assert handle_policy_update(conn, "dehum_attic", {"force_run": "yes"})[0] == 400
     assert handle_policy_update(conn, "dehum_attic", {"force_run": False})[0] == 200
     assert store.get_policy(conn, "dehum_attic")["force_run"] is False
+
+
+def test_uncoupling_mid_run_drops_the_floor_and_the_interlock(tmp_path):
+    # ducts separated 2026-10-17: ventilation.device -> null while the dehum runs. The open 'during' floor must
+    # go (it has no expiry), the ERV follows its own AQ bands, and the dehum no longer needs the ERV moving.
+    ctrl, iss, db = _make(tmp_path, rh=(60, 62), erv_mode=8)
+    ctrl.tick(now=NOW)
+    assert _erv_cmds(iss)[-1] == {"mode": "low"}                     # coupled: floored to Low
+    conn = sqlite3.connect(db)
+    pol = store.get_policy(conn, "dehum_attic")
+    store.set_policy(conn, "dehum_attic", {**pol, "ventilation": {**pol["ventilation"], "device": None}})
+    store.set_policy(conn, "erv_attic", {**store.get_policy(conn, "erv_attic"), "enabled": False})
+    conn.close()
+    ctrl.tick(now=NOW + 60)
+    assert ctrl._ventilation_floor("erv_attic", NOW + 60) is None
+    assert ("dehum_attic", "switchable", {"on": True}) in iss.calls
