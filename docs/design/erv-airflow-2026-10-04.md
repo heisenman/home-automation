@@ -58,3 +58,17 @@ Labelled event: the Aprilaire was re-ducted onto its own loop, no longer in seri
 
 Next (Hugh's call — "may need to rethink my flow path"): re-run `tools/erv_airflow_test.sh` for a clean
 after-table incl. High; check the new supply run (damper, crushed/kinked flex, a long run or a register restriction).
+
+## 2026-10-18: ERV-branch backdraft damper removed (Hugh) — the restriction was mostly the damper
+
+Step at **16:49Z** (09:49 PDT; same minute as the first REMOTE boost of the E070 — Hugh to confirm the time). The
+Aprilaire-branch damper stays (it stops ERV supply flowing back through the idle E070).
+
+| ERV mode | with damper (10-17 11:30 … 10-18 16:48) | damper out |
+|---|---|---|
+| low | 2330–2360 RPM, 66 cfm, ~53 W | **1520–1630 RPM, 66 cfm, ~38 W** |
+| high | (not measured cleanly) | 2685 supply / 3000 exhaust RPM, **128–130 cfm**, ~133 W |
+
+Low now needs ~70 % of the supply RPM it did with the damper, and High is back at the exhaust-limited ceiling
+(≈ the pre-split 126 cfm). Low is still ~1000 RPM above the old in-series case (600 RPM), where the Aprilaire
+blower pulled for it. Medium not yet observed with the damper out.
