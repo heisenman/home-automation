@@ -480,7 +480,16 @@ different control sources and cannot coexist.
 we can detect **commanded on but drawing no power** — exactly how a silent `E8` dew-point lockout or an
 `E7` float trip presents. The control path alone can never see that.
 
-### 2.8 The RS-485 Remote path (built + characterised 2026-10-06; NOT the operating mode — see below)
+### 2.8 The RS-485 Remote path (built + characterised 2026-10-06; THE OPERATING MODE since 2026-10-18)
+
+> **Operating decision 2026-10-18 (Hugh): REMOTE (RS-485), VENT off.** The ERV and E070 were put on separate
+> duct loops 2026-10-17 (Y with a backdraft damper per branch; `docs/design/erv-airflow-2026-10-04.md`), so the
+> backflow reason for VENT is gone and the blower only ran ~60 % of the time at ~87 W for nothing. Menu flipped
+> ~16:44Z: `dehum_c6` answered at once (no firmware/server change — v11 always answers M-frames), `apr_link` 1,
+> `unit_err` 0, `unit_rh_pct` 43. Rule calls are `on=02` force-run (policy `force_run: true`), so the
+> `verify_power` alarm stays valid; the card's running/error now come from the unit. No coil dry-out fan exists
+> in REMOTE — accepted (the coil drains). The 2026-10-06 decision below is superseded.
+
 
 > **Operating decision 2026-10-06 (Hugh): EXTERNAL + VENT + `DH` relay.** REMOTE cannot keep the blower moving
 > (no fan-only `on` value, no air-cycling — sweep below), and a stopped E070 leaks ERV supply out of its intake.
