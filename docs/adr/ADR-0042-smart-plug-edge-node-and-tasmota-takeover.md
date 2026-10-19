@@ -2,7 +2,9 @@
 
 **Status:** Accepted — **first unit taken over live 2026-10-19 03:18Z** (`plug_01`, over WiFi, no case opened):
 partition table migrated (boots slot `ota_0`), meter reading (119.7 V), signed `plug_set`/`plug_status` verified.
-Pending: relay-hold-through-OTA check with a load attached; generic image for the production line (§3).
+**All 8 taken over 2026-10-19** (plug_02..08 by `tools/plug_line.py`, v3, each first-pass after the retry fix;
+plug_01 v1 meters the Midea as `plug_hall`). Pending: relay-hold-through-OTA check (plug_01 → v3, the Midea as
+witness); control driver; generic image (§3).
 **Relates to:** ADR-0001 (dumb relay), ADR-0010 (signed commands), ADR-0020 (shared core, module-first),
 ADR-0036 (node-born secret + standby intake), ADR-0041 (actuators; `verify_power`)
 
