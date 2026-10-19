@@ -55,6 +55,12 @@ Labelled event: the Aprilaire was re-ducted onto its own loop, no longer in seri
 3. **The Aprilaire is unaffected:** blower 87–88 W, compressor ~570 W (≈ 540 W before).
 4. **Coupling dropped (Hugh, 2026-10-18):** `dehum_attic` policy `ventilation.device` → null — no ERV floor
    during/after a dehumidify run, no "ERV must be moving" interlock. The ERV runs on its AQ bands alone.
+5. **Outdoor dew-point gate dropped (Hugh, 2026-10-19 16:32Z):** `dehum_attic` policy `outdoor_gate.sensor` →
+   null. The gate skipped starts when the OUTDOOR dew point was < 40 °F, as a proxy for the E070's E8 inlet
+   lockout while its inlet was ERV (outdoor) air. On its own loop the inlet is indoor air (~68 °F / 42–44 % ≈
+   45 °F dew point), so the proxy no longer applies — it was still skipping starts (10-18 14:15, outdoor dp
+   1.0 °C). Should have gone with the coupling on 10-18. The unit still guards E8 itself; a lockout shows as
+   "Called but not running".
 
 Next (Hugh's call — "may need to rethink my flow path"): re-run `tools/erv_airflow_test.sh` for a clean
 after-table incl. High; check the new supply run (damper, crushed/kinked flex, a long run or a register restriction).

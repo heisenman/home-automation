@@ -518,7 +518,8 @@ unit decides from its OWN incoming-air dew point vs the remote's dryness (1 = 65
 p.3, p.19): ON only enables, a ~3-min blower sample precedes the compressor, and raising dryness forces a sample.
 (Live: `on=1` at dryness 4 with 43 % incoming RH → blower only, 88 W, never `M!`.) So the house-RH decision stays
 on the server as before, and the node maps it: **call → R `on=1`, dryness 7; no call → `on=0`, dryness 1.** The
-unit's own 40 °F floor coincides with our outdoor dew-point gate. The node keeps driving the `DH` relay with the
+unit's own 40 °F floor coincided with our outdoor dew-point gate (gate dropped 2026-10-19: the E070's inlet is
+indoor air since the 10-17 duct split — `docs/design/erv-airflow-2026-10-04.md`). The node keeps driving the `DH` relay with the
 same call, so switching the installer menu back to EXTERNAL needs no software change. Node dead → E3 → unit off.
 Telemetry `apr_link`, `unit_running`, `unit_rh_pct`, `unit_err` (`unit_rh_pct` is NOT `humidity_pct`, so it never
 pollutes the attic's canonical RH). Mode switching over the wire: no known R-frame field — installer menu only.
