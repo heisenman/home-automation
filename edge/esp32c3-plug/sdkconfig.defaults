@@ -1,0 +1,35 @@
+# Defaults applied on first `idf.py set-target esp32c3`. Edit sdkconfig (not this) for local tweaks.
+# IoTorero/Athom PG03V3-US16A smart plug — ADR-0042.
+CONFIG_IDF_TARGET="esp32c3"
+
+# ── Console: USB-Serial-JTAG ONLY ──────────────────────────────────────────────────────────────────────────
+# The CSE7766 power meter's TX is wired to GPIO20 = the C3's UART0 RX. A UART0 console would own that pin, so
+# the meter is read on UART1 (RX routed to GPIO20) and the console moves off UART0. (The ROM boot banner still
+# goes out on GPIO21/TX — the meter only transmits, so nothing hears it.)
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+# ── Bluetooth: compiled for ha_mqtt's unconditional REQUIRES, never initialised (as on dehum_c6) ──────────
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_ROLE_OBSERVER=y
+CONFIG_BT_NIMBLE_ROLE_CENTRAL=y
+CONFIG_HA_MQTT_NO_BLE=y
+
+# ── Flash + partitions: 4 MB, the Tasmota-compatible A/B layout in partitions.csv ─────────────────────────
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+CONFIG_ESPTOOLPY_FLASHSIZE="4MB"
+CONFIG_ESPTOOLPY_FLASHMODE_DIO=y
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# ha_partmig rewrites the partition table once on a unit that arrives running Tasmota. The default
+# (DANGEROUS_WRITE_ABORTS) would abort that write by design.
+CONFIG_SPI_FLASH_DANGEROUS_WRITE_ALLOWED=y
+
+# Rollback: effective on serial-flashed units (our bootloader). A Tasmota-migrated unit keeps Tasmota's
+# bootloader, which may not honour it — ADR-0042 "Consequences".
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+CONFIG_ESP_HTTPS_OTA_ALLOW_HTTP=y
+
+CONFIG_LOG_DEFAULT_LEVEL_INFO=y
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144

@@ -1,0 +1,16 @@
+# ESP-IDF build artifacts
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+
+# Secrets (Wi-Fi creds, broker) — never commit. Copy from secrets.example.h.
+main/secrets.h
+
+# Per-node PROJECT_VER identity ("<node_id>@<fw>" -> app_desc.version, OTA gate). Emitted by
+# enroll_node alongside secrets.h; per-node so never committed.
+version.txt
+
+# NB sdkconfig.defaults IS tracked and must stay that way — the console config in it is load-bearing
+# (console on USB-Serial-JTAG so the CSE7766 can have GPIO20). See ADR-0042.

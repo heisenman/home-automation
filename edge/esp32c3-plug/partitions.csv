@@ -1,0 +1,11 @@
+# Name,     Type, SubType, Offset,   Size,     Flags
+# PG03V3 plug (ESP32-C3, 4 MB) — ADR-0042. Laid out ON TOP of Tasmota's 4 MB safeboot table so an image
+# uploaded through Tasmota's own web OTA (which lands in Tasmota's app0 @0xE0000) is ALREADY sitting in our
+# ota_0: ha_partmig then rewrites only this table, no code is copied. nvs + otadata keep Tasmota's offsets;
+# Tasmota's safeboot (0x10000..0xE0000) becomes `spare`; its app0 tail + fs become ota_1.
+# Serial-flashed units get the same table, so every plug has one layout whatever its history.
+nvs,        data, nvs,     0x9000,   0x5000,
+otadata,    data, ota,     0xe000,   0x2000,
+spare,      data, 0x40,    0x10000,  0xd0000,
+ota_0,      app,  ota_0,   0xe0000,  0x190000,
+ota_1,      app,  ota_1,   0x270000, 0x190000,

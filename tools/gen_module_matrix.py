@@ -39,6 +39,7 @@ BUILDS = [
     ("s3-shades", "edge/esp32s3-shades/main/CMakeLists.txt"),
     ("c6-hvac", "edge/esp32c6-hvac/main/CMakeLists.txt"),
     ("c6-dehum", "edge/esp32c6-dehum/main/CMakeLists.txt"),
+    ("c3-plug", "edge/esp32c3-plug/main/CMakeLists.txt"),
     ("d1001-panel", "provisioning/reterminal/beachhead/main/CMakeLists.txt"),
 ]
 
@@ -53,6 +54,8 @@ MODULES = [
     ("ha_broan", {"sources": [], "component": "ha_broan"}),      # ADR-0041 Broan ERV session + codec
     ("ha_dout", {"sources": [], "component": "ha_dout"}),        # ADR-0041 dry-contact output
     ("ha_gaposa", {"sources": [], "component": "ha_gaposa"}),    # ADR-0041 shade planner
+    ("ha_cse7766", {"sources": [], "component": "ha_cse7766"}),  # ADR-0042 power-meter frame parser
+    ("ha_partmig", {"sources": [], "component": "ha_partmig"}),  # ADR-0042 Tasmota-layout takeover
     ("ha_config", {"sources": ["ha_config.c"], "component": "ha_config"}),
     ("ha_wifi", {"sources": ["ha_wifi.c"], "component": "ha_wifi"}),   # ADR-0020: promoted fork -> shared component
     ("ha_eth", {"sources": ["ha_eth.c"], "component": "ha_eth"}),
