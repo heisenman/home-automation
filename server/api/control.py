@@ -575,6 +575,12 @@ _NODE_ABILITIES = {
     # back; whether the unit actually runs is dehum_pm's watts (the E070 has no status output).
     "dehum": {"lane": "dehum", "prefix": "dehum", "transport": "gpio",
               "capabilities": ["dh_call", "call_left_s"]},
+    # PG03V3 metering smart plug on our firmware (ADR-0042, edge/esp32c3-plug). Same metric names AND the
+    # same device_type as the Tasmota S31 meters (tasmota_bridge: energy_meter), so a plug drops in wherever
+    # an S31 is used today (verify_power meter, dashboards) — only the transport differs.
+    "plug": {"lane": "plug", "prefix": "plug", "transport": "uart", "device_type": "energy_meter",
+             "capabilities": ["relay_on", "power_w", "voltage_v", "current_a", "apparent_va", "power_factor",
+                              "energy_kwh", "tripped", "meter_ok"]},
 }
 
 # Where a freshly auto-registered edge ability is parked until intake relocates it into a real room.
@@ -623,7 +629,7 @@ def _intake_lane(abilities):
     ab = next((a for a in (abilities or []) if a in _NODE_ABILITIES), None)
     if ab:
         d = _NODE_ABILITIES[ab]
-        return ab, d["lane"], d["prefix"], ab, list(d["capabilities"]), d["transport"]
+        return d.get("device_type", ab), d["lane"], d["prefix"], ab, list(d["capabilities"]), d["transport"]
     return None
 
 

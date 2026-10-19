@@ -159,3 +159,13 @@ def test_dehum_node_registers_its_own_lane(tmp_path):
     assert (did, err) == ("dehum_attic", None)
     rec = _read(p)["dehum_c6-dehum"]              # matches the payload mac "dehum_c6-dehum"
     assert rec["device_type"] == "dehum" and "dh_call" in rec["capabilities"]
+
+
+def test_plug_node_registers_as_an_energy_meter(tmp_path):
+    # ADR-0042: a plug on our firmware lands with the S31's device_type + metric names, so it can replace one
+    p = _registry(tmp_path)
+    did, err = C._register_edge_node_device(p, "plug_01", ["plug"], "attic")
+    assert (did, err) == ("plug_attic", None)
+    rec = _read(p)["plug_01-plug"]                # matches the payload mac "plug_01-plug"
+    assert rec["device_type"] == "energy_meter" and rec["area"] == C.DORMANT_AREA
+    assert {"power_w", "voltage_v", "energy_kwh", "relay_on"} <= set(rec["capabilities"])
