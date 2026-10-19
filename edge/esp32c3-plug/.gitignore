@@ -14,3 +14,4 @@ version.txt
 
 # NB sdkconfig.defaults IS tracked and must stay that way — the console config in it is load-bearing
 # (console on USB-Serial-JTAG so the CSE7766 can have GPIO20). See ADR-0042.
+nodes.yaml

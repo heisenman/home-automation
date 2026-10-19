@@ -1,7 +1,8 @@
 # ADR-0042 — Smart plugs as edge nodes, taken over from Tasmota over the air
 
-**Status:** Proposed — firmware built (`edge/esp32c3-plug`, 2026-10-19), NOT yet run on hardware. First unit
-pending: live partition-table check → one OTA through Tasmota → verify.
+**Status:** Accepted — **first unit taken over live 2026-10-19 03:18Z** (`plug_01`, over WiFi, no case opened):
+partition table migrated (boots slot `ota_0`), meter reading (119.7 V), signed `plug_set`/`plug_status` verified.
+Pending: relay-hold-through-OTA check with a load attached; generic image for the production line (§3).
 **Relates to:** ADR-0001 (dumb relay), ADR-0010 (signed commands), ADR-0020 (shared core, module-first),
 ADR-0036 (node-born secret + standby intake), ADR-0041 (actuators; `verify_power`)
 
@@ -50,8 +51,12 @@ fast = tripped) — the Levoit night-flash lesson.
 
 ### 2. Take over from Tasmota over the air: our ota_0 sits on Tasmota's app0 (`ha_partmig`)
 
-Tasmota ≥ 12's 4 MB layout: `nvs 0x9000 | otadata 0xE000 | safeboot (factory) 0x10000 | app0 0xE0000
-(1856 K) | fs 0x2B0000`. Its web "Firmware upgrade" writes an uploaded app image into app0 and boots it. Our
+Tasmota ≥ 12's 4 MB layout — **read live from our unit (Tasmota 14.3.0, IDF 5.3.1)**: `nvs 0x9000 |
+otadata 0xE000 | safeboot (factory) 0x10000 (832 K) | app0 0xE0000 (2880 K) | spiffs 0x3B0000 (320 K)`.
+**An upload only reaches app0 from SAFEBOOT:** the running main firmware writes uploads into the 832 K safeboot
+slot and refuses a ~1 MB image ("Not enough space" — harmless, nothing written). The web page's own sequence,
+reproduced by hand: `GET /u4?u4=fct&api=` (restart into safeboot; poll until it returns `true`), then
+`POST /u2?fsz=<bytes>` with the image as form field `u2`. Safeboot writes app0 and boots it. Our
 table (`partitions.csv`) keeps nvs + otadata where Tasmota has them and puts **ota_0 at 0xE0000**, so the
 uploaded image is already in our slot. On first boot `ha_partmig` sees a table with a `safeboot` app, checks
 it is running from that table's app slot and that the slot is our ota_0, then:

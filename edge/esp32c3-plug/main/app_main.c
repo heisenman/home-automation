@@ -66,7 +66,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v1-plug"
+#define HA_FW_VERSION "v2-plug"
 #endif
 
 static const char *TAG = "ha_plug";
@@ -304,8 +304,7 @@ static bool on_cmd(const cJSON *cmd, void *user) {
         const cJSON *on = cJSON_GetObjectItem(cmd, "on");
         if (!cJSON_IsBool(on)) { ha_mqtt_log("plug_set: REFUSED (on must be true/false)"); return true; }
         esp_timer_stop(s_cycle_timer);
-        relay_set(cJSON_IsTrue(on), "command");
-        publish_plug();
+        relay_set(cJSON_IsTrue(on), "command");   // plug_task publishes the change
         return true;
     }
     if (strcmp(op->valuestring, "plug_cycle") == 0) {         // {off_s: 1..120}: off, then back on
@@ -315,7 +314,6 @@ static bool on_cmd(const cJSON *cmd, void *user) {
         relay_set(false, "power-cycle");
         esp_timer_stop(s_cycle_timer);
         esp_timer_start_once(s_cycle_timer, (uint64_t)secs * 1000000u);
-        publish_plug();
         return true;
     }
     if (strcmp(op->valuestring, "plug_cfg") == 0) {           // {boot: "on"|"off"|"restore", lock: bool}
