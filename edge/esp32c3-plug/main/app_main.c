@@ -66,7 +66,7 @@
 #define HA_MQTT_PASS ""
 #endif
 #ifndef HA_FW_VERSION
-#define HA_FW_VERSION "v2-plug"
+#define HA_FW_VERSION "v3-plug"
 #endif
 
 static const char *TAG = "ha_plug";
@@ -189,10 +189,15 @@ static void publish_plug(void) {
     s_n = 0;
     bool on = s_on, tripped = s_tripped, ok = s_meter_ok;
     xSemaphoreGive(s_mu);
-    double va = v * i, pf = va > 0.5 ? fmin(1.0, p / va) : (p < 0.5 ? 1.0 : -1.0);
+    // PF only when it is computable: below the 50 mA current floor with a few watts flowing there is no
+    // honest value, and a sentinel would be stored as a measurement — omit the key instead
+    double va = v * i;
+    char pf[32] = "";
+    if (va > 0.5) snprintf(pf, sizeof pf, ",\"power_factor\":%.2f", fmin(1.0, p / va));
+    else if (p < 0.5) snprintf(pf, sizeof pf, ",\"power_factor\":1.00");          // no load
     if (ok)
         snprintf(m, sizeof m, "{\"relay_on\":%s,\"power_w\":%.1f,\"voltage_v\":%.1f,\"current_a\":%.3f,"
-                 "\"apparent_va\":%.1f,\"power_factor\":%.2f,\"energy_kwh\":%.4f,\"tripped\":%s,\"meter_ok\":true}",
+                 "\"apparent_va\":%.1f%s,\"energy_kwh\":%.4f,\"tripped\":%s,\"meter_ok\":true}",
                  on ? "true" : "false", p, v, i, va, pf, energy_kwh(), tripped ? "true" : "false");
     else   // never publish a stale or invented reading as a measurement
         snprintf(m, sizeof m, "{\"relay_on\":%s,\"tripped\":%s,\"meter_ok\":false}", on ? "true" : "false",

@@ -15,15 +15,19 @@ Steps (the Tasmota web page's own sequence, reproduced):
 The plug must already be on the air-gap WiFi (Tasmota setup AP -> autohome_airgap: a user step).
 """
 import argparse
+import functools
 import json
 import struct
 import subprocess
 import sys
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
 from pathlib import Path
+
+print = functools.partial(print, flush=True)   # noqa: A001 — progress lines in order when piped
 
 PLANNED = {"nvs": 0x9000, "otadata": 0xE000, "safeboot": 0x10000, "app0": 0xE0000}   # offsets ota_0 relies on
 
@@ -37,8 +41,24 @@ def tasmota_cmd(ip: str, cmd: str) -> dict:
     return json.loads(get(ip, "/cm?" + urllib.parse.urlencode({"cmnd": cmd})))
 
 
-def check(ip: str) -> None:
-    fw = tasmota_cmd(ip, "Status 2")["StatusFWR"]
+def in_safeboot(ip: str) -> bool:
+    """`/u4?u4=fct&api=` answers "true" only when running the factory (safeboot) partition of a single-OTA
+    (safeboot) layout — so "true" also proves the layout. Main Tasmota answers "false" AND restarts into
+    safeboot, so only call this when that is wanted."""
+    try:
+        return get(ip, "/u4?u4=fct&api=", timeout=4).strip() == "true"
+    except Exception:
+        return False
+
+
+def check(ip: str) -> bool:
+    """True = already in safeboot (a re-run after an interrupted takeover); False = main Tasmota, checked."""
+    st = tasmota_cmd(ip, "Status 2")
+    if "safeboot" in st.get("StatusFWR", {}).get("Version", "").lower():
+        # an earlier run got this far; safeboot exists only on the safeboot layout, and has no Berry
+        print("plug is already in SAFEBOOT (an earlier run got this far) — layout implied, skipping the table read")
+        return True
+    fw = st["StatusFWR"]
     if "ESP32-C3" not in fw.get("Hardware", ""):
         sys.exit(f"refusing: not an ESP32-C3 ({fw.get('Hardware')})")
     raw = bytes.fromhex(tasmota_cmd(ip, "Br import flash; return flash.read(0x8000, 0x100).tohex()")["Br"])
@@ -55,25 +75,19 @@ def check(ip: str) -> None:
     if bad:
         sys.exit(f"refusing: partition table differs from the planned Tasmota layout ({bad}; live {parts})")
     print(f"ok: Tasmota {fw['Version']} on {fw['Hardware']}, safeboot layout as planned")
+    return False
 
 
 def to_safeboot(ip: str) -> None:
-    try:
-        r = get(ip, "/u4?u4=fct&api=")
-    except Exception:
-        r = ""
-    if r.strip() == "true":
-        print("already in safeboot")
-        return
     print("restarting into safeboot ...")
+    if in_safeboot(ip):            # the request itself triggers the restart; the connection often resets
+        print("in safeboot")
+        return
     for _ in range(40):
         time.sleep(3)
-        try:
-            if get(ip, "/u4?u4=fct&api=", timeout=4).strip() == "true":
-                print("in safeboot")
-                return
-        except Exception:
-            pass
+        if in_safeboot(ip):
+            print("in safeboot")
+            return
     sys.exit("safeboot did not answer within 2 min — check the plug, nothing was written")
 
 
@@ -86,8 +100,17 @@ def upload(ip: str, image: Path) -> None:
             f"Content-Type: application/octet-stream\r\n\r\n").encode() + data + f"\r\n--{b}--\r\n".encode()
     req = urllib.request.Request(f"http://{ip}/u2?fsz={len(data)}", data=body, method="POST",
                                  headers={"Content-Type": f"multipart/form-data; boundary={b}"})
-    with urllib.request.urlopen(req, timeout=240) as r:
-        page = r.read().decode("utf-8", "replace")
+    time.sleep(5)                  # safeboot answers u4 a moment before its upload handler is ready
+    for attempt in (1, 2):
+        try:
+            with urllib.request.urlopen(req, timeout=240) as r:
+                page = r.read().decode("utf-8", "replace")
+            break
+        except urllib.error.URLError as e:
+            if attempt == 2:
+                sys.exit(f"upload failed twice ({e}) — the plug stays in safeboot; just re-run")
+            print(f"upload connection dropped ({e}) — retrying in 5 s")
+            time.sleep(5)
     if "Successful" not in page:
         sys.exit("upload NOT successful — Tasmota said: " + " ".join(
             t for t in page.replace(">", "<").split("<") if t.strip() and "{" not in t and "(" not in t)[-200:])
@@ -117,8 +140,8 @@ def main() -> None:
     ap.add_argument("--node", help="node id baked into the image: wait for its hello")
     ap.add_argument("--broker", default="192.168.1.200")
     a = ap.parse_args()
-    check(a.ip)
-    to_safeboot(a.ip)
+    if not check(a.ip):
+        to_safeboot(a.ip)
     upload(a.ip, a.image)
     if a.node:
         wait_hello(a.node, a.broker)
