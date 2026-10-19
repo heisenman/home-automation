@@ -3,8 +3,11 @@
 **Status:** Accepted — **first unit taken over live 2026-10-19 03:18Z** (`plug_01`, over WiFi, no case opened):
 partition table migrated (boots slot `ota_0`), meter reading (119.7 V), signed `plug_set`/`plug_status` verified.
 **All 8 taken over 2026-10-19** (plug_02..08 by `tools/plug_line.py`, v3, each first-pass after the retry fix;
-plug_01 v1 meters the Midea as `plug_hall`). Pending: relay-hold-through-OTA check (plug_01 → v3, the Midea as
-witness); control driver; generic image (§3).
+plug_01 meters the Midea as `plug_hall`). **2026-10-19 04:01Z: plug_01 v1 → v3 by signed OTA from ha-2 on
+Tasmota's bootloader** (ota_0 → ota_1, hash + identity verified, self-test confirmed) **with the relay held**: the
+Midea on it kept drawing its idle ~1.3 W straight through the reboot — no ~32 W power-up fan run, which the same
+Midea showed when it was actually unplugged (03:29Z). (A Midea "implausible status frame" at 04:02:00 is its
+normal noise — 82 in 48 h.) Pending: control driver; generic image (§3).
 **Relates to:** ADR-0001 (dumb relay), ADR-0010 (signed commands), ADR-0020 (shared core, module-first),
 ADR-0036 (node-born secret + standby intake), ADR-0041 (actuators; `verify_power`)
 
