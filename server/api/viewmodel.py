@@ -775,7 +775,7 @@ def verify_power_alert(hot_conn, device_id: str, traits_cfg: dict | None, now: f
     """'Called but not running': a leased call (the Aprilaire's DH) has been closed longer than `grace_min`
     while the plug feeding the unit reads under `min_w`. The E070 has no status output and its lockouts
     (E8 cold/dry inlet, E7 float, wrong mode) are silent except on its LCD — the meter is the only witness.
-    Config: traits.switchable.verify_power {meter, min_w, grace_min}."""
+    Config: traits.switchable.verify_power {meter, min_w, grace_min, window_min (peak-power window, default 15)}."""
     cfg = ((traits_cfg or {}).get("switchable") or {}).get("verify_power") or {}
     if hot_conn is None or not cfg.get("meter"):
         return None
@@ -790,16 +790,22 @@ def verify_power_alert(hot_conn, device_id: str, traits_cfg: dict | None, now: f
         called_s = _age_s(start, now) or 0
         if called_s < float(cfg.get("grace_min", 5)) * 60:
             return None
-        p = _latest(hot_conn, cfg["meter"], "power_w", 1) or _latest(hot_conn, cfg["meter"], "power_w", 0)
-        if p is not None and p[0] >= float(cfg.get("min_w", 100)):
+        # PEAK over the window, not the latest reading: in REMOTE the unit cycles its own compressor (~6 min at
+        # ~520 W, ~4 min blower-only at ~88 W, 2026-10-19), so one blower-phase reading is not "not running".
+        win_s = min(called_s, float(cfg.get("window_min", 15)) * 60)
+        since = datetime.fromtimestamp(now - win_s, timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        peak = hot_conn.execute("SELECT MAX(value) FROM readings WHERE device_id=? AND metric='power_w' AND ts>=?",
+                                (cfg["meter"], since)).fetchone()[0]
+        if peak is not None and peak >= float(cfg.get("min_w", 100)):
             return None
     except Exception:
         return None
-    watts = "no reading" if p is None else f"{p[0]:.0f} W"
+    watts = "no reading" if peak is None else f"at most {peak:.0f} W"
     return {"level": "alarm", "title": "Called but not running",
-            "text": f"Dehumidification has been requested for {called_s / 60:.0f} min but {cfg['meter']} reads "
-                    f"{watts}. Likely a lockout (E8: inlet below 50 °F or dew point below 40 °F; E7: float), "
-                    f"or the unit is not in EXTERNAL mode — check its display."}
+            "text": f"Dehumidification has been requested for {called_s / 60:.0f} min but {cfg['meter']} has read "
+                    f"{watts} over the last {win_s / 60:.0f} min. Likely a lockout (E8: inlet below 50 °F or dew "
+                    f"point below 40 °F; E7: float), or the unit's control mode is wrong (REMOTE, or EXTERNAL "
+                    f"with the NC|NO switch on NO) — check its display."}
 
 
 def _setpoint_label(cfg: dict) -> tuple[str, str]:

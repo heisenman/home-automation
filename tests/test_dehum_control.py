@@ -140,10 +140,37 @@ def test_called_but_not_running_alarm(tmp_path):
     from datetime import datetime, timezone
     now = datetime(2026, 10, 4, 22, 10, tzinfo=timezone.utc).timestamp()
     a = verify_power_alert(hc, "dehum_attic", tc, now)
-    assert a and a["title"] == "Called but not running" and "3 W" in a["text"]
+    assert a and a["title"] == "Called but not running" and "at most 3 W" in a["text"]
     W._insert_readings(hc, {"schema": 1, "device_id": "dehum_pm", "device_type": "energy_meter", "area": "attic",
                             "transport": "wifi-mqtt", "ts": "2026-10-04T22:09:30Z", "metrics": {"power_w": 590}})
     assert verify_power_alert(hc, "dehum_attic", tc, now) is None
+
+
+def test_called_but_not_running_ignores_a_blower_phase_between_compressor_runs(tmp_path):
+    """REMOTE: the unit cycles its own compressor (~520 W) with ~4-min blower-only (~88 W) gaps — a call that
+    ran the compressor 3 min ago is running; one that has only seen the blower for the whole window is not."""
+    from datetime import datetime, timezone
+    from pathlib import Path
+
+    from server.api.viewmodel import verify_power_alert
+    from server.storage import writer as W
+    hc = W._open_db(Path(tmp_path) / "hot.db")
+    for ts, call in (("2026-10-19T15:00:00Z", 0), ("2026-10-19T15:26:00Z", 1), ("2026-10-19T16:30:00Z", 1)):
+        W._insert_readings(hc, {"schema": 1, "device_id": "dehum_attic", "device_type": "dehum", "area": "attic",
+                                "transport": "gpio", "ts": ts, "metrics": {"dh_call": call}})
+
+    def pm(ts, w):
+        W._insert_readings(hc, {"schema": 1, "device_id": "dehum_pm", "device_type": "energy_meter",
+                                "area": "attic", "transport": "wifi-mqtt", "ts": ts, "metrics": {"power_w": w}})
+    pm("2026-10-19T16:24:00Z", 528)
+    pm("2026-10-19T16:28:00Z", 87)
+    tc = _reg()["dehum_attic"].traits_cfg
+    now = datetime(2026, 10, 19, 16, 30, tzinfo=timezone.utc).timestamp()
+    assert verify_power_alert(hc, "dehum_attic", tc, now) is None
+    later = datetime(2026, 10, 19, 16, 50, tzinfo=timezone.utc).timestamp()
+    pm("2026-10-19T16:45:00Z", 88)
+    a = verify_power_alert(hc, "dehum_attic", tc, later)
+    assert a and "at most 88 W" in a["text"] and "EXTERNAL mode" not in a["text"]
 
 
 # ── outdoor dew-point gate (2026-10-04) ──────────────────────────────────────────────────────────────
@@ -291,3 +318,32 @@ def test_uncoupling_mid_run_drops_the_floor_and_the_interlock(tmp_path):
     ctrl.tick(now=NOW + 60)
     assert ctrl._ventilation_floor("erv_attic", NOW + 60) is None
     assert ("dehum_attic", "switchable", {"on": True}) in iss.calls
+
+
+# ── an override ending inside the deadband returns to the rule's own choice (2026-10-21) ────────────────
+def _log(db, *rows):
+    conn = sqlite3.connect(db)
+    for desired, source, acted in rows:
+        store.append_log(conn, "dehum_attic", desired, source, "t", acted, "ok" if acted else "noop")
+    conn.close()
+
+
+def test_boost_ending_in_the_deadband_drops_the_call_it_left(tmp_path):
+    ctrl, iss, db = _make(tmp_path, rh=(52, 52), dh_running=True, lease_left=500, erv_mode=11)
+    _log(db, (False, "rule", False), (True, "override", True), (True, "override", False))
+    ctrl.tick(now=NOW)                    # boost over, RH 52 between 50 and 55: automation had it OFF
+    assert ("dehum_attic", "switchable", {"on": False}) in iss.calls
+
+
+def test_boost_ending_in_the_deadband_keeps_a_call_automation_already_had(tmp_path):
+    ctrl, iss, db = _make(tmp_path, rh=(52, 52), dh_running=True, lease_left=500, erv_mode=11)
+    _log(db, (True, "rule", True), (True, "override", True))
+    ctrl.tick(now=NOW)
+    assert not [a for d, t, a in iss.calls if d == "dehum_attic" and a.get("on") is False]
+
+
+def test_plain_deadband_hold_is_unchanged_once_automation_has_acted(tmp_path):
+    ctrl, iss, db = _make(tmp_path, rh=(52, 52), dh_running=True, lease_left=500, erv_mode=11)
+    _log(db, (False, "rule", False), (True, "override", True), (True, "rule", True))
+    ctrl.tick(now=NOW)
+    assert not [a for d, t, a in iss.calls if d == "dehum_attic" and a.get("on") is False]

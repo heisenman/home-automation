@@ -73,9 +73,9 @@ devices:
   # Aprilaire E070 via edge node dehum_c6 (ADR-0041) — External mode, a LEASED `DH` call
   # (server/control/dehum_driver.py, routed by device_type dehum). The controller renews the lease while it
   # wants dehumidification; a lost server lets it run out. `verify_power` raises "Called but not running"
-  # when the call is on past `grace_min` but the plug feeding the unit reads under `min_w` (E8/E7 lockouts
-  # are silent otherwise). Unit config that MUST be set (2026-10-04): EXTERNAL enabled, REMOTE off,
-  # board NC|NO switch on NO (ships NC).
+  # when the call is on past `grace_min` but the plug feeding the unit has peaked under `min_w` over the last
+  # `window_min` (default 15; the unit cycles its own compressor in REMOTE). E8/E7 lockouts are silent otherwise.
+  # Unit mode: REMOTE over RS-485 since 2026-10-18 (EXTERNAL also works: NC|NO switch on NO, ships NC).
   dehum_attic:
     node: dehum_c6
     area: attic

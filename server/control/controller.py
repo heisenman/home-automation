@@ -25,8 +25,8 @@ from server.control.registry import load_control_registry
 from server.util.psychro import dewpoint_c
 from server.util.registry_reload import RegistryReloader
 from server.control.automation import (
-    DEFAULT_SCENE, DeviceState, Override, Policy, Reading, Resolution, apply_scene, house_tod, in_window, resolve,
-    schedule_off_now)
+    DEFAULT_SCENE, DeviceState, Override, Policy, Reading, Resolution, _gate, apply_scene, house_tod, in_window,
+    resolve, schedule_off_now)
 from server.control.secret_store import available_master
 
 log = logging.getLogger("ha.controller")
@@ -619,6 +619,14 @@ class Controller:
             # deadband "hold" holds the DEVICE's state, but this OFF wasn't ours: our last transition was ON
             # and the unit powered itself off (or was switched off at the unit). Keep the call: re-power it.
             res = Resolution(True, True, "rule", f"{res.reason}; unit powered off while called -> ON")
+        if (override is None and policy.strategy == "hysteresis" and res.source == "rule" and not res.act
+                and sensor is not None and policy.off_below < sensor.value < policy.on_above):
+            # deadband "hold" after an override ended: the device holds the OVERRIDE's state, so a Boost that ends
+            # with RH between the thresholds kept the Aprilaire called (2026-10-18). Return to the rule's own choice.
+            pre = store.pre_override_desired(conn, device_id)
+            if pre is not None and pre != dev_state.running:
+                res = _gate(policy, now, dev_state, pre, "rule",
+                            f"{res.reason}; override ended -> back to pre-override {'ON' if pre else 'OFF'}")
         res = self._apply_airflow_interlock(conn, device_id, pol, res, dev_state, now)
         res = self._apply_outdoor_gate(pol, res, dev_state, now)
         lm = self._level_modes(device_id) if drv is None else None

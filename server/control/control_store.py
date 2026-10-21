@@ -182,6 +182,23 @@ def recent_log(conn, device_id: str, limit: int = 50) -> list[dict]:
         (device_id, limit))]
 
 
+def pre_override_desired(conn, device_id: str, limit: int = 200) -> bool | None:
+    """What automation wanted just BEFORE the most recent override, if nothing has acted since that override
+    ended — else None. A hysteresis deadband "hold" holds the device's state, which after a Boost (or an operator
+    OFF) is the override's state, not the rule's; this is the rule's. Rowid order: ticks can share an ISO second."""
+    seen_override = False
+    for desired, source, acted in conn.execute(
+            "SELECT desired, source, acted FROM control_log WHERE device_id=? ORDER BY rowid DESC LIMIT ?",
+            (device_id, limit)):
+        if source == "override":
+            seen_override = True
+        elif seen_override:
+            return bool(desired)
+        elif acted:
+            return None                               # automation already moved the device since the override
+    return None
+
+
 # ── device meta (user overlay: friendly name / room / hidden) ─────────────────────
 def get_device_meta(conn, device_id: str) -> dict | None:
     r = conn.execute("SELECT name, room, hidden, retired, pending_until FROM device_meta WHERE device_id=?",
