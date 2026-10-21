@@ -221,7 +221,9 @@ driven by HOUSE RH sensors**. No Model 76 remote is installed, so `A`/`B` is fre
   hysteresis → leased `DH` call (renewed <5 min left); ERV FLOOR med while running, high 15 min after each stop
   (coil dry-out), ERV = max(own AQ level, floor); operator ERV-OFF wins and holds the dehum; "Called but not
   running" alarm via `dehum_pm` (<100 W after 5 min). ✅ outdoor dew-point gate BUILT 2026-10-05 — **DROPPED
-  2026-10-19** (sensor → null; inlet is indoor air since the 10-17 duct split; ERV coupling dropped 10-18). Not built:
+  2026-10-19** (sensor → null; inlet is indoor air since the 10-17 duct split; ERV coupling dropped 10-18).
+  ✅ 2026-10-21 (32f983c): the alarm reads PEAK power over `window_min` (15) — REMOTE's own blower-only phases
+  no longer false-alarm; a Boost ending inside the RH deadband returns to the rule's pre-boost choice. Not built:
   PWA editor for the ventilation floor (API-editable), fan-only.
 - **(superseded design note)** call `DH` only while the ERV is moving air (not Off/Intermittent) — first
   cross-device interlock. Expect E8 lockouts in cool seasons (inlet <50 °F or dew point <40 °F); harmless but
