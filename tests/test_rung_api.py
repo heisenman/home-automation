@@ -89,6 +89,23 @@ def test_rung_since_streams_ndjson_inclusive_of_after(tmp_path):
     assert objs[0]["vmean"] == 6.0 and objs[0]["vcount"] == 60                    # raw rung values (no calib)
 
 
+def test_rung_since_survives_steps_and_close_on_other_threads(tmp_path):
+    """A panel that disconnects mid-sync: the first row is read on one worker thread, the generator closed on
+    another (what Starlette's threadpool does) — must not raise sqlite3.ProgrammingError."""
+    from concurrent.futures import ThreadPoolExecutor
+    p = _mk_rungs(tmp_path)
+    old_db, old_sr = M.RUNG_DB, M.StreamingResponse
+    M.RUNG_DB, M.StreamingResponse = p, lambda content, **kw: content       # hand back the sync generator
+    try:
+        gen = M.rung_since(res="1hour", after=0, limit=1000)
+        with ThreadPoolExecutor(1) as a, ThreadPoolExecutor(1) as b:
+            assert a.submit(next, gen).result()
+            assert b.submit(next, gen).result()
+            b.submit(gen.close).result()                                       # raised ProgrammingError before
+    finally:
+        M.RUNG_DB, M.StreamingResponse = old_db, old_sr
+
+
 def test_rung_since_rejects_bad_res(tmp_path):
     from fastapi import HTTPException
 

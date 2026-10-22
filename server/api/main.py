@@ -1322,7 +1322,10 @@ def rung_since(res: str = Query(..., description="rung name: 1min|1hour|1day|1we
         raise HTTPException(status_code=404, detail="rungs.db not built yet")
 
     def gen():
-        conn = sqlite3.connect(str(RUNG_DB))
+        # Starlette runs each next() of a sync generator on a threadpool worker — not always the same one — and a
+        # client that disconnects mid-stream closes the generator from yet another (ha-2: ~190 ProgrammingErrors a
+        # day at the close). The connection is only ever used by one step at a time, so cross-thread use is safe.
+        conn = sqlite3.connect(str(RUNG_DB), check_same_thread=False)
         try:
             q = (f"SELECT {','.join(_RUNG_COLS)} FROM rung WHERE res=? AND bucket_start>=? "
                  f"ORDER BY bucket_start LIMIT ?")
