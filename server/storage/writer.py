@@ -198,11 +198,28 @@ def _insert_readings(conn: sqlite3.Connection, payload: dict) -> int:
     return len(rows)
 
 
+def _derive_energy_today(et, payload: dict) -> None:
+    """A meter with only a lifetime counter (the PG03 plugs, ADR-0042) gets `energy_today_kwh` derived here, like
+    the S31s' on-device "Today" (server/storage/energy_today.py). Never lets a derivation fault drop the reading."""
+    m = payload.get("metrics")
+    if not isinstance(m, dict) or "energy_today_kwh" in m or not isinstance(m.get("energy_kwh"), (int, float)):
+        return
+    try:
+        v = et.add(payload.get("device_id", "unknown"), payload.get("ts", ""), float(m["energy_kwh"]))
+    except Exception as exc:
+        log.warning("energy_today derivation failed for %s: %s", payload.get("device_id"), exc)
+        return
+    if v is not None:
+        m["energy_today_kwh"] = v
+
+
 # ── MQTT callbacks ─────────────────────────────────────────────────────────────
 
 class Writer:
     def __init__(self, db_path: Path):
         self._conn = _open_db(db_path)
+        from server.storage.energy_today import EnergyToday, house_tz
+        self._energy_today = EnergyToday(self._conn, lambda: house_tz(Path(db_path).parent / "control.db"))
         self._client = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
         apply_credentials(self._client)
         self._client.on_connect = self._on_connect
@@ -230,6 +247,7 @@ class Writer:
             return
 
         try:
+            _derive_energy_today(self._energy_today, payload)
             n = _insert_readings(self._conn, payload)
             log.debug("stored %d row(s) from %s", n, msg.topic)
         except sqlite3.Error as exc:
