@@ -19,6 +19,7 @@ from server.control.policy import PolicyStore
 from server.control.registry import (check_secrets_present, load_control_registry, load_secrets,
                                       secrets_from_lut)
 from server.control.secret_store import load_lut
+from server.control.venstar_driver import VenstarTransport, client_from_env, venstar_devices_of
 
 log = logging.getLogger("ha.control.bootstrap")
 
@@ -79,6 +80,14 @@ def build_issuer(master: str, *, control_registry: Path, node_secrets_lut: Path,
     if dehum_devices:
         dt = DehumEdgeTransport(dehum_devices, lut, broker=broker, port=port)
         overrides.update({d: dt for d in dehum_devices})
+    # Venstar thermostat (ADR-0043): a LAN-HTTP local driver serving two entities — the thermostat (mode +
+    # heat/cool setpoints) and the furnace blower (fan on/auto). Address + credentials: instance/venstar.env.
+    venstar_devices = venstar_devices_of(registry)
+    vclient = client_from_env(parse_env_file(control_registry.parent / "venstar.env")) if venstar_devices else None
+    if vclient is not None:
+        units = {d: (registry[d].traits_cfg.get("setpoint") or {}).get("unit", "degF") for d in venstar_devices}
+        vt = VenstarTransport(venstar_devices, vclient, units)
+        overrides.update({d: vt for d in venstar_devices})
     # host indicator LEDs: device_id host_* -> HostLedTransport (runs tools/host-leds.sh locally via sudo).
     host_led_ids = [d for d in registry if d.startswith("host_")]
     if host_led_ids:

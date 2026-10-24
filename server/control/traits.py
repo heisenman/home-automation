@@ -93,6 +93,17 @@ def _positionable_set(args, cfg):
 
 
 def _setpoint_set(args, cfg):
+    """{value} — or, for a device with several setpoints (a thermostat's heat + cool, ADR-0043), {channel,
+    value} where cfg `channels` maps each channel name to its own {min, max}. The bounds here are the MANUAL
+    range (what a person may set); automation's narrower comfort limits live in the policy, not the trait."""
+    channels = cfg.get("channels")
+    if channels:
+        ch = args.get("channel")
+        if ch not in channels:
+            raise TraitError(f"'channel' must be one of {sorted(channels)}, got {ch!r}")
+        c = channels[ch] or {}
+        lo, hi = c.get("min", float("-inf")), c.get("max", float("inf"))
+        return {"channel": ch, "value": _as_number_in_range(args.get("value"), "value", lo, hi, integer=False)}
     lo, hi = cfg.get("min", float("-inf")), cfg.get("max", float("inf"))
     val = _as_number_in_range(args.get("value"), "value", lo, hi, integer=False)
     return {"value": val}

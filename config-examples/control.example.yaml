@@ -86,3 +86,31 @@ devices:
         lease_min: 10
         label: Dehumidify
         verify_power: {meter: dehum_pm, min_w: 100, grace_min: 5}
+
+  # Venstar ColorTouch T7850 (ADR-0043) — one LAN-HTTP node, TWO entities (server/control/venstar_driver.py,
+  # routed by device_type; address + credentials in instance/venstar.env). The thermostat keeps its OWN
+  # schedule (the fallback when ha-2 is down); these are manual controls until the automation-override
+  # question is decided (ADR-0043 §4). setpoint `channels` bounds = the MANUAL range (what a person may set);
+  # automation's narrower comfort limits will live in its policy. unit must match the thermostat's tempunits.
+  thermostat_hall:
+    node: venstar
+    area: hall
+    device_type: thermostat
+    manual: true
+    traits:
+      mode:
+        label: HVAC mode
+        values: {"off": 0, "heat": 1, "cool": 2, "auto": 3}
+      setpoint:
+        unit: degF
+        channels: {heat: {min: 50, max: 80}, cool: {min: 65, max: 90}}
+
+  # the furnace blower, through the thermostat's fan setting: on = run continuously, off = auto (only with a
+  # heat/cool call). The Aprilaire→blower coupling would drive THIS entity (ADR-0043 §5).
+  hvac_blower:
+    node: venstar
+    area: hall
+    device_type: hvac_fan
+    manual: true
+    traits:
+      switchable: {label: Furnace blower}
