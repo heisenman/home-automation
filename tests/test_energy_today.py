@@ -89,3 +89,45 @@ def test_backfill_corrects_rows_a_live_writer_started_at_zero(tmp_path):
     c = sqlite3.connect(tmp_path / "hot.db")
     assert c.execute("SELECT value FROM readings WHERE metric='energy_today_kwh' AND ts='2026-10-24T10:00:00Z'"
                      ).fetchone()[0] == 0.75
+
+
+def test_backfill_walks_the_parquet_archive_then_hot(tmp_path):
+    import pyarrow as pa
+    import pyarrow.parquet as pq
+    d = tmp_path / "parquet/year=2026/month=10"
+    d.mkdir(parents=True)
+    rows = [("2026-10-22T08:00:00Z", 1.0), ("2026-10-22T20:00:00Z", 1.4), ("2026-10-23T08:00:00Z", 1.6)]
+    pq.write_table(pa.table({"ts": [r[0] for r in rows], "device_id": ["plug_hall"] * 3,
+                             "device_type": ["energy_meter"] * 3, "area": ["hall"] * 3, "transport": ["uart"] * 3,
+                             "metric": ["energy_kwh"] * 3, "value": [r[1] for r in rows], "unit": ["kWh"] * 3,
+                             "schema_v": pa.array([1] * 3, pa.int32())}), d / "2026-10.parquet")
+    c = _db(tmp_path)
+    W._insert_readings(c, {"device_id": "plug_hall", "device_type": "energy_meter", "area": "hall",
+                           "ts": "2026-10-23T09:00:00Z", "metrics": {"energy_kwh": 1.9}})
+    c.close()
+    backfill(tmp_path / "hot.db", tmp_path / "no-control.db", ["plug_hall"],
+             str(tmp_path / "parquet/year=*/month=*/*.parquet"))
+    c = sqlite3.connect(tmp_path / "hot.db")
+    got = dict(c.execute("SELECT ts, round(value,3) FROM readings WHERE metric='energy_today_kwh'"))
+    assert got == {"2026-10-22T08:00:00Z": 0.0, "2026-10-22T20:00:00Z": 0.4,
+                   "2026-10-23T08:00:00Z": 0.2, "2026-10-23T09:00:00Z": 0.5}   # 10-22 house day, then 10-23
+
+
+def test_reroll_puts_old_derived_rows_into_the_chart_rungs_and_bumps_the_epoch(tmp_path):
+    import time
+
+    from server.storage import rollup as R
+    from server.storage.energy_today import reroll
+    c = _db(tmp_path)
+    old = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(time.time() - 3 * 86400))
+    W._insert_readings(c, {"device_id": "plug_hall", "device_type": "energy_meter", "area": "hall", "ts": old,
+                           "metrics": {"energy_today_kwh": 0.4}})
+    c.close()
+    rung = sqlite3.connect(tmp_path / "rungs.db")
+    R.ensure_schema(rung)
+    before = R.get_epoch(rung)
+    rung.close()
+    reroll(tmp_path / "hot.db", tmp_path / "rungs.db", old[:11] + "00:00:00Z")
+    rung = sqlite3.connect(tmp_path / "rungs.db")
+    got = {r for (r,) in rung.execute("SELECT res FROM rung WHERE metric='energy_today_kwh'")}
+    assert got == {"1min", "1hour", "1day", "1week"} and R.get_epoch(rung) != before
