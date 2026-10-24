@@ -155,7 +155,7 @@ def reroll(db: Path, rung_db: Path, since_ts: str) -> None:
     """Rebuild the chart rungs from `since_ts` (old buckets now hold energy_today_kwh) and bump the replica epoch
     so seeded panels re-seed — rollup.run() only rolls forward. Upserts, so it is safe beside the rollup timer."""
     from server.storage import rollup as R
-    raw, rung = sqlite3.connect(str(db)), sqlite3.connect(str(rung_db))
+    raw, rung = sqlite3.connect(str(db)), sqlite3.connect(str(rung_db), timeout=120)   # the rollup timer writes too
     try:
         now = int(time.time())
         until = R.iso_of(now // 60 * 60)
