@@ -40,7 +40,10 @@ Reuses the fleet core unchanged — `ha_config` (identity gate, node-born secret
 each pure + host-tested: **`ha_cse7766`** (frame parser; algorithm per ESPHome's component) and **`ha_partmig`**
 (§2). Telemetry: `home/edge/<node>/plug/adv`, reg `<node>-plug`, metrics named as the Tasmota bridge names them
 (`relay_on, power_w, voltage_v, current_a, apparent_va, power_factor, energy_kwh`) + `tripped`, `meter_ok` —
-so `verify_power` and the dashboards take a plug in place of an S31 unchanged. 30 s heartbeat, immediate on relay
+so `verify_power` and the dashboards take a plug in place of an S31 unchanged. The plug reports only the
+lifetime `energy_kwh`; the S31's on-device "Today" is **derived on the dictator** as `energy_today_kwh` (house-local
+midnight, a reboot rewind adds nothing — `server/storage/energy_today.py`, called by the writer; `--backfill
+--parquet --reroll` filled plug_hall's history from 10-19 on 2026-10-24). 30 s heartbeat, immediate on relay
 change, and on a power step (> max(5 W, 10 %), ≥ 2 s apart). `power_w` is the mean since the last publish.
 Commands (signed): `plug_set {on}`, `plug_cycle {off_s 1..120}` (the ERV OVR-clear power-cycle),
 `plug_cfg {boot on|off|restore, lock}`, `plug_status`.
