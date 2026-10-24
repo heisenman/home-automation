@@ -76,3 +76,16 @@ def test_backfill_walks_history_and_skips_s31s(tmp_path):
                     "ORDER BY device_id, ts").fetchall()
     assert got == [("dehum_pm", "2026-10-24T07:30:00Z", 0.7), ("plug_hall", "2026-10-24T06:00:00Z", 0.0),
                    ("plug_hall", "2026-10-24T06:30:00Z", 0.2), ("plug_hall", "2026-10-24T07:30:00Z", 0.3)]
+
+
+def test_backfill_corrects_rows_a_live_writer_started_at_zero(tmp_path):
+    c = _db(tmp_path)
+    for ts, kwh in (("2026-10-24T08:00:00Z", 1.0), ("2026-10-24T09:00:00Z", 1.5)):
+        W._insert_readings(c, {"device_id": "plug_hall", "device_type": "energy_meter", "area": "hall",
+                               "ts": ts, "metrics": {"energy_kwh": kwh}})
+    assert _put(c, EnergyToday(c, lambda: TZ), "2026-10-24T10:00:00Z", 1.75) == 0.25   # live: no history yet
+    c.close()
+    backfill(tmp_path / "hot.db", tmp_path / "no-control.db", ["plug_hall"])
+    c = sqlite3.connect(tmp_path / "hot.db")
+    assert c.execute("SELECT value FROM readings WHERE metric='energy_today_kwh' AND ts='2026-10-24T10:00:00Z'"
+                     ).fetchone()[0] == 0.75

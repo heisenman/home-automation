@@ -9,7 +9,7 @@ the count continues from the new value — never a negative day.
 
 Live: storage/writer.py calls EnergyToday.add() for each payload with energy_kwh but no energy_today_kwh; the
 derived point carries the source reading's ts, so it is deterministic and both stacks write the same rows.
-One-time:  python3 server/storage/energy_today.py --backfill [--db instance/db/hot.db]   (INSERT OR IGNORE)
+One-time:  python3 server/storage/energy_today.py --backfill [--device D] [--db …]   (upsert; idempotent)
 """
 import argparse
 import calendar
@@ -95,12 +95,13 @@ class EnergyToday:
         return round(today, 6)
 
 
-def backfill(db: Path, control_db: Path) -> int:
-    """Walk each lifetime-only meter's whole energy_kwh history in order. A device needs it when it has fewer
-    energy_today_kwh rows than energy_kwh rows (an S31 publishes both in every message, so it never qualifies)."""
+def backfill(db: Path, control_db: Path, devices: list[str] | None = None) -> int:
+    """Walk each lifetime-only meter's whole energy_kwh history in order and (re)write energy_today_kwh — an
+    UPSERT, so it also corrects rows a live writer derived without the history (its first day). Default devices:
+    those with fewer energy_today_kwh rows than energy_kwh rows (an S31 publishes both, so never qualifies)."""
     conn = sqlite3.connect(str(db))
     tz = house_tz(control_db)
-    devs = [d for (d,) in conn.execute(
+    devs = devices or [d for (d,) in conn.execute(
         "SELECT device_id FROM readings WHERE metric IN ('energy_kwh','energy_today_kwh') GROUP BY device_id "
         "HAVING SUM(metric='energy_today_kwh') < SUM(metric='energy_kwh')")]
     n = 0
@@ -112,8 +113,10 @@ def backfill(db: Path, control_db: Path) -> int:
             today = et.add(did, ts, v)
             if today is None:
                 continue
-            n += conn.execute("INSERT OR IGNORE INTO readings (ts, device_id, device_type, area, transport, metric, "
-                              "value, unit, schema_v, authoritative) VALUES (?,?,?,?,?,?,?,?,?,?)",
+            n += conn.execute("INSERT INTO readings (ts, device_id, device_type, area, transport, metric, value, "
+                              "unit, schema_v, authoritative) VALUES (?,?,?,?,?,?,?,?,?,?) "
+                              "ON CONFLICT(device_id, ts, metric) DO UPDATE SET value=excluded.value "
+                              "WHERE readings.value IS NOT excluded.value",
                               (ts, did, dtype, area, transport, "energy_today_kwh", today, "kWh", schema_v,
                                auth)).rowcount
         conn.commit()
@@ -128,8 +131,9 @@ def main() -> None:
     ap.add_argument("--backfill", action="store_true", required=True)
     ap.add_argument("--db", type=Path, default=REPO / "instance/db/hot.db")
     ap.add_argument("--control-db", type=Path, default=REPO / "instance/db/control.db")
+    ap.add_argument("--device", action="append", help="re-derive this device even if it looks complete")
     a = ap.parse_args()
-    print(f"inserted {backfill(a.db, a.control_db)} rows")
+    print(f"wrote {backfill(a.db, a.control_db, a.device)} rows (new or corrected)")
 
 
 if __name__ == "__main__":
