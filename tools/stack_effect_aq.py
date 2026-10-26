@@ -9,14 +9,15 @@ comes up through the floor. Expected signatures:
   - by day: bigger bumps on days with a bigger temperature difference;
   - per furnace run: house moisture (absolute humidity) moves toward the crawlspace/outdoor level, VOCs rise.
 
-Inputs: the hourly rung (rungs.db, ADR-0022) for everything; raw readings (parquet + hot.db) only to find furnace
-runs, which the system never recorded (the thermostat was cloud-only) — reconstructed from fast temperature rises
-at the mech-closet gas node, which sits next to the furnace (validated on the 2026-10-25 18:35 PDT run).
+Inputs: the hourly rung (rungs.db, ADR-0022). Daytime warming is the SUN, not the furnace (Hugh, 2026-10-26): an
+earlier version read "whole house warms >= 0.5 °C/h" as a furnace run, but those hours line up with outdoor warming
+of 2-3 °C/h and keep climbing until ~15 h. So: the per-side solar gain is the driver for the time-of-day test, and
+furnace/AC runs come only from the thermostat's own record (thermostat_hall hvac_state, from 2026-10-25 22:06 PDT).
 
 "Worse air" per side = mean of per-sensor z-scores, oriented so + = worse: SGP4x voc_raw and BME680 gas_ohm fall as
 VOCs rise, SGP30 tvoc rises. Raw signals, not the self-adapting VOC index.
 
-    venv/bin/python tools/stack_effect_aq.py [--since 2026-10-05] [--rise-c 1.5]
+    venv/bin/python tools/stack_effect_aq.py [--since 2026-10-05]
 """
 import argparse
 import datetime as dt
@@ -101,30 +102,32 @@ def pearson(xs, ys):
     return sum((x - mx) * (y - my) for x, y in zip(xs, ys)) / (len(xs) * sx * sy)
 
 
-def furnace_hours(s, devs, min_rise_c, min_share):
-    """Hours in which the WHOLE HOUSE warmed at once — the furnace's signature (a mech-closet temperature rise alone
-    is not: something else in that closet cycles every 30–60 min). -> [(bucket_start, mean_rise_c, share_rising)].
-    Daytime sun also warms rooms, but unevenly and slowly; report and let the reader judge."""
-    temps = [s.get((d, "temperature_c"), {}) for d in devs]
-    out = []
-    for b in sorted(set().union(*temps)):
-        rises = [t[b] - t[b - 3600] for t in temps if b in t and (b - 3600) in t]
-        if len(rises) < 4:
-            continue
-        share = sum(r >= min_rise_c for r in rises) / len(rises)
-        if share >= min_share:
-            out.append((b, mean(rises), share))
-    return out
+def warming(series):
+    """Hour-over-hour change, keyed by the later hour."""
+    return {b: v - series[b - 3600] for b, v in series.items() if b - 3600 in series}
+
+
+def recorded_runs(rung_db, since_ep):
+    """Heat/cool runs from the thermostat's own record: consecutive 1-min buckets with hvac_state 1 (heating) or
+    2 (cooling). -> [(start, end, 'heat'|'cool')]."""
+    c = sqlite3.connect(f"file:{rung_db}?mode=ro", uri=True)
+    rows = c.execute("SELECT bucket_start, vmax FROM rung WHERE res='1min' AND device_id='thermostat_hall' "
+                     "AND metric='hvac_state' AND bucket_start >= ? ORDER BY bucket_start", (since_ep,)).fetchall()
+    runs, cur = [], None
+    for b, v in rows:
+        kind = {1: "heat", 2: "cool"}.get(int(v or 0))
+        if cur and (kind != cur[2] or b - cur[1] > 120):
+            runs.append(cur)
+            cur = None
+        if kind:
+            cur = (cur[0], b, kind) if cur else (b, b, kind)
+    return runs + ([cur] if cur else [])
 
 
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n")[0])
     ap.add_argument("--since", default="2026-10-05")
     ap.add_argument("--rung-db", default="instance/db/rungs.db")
-    ap.add_argument("--hot-db", default="instance/db/hot.db")
-    ap.add_argument("--parquet", default="instance/db/parquet/year=*/month=*/*.parquet")
-    ap.add_argument("--rise-c", type=float, default=0.5, help="hour-over-hour °C rise a room must show")
-    ap.add_argument("--share", type=float, default=0.75, help="fraction of main-floor rooms that must rise together")
     a = ap.parse_args()
     since = dt.datetime.fromisoformat(a.since).replace(tzinfo=PT)
     s = hourly(a.rung_db, int(since.timestamp()))
@@ -180,25 +183,44 @@ def main():
         r = pearson([p[0] for p in pairs], [p[1] for p in pairs])
         print(f"   r({label}) = {'n/a' if r is None else f'{r:+.2f}'}  (n={len(pairs)} days)")
 
-    # ── 3. likely furnace runs: the whole house warmed together ──────────────────────────────────────────
-    print(f"\n3. LIKELY FURNACE HOURS — >= {a.share:.0%} of main-floor rooms up >= {a.rise_c} °C hour-over-hour."
-          "\n   Change from the hour before to the hour after (AH g/m³; worse-air z).")
-    runs = furnace_hours(s, sum(METERS.values(), []), a.rise_c, a.share)
-    print("hour (PT)          rise°C rooms  ΔAH_H  ΔAH_C  ΔAH_K  ΔH-worse ΔC-worse ΔK-worse  AH_out AH_crawl")
+    # ── 3. the sun: per-side warming drives the side's bump ─────────────────────────────────────────────
+    print("\n3. SOLAR GAIN — mean warming rate by hour (°C/h); sun on the house shows as outdoor + rooms rising")
+    side_t = {k: temp_series(s, v) for k, v in METERS.items()}
+    rates = {"out": by_hour(warming(t_out)), **{k: by_hour(warming(v)) for k, v in side_t.items()}}
+    print("hour    out      H      C      K")
+    for h in range(5, 21):
+        print(f"{h:02d}  " + " ".join(f"{rates[k].get(h, 0):+6.2f}" for k in ("out", "H", "C", "K")))
+    print("   per day: side warming = its max temperature in the window minus its 06 h temperature;"
+          "\n   bump = the side's worse-air mean in the window minus its 01–04 h baseline")
+    for side, h0, h1 in (("H", 6, 12), ("C", 12, 19)):
+        xs, ys = [], []
+        for day in days:
+            t6 = [v for b, v in side_t[side].items() if pt(b).date() == day and pt(b).hour == 6]
+            win = [v for b, v in side_t[side].items() if pt(b).date() == day and h0 <= pt(b).hour < h1]
+            base, w = window(score[side], day, 1, 5), window(score[side], day, h0, h1)
+            if t6 and win and base is not None and w is not None:
+                xs.append(max(win) - t6[0])
+                ys.append(w - base)
+        r = pearson(xs, ys)
+        print(f"   r({side} {h0:02d}–{h1:02d} h warming vs {side} bump) = {'n/a' if r is None else f'{r:+.2f}'}"
+              f"  (n={len(xs)} days, warming {min(xs, default=0):.1f}..{max(xs, default=0):.1f} °C)")
+
+    # ── 4. furnace / AC runs, from the thermostat's own record ──────────────────────────────────────────
+    print("\n4. RECORDED HEAT/COOL RUNS (thermostat_hall hvac_state; nothing before 2026-10-25 22:06 PDT)."
+          "\n   Change from the hour before the start to the hour after the end (AH g/m³; worse-air z).")
+    runs = recorded_runs(a.rung_db, int(since.timestamp()))
+    print("start (PT)        min  kind   ΔAH_H  ΔAH_C  ΔAH_K  ΔH-worse ΔC-worse ΔK-worse  AH_out AH_crawl")
     f = lambda x, w=6: (f"{x:+{w}.2f}" if x is not None else " " * w)
-    for b, rise, share in runs:
-        before, after = b - 3600, b + 3600
+    for start, end, kind in runs:
+        before, after = start // 3600 * 3600 - 3600, end // 3600 * 3600 + 3600
 
         def d(series):
             return (series[after] - series[before]) if before in series and after in series else None
-        print(f"{pt(b):%Y-%m-%d %H:00}   {rise:5.1f}  {share:4.0%} {f(d(side_ah['H']))} {f(d(side_ah['C']))} "
-              f"{f(d(side_ah['K']))}   {f(d(score['H']))}   {f(d(score['C']))}   {f(d(score['K']))}  "
-              f"{ah_out.get(before, float('nan')):6.2f} {ah_crawl.get(before, float('nan')):8.2f}")
+        print(f"{pt(start):%Y-%m-%d %H:%M}  {(end - start) // 60 + 1:4d}  {kind:5s} {f(d(side_ah['H']))} "
+              f"{f(d(side_ah['C']))} {f(d(side_ah['K']))}   {f(d(score['H']))}   {f(d(score['C']))}   "
+              f"{f(d(score['K']))}  {ah_out.get(before, float('nan')):6.2f} {ah_crawl.get(before, float('nan')):8.2f}")
     if not runs:
-        print("   none found")
-    print("\n   From 2026-10-25 22:06 PDT on, the thermostat records real heat/cool/blower state (thermostat_hall"
-          " hvac_state, hvac_blower running) — use those instead of this reconstruction.")
-
+        print("   none recorded")
 
 if __name__ == "__main__":
     main()
