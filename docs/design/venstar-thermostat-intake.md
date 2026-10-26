@@ -96,6 +96,25 @@ Record each result with the date in this section.
   1 from the first sample of the heat call with DIP GAS/EL·O·GAS — either it means "call active" or G is energised
   in heat; Hugh to listen whether the blower starts with the burner or ~30–60 s after it.
 - **7 open** — needs the unit's clock set and its schedule on.
+- **❌ 2026-10-26 W OUTPUT FAILED ON (hardware) — unit to be returned.** Timeline (UTC): front attached since
+  install, furnace quiet. 01:35:48 first heat call (heat 76, via the API); 01:36:20 the call ended (Hugh lowered
+  the setpoint at the wall) and the unit reported idle from then on — **but the furnace kept heating** (house
+  +3–4 °F, mech closet 94→106 °F by 01:57; furnace status LED steady = 24 V present, no fault). Wall buttons, mode
+  Off and every API Off had no effect. Front pulled, then the furnace breaker cycled → stopped. 02:05 front
+  re-attached (unit reporting Off/idle) → furnace started at once; front pulled → stopped (blower ran its off-delay).
+  Diagnosis (Hugh, meter, 02:20–02:50): W conductor unscrewed at the furnace → **24 VAC W↔Com with the front
+  attached in Off; ~3 VAC (stray pickup) with the front removed** (so no wiring short); with the interlock taped,
+  **W goes to 24 V the instant the front is plugged in, before the unit boots** — no firmware is running, so it
+  is the output stage, not software. Unpowered ohmmeter: R open to every output (a gate/driver-type failure only
+  conducts under voltage). DIP verified GAS/EL·O·GAS (photo `T7850_inside`); outputs are three solid-state
+  devices (Q1–Q3), no relays. **G output verified good** 02:45:42 on / 02:46:57 off (blower followed).
+  Furnace cleared: Carrier 59TP5 gas valve is fed through two series relays (GVR-1/GVR-2) the CPU closes only on a
+  W call (schematic photo `59TP5A_user_3`); the furnace behaved correctly throughout. **State now:** W disconnected
+  and taped at the furnace (no heat possible); Venstar up for G/Y1/telemetry. Carrier label (photo `59TP5A_user_1`):
+  stored status codes erase after 72 h; recall = briefly open one main-limit (24 V) wire per code.
+  Lessons: (1) a thermostat output can fail ON while the API reports idle — the API is not proof of what the wire
+  does → a furnace call monitor (24 V sense on R/W/Y/G + supply-air probe) is the independent check;
+  (2) Hugh can't tell burner from blower at the furnace — don't diagnose from "it's still running".
 - **8 dry run ✔ 2026-10-26** on ha-2 with a temp registry: both entities, 72 °F → 22.22 °C, cool 74 °F → 23.33 °C,
   thermostat `authoritative:false`.
 

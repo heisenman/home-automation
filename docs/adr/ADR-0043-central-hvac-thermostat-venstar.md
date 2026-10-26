@@ -68,6 +68,11 @@ blower whenever the Aprilaire E070 dehumidifies, so more of the house's air reac
 
 ## Consequences
 
+- **2026-10-26: the first unit's W output failed ON** during its first heat call (energises W before boot,
+  API reports idle) — returned/replaced; W disconnected at the furnace meanwhile. Consequence for the design: the
+  thermostat's own report is NOT evidence of what its wires do. Before any automation touches heat/cool, add an
+  independent furnace call monitor (24 V sense on R/W/Y/G + supply-air temperature) and alarm on "burner/W live
+  with no call reported". Intake §5 has the diagnosis.
 - No lease: unlike the Aprilaire's `DH` call, a Venstar setting **sticks** if ha-2 dies. Hence §4's clamp, the
   out-of-limits warning, and the schedule as fallback. A blower left ON is harmless (air moves; ~ blower watts).
 - HTTPS on the unit is self-signed; the client does not verify it (the air gap is the boundary). Digest auth +

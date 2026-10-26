@@ -7,16 +7,18 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
-## 🟡 2026-10-26 — Central HVAC: Venstar T7850 installed (ADR-0043)
+## 🔴 2026-10-26 — Central HVAC: Venstar T7850 W output FAILED ON — return/replace (ADR-0043)
 
-Installed in the hallway 2026-10-26 (R·C·W1·Y1·G, DIP GAS/EL·O·GAS), on `autohome_airgap` at 192.168.1.118, local
-API on (HTTP, no login — Hugh). Read checks + fan/setpoint/mode commands verified live ([intake §5](design/venstar-thermostat-intake.md)).
-Built: PWA controls (heat/cool channels, blower On|Auto) + comfort warning; blower **follows** `dehum_attic`.
-**Go-live (open):** control.yaml entries + `control_secrets.yaml` keys + `instance/venstar.env` on ha-2 · install
-`ha-venstar-bridge` (gated, Hugh) · static DHCP lease. **Open:** §5 step 7 (set the unit's clock, schedule on) ·
-`fanstate` during heat with DIP on GAS (listen: blower with the burner or 30–60 s after?) · D1001 alert reader
-(comfort warning reaches PWA/ntfy/E1001 only) · comfort defaults heat 62–74 / cool 72–82 °F — Hugh to adjust ·
-**pinned:** automation overriding setpoints/mode · check what the furnace's second red R wire powers.
+Installed in the hallway 2026-10-26 (192.168.1.118, local API HTTP, no login). The **W (heat) output went stuck ON
+during the first heat call** and energises W the instant the front is attached, before boot, while the API reports
+Off/idle — furnace ran ~20 min uncommanded. Diagnosis + timeline: [intake §5](design/venstar-thermostat-intake.md).
+**Now:** W unscrewed + taped at the furnace (no heat); Venstar up for blower (G verified) + cooling + telemetry.
+**Open:** Hugh: return/warranty the unit · choose Venstar-up (no heat) vs Honeywell back until the replacement ·
+go-live (`ha-venstar-bridge` install, static lease) HELD on that choice · build a **furnace call monitor** (24 V
+sense on R/W/Y/G at the board + supply-air probe) — the API can't prove what a wire does · driver: minimum heat/cool
+run time before the system may end a call · §5 step 7 (clock + schedule) · D1001 alert reader · comfort defaults
+heat 62–74 / cool 72–82 °F (Hugh to adjust) · **pinned:** automation overriding setpoints/mode · second red wire on
+the furnace R terminal (unidentified).
 
 ## 🟢 2026-10-10 — Air-quality Study 2 + v2 shadow experiment (dev2; Hugh: "document it and start Phase 0")
 
