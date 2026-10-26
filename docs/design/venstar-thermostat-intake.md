@@ -1,7 +1,7 @@
 # Venstar ColorTouch T7850 — device intake (ADR-0043)
 
-Intake per [DEVICE-INTAKE.md](../DEVICE-INTAKE.md). Status 2026-10-24: **ordered, not installed** — Stages 0–4
-done on paper, 5 built against the spec + a fake unit, 6–7 wait for the hardware.
+Intake per [DEVICE-INTAKE.md](../DEVICE-INTAKE.md). Status 2026-10-26: **installed and on `autohome_airgap` (192.168.1.118), local API on** — read-only checks
+(§5 1, 2, 8 dry run) passed; commands, schedule, lease and the bridge unit still open.
 
 ## 1. The system it replaces (Stage 0, from photos hvac_1–4, 2026-10-24)
 
@@ -74,6 +74,21 @@ Record each result with the date in this section.
    or drop the schedule? Record — it decides how overrides must be shaped.
 8. Bridge `--once` prints both entities with sane °C values; then install the unit (gated).
 9. Static DHCP lease on the air-gap router (MAC → `instance/openwrt/airgap_router.env`, `router_reconcile.py`).
+
+### Results
+
+- **2026-10-26 wiring** (photo `T7850_mounted`): R (old Rc; one transformer — the T7850 has a single R, no Rc/Rh)
+  · C · W → W1/O/B · Y → Y1 · G. W2/W3/Y2/SENSOR empty. Per manual p.75–76: DIP GAS/EL + GAS; 1 heat / 1 compressor stage.
+- **1 ✔ 2026-10-26** `GET /` → `api_ver` **9** (spec doc is v4; v4 fields all present), `model` **"COLORTOUCH"** (not
+  "T7850"), `firmware` 6.93.
+- **2 ✔ 2026-10-26** `tempunits` 0 (°F, matches the trait) · `availablemodes` 0 · `setpointdelta` 2 · heat/cool
+  min/max 35/99 · **no `hum` key** (absent, as the bridge assumes) · `schedule` **0** (off out of the box — ADR-0043
+  §3 wants it on) · mode 0 off. `/query/sensors`, `/query/runtimes`, `/query/alerts` all answer (alerts: Air Filter,
+  UV Lamp, Service). `/query/runtimes` `ts` = 2019-09-01 → **the unit's clock looks unset** (no internet/NTP on the
+  air gap) — set date/time on the wall before turning the schedule on.
+- **3 — n/a**: Hugh chose HTTP with no login (air-gap posture). The client handles Basic or Digest if that changes.
+- **8 dry run ✔ 2026-10-26** on ha-2 with a temp registry: both entities, 72 °F → 22.22 °C, cool 74 °F → 23.33 °C,
+  thermostat `authoritative:false`.
 
 Re-check procedure for the stance above: `venv/bin/python -m server.ingest.venstar_bridge --once` on ha-2
 (prints what the unit reports right now) — to be added to [runbook-device-verification.md](../runbook-device-verification.md)
