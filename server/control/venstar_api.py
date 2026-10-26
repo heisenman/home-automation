@@ -109,7 +109,8 @@ def _num(v):
 
 
 class VenstarClient:
-    """Thin HTTP client. `proto` http|https; with user+password, HTTP digest auth (the ColorTouch's scheme).
+    """Thin HTTP client. `proto` http|https; with user+password it answers whichever challenge the unit sends:
+    the T7850 manual calls the fields "Basic Auth User/Password", the HA client uses digest (intake §5 step 3).
     HTTPS on a ColorTouch is a self-signed cert on an air-gapped LAN: verification is off and that is a
     known, documented trade (ADR-0043) — the network, not the cert, is the boundary."""
 
@@ -122,7 +123,7 @@ class VenstarClient:
             if user and password:
                 pm = urllib.request.HTTPPasswordMgrWithDefaultRealm()
                 pm.add_password(None, self.base, user, password)
-                handlers.append(urllib.request.HTTPDigestAuthHandler(pm))
+                handlers += [urllib.request.HTTPDigestAuthHandler(pm), urllib.request.HTTPBasicAuthHandler(pm)]
             if proto == "https":
                 ctx = ssl.create_default_context()
                 ctx.check_hostname, ctx.verify_mode = False, ssl.CERT_NONE

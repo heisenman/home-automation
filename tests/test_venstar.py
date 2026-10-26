@@ -33,6 +33,7 @@ REG = parse_control_registry({"devices": {
 class Fake(BaseHTTPRequestHandler):
     info: dict = {}
     posts: list = []
+    basic: str | None = None                     # "user:pass" -> demand HTTP Basic auth (the T7850 manual's term)
 
     def log_message(self, *a):
         pass
@@ -45,7 +46,20 @@ class Fake(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(b)
 
+    def _authed(self):
+        import base64
+        if Fake.basic is None or self.headers.get("Authorization") == "Basic " + base64.b64encode(
+                Fake.basic.encode()).decode():
+            return True
+        self.send_response(401)
+        self.send_header("WWW-Authenticate", 'Basic realm="venstar"')
+        self.send_header("Content-Length", "0")
+        self.end_headers()
+        return False
+
     def do_GET(self):
+        if not self._authed():
+            return
         if self.path == "/query/info":
             return self._send(Fake.info)
         if self.path == "/":
@@ -72,7 +86,7 @@ class Fake(BaseHTTPRequestHandler):
 
 @contextmanager
 def _fake():
-    Fake.info, Fake.posts = dict(INFO), []
+    Fake.info, Fake.posts, Fake.basic = dict(INFO), [], None
     srv = HTTPServer(("127.0.0.1", 0), Fake)
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     try:
@@ -157,6 +171,14 @@ def test_bridge_messages_in_celsius_and_self_report_flagged():
     assert t["metrics"]["humidity_pct"] == 41 and t["meta"]["authoritative"] is False
     b = msgs["home/hall/hvac_blower/state"]
     assert b["metrics"] == {"running": 1, "fan_on_setting": 0} and b["meta"]["authoritative"] is True
+
+
+def test_basic_auth_login_works():
+    with _fake() as fake:
+        Fake.basic = "ha:pw"
+        assert VenstarClient(fake, user="ha", password="pw").info()["mode"] == 1
+        with raises(OSError):                                  # urllib HTTPError is an OSError
+            VenstarClient(fake).info()
 
 
 def test_absent_humidity_is_not_reported_as_zero():
