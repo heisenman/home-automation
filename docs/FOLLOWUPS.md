@@ -12,9 +12,10 @@
 Installed in the hallway 2026-10-26 (192.168.1.118, local API HTTP, no login). The **W (heat) output went stuck ON
 during the first heat call** and energises W the instant the front is attached, before boot, while the API reports
 Off/idle — furnace ran ~20 min uncommanded. Diagnosis + timeline: [intake §5](design/venstar-thermostat-intake.md).
-**Now:** W unscrewed + taped at the furnace (no heat); Venstar up for blower (G verified) + cooling + telemetry.
+**Now:** W unscrewed + taped at the furnace (no heat); Venstar up for blower (G verified) + cooling (Y1 verified) +
+telemetry. **`ha-venstar-bridge` installed on ha-2 2026-10-25 22:06 PDT**; blower-follows-`dehum_attic` acted first at 22:06:42.
 **Open:** Hugh: return/warranty the unit · choose Venstar-up (no heat) vs Honeywell back until the replacement ·
-go-live (`ha-venstar-bridge` install, static lease) HELD on that choice · build a **furnace call monitor** (24 V
+static DHCP lease for 192.168.1.118 · build a **furnace call monitor** (24 V
 sense on R/W/Y/G at the board + supply-air probe) — the API can't prove what a wire does · driver: minimum heat/cool
 run time before the system may end a call · §5 step 7 (clock + schedule) · D1001 alert reader · comfort defaults
 heat 62–74 / cool 72–82 °F (Hugh to adjust) · **pinned:** automation overriding setpoints/mode · second red wire on
