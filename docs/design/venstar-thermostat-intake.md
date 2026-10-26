@@ -112,6 +112,10 @@ Record each result with the date in this section.
   W call (schematic photo `59TP5A_user_3`); the furnace behaved correctly throughout. **State now:** W disconnected
   and taped at the furnace (no heat possible); Venstar up for G/Y1/telemetry. Carrier label (photo `59TP5A_user_1`):
   stored status codes erase after 72 h; recall = briefly open one main-limit (24 V) wire per code.
+  **Y1 verified good under its real load** 2026-10-26 03:39:30 cool call → outdoor unit ran (Hugh) → 03:42:03
+  mode Off → outdoor unit stopped within seconds, blower stopped after the furnace's ~90 s cooling off-delay. So a
+  coil load (the contactor) did not kill Y1 on its first switch-off — W looks like a one-off part failure. Plan for
+  the replacement: RIBU1C isolation relay on W (ordered); a second on Y1 optional; new 18/8 cable with service loops.
   Lessons: (1) a thermostat output can fail ON while the API reports idle — the API is not proof of what the wire
   does → a furnace call monitor (24 V sense on R/W/Y/G + supply-air probe) is the independent check;
   (2) Hugh can't tell burner from blower at the furnace — don't diagnose from "it's still running".
