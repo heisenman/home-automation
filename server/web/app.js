@@ -10,7 +10,10 @@ import { pushSupported, pushState, enablePush, disablePush } from "/app/push.js"
 const UnitsCtx = createContext("F");
 const useTemp = () => useContext(UnitsCtx);
 const tempPref = () => localStorage.getItem("ha.tempUnit") || "F";
-const isTempMetric = (m) => m === "temperature_c" || m === "dewpoint_c";   // both convert °C↔°F
+// every stored-°C temperature the PWA shows: room/dew point, the ERV's supply air (Hugh 2026-10-26), and the
+// thermostat's setpoints — all follow the °F/°C preference
+const TEMP_METRICS = new Set(["temperature_c", "dewpoint_c", "supply_temp_c", "heat_setpoint_c", "cool_setpoint_c"]);
+const isTempMetric = (m) => TEMP_METRICS.has(m);
 const convT = (c, unit) => (unit === "F" ? c * 9 / 5 + 32 : c);
 const tUnit = (unit) => (unit === "F" ? "°F" : "°C");
 
