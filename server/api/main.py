@@ -1078,7 +1078,9 @@ def _build_current_alerts(now: float) -> list[dict]:
         displays = []
         if cc is not None:
             reg = _control_registry()
-            displays = [vm for did in sorted(store.all_policies(cc))
+            # + manual-only actuators: the thermostat's comfort warning lives on one (ADR-0043)
+            ids = set(store.all_policies(cc)) | {d for d, c in (reg or {}).items() if getattr(c, "manual", False)}
+            displays = [vm for did in sorted(ids)
                         if (vm := build_display(cc, hc, did, now, registry=reg, meta=meta)) is not None]
         alerts = build_alerts(sensors, displays, now)
         # merge in cluster/service-health alerts (service_missing / node_down) for the banner + MQTT snapshot

@@ -185,6 +185,109 @@ def test_absent_humidity_is_not_reported_as_zero():
     assert "humidity_pct" not in info_metrics(INFO)[0]
 
 
+# ── follow coupling: the blower follows the attic dehumidifier (Hugh, 2026-10-26) ─────────────────────────
+def test_follow_decide_edges_and_person_wins():
+    from server.control.follow import decide, initial
+    cmd, st, _ = decide(True, False, initial())                     # dehum starts, blower on auto
+    assert cmd is True and st == {"leader_on": True, "engaged": True}
+    assert decide(True, False, st)[0] is None                        # a person set Auto mid-run: not re-asserted
+    assert decide(False, True, st)[0] is False                       # dehum stops: we hand it back to Auto
+    assert decide(False, False, st) == (None, initial(), "leader stopped; follower already off")
+    cmd, st, _ = decide(True, True, initial())                       # a person already had it On
+    assert cmd is None and st["engaged"] is False
+    assert decide(False, True, st)[0] is None                        # ...so it stays On after the dehum stops
+    assert decide(None, False, initial())[0] is None                 # stale/missing telemetry: do nothing
+
+
+def _follow_ctrl(db):
+    import time
+    from server.control import controller as C
+    from server.control.issuer import Result
+
+    class Iss:
+        calls = []
+
+        def issue(self, *, device_id, trait, action, args, **kw):
+            Iss.calls.append((device_id, trait, args))
+            return Result("ok", "ok", intended=args, reported=args)
+
+    reg = parse_control_registry({"devices": {
+        "dehum_attic": {"node": "dehum_c6", "area": "attic", "device_type": "dehum",
+                        "traits": {"switchable": {"safe_on": False}}},
+        "hvac_blower": {"node": "venstar", "area": "mech_closet", "device_type": "hvac_fan", "manual": True,
+                        "traits": {"switchable": {"now_metric": "fan_on_setting",
+                                                  "follow": {"device": "dehum_attic"}}}}}})
+    ctrl = C.Controller(Iss(), {}, reg, db)
+
+    def feed(did, metrics):
+        class M:
+            payload = json.dumps({"device_id": did, "metrics": metrics}).encode()
+        ctrl.on_message(None, None, M)
+    return ctrl, Iss.calls, feed, time.time
+
+
+def test_blower_follows_the_dehum_through_the_controller_and_survives_a_restart():
+    import sqlite3
+    import tempfile
+    from server.control import control_store as store
+    with tempfile.TemporaryDirectory() as d:
+        db = f"{d}/control.db"
+        ctrl, calls, feed, now = _follow_ctrl(db)
+        feed("hvac_blower", {"running": 0, "fan_on_setting": 0})
+        feed("dehum_attic", {"dh_call": 1, "call_left_s": 600})
+        ctrl.tick(now=now())
+        assert calls == [("hvac_blower", "switchable", {"on": True})]
+        ctrl.tick(now=now())                                         # no edge -> no repeat
+        assert len(calls) == 1
+        ctrl2, calls2, feed2, _ = _follow_ctrl(db)                   # controller restarts mid-run
+        calls2.clear()
+        feed2("hvac_blower", {"running": 1, "fan_on_setting": 1})
+        feed2("dehum_attic", {"dh_call": 0, "call_left_s": 0})
+        ctrl2.tick(now=now())
+        assert calls2 == [("hvac_blower", "switchable", {"on": False})]
+        c = sqlite3.connect(db)
+        assert store.get_setting(c, "follow:hvac_blower") == {"leader_on": False, "engaged": False}
+
+
+# ── BFF: render-ready thermostat + blower controls, °F values, comfort warning ─────────────────────────────
+TRAITS = {"mode": {"values": {"off": 0, "heat": 1, "cool": 2, "auto": 3}, "now_metric": "hvac_mode",
+                   "activity": {"metric": "hvac_state", "labels": {0: "idle", 1: "heating", 2: "cooling"}}},
+          "setpoint": {"unit": "degF", "channels": {
+              "heat": {"min": 50, "max": 80, "now_metric": "heat_setpoint_c", "comfort": {"min": 62, "max": 74}},
+              "cool": {"min": 65, "max": 90, "now_metric": "cool_setpoint_c", "comfort": {"min": 72, "max": 82}}}}}
+
+
+def test_bff_thermostat_channels_and_blower_switch():
+    from server.api.viewmodel import build_controls
+    sp = [c for c in build_controls(TRAITS, manual=True) if c["kind"] == "setpoint"][0]
+    assert [(c["key"], c["now_key"]) for c in sp["channels"]] == [("heat", "heat_setpoint"),
+                                                                    ("cool", "cool_setpoint")]
+    assert sp["unit"] == "°F" and sp["action"]["channel_key"] == "channel"
+    sw = build_controls({"switchable": {"label": "Furnace blower", "on_label": "On", "off_label": "Auto"}},
+                        manual=True)
+    assert [(c["kind"], c["on_label"], c["off_label"]) for c in sw] == [("switchable", "On", "Auto")]
+    assert build_controls({"switchable": {}}, manual=False)[0]["kind"] == "override"   # automated: unchanged
+
+
+def test_bff_now_values_in_fahrenheit_and_state_label():
+    from server.api.viewmodel import manual_state_label, trait_now_values
+    db = {"hvac_mode": 1, "hvac_state": 1, "heat_setpoint_c": 21.67, "cool_setpoint_c": 26.11}
+    act = trait_now_values(lambda m: (db[m], "T") if m in db else None, TRAITS)
+    assert act == {"mode": 1, "heat_setpoint": 71.0, "cool_setpoint": 79.0, "activity": "heating", "active": True}
+    assert manual_state_label(TRAITS, act) == "Heat · heating"
+
+
+def test_comfort_warning_only_for_the_channel_the_mode_uses():
+    from server.api.viewmodel import build_alerts, comfort_alert
+    a = comfort_alert(TRAITS, {"mode": 1, "heat_setpoint": 76, "cool_setpoint": 79})
+    assert a["level"] == "warn" and "Heat setpoint 76°F" in a["text"] and "62–74°F" in a["text"]
+    assert comfort_alert(TRAITS, {"mode": 2, "heat_setpoint": 76, "cool_setpoint": 79}) is None   # cooling
+    assert comfort_alert(TRAITS, {"mode": 0, "heat_setpoint": 90, "cool_setpoint": 95}) is None   # off
+    assert comfort_alert(TRAITS, {"mode": 3, "heat_setpoint": 70, "cool_setpoint": 85})["text"].startswith("Cool")
+    out = build_alerts([], [{"device_id": "thermostat_hall", "alert": a}], 0)
+    assert [(x["severity"], x["kind"]) for x in out] == [("warning", "comfort_limits")]
+
+
 if __name__ == "__main__":
     from tests._harness import run_module
     run_module(globals())

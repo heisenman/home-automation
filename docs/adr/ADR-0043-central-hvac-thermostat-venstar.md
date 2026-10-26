@@ -1,7 +1,8 @@
 # ADR-0043 — Central HVAC via a Venstar ColorTouch thermostat (local API, own schedule, bounded overrides)
 
-**Status:** Proposed — driver, bridge and tests built 2026-10-24 against Venstar's published spec and a fake
-unit; **the T7850 is ordered, not installed**. Nothing here is verified live yet (intake §5 is the checklist).
+**Status:** Proposed → **in service 2026-10-26** for §1–§3 and §5 — the T7850 is installed (hallway), its local
+API verified live (intake §5 results), the PWA renders its controls and the comfort warning, and the blower
+follows the Aprilaire. §4's automatic override question stays **pinned**.
 **Relates to:** ADR-0001 (dictator authority), ADR-0002 (traits), ADR-0014 (actuator R1–R6), ADR-0026 (routing
 by device_type), ADR-0034 (Node/Ability/Entity), ADR-0041 (Aprilaire + ERV actuators). Intake:
 [design/venstar-thermostat-intake.md](../design/venstar-thermostat-intake.md).
@@ -34,12 +35,26 @@ blower whenever the Aprilaire E070 dehumidifies, so more of the house's air reac
      sends. A setpoint outside the comfort limits — set by a person in the PWA, on the panel, or **at the wall** —
      is allowed, but raises a **warning** on the PWA and the D1001 (derived from the polled state, so it catches
      every source).
+   - Comfort defaults (proposed 2026-10-26, Hugh to adjust): heat 62–74 °F, cool 72–82 °F — the `comfort` of
+     each setpoint channel in control.yaml. A warning fires only for the channel the current mode uses.
    - **Pinned (not decided):** whether the system ever overrides setpoints/mode by itself. Until decided, both
-     entities are `manual: true` (controls, no automation policy).
-5. **First automation candidate: the blower follows the Aprilaire** (pinned with §4 — design only). When the
-   E070 is called, set `hvac_blower` on; when the call ends, back to auto. The E070 now runs on its own indoor
-   loop (ducts split 2026-10-17), so this is about house-wide mixing, not its inlet. Shape it like the old
-   ERV coupling (`ventilation` floor in the dehum policy, ADR-0041), with a person's blower override winning.
+     entities are `manual: true` (controls, no automation policy) — the §5 follow is a coupling on the blower,
+     not a setpoint/mode override.
+5. **The blower follows the Aprilaire** (Hugh, 2026-10-26: "whenever the attic dehum turns on so does the
+   blower"). Configured on the blower's switchable trait (`follow: {device: dehum_attic}`), implemented in
+   `server/control/follow.py` + `Controller._apply_follow`. **Edge-triggered**, so a person always wins: on the
+   Aprilaire's call START the blower goes On unless it already was (then it's a person's setting, left alone);
+   on the call STOP it goes back to Auto only if we turned it on and it is still on. State persists in control.db
+   (`follow:hvac_blower`), so a restart mid-run still hands it back. Unknown state (stale telemetry) → no action.
+   Not done: the ERV-style `ventilation` floor (levels, dry-out) — the blower has no levels, and the E070 now sits
+   on its own indoor loop, so there is no coil to dry with house air. Open: running the blower right after an AC
+   cycle re-evaporates water off the wet coil; if summer RH shows it, gate the follow on "no cooling in the last
+   N min".
+6. **UI (R1)** — the PWA's manual control renders a channelled setpoint as one field per channel (posting
+   `{channel, value}`), a manual switchable as two labelled buttons (blower On | Auto), and current values from
+   the metric each control names (`now_metric`, °C shown in °F). The comfort warning is a device `alert`
+   (amber banner) and a `comfort_limits` entry in `/api/v1/alerts` (ntfy, E1001). **The D1001 has no alert
+   reader yet** — FOLLOWUPS.
 
 ## Rejected alternatives
 

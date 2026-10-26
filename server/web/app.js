@@ -513,12 +513,16 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
   const act = vm.actuator || {};
   const cmds = (vm.controls || []).filter((c) =>
     c.kind === "setpoint" || c.kind === "ranged" || c.kind === "mode" || c.kind === "indicator" ||
-    c.kind === "timed");
+    c.kind === "timed" || c.kind === "switchable");
   const spCtl = cmds.find((c) => c.kind === "setpoint");
   const rgCtl = cmds.find((c) => c.kind === "ranged");
   const modeCtl = cmds.find((c) => c.kind === "mode");
   const indCtl = cmds.find((c) => c.kind === "indicator");
   const tmCtl = cmds.find((c) => c.kind === "timed");
+  const swCtl = cmds.find((c) => c.kind === "switchable");
+  // a channelled setpoint (thermostat heat + cool): one input per channel, keyed by channel
+  const [chTarget, setChTarget] = useState(() => Object.fromEntries(((spCtl && spCtl.channels) || [])
+    .map((ch) => [ch.key, act[ch.now_key] ?? ""])));
   const spInit = spCtl ? (act[spCtl.now_key] ?? spCtl.safe_value ?? "") : "";
   const [open, setOpen] = useState(!!vm.manual);       // manual-only devices: the controls ARE the card
   const [target, setTarget] = useState(spInit);
@@ -528,13 +532,13 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
   if (!cmds.length) return null;                        // device exposes no manual functions
 
   // one issuer for every command kind: path/trait/action/arg_key all come from the control's action contract.
-  const cmd = async (c, value, tag) => {
+  const cmd = async (c, value, tag, extra) => {
     if (!isAdmin) return onNeedAdmin();
     setBusy(tag); setErr("");
     try {
       const path = c.action.path.replace("{id}", vm.device_id);
       await adminSend(c.action.method, path,
-        { trait: c.action.trait, action: c.action.action, args: { [c.action.arg_key]: value } });
+        { trait: c.action.trait, action: c.action.action, args: { [c.action.arg_key]: value, ...(extra || {}) } });
       await onChange();
     } catch (e) { setErr(String(e.message)); }
     setBusy("");
@@ -560,7 +564,25 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
       <p class="note">${vm.manual
         ? "Manual control — no automation drives this device. Each command is confirmed by the device's own readback."
         : "Direct device commands. Power is automation-managed — use the override buttons above to force on/off."}</p>
-      ${spCtl && html`
+      ${swCtl && html`
+        <div class="field"><label>${swCtl.label}</label>
+          <div class="controls">
+            <button class="btn sm ${act[swCtl.now_key] === true ? "primary" : ""}" disabled=${busy === "switchable"}
+              onClick=${() => cmd(swCtl, true, "switchable")}>${swCtl.on_label}</button>
+            <button class="btn sm ${act[swCtl.now_key] === false ? "primary" : ""}" disabled=${busy === "switchable"}
+              onClick=${() => cmd(swCtl, false, "switchable")}>${swCtl.off_label}</button>
+          </div>
+        </div>`}
+      ${spCtl && spCtl.channels && spCtl.channels.map((ch) => html`
+        <div class="field"><label>${ch.label}</label>
+          <input type="number" min=${ch.min} max=${ch.max} value=${chTarget[ch.key]}
+            onInput=${(e) => setChTarget({ ...chTarget, [ch.key]: e.target.value })} />
+          <button class="btn sm primary" disabled=${busy === "setpoint-" + ch.key}
+            onClick=${() => cmd(spCtl, Number(chTarget[ch.key]), "setpoint-" + ch.key,
+              { [spCtl.action.channel_key]: ch.key })}>Set</button>
+          <span class="note">${ch.min}–${ch.max}${u}${act[ch.now_key] != null ? ` · now ${act[ch.now_key]}${u}` : ""}</span>
+        </div>`)}
+      ${spCtl && !spCtl.channels && html`
         <div class="field"><label>${spCtl.label}</label>
           <input type="number" min=${spCtl.min} max=${spCtl.max} value=${target}
             onInput=${(e) => setTarget(e.target.value)} />
@@ -814,7 +836,8 @@ function AlertBanner({ alert, vm, isAdmin, onChange, onNeedAdmin }) {
 // would all read "—". Its state is what the device reports; its UI is its controls.
 function ManualDeviceCard({ vm, isAdmin, onChange, onNeedAdmin, onEdit, onClose }) {
   const act = vm.actuator || {};
-  const mode = modeLabelOf(vm);
+  const mode = vm.state_label || modeLabelOf(vm);       // server-authored headline ("Heat · heating") first
+  const on = vm.state_active != null ? vm.state_active : (mode && mode !== "Off");
   return html`
     <div class="card health-${vm.health}">
       <div class="card-head">
@@ -826,8 +849,9 @@ function ManualDeviceCard({ vm, isAdmin, onChange, onNeedAdmin, onEdit, onClose 
       </div>
       <${AlertBanner} alert=${vm.alert} vm=${vm} isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
       <div class="state-row">
-        <span class="pill ${vm.alert ? "alarm" : mode && mode !== "Off" ? "on" : "off"}">${mode || "?"}</span>
+        <span class="pill ${vm.alert && vm.alert.level === "alarm" ? "alarm" : on ? "on" : "off"}">${mode || "?"}</span>
         ${act.boost_on && html`<span class="scene-chip">boost</span>`}
+        ${vm.follow && vm.follow.device && html`<span class="note">turns on while ${vm.follow.device} runs</span>`}
       </div>
       <${ManualControl} vm=${vm} isAdmin=${isAdmin} onChange=${onChange} onNeedAdmin=${onNeedAdmin} />
     </div>`;

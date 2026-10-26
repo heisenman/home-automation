@@ -7,14 +7,16 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
-## 🟡 2026-10-24 — Central HVAC: Venstar T7850 ordered (ADR-0043, Proposed)
+## 🟡 2026-10-26 — Central HVAC: Venstar T7850 installed (ADR-0043)
 
-Built ahead of the hardware (spec + fake unit, `tests/test_venstar.py`): `venstar_api.py`, `venstar_driver.py`,
-`venstar_bridge.py` (+ unit file, NOT installed), setpoint `channels`. Both entities `manual: true`.
-**Install day:** [intake §5](design/venstar-thermostat-intake.md) checklist · `instance/venstar.env` · static lease ·
-control.yaml entries · install `ha-venstar-bridge` (gated). **Before go-live:** PWA/D1001 render channelled setpoints +
-out-of-comfort-limits warning. **Pinned (Hugh):** does automation ever override setpoints/mode? · the
-Aprilaire→blower coupling (first candidate). Check what the furnace's second red R wire powers.
+Installed in the hallway 2026-10-26 (R·C·W1·Y1·G, DIP GAS/EL·O·GAS), on `autohome_airgap` at 192.168.1.118, local
+API on (HTTP, no login — Hugh). Read checks + fan/setpoint/mode commands verified live ([intake §5](design/venstar-thermostat-intake.md)).
+Built: PWA controls (heat/cool channels, blower On|Auto) + comfort warning; blower **follows** `dehum_attic`.
+**Go-live (open):** control.yaml entries + `control_secrets.yaml` keys + `instance/venstar.env` on ha-2 · install
+`ha-venstar-bridge` (gated, Hugh) · static DHCP lease. **Open:** §5 step 7 (set the unit's clock, schedule on) ·
+`fanstate` during heat with DIP on GAS (listen: blower with the burner or 30–60 s after?) · D1001 alert reader
+(comfort warning reaches PWA/ntfy/E1001 only) · comfort defaults heat 62–74 / cool 72–82 °F — Hugh to adjust ·
+**pinned:** automation overriding setpoints/mode · check what the furnace's second red R wire powers.
 
 ## 🟢 2026-10-10 — Air-quality Study 2 + v2 shadow experiment (dev2; Hugh: "document it and start Phase 0")
 

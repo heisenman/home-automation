@@ -91,7 +91,10 @@ devices:
   # routed by device_type; address + credentials in instance/venstar.env). The thermostat keeps its OWN
   # schedule (the fallback when ha-2 is down); these are manual controls until the automation-override
   # question is decided (ADR-0043 §4). setpoint `channels` bounds = the MANUAL range (what a person may set);
-  # automation's narrower comfort limits will live in its policy. unit must match the thermostat's tempunits.
+  # `comfort` = the narrower range automation would keep to — a setpoint the current mode uses outside it
+  # raises a warning (PWA banner + /api/v1/alerts), whoever set it. unit must match the thermostat's tempunits.
+  # `now_metric` / `activity` name the bridge's metrics that report each control's current value (°C metrics
+  # are shown in the trait's °F).
   thermostat_hall:
     node: venstar
     area: hall
@@ -101,16 +104,28 @@ devices:
       mode:
         label: HVAC mode
         values: {"off": 0, "heat": 1, "cool": 2, "auto": 3}
+        now_metric: hvac_mode
+        activity: {metric: hvac_state, labels: {0: idle, 1: heating, 2: cooling, 3: lockout, 4: error}}
       setpoint:
         unit: degF
-        channels: {heat: {min: 50, max: 80}, cool: {min: 65, max: 90}}
+        channels:
+          heat: {min: 50, max: 80, now_metric: heat_setpoint_c, comfort: {min: 62, max: 74}}
+          cool: {min: 65, max: 90, now_metric: cool_setpoint_c, comfort: {min: 72, max: 82}}
 
-  # the furnace blower, through the thermostat's fan setting: on = run continuously, off = auto (only with a
-  # heat/cool call). The Aprilaire→blower coupling would drive THIS entity (ADR-0043 §5).
+  # the furnace blower (physically in the mechanical closet), through the thermostat's fan setting: on = run
+  # continuously, off = auto (only with a heat/cool call). `follow`: ON while the attic Aprilaire is called,
+  # back to Auto when it stops — edge-triggered, so a person's On/Auto always wins (server/control/follow.py,
+  # Hugh 2026-10-26).
   hvac_blower:
     node: venstar
-    area: hall
+    area: mech_closet
     device_type: hvac_fan
     manual: true
     traits:
-      switchable: {label: Furnace blower}
+      switchable:
+        label: Furnace blower
+        on_label: "On"
+        off_label: Auto
+        now_metric: fan_on_setting
+        activity: {metric: running, labels: {0: idle, 1: running}}
+        follow: {device: dehum_attic}

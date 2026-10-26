@@ -56,8 +56,9 @@ field-proven `venstarcolortouch` client (Home Assistant's) for what the spec omi
 | setpoint channels | `server/control/traits.py` | extension of the existing trait, backward compatible |
 | tests | `tests/test_venstar.py` | fake unit enforcing the spec's rules |
 
-Not built yet: PWA/D1001 rendering of channels + the out-of-limits warning; the comfort-limit clamp (with the
-automation decision); the Aprilaire→blower coupling.
+Built 2026-10-26: PWA rendering of channels + blower + the comfort warning (`server/api/viewmodel.py`
+`trait_now_values` / `comfort_alert`, `server/web/app.js` ManualControl); the Aprilaire→blower follow
+(`server/control/follow.py`). Not built: a D1001 alert reader; the comfort clamp (with the automation decision).
 
 ## 5. Install-day verification (Stage 6 — nothing above is trusted until these pass)
 
@@ -87,6 +88,14 @@ Record each result with the date in this section.
   UV Lamp, Service). `/query/runtimes` `ts` = 2019-09-01 → **the unit's clock looks unset** (no internet/NTP on the
   air gap) — set date/time on the wall before turning the schedule on.
 - **3 — n/a**: Hugh chose HTTP with no login (air-gap posture). The client handles Basic or Digest if that changes.
+- **4 ✔ 2026-10-26** fan=1 → `fanstate` 1 within 5 s, blower heard (Hugh at the furnace); fan=0 → 0 within 6 s.
+- **5 ✔ (caveat) 2026-10-26** heat 72→70 kept cool 74. Our planner refused 73/74 (delta 2); the UNIT accepted a raw
+  73/74 POST in Off mode — it does not enforce `setpointdelta` itself there, so the planner is the guard.
+- **6 ✔ 2026-10-26** Off→Heat (heat 76 / cool 79): `state` 1, `activestage` 1 within 10 s, Hugh felt heat. A
+  wall change (76→72→71) showed in `/query/info` within 10 s — the poll sees wall edits. **Open:** `fanstate` read
+  1 from the first sample of the heat call with DIP GAS/EL·O·GAS — either it means "call active" or G is energised
+  in heat; Hugh to listen whether the blower starts with the burner or ~30–60 s after it.
+- **7 open** — needs the unit's clock set and its schedule on.
 - **8 dry run ✔ 2026-10-26** on ha-2 with a temp registry: both entities, 72 °F → 22.22 °C, cool 74 °F → 23.33 °C,
   thermostat `authoritative:false`.
 

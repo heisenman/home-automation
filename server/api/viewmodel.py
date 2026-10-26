@@ -175,6 +175,10 @@ def build_alerts(sensors: list[dict], displays: list[dict], now: float) -> list[
         if last.get("source") == "safety" and "tank" in (last.get("reason") or "").lower():
             out.append({"severity": "critical", "kind": "tank_full", "device_id": d["device_id"],
                         "name": label(d), "detail": "tank full — dehumidifier paused"})
+        a = d.get("alert") or {}
+        if a.get("kind") == "comfort_limits":
+            out.append({"severity": "warning", "kind": "comfort_limits", "device_id": d["device_id"],
+                        "name": label(d), "detail": a.get("text", "")})
         ov = d.get("override")
         if ov and ov.get("expires_in_min") is not None and ov["expires_in_min"] * 60 < OVERRIDE_EXPIRING_S:
             out.append({"severity": "info", "kind": "override_expiring", "device_id": d["device_id"],
@@ -808,12 +812,89 @@ def verify_power_alert(hot_conn, device_id: str, traits_cfg: dict | None, now: f
                     f"with the NC|NO switch on NO) — check its display."}
 
 
+def _in_unit(value: float, metric: str, unit: str | None) -> float:
+    """A stored reading in the trait's unit. Stored temperatures are °C (`*_c` metrics); a °F trait (the
+    Venstar's setpoints) shows °F."""
+    if metric.endswith("_c") and unit in ("degF", "°F", "F", "fahrenheit"):
+        return round(value * 9 / 5 + 32, 1)
+    return value
+
+
+def trait_now_values(latest, traits_cfg: dict | None) -> dict:
+    """Current values for controls whose trait cfg names the metric that reports them (`now_metric`), and
+    the device's `activity` (what it is doing right now, e.g. heating). `latest(metric)` -> (value, ts)|None.
+    For devices whose telemetry metric names differ from the fixed ones above (the Venstar: hvac_mode,
+    *_setpoint_c, fan_on_setting) — config, not a per-device branch."""
+    tc = traits_cfg or {}
+    out: dict = {}
+    mc, sc, sp = tc.get("mode") or {}, tc.get("switchable") or {}, tc.get("setpoint") or {}
+    if mc.get("now_metric") and (v := latest(mc["now_metric"])) is not None:
+        out["mode"] = int(v[0])
+    if sc.get("now_metric") and (v := latest(sc["now_metric"])) is not None:
+        out["switch_on"] = bool(v[0])
+    for k, ch in (sp.get("channels") or {}).items():
+        m = (ch or {}).get("now_metric")
+        if m and (v := latest(m)) is not None:
+            out[f"{k}_setpoint"] = _in_unit(v[0], m, sp.get("unit"))
+    for cfg in (mc, sc):
+        a = cfg.get("activity") or {}
+        if a.get("metric") and (v := latest(a["metric"])) is not None:
+            labels = {int(k): str(x) for k, x in (a.get("labels") or {}).items()}
+            out["activity"] = labels.get(int(v[0]), str(int(v[0])))
+            out["active"] = int(v[0]) != 0
+    return out
+
+
+def manual_state_label(traits_cfg: dict | None, actuator: dict) -> str | None:
+    """'Heat · heating', 'Auto · idle' — a manual device's headline state, server-authored."""
+    tc = traits_cfg or {}
+    head = None
+    if actuator.get("mode") is not None and tc.get("mode"):
+        head = next((o["label"] for o in _mode_options(tc["mode"]) if o["value"] == actuator["mode"]), None)
+    elif actuator.get("switch_on") is not None and tc.get("switchable") is not None:
+        sc = tc.get("switchable") or {}
+        head = (sc.get("on_label") or "On") if actuator["switch_on"] else (sc.get("off_label") or "Off")
+    if head is None:
+        return None
+    return f"{head} · {actuator['activity']}" if actuator.get("activity") else head
+
+
+def comfort_alert(traits_cfg: dict | None, actuator: dict) -> dict | None:
+    """Warn when a thermostat setpoint the current mode USES sits outside its channel's `comfort` range
+    (ADR-0043 §4: people may set anything in the manual range; automation stays inside comfort). Derived
+    from the polled state, so it catches a change from the PWA, a panel, or the wall. Unknown mode -> None."""
+    tc = traits_cfg or {}
+    sp = tc.get("setpoint") or {}
+    chans = sp.get("channels") or {}
+    inv = {int(v): str(k) for k, v in ((tc.get("mode") or {}).get("values") or {}).items()}
+    mode = inv.get(actuator.get("mode")) if actuator.get("mode") is not None else None
+    if not chans or mode is None or mode == "off":
+        return None
+    u = _setpoint_label(sp)[1]
+    out = []
+    for k, ch in chans.items():
+        cf, v = (ch or {}).get("comfort") or {}, actuator.get(f"{k}_setpoint")
+        if v is None or mode not in (k, "auto") or not cf:
+            continue
+        lo, hi = cf.get("min"), cf.get("max")
+        if (lo is not None and v < lo) or (hi is not None and v > hi):
+            out.append(f"{k} setpoint {v:g}{u} is outside the comfort range {lo:g}–{hi:g}{u}")
+    if not out:
+        return None
+    text = "; ".join(out)
+    return {"level": "warn", "kind": "comfort_limits", "title": "Setpoint outside comfort limits",
+            "text": text[0].upper() + text[1:] + ". Allowed — a person set it (here, on a panel or at the "
+                    "wall) — but automation never would. Change it back if it wasn't meant."}
+
+
 def _setpoint_label(cfg: dict) -> tuple[str, str]:
     unit = cfg.get("unit", "")
     if unit in ("%", "%RH", "pct", "percent"):
         return "Target humidity", "%"
     if unit in ("degC", "°C", "C", "celsius"):
         return "Target temperature", "°C"
+    if unit in ("degF", "°F", "F", "fahrenheit"):
+        return "Target temperature", "°F"
     return "Setpoint", unit
 
 
@@ -846,6 +927,16 @@ def build_controls(traits_cfg: dict | None, manual: bool = False) -> list[dict]:
         "state": {"from": "override"},
     }]
     tc = traits_cfg or {}
+    if manual and "switchable" in tc:
+        # a manual-only device's power/on-off IS a direct command (an automated device's goes through the
+        # override above). Labels are per device: the furnace blower is On | Auto, not On | Off.
+        cfg = tc.get("switchable") or {}
+        controls.append({
+            "kind": "switchable", "trait": "switchable", "label": cfg.get("label") or "Power", "admin": True,
+            "now_key": "switch_on", "on_label": cfg.get("on_label") or "On",
+            "off_label": cfg.get("off_label") or "Off",
+            "action": {"method": "POST", "path": _CMD_PATH, "trait": "switchable", "action": "set",
+                       "arg_key": "on"}})
     if "setpoint" in tc:
         cfg = tc.get("setpoint") or {}
         label, unit = _setpoint_label(cfg)
@@ -856,6 +947,13 @@ def build_controls(traits_cfg: dict | None, manual: bool = False) -> list[dict]:
         for k in ("min", "max", "safe_value"):
             if k in cfg:
                 c[k] = cfg[k]
+        chans = cfg.get("channels") or {}
+        if chans:
+            # one field per channel (a thermostat's heat + cool); each posts {channel, value} (ADR-0043)
+            c["channels"] = [{"key": k, "label": (ch or {}).get("label") or f"{k.title()} to",
+                              "min": (ch or {}).get("min"), "max": (ch or {}).get("max"),
+                              "now_key": f"{k}_setpoint"} for k, ch in chans.items()]
+            c["action"]["channel_key"] = "channel"
         controls.append(c)
     if "ranged" in tc:
         cfg = tc.get("ranged") or {}
@@ -1006,6 +1104,9 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         if ctl is not None:
             traits = getattr(ctl, "traits_cfg", None)
 
+    if hot_conn is not None and traits:
+        actuator.update(trait_now_values(lambda m: _latest_any(device_id, m), traits))
+
     # running state: the latest tick logged res.running, which mirrors the live device status each tick
     last = snap["last_decision"]
     running = bool(last["desired"]) if last else None
@@ -1014,7 +1115,7 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
 
     stale_s = float(policy.get("sensor_stale_min", 10)) * 60.0
     alert = (external_mode_alert(traits, actuator) or unit_error_alert(actuator)
-             or verify_power_alert(hot_conn, device_id, traits, now))
+             or verify_power_alert(hot_conn, device_id, traits, now) or comfort_alert(traits, actuator))
     if alert and alert["level"] == "alarm":
         health = "alarm"
     elif manual:
@@ -1057,6 +1158,9 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         "traits": traits,                              # raw — kept for back-compat during migration
         "controls": build_controls(traits, manual=manual),  # shared-ui-spec: server-authored render-ready controls
         "manual": manual,                              # manual-only actuator: no policy, no automation
+        "state_label": manual_state_label(traits, actuator) if manual else None,   # e.g. "Heat · heating"
+        "state_active": actuator.get("active"),        # its activity is non-idle (pill colour)
+        "follow": ((traits or {}).get("switchable") or {}).get("follow"),   # coupling, e.g. blower <- dehum
         "alert": alert,                                # e.g. ERV in OVR — rendered as a loud banner
         "recent_decisions": [{"ts": r["ts"], "source": r["source"], "reason": r["reason"],
                               "acted": r["acted"]} for r in (snap.get("recent_log") or [])[:8]],

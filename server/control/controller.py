@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 from server.comms import events as ev
-from server.control import actuator_state, bootstrap, control_store as store
+from server.control import actuator_state, bootstrap, control_store as store, follow
 from server.control.midea_driver import GarbledStatus
 from server.control.registry import load_control_registry
 from server.util.psychro import dewpoint_c
@@ -324,6 +324,7 @@ class Controller:
                     continue
                 self._tick_device(conn, device_id, pol, now, tod, scene, dry_run)
             self._apply_night_mode(conn, tod, dry_run)          # LED night mode (all indicator devices)
+            self._apply_follow(conn, now, dry_run)              # switches that follow another device (blower)
         finally:
             conn.close()
 
@@ -352,6 +353,38 @@ class Controller:
             store.append_log(conn, device_id, want_on, "night",
                              f"night-mode -> LED {'on' if want_on else 'off'}", True, r.status)
             log.info("night-mode: %s LED -> %s (%s)", device_id, "on" if want_on else "off", r.status)
+
+    def _apply_follow(self, conn, now, dry_run):
+        """Follow coupling (server/control/follow.py): each switchable with `follow: {device}` turns on while
+        that device runs. Leader = its telemetry `running` (the Aprilaire: the DH call); follower = the metric
+        its switchable `now_metric` names (the Venstar blower: fan_on_setting). Edge-triggered; persisted."""
+        for fid, ctl in self.registry.items():
+            sc = (getattr(ctl, "traits_cfg", {}) or {}).get("switchable") or {}
+            leader = (sc.get("follow") or {}).get("device")
+            if not leader:
+                continue
+            with self._lock:
+                tel = dict(self.telemetry.get(leader) or {})
+                rec = self.readings.get(fid)
+            leader_on = (bool(tel["running"]) if tel.get("running") is not None
+                         and now - tel.get("ts", 0) <= follow.FRESH_S else None)
+            m = sc.get("now_metric")
+            follower_on = (bool(rec["m"][m]) if rec and m and m in rec["m"]
+                           and now - rec["ts"] <= follow.FRESH_S else None)
+            key = f"follow:{fid}"
+            cmd, new_state, why = follow.decide(leader_on, follower_on, store.get_setting(conn, key))
+            if cmd is None:
+                if new_state != store.get_setting(conn, key, follow.initial()):
+                    store.set_setting(conn, key, new_state)
+                    store.append_log(conn, fid, bool(follower_on), "coupling", f"{leader}: {why}", False, "noop")
+                continue
+            if dry_run:
+                continue
+            r = self.issuer.issue(device_id=fid, trait="switchable", action="set", args={"on": cmd})
+            if r.status == "ok":
+                store.set_setting(conn, key, new_state)
+            store.append_log(conn, fid, cmd, "coupling", f"{leader}: {why}", True, r.status)
+            log.info("follow: %s -> %s (%s) %s", fid, "ON" if cmd else "OFF", why, r.status)
 
     # ── device coupling: a dehumidifier in series with an ERV (Hugh, 2026-10-04) ───────────────────────────
     def _track_ventilation_demand(self, device_id, pol, was_running, wants_running, now):
