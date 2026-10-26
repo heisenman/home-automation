@@ -241,6 +241,40 @@ def test_mean_of_fresh_sensors_drives_the_band_and_stale_ones_are_left_out(tmp_p
     assert iss.calls[-1] == ("mode", {"mode": "med"})
 
 
+def test_worst_room_drives_the_band_so_one_bad_room_ramps_it(tmp_path):
+    # Hugh 2026-10-26: house AQ poor but the average looked fine. a=85, b=80 clean, c=30 bad -> mean 65 (low)
+    # but WORST = 30 (lower air_quality is worse) -> band "<40" -> high
+    ctrl, iss, now = _erv_ctrl(tmp_path, policy_patch={"aggregate": "worst"},
+                               aq={"gas_a": (85, 60), "gas_b": (80, 60), "gas_c": (30, 60)})
+    r, used, _ = ctrl._pick_source(ctrl_pol(tmp_path), 1800, now)
+    assert r.value == 30 and used == "worst of 3/3 (gas_c)"
+    _report(ctrl, 9)                                     # currently LOW
+    ctrl.tick(now=now)
+    assert iss.calls[-1] == ("mode", {"mode": "high"})
+
+
+def test_worst_direction_follows_the_metric():
+    from server.control.controller import worst_value
+    m = [(40.0, 1, "a"), (70.0, 1, "b")]
+    assert worst_value("air_quality", m)[2] == "a"       # cleanliness score: lowest is worst
+    assert worst_value("pm25_ugm3", m)[2] == "b"         # concentration: highest is worst
+    assert worst_value("humidity_pct", m)[2] == "b"
+
+
+def test_api_accepts_worst_and_still_refuses_unknown_aggregates(tmp_path):
+    import sqlite3
+
+    from server.api.control import handle_policy_update
+    from server.control import controller as C
+    from server.control import control_store as store
+    conn = sqlite3.connect(str(tmp_path / "c.db"))
+    store.ensure_schema(conn)
+    store.set_policy(conn, "erv_attic", {**C.ERV_POLICY, "source_sensors": ["gas_a"]})
+    code, body = handle_policy_update(conn, "erv_attic", {"aggregate": "worst", "source_sensors": ["gas_a", "gas_b"]})
+    assert code == 200 and body["policy"]["aggregate"] == "worst"
+    assert handle_policy_update(conn, "erv_attic", {"aggregate": "median"})[0] == 400
+
+
 def ctrl_pol(tmp_path):
     import sqlite3
 

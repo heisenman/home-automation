@@ -673,6 +673,8 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
     (c.aggregate === "mean" && (c.source_sensors || []).length) ? c.source_sensors
       : (c.source_sensor ? [c.source_sensor] : []));
   const source = picked[0] || "";
+  // several sensors: AVERAGE them, or follow the WORST one (one bad room ramps it even when the average is fine)
+  const [how, setHow] = useState(c.aggregate === "worst" ? "worst" : "mean");
   const levelName = (lvl) => (c.level_labels && c.level_labels[lvl - 1]) || `Speed ${lvl}`;
   const [cuts, setCuts] = useState(bands.filter((b) => b.max != null).map((b) => b.max));
   const [speeds, setSpeeds] = useState(bands.map((b) => b.level));
@@ -743,7 +745,7 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
     try {
       await adminSend("PUT", `/control/${vm.device_id}/policy`,
         { enabled, source_sensor: source, source_sensors: picked,
-          aggregate: picked.length > 1 ? "mean" : "first",
+          aggregate: picked.length > 1 ? how : "first",
           control: { strategy: "threshold_ranged", metric, bands: newBands } });
       setFlash("saved"); await onChange();
     } catch (e) { setErr(String(e.message)); }
@@ -761,7 +763,8 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
         <input type="checkbox" checked=${enabled} onChange=${(e) => setEnabled(e.target.checked)} />
         Automation enabled (${c.level_labels ? "ventilation" : "fan speed"} follows air quality)
       </label>
-      <div class="field"><label>Sensors to follow ${picked.length > 1 ? html`<span class="note">— averaged</span>` : ""}</label>
+      <div class="field"><label>Sensors to follow ${picked.length > 1
+          ? html`<span class="note">— ${how === "worst" ? "worst one" : "averaged"}</span>` : ""}</label>
         <div class="checklist">
           ${sensorOpts.map((o) => html`<label class="check" key=${o.id}>
             <input type="checkbox" checked=${picked.includes(o.id)} onChange=${() => toggleSource(o.id)} />
@@ -769,8 +772,17 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
         </div>
         ${!sensorOpts.length && html`<p class="note">No sensor on this server is reporting an
           air-quality measure right now.</p>`}
-        ${picked.length > 1 && html`<p class="note">The average of the ${picked.length} sensors' current
-          readings drives it; a sensor that goes quiet is left out of the average.</p>`}</div>
+        ${picked.length > 1 && html`
+          <div class="controls">
+            <label class="check"><input type="radio" name=${"how-" + vm.device_id} checked=${how === "mean"}
+              onChange=${() => setHow("mean")} /> Average</label>
+            <label class="check"><input type="radio" name=${"how-" + vm.device_id} checked=${how === "worst"}
+              onChange=${() => setHow("worst")} /> Worst room</label>
+          </div>
+          <p class="note">${how === "worst"
+            ? `The worst of the ${picked.length} sensors' current readings drives it, so one bad room ramps it.`
+            : `The average of the ${picked.length} sensors' current readings drives it.`} A sensor that goes
+            quiet is left out.</p>`}</div>
       <div class="field"><label>Measure</label>
         <select value=${metric} disabled=${!source}
                 onChange=${(e) => changeMetric(e.target.value)}>

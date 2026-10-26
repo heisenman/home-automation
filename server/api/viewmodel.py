@@ -1035,15 +1035,22 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
     # the authoritative reading that DRIVES the loop. Carries both the metric-named key (back-compat for
     # the dehumidifier card) and a generic value/metric so a purifier card can render the same shape.
     sensor = None
-    if policy.get("aggregate") == "mean" and policy.get("source_sensors") and hot_conn is not None:
-        # the controller averages the fresh members; mirror it so the card shows the number it acts on
+    if policy.get("aggregate") in ("mean", "worst") and policy.get("source_sensors") and hot_conn is not None:
+        # the controller averages (or takes the worst of) the fresh members; mirror it so the card shows the
+        # number it acts on
+        from server.control.controller import worst_value
         stale_s_ = float(policy.get("sensor_stale_min", 10)) * 60.0
         vals = [(sid, _latest_any(sid, metric)) for sid in policy["source_sensors"]]
         fresh = [(sid, v) for sid, v in vals if v and (_age_s(v[1], now) or 0) <= stale_s_]
         if fresh:
-            avg = sum(v[0] for _, v in fresh) / len(fresh)
+            if policy["aggregate"] == "worst":
+                avg, _, wsid = worst_value(metric, [(v[0], v[1], sid) for sid, v in fresh])
+                label = f"worst of {len(fresh)}/{len(vals)}: {wsid}"
+            else:
+                avg = sum(v[0] for _, v in fresh) / len(fresh)
+                label = f"average of {len(fresh)}/{len(vals)}"
             oldest = min((v[1] for _, v in fresh), key=lambda t: t)
-            sensor = {"device_id": f"average of {len(fresh)}/{len(vals)}", metric: avg, "value": avg,
+            sensor = {"device_id": label, metric: avg, "value": avg,
                       "metric": metric, "ts": oldest, "age_s": _age_s(oldest, now),
                       "members": [{"device_id": sid, "value": v[0]} for sid, v in fresh]}
     elif source_id and hot_conn is not None:

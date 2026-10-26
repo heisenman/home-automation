@@ -127,6 +127,16 @@ DEFAULT_CONTROL_METRIC = "humidity_pct"
 # The stored row's OWN ts is used, so the normal sensor_stale_min logic still governs: if the sampler
 # stops writing, the source goes stale and the resolver fails safe exactly as it would for a dead radio.
 DERIVED_METRICS = frozenset({"air_quality"})
+
+# Metrics where a LOWER value is the worse one (cleanliness scores: ADR-0035's 0-100, higher = cleaner). For
+# everything else (RH, PM2.5, AQI, VOC index) higher is worse. Used by aggregate "worst".
+LOWER_IS_WORSE = frozenset({"air_quality", "air_quality_v2", "air_quality_v3", "air_quality_pm25",
+                            "air_quality_tc"})
+
+
+def worst_value(metric: str, members: list) -> tuple:
+    """The worst of [(value, ts, sid), ...] for `metric`. Pure."""
+    return (min if metric in LOWER_IS_WORSE else max)(members, key=lambda m: m[0])
 _DERIVED_MAX_AGE_S = 3600.0      # ignore stored points older than this outright (cheap query bound)
 
 
@@ -245,8 +255,9 @@ class Controller:
         freshness is judged the same way for both."""
         metric = control_metric(pol)
         derived = metric in DERIVED_METRICS
-        if pol.get("aggregate") == "mean" and pol.get("source_sensors"):
-            return self._mean_source(pol["source_sensors"], metric, derived, stale_s, now)
+        if pol.get("aggregate") in ("mean", "worst") and pol.get("source_sensors"):
+            return self._mean_source(pol["source_sensors"], metric, derived, stale_s, now,
+                                     worst=pol["aggregate"] == "worst")
         primary = pol.get("source_sensor")
         order = [primary, *(pol.get("fallback_sensors") or [])]
         first = None
@@ -270,11 +281,13 @@ class Controller:
             return first[0], first[1], first[1] != primary
         return None, None, False
 
-    def _mean_source(self, sids, metric, derived, stale_s, now):
+    def _mean_source(self, sids, metric, derived, stale_s, now, worst=False):
         """The MEAN of the fresh readings of `metric` across `sids` (an operator-chosen set — e.g. the rooms
-        an ERV ventilates). Stale/missing members are left out, not counted as zero; the result's ts is the
-        OLDEST fresh member's, so staleness stays conservative. No fresh member -> the first stale one, so
-        the resolver fail-safes exactly as for a single dead source."""
+        an ERV ventilates) — or, with `worst`, the WORST fresh one (aggregate "worst", Hugh 2026-10-26: one bad
+        room must ramp the ERV even when the average looks fine; worst = lowest for a cleanliness score, highest
+        otherwise — see worst_value). Stale/missing members are left out, not counted as zero; the result's ts
+        is the OLDEST fresh member's, so staleness stays conservative. No fresh member -> the first stale one,
+        so the resolver fail-safes exactly as for a single dead source."""
         with self._lock:
             live = dict(self.readings) if not derived else {}
         fresh, first = [], None
@@ -287,10 +300,14 @@ class Controller:
             if first is None:
                 first = (Reading(rec["m"][metric], rec["ts"]), sid)
             if (now - rec["ts"]) <= stale_s:
-                fresh.append((rec["m"][metric], rec["ts"]))
+                fresh.append((rec["m"][metric], rec["ts"], sid))
+        if fresh and worst:
+            v, _, sid = worst_value(metric, fresh)
+            return (Reading(v, min(t for _, t, _ in fresh)),
+                    f"worst of {len(fresh)}/{len(sids)} ({sid})", False)
         if fresh:
-            avg = sum(v for v, _ in fresh) / len(fresh)
-            return Reading(avg, min(t for _, t in fresh)), f"mean of {len(fresh)}/{len(sids)}", False
+            avg = sum(v for v, _, _ in fresh) / len(fresh)
+            return Reading(avg, min(t for _, t, _ in fresh)), f"mean of {len(fresh)}/{len(sids)}", False
         if first:
             return first[0], first[1], False
         return None, None, False

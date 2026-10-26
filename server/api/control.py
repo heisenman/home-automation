@@ -271,15 +271,16 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
             return bad("source_sensors must be a list of non-empty strings")
         pol["source_sensors"] = list(dict.fromkeys(ss))          # de-dup, keep order
     if "aggregate" in patch:
-        if patch["aggregate"] not in ("first", "mean"):
-            return bad("aggregate must be 'first' (primary + fallbacks) or 'mean' (average of source_sensors)")
+        if patch["aggregate"] not in ("first", "mean", "worst"):
+            return bad("aggregate must be 'first' (primary + fallbacks), 'mean' (average of source_sensors) "
+                       "or 'worst' (the worst of source_sensors)")
         pol["aggregate"] = patch["aggregate"]
     if "source_sensor" in patch and "source_sensors" not in patch and "aggregate" not in patch:
         # a single-sensor save (any editor that predates averaging, or a script) means "follow this one" —
         # never leave a seeded mean policy pointing at an empty list (2026-10-04: the ERV's first save 400'd).
         pol["source_sensors"] = [pol["source_sensor"]]
         pol["aggregate"] = "first"
-    if pol.get("aggregate") == "mean" and pol.get("enabled", True) and not pol.get("source_sensors"):
+    if pol.get("aggregate") in ("mean", "worst") and pol.get("enabled", True) and not pol.get("source_sensors"):
         return bad("pick at least one sensor to average")
     if "ventilation" in patch:
         v = patch["ventilation"]
