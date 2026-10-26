@@ -62,6 +62,14 @@ config host
 	option ip '192.168.1.119'
 	option mac '__MIDEA_MAC__'
 
+# Venstar thermostat (ADR-0043) — ha-2 polls + commands it over its local HTTP API (VENSTAR_HOST in
+# instance/venstar.env), so its IP must not float. Added 2026-10-25; MAC in the gitignored env. The unit is a
+# warranty replacement-in-waiting: when the new one is installed, swap VENSTAR_MAC and this host's mac.
+config host
+	option name 'venstar'
+	option ip '192.168.1.118'
+	option mac '__VENSTAR_MAC__'
+
 # ha-vip.lan -> .200 (resolve only; the address floats via VRRP). Also add to /etc/hosts:
 #   192.168.1.200  ha-vip ha-vip.lan
 # Edge nodes get static leases here (.150–.199) once their MACs are filled in, OFF wifi-isolation.

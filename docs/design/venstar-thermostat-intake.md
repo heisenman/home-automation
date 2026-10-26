@@ -74,7 +74,9 @@ Record each result with the date in this section.
 7. Schedule interaction: after a setpoint POST, does the unit hold it until the next schedule period (expected)
    or drop the schedule? Record — it decides how overrides must be shaped.
 8. Bridge `--once` prints both entities with sane °C values; then install the unit (gated).
-9. Static DHCP lease on the air-gap router (MAC → `instance/openwrt/airgap_router.env`, `router_reconcile.py`).
+9. Static DHCP lease on the air-gap router (MAC → `instance/openwrt/airgap_router.env`). **Done 2026-10-25** for the first unit:
+   router `uci` host `venstar` → 192.168.1.118 (the host table is hand-set, not in `router_reconcile.py` invariants;
+   documented in `provisioning/openwrt/etc/config/dhcp`). Redo with the replacement's MAC.
 
 ### Results
 
