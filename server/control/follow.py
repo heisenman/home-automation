@@ -11,7 +11,7 @@ EDGE-triggered, like LED night mode, so a person's choice always wins:
   - leader STOP: switch it back OFF — only if WE turned it on and it is still on.
 A person who switches it off mid-run, or on before the run, is never overridden. Once anyone else switches the
 follower off, it stops being ours (`engaged` drops), so a person's later ON is never undone at the leader's stop
-(bug 2026-10-26 20:08 PDT: someone set Auto, Hugh set On again, the dehum stop turned it off). A PWA press on the
+(bug 2026-10-26 20:08 PDT: the fan was set to Auto at 18:40, Hugh set On at 20:04, the dehum stop turned it off). A PWA press on the
 follower also drops `engaged` (server/api/control.py) — the one case telemetry can't see is a wall ON while it is
 already on. State persists in control.db
 (house_setting `follow:<follower>`) so a controller restart mid-run still hands the blower back.

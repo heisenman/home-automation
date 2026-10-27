@@ -13,6 +13,8 @@ Not a control path: nothing here goes through the issuer — it is a bench tool,
 import os
 import sys
 import time
+from datetime import datetime
+from zoneinfo import ZoneInfo
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -39,7 +41,7 @@ def table(i):
 
 
 def line(i):
-    return (f"{time.strftime('%H:%M:%S')}  mode {MODES.get(i['mode'], i['mode'])}  "
+    return (f"{datetime.now(ZoneInfo('America/Los_Angeles')):%H:%M:%S %Z}  mode {MODES.get(i['mode'], i['mode'])}  "
             f"state {STATES.get(i['state'], i['state'])} (stage {i.get('activestage')})  "
             f"fan {'ON' if i['fan'] else 'auto'} / blower {'RUNNING' if i['fanstate'] else 'off'}  "
             f"room {i['spacetemp']:g}  heat {i['heattemp']:g}  cool {i['cooltemp']:g}")

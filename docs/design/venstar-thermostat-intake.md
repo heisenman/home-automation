@@ -98,11 +98,11 @@ Record each result with the date in this section.
   1 from the first sample of the heat call with DIP GAS/EL·O·GAS — either it means "call active" or G is energised
   in heat; Hugh to listen whether the blower starts with the burner or ~30–60 s after it.
 - **7 open** — needs the unit's clock set and its schedule on.
-- **✔ 2026-10-27 ROOT CAUSE CORRECTED — off-state leakage, not a failed output; fixed with an isolation relay.**
+- **✔ 2026-10-26 ROOT CAUSE CORRECTED — off-state leakage, not a failed output; fixed with an isolation relay.**
   The "24 V on W" readings below were all taken with W **unloaded** (meter only, furnace W unscrewed). A solid-state
   output leaks a small current when off; into a meter or the furnace's high-impedance W input that reads/acts as
   24 V. With the RIBU1C coil (55 mA) on W the leakage collapses: front on, mode Off → W/Blu and Org low, relay off.
-  Heat call on the **original unit** 2026-10-27 01:31:40 PDT → relay LED on, furnace fired (Hugh); 01:32:38 Off →
+  Heat call on the **original unit** 2026-10-26 18:31:40 PDT → relay LED on, furnace fired (Hugh); 18:32:38 Off →
   LED off, burner stopped. "Before boot" also fits leakage (passive, no firmware needed). RIBU1C at the furnace:
   Wht/Blu (10–30 V coil) ← stat W · Wht/Yel (coil comm) → furnace C · Yel (C) → furnace R · Org (N/O) → furnace W ·
   Wht/Blk (120 V coil) and Blu (N/C) capped separately. Red LED = furnace heat call (a visible indicator).

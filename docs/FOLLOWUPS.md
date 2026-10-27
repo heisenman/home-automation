@@ -7,12 +7,12 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
-## 🟡 2026-10-27 — Central HVAC: Venstar T7850 heat fixed with the RIBU1C isolation relay (ADR-0043)
+## 🟡 2026-10-26 — Central HVAC: Venstar T7850 heat fixed with the RIBU1C isolation relay (ADR-0043)
 
 Installed in the hallway 2026-10-26 (192.168.1.118, local API HTTP, no login). The furnace ran ~20 min with the unit
 reporting Off/idle. **First diagnosis (W output failed ON) was WRONG.** Root cause (2026-10-27): **off-state leakage**
 of the unit's solid-state W output — 24 V on an *unloaded* W (meter only), enough to trigger the furnace's
-high-impedance W input, but it collapses under the RIBU1C's 55 mA coil. Proven 2026-10-27 01:31–01:32 PDT with the
+high-impedance W input, but it collapses under the RIBU1C's 55 mA coil. Proven 2026-10-26 18:31–18:32 PDT with the
 **original unit**: front on, Off → relay off, furnace quiet; heat call → LED on, furnace fired; Off → LED off, burner
 stopped. Wiring + diagnosis: [intake §5](design/venstar-thermostat-intake.md). Heat is back via the relay;
 blower (G) + cooling (Y1) verified; `ha-venstar-bridge` live since 2026-10-25 22:06 PDT; blower follows `dehum_attic`.

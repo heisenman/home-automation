@@ -68,9 +68,9 @@ blower whenever the Aprilaire E070 dehumidifies, so more of the house's air reac
 
 ## Consequences
 
-- **2026-10-26/27: the furnace ran while the unit reported Off.** First read as a failed W output; the real cause
+- **2026-10-25/26: the furnace ran while the unit reported Off.** First read as a failed W output; the real cause
   is off-state leakage from the solid-state W output into the furnace's high-impedance W input. Fixed with a RIBU1C
-  isolation relay at the furnace (2026-10-27; proven on the original unit). Consequence for the design: the
+  isolation relay at the furnace (2026-10-26 evening PDT; proven on the original unit). Consequence for the design: the
   thermostat's own report is NOT evidence of what its wires do. Before any automation touches heat/cool, add an
   independent furnace call monitor (24 V sense on R/W/Y/G + supply-air temperature) and alarm on "burner/W live
   with no call reported". Intake §5 has the diagnosis.
