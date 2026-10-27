@@ -1395,8 +1395,23 @@ def handle_power_cycle(registry, device_id: str, publish, sleep) -> tuple[int, d
                          "accepts mode commands."}
 
 
+def release_follow(control_db, device_id: str) -> None:
+    """A person switched a follower from the PWA: the follow coupling must not undo it (server/control/follow.py)."""
+    import sqlite3
+    from server.control import control_store as store
+    from server.control import follow
+    c = sqlite3.connect(str(control_db))
+    try:
+        key = f"follow:{device_id}"
+        st = store.get_setting(c, key)
+        if st is not None and st.get("engaged"):
+            store.set_setting(c, key, follow.released(st))
+    finally:
+        c.close()
+
+
 def make_router(issuer: CommandIssuer, confirm_verifier=None, api_authz=None, admin_authz=None,
-                broker: str = "localhost", port: int = 1883):
+                broker: str = "localhost", port: int = 1883, control_db=None):
     """Build the FastAPI control router (fastapi imported lazily so non-API code/tests don't need it).
 
     `api_authz(authorization_header) -> bool` is the admin gate (bearer = SHA256("ha-api:"+master), see
@@ -1423,6 +1438,8 @@ def make_router(issuer: CommandIssuer, confirm_verifier=None, api_authz=None, ad
         # async API (reads, other clients) while it waits on the appliance.
         from starlette.concurrency import run_in_threadpool
         code, payload = await run_in_threadpool(handle_command, issuer, device_id, body, confirm_verifier)
+        if control_db is not None and code == 200 and body.get("trait") == "switchable":
+            await run_in_threadpool(release_follow, control_db, device_id)
         return JSONResponse(status_code=code, content=payload)
 
     def require_admin_only(authorization: str | None = Header(default=None)):

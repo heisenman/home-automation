@@ -389,7 +389,7 @@ class Controller:
             follower_on = (bool(rec["m"][m]) if rec and m and m in rec["m"]
                            and now - rec["ts"] <= follow.FRESH_S else None)
             key = f"follow:{fid}"
-            cmd, new_state, why = follow.decide(leader_on, follower_on, store.get_setting(conn, key))
+            cmd, new_state, why = follow.decide(leader_on, follower_on, store.get_setting(conn, key), now)
             if cmd is None:
                 if new_state != store.get_setting(conn, key, follow.initial()):
                     store.set_setting(conn, key, new_state)

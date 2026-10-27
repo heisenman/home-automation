@@ -197,6 +197,29 @@ def test_follow_decide_edges_and_person_wins():
     assert cmd is None and st["engaged"] is False
     assert decide(False, True, st)[0] is None                        # ...so it stays On after the dehum stops
     assert decide(None, False, initial())[0] is None                 # stale/missing telemetry: do nothing
+    on = {"leader_on": True, "engaged": True}
+    _, st, why = decide(True, False, on)                             # someone switched it off mid-run...
+    assert st["engaged"] is False and "not ours" in why
+    assert decide(False, True, st)[0] is None                        # ...then a person's On survives the stop
+    assert decide(True, False, {**on, "at": 1000.0}, now=1060.0)[1]["engaged"] is True   # lagging poll, not a person
+
+
+def test_follow_pwa_press_releases_the_follower():
+    import sqlite3
+    import tempfile
+    from server.api.control import release_follow
+    from server.control import control_store as store
+    with tempfile.TemporaryDirectory() as d:
+        db = f"{d}/control.db"
+        c = sqlite3.connect(db)
+        store.ensure_schema(c)
+        store.set_setting(c, "follow:hvac_blower", {"leader_on": True, "engaged": True})
+        c.close()
+        release_follow(db, "hvac_blower")
+        release_follow(db, "not_a_follower")                         # no follow state: untouched, no error
+        c = sqlite3.connect(db)
+        assert store.get_setting(c, "follow:hvac_blower") == {"leader_on": True, "engaged": False}
+        assert store.get_setting(c, "follow:not_a_follower") is None
 
 
 def _follow_ctrl(db):
@@ -237,8 +260,8 @@ def test_blower_follows_the_dehum_through_the_controller_and_survives_a_restart(
         feed("dehum_attic", {"dh_call": 1, "call_left_s": 600})
         ctrl.tick(now=now())
         assert calls == [("hvac_blower", "switchable", {"on": True})]
-        ctrl.tick(now=now())                                         # no edge -> no repeat
-        assert len(calls) == 1
+        ctrl.tick(now=now())                                         # no edge -> no repeat; the blower still
+        assert len(calls) == 1                                       # reads off (poll lag): stays ours
         ctrl2, calls2, feed2, _ = _follow_ctrl(db)                   # controller restarts mid-run
         calls2.clear()
         feed2("hvac_blower", {"running": 1, "fan_on_setting": 1})

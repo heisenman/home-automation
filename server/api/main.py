@@ -332,7 +332,7 @@ def _mount_control(app: FastAPI) -> None:
 
         app.include_router(_make_auth_router(legacy_ok, signing_key))
         app.include_router(make_router(issuer, make_confirm_verifier(master), command_authz,
-                                       admin_authz=api_authz, broker=broker, port=port))
+                                       admin_authz=api_authz, broker=broker, port=port, control_db=CONTROL_DB))
         # the manual-override + control-state router (writes control.db, read by the controller each tick)
         app.include_router(make_override_router(api_authz, CONTROL_DB, device_ids=set(registry)))
         app.include_router(make_device_meta_router(api_authz, CONTROL_DB, placement_path=DEVICE_PLACEMENT,
