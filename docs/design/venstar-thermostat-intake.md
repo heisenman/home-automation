@@ -98,7 +98,17 @@ Record each result with the date in this section.
   1 from the first sample of the heat call with DIP GAS/EL·O·GAS — either it means "call active" or G is energised
   in heat; Hugh to listen whether the blower starts with the burner or ~30–60 s after it.
 - **7 open** — needs the unit's clock set and its schedule on.
-- **❌ 2026-10-26 W OUTPUT FAILED ON (hardware) — unit to be returned.** Timeline (UTC): front attached since
+- **✔ 2026-10-27 ROOT CAUSE CORRECTED — off-state leakage, not a failed output; fixed with an isolation relay.**
+  The "24 V on W" readings below were all taken with W **unloaded** (meter only, furnace W unscrewed). A solid-state
+  output leaks a small current when off; into a meter or the furnace's high-impedance W input that reads/acts as
+  24 V. With the RIBU1C coil (55 mA) on W the leakage collapses: front on, mode Off → W/Blu and Org low, relay off.
+  Heat call on the **original unit** 2026-10-27 01:31:40 PDT → relay LED on, furnace fired (Hugh); 01:32:38 Off →
+  LED off, burner stopped. "Before boot" also fits leakage (passive, no firmware needed). RIBU1C at the furnace:
+  Wht/Blu (10–30 V coil) ← stat W · Wht/Yel (coil comm) → furnace C · Yel (C) → furnace R · Org (N/O) → furnace W ·
+  Wht/Blk (120 V coil) and Blu (N/C) capped separately. Red LED = furnace heat call (a visible indicator).
+  Measured: C↔R 28 VAC (normal unloaded 24 V transformer). The section below is the original (wrong) diagnosis,
+  kept for the record.
+- **❌ (superseded) 2026-10-26 "W OUTPUT FAILED ON (hardware)".** Timeline (UTC): front attached since
   install, furnace quiet. 01:35:48 first heat call (heat 76, via the API); 01:36:20 the call ended (Hugh lowered
   the setpoint at the wall) and the unit reported idle from then on — **but the furnace kept heating** (house
   +3–4 °F, mech closet 94→106 °F by 01:57; furnace status LED steady = 24 V present, no fault). Wall buttons, mode
@@ -116,9 +126,11 @@ Record each result with the date in this section.
   stored status codes erase after 72 h; recall = briefly open one main-limit (24 V) wire per code.
   **Y1 verified good under its real load** 2026-10-26 03:39:30 cool call → outdoor unit ran (Hugh) → 03:42:03
   mode Off → outdoor unit stopped within seconds, blower stopped after the furnace's ~90 s cooling off-delay. So a
-  coil load (the contactor) did not kill Y1 on its first switch-off — W looks like a one-off part failure. Plan for
+  coil load (the contactor) did not kill Y1 on its first switch-off. (Same reason Y1 never misbehaved: the contactor
+  coil is a real load, so leakage can't hold it in.) Plan for
   the replacement: RIBU1C isolation relay on W (ordered); a second on Y1 optional; new 18/8 cable with service loops.
-  Lessons: (1) a thermostat output can fail ON while the API reports idle — the API is not proof of what the wire
+  Lessons: (0) **measure a solid-state output under a real load** — an unloaded 24 V reading is not proof it is on;
+  (1) a thermostat output can drive a load while the API reports idle — the API is not proof of what the wire
   does → a furnace call monitor (24 V sense on R/W/Y/G + supply-air probe) is the independent check;
   (2) Hugh can't tell burner from blower at the furnace — don't diagnose from "it's still running".
 - **8 dry run ✔ 2026-10-26** on ha-2 with a temp registry: both entities, 72 °F → 22.22 °C, cool 74 °F → 23.33 °C,

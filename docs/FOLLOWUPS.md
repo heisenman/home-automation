@@ -7,19 +7,22 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
-## 🔴 2026-10-26 — Central HVAC: Venstar T7850 W output FAILED ON — return/replace (ADR-0043)
+## 🟡 2026-10-27 — Central HVAC: Venstar T7850 heat fixed with the RIBU1C isolation relay (ADR-0043)
 
-Installed in the hallway 2026-10-26 (192.168.1.118, local API HTTP, no login). The **W (heat) output went stuck ON
-during the first heat call** and energises W the instant the front is attached, before boot, while the API reports
-Off/idle — furnace ran ~20 min uncommanded. Diagnosis + timeline: [intake §5](design/venstar-thermostat-intake.md).
-**Now:** W unscrewed + taped at the furnace (no heat); Venstar up for blower (G verified) + cooling (Y1 verified) +
-telemetry. **`ha-venstar-bridge` installed on ha-2 2026-10-25 22:06 PDT**; blower-follows-`dehum_attic` acted first at 22:06:42.
-**Open:** Hugh: return/warranty the unit · choose Venstar-up (no heat) vs Honeywell back until the replacement ·
-static lease 192.168.1.118 SET 2026-10-25 — **redo for the replacement unit** (router `uci` host `venstar` mac + `VENSTAR_MAC` in instance/openwrt/airgap_router.env) · build a **furnace call monitor** (24 V
-sense on R/W/Y/G at the board + supply-air probe) — the API can't prove what a wire does · driver: minimum heat/cool
-run time before the system may end a call · §5 step 7 (clock + schedule) · D1001 alert reader · comfort defaults
-heat 62–74 / cool 72–82 °F (Hugh to adjust) · **pinned:** automation overriding setpoints/mode · second red wire on
-the furnace R terminal (unidentified).
+Installed in the hallway 2026-10-26 (192.168.1.118, local API HTTP, no login). The furnace ran ~20 min with the unit
+reporting Off/idle. **First diagnosis (W output failed ON) was WRONG.** Root cause (2026-10-27): **off-state leakage**
+of the unit's solid-state W output — 24 V on an *unloaded* W (meter only), enough to trigger the furnace's
+high-impedance W input, but it collapses under the RIBU1C's 55 mA coil. Proven 2026-10-27 01:31–01:32 PDT with the
+**original unit**: front on, Off → relay off, furnace quiet; heat call → LED on, furnace fired; Off → LED off, burner
+stopped. Wiring + diagnosis: [intake §5](design/venstar-thermostat-intake.md). Heat is back via the relay;
+blower (G) + cooling (Y1) verified; `ha-venstar-bridge` live since 2026-10-25 22:06 PDT; blower follows `dehum_attic`.
+**Open:** Hugh: keep or return the replacement unit (the original is fine behind the relay) · Y1 has no relay — the
+contactor coil is a real load so leakage hasn't mattered; add one only if the AC ever runs uncommanded · new 18/8
+cable with service loops (Hugh, optional) · static lease 192.168.1.118 set — redo only if the unit is swapped
+(router `uci` host `venstar` mac + `VENSTAR_MAC` in instance/openwrt/airgap_router.env) · **furnace call monitor**
+(24 V sense on R/W/Y/G at the board + supply-air probe) — the API can't prove what a wire does · driver: minimum
+heat/cool run time · §5 step 7 (clock + schedule) · D1001 alert reader · comfort defaults heat 62–74 / cool 72–82 °F
+(Hugh to adjust) · **pinned:** automation overriding setpoints/mode · second red wire on the furnace R (unidentified).
 
 ## 🟢 2026-10-10 — Air-quality Study 2 + v2 shadow experiment (dev2; Hugh: "document it and start Phase 0")
 

@@ -33,6 +33,7 @@ def table(i):
         "cool70":   {"mode": 2, "heattemp": 66, "cooltemp": 70},     # call for cooling
         "cool_sp80": {"heattemp": h, "cooltemp": 80},                 # end a cool call by setpoint
         "off":      {"mode": 0, "heattemp": h, "cooltemp": c},        # mode Off, setpoints unchanged
+        "off66":    {"mode": 0, "heattemp": 66, "cooltemp": 70},      # mode Off, back to the 66/70 baseline
         "restore":  {"mode": 0, "heattemp": 71, "cooltemp": 79, "fan": 0},
     }
 
