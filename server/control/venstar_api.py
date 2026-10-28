@@ -65,6 +65,20 @@ def info_metrics(info: dict) -> tuple[dict, dict]:
     return ({k: v for k, v in t.items() if v is not None}, {k: v for k, v in b.items() if v is not None})
 
 
+def state_messages(info: dict, entities: dict[str, tuple[str, str]], ts: str) -> list[tuple[str, dict]]:
+    """[(topic, payload)] for one /query/info read (the bridge's poll, or a driver command's readback). entities: {device_id: (device_type, area)}. Pure."""
+    therm, blower = info_metrics(info)
+    out = []
+    for did, (dtype, area) in sorted(entities.items()):
+        m = therm if dtype == "thermostat" else blower
+        if not m:
+            continue
+        out.append((f"home/{area}/{did}/state", {
+            "schema": 1, "device_id": did, "device_type": dtype, "area": area, "ts": ts, "transport": "lan-http",
+            "metrics": m, "meta": {"node": "venstar", "authoritative": dtype != "thermostat"}}))
+    return out
+
+
 def plan_setpoint(info: dict, channel: str, value: float, unit: str) -> dict:
     """Form params that set ONE setpoint and keep the other — or VenstarError. `value` is in `unit`
     (the trait's configured unit); the thermostat's own tempunits must match it, never silently convert."""

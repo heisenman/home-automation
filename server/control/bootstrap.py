@@ -19,7 +19,7 @@ from server.control.policy import PolicyStore
 from server.control.registry import (check_secrets_present, load_control_registry, load_secrets,
                                       secrets_from_lut)
 from server.control.secret_store import load_lut
-from server.control.venstar_driver import VenstarTransport, client_from_env, venstar_devices_of
+from server.control.venstar_driver import VenstarTransport, client_from_env, mqtt_state_publisher, venstar_devices_of
 
 log = logging.getLogger("ha.control.bootstrap")
 
@@ -86,7 +86,8 @@ def build_issuer(master: str, *, control_registry: Path, node_secrets_lut: Path,
     vclient = client_from_env(parse_env_file(control_registry.parent / "venstar.env")) if venstar_devices else None
     if vclient is not None:
         units = {d: (registry[d].traits_cfg.get("setpoint") or {}).get("unit", "degF") for d in venstar_devices}
-        vt = VenstarTransport(venstar_devices, vclient, units)
+        vt = VenstarTransport(venstar_devices, vclient, units, areas={d: registry[d].area for d in venstar_devices},
+                              publish=mqtt_state_publisher(broker, port))
         overrides.update({d: vt for d in venstar_devices})
     # host indicator LEDs: device_id host_* -> HostLedTransport (runs tools/host-leds.sh locally via sudo).
     host_led_ids = [d for d in registry if d.startswith("host_")]

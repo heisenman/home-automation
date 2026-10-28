@@ -25,7 +25,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 from server.control.bootstrap import parse_env_file          # noqa: E402
 from server.control.registry import load_control_registry    # noqa: E402
-from server.control.venstar_api import VenstarError, info_metrics  # noqa: E402
+from server.control.venstar_api import VenstarError, state_messages as messages  # noqa: E402,F401
 from server.control.venstar_driver import client_from_env, venstar_devices_of  # noqa: E402
 
 BROKER_HOST = os.environ.get("HA_BROKER_HOST", "127.0.0.1")
@@ -35,20 +35,6 @@ log = logging.getLogger("ha.venstar")
 
 def _utc_now() -> str:
     return dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
-
-
-def messages(info: dict, entities: dict[str, tuple[str, str]], ts: str) -> list[tuple[str, dict]]:
-    """[(topic, payload)] for one poll. entities: {device_id: (device_type, area)}. Pure."""
-    therm, blower = info_metrics(info)
-    out = []
-    for did, (dtype, area) in sorted(entities.items()):
-        m = therm if dtype == "thermostat" else blower
-        if not m:
-            continue
-        out.append((f"home/{area}/{did}/state", {
-            "schema": 1, "device_id": did, "device_type": dtype, "area": area, "ts": ts, "transport": "lan-http",
-            "metrics": m, "meta": {"node": "venstar", "authoritative": dtype != "thermostat"}}))
-    return out
 
 
 def poll_once(client, entities, publish) -> int:

@@ -110,6 +110,21 @@ def test_blower_on_sends_fan_only_and_reads_it_back():
         assert Fake.posts == [{"fan": "1"}]                      # fan alone: no mode, so no setpoints needed
 
 
+def test_command_readback_is_published_as_live_state():
+    # the bridge polls every 30 s; the readback is published at once so the PWA doesn't show the old state
+    sent = []
+    with _fake() as fake:
+        devs = venstar_devices_of(REG)
+        t = VenstarTransport(devs, VenstarClient(fake), {"thermostat_hall": "degF"}, readback_delay_s=0,
+                             areas={d: REG[d].area for d in devs}, publish=sent.extend)
+        CommandIssuer(registry=REG, secrets={d: "x" * 32 for d in REG}, policy=PolicyStore({"version": 1}),
+                      transport=t).issue(device_id="hvac_blower", trait="switchable", action="set", args={"on": True})
+    msgs = dict(sent)
+    blower = next(p for topic, p in msgs.items() if topic.endswith("/hvac_blower/state"))
+    assert blower["metrics"]["fan_on_setting"] == 1 and blower["device_type"] == "hvac_fan"
+    assert any(topic.endswith("/thermostat_hall/state") for topic in msgs)
+
+
 def test_heat_setpoint_keeps_the_cool_one():
     with _fake() as fake:
         r = _issuer(fake).issue(device_id="thermostat_hall", trait="setpoint", action="set",

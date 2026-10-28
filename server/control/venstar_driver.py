@@ -16,7 +16,7 @@ import logging
 import time
 
 from . import protocol
-from .venstar_api import VenstarClient, VenstarError, plan_fan, plan_mode, plan_setpoint
+from .venstar_api import VenstarClient, VenstarError, plan_fan, plan_mode, plan_setpoint, state_messages
 
 log = logging.getLogger("ha.control.venstar")
 DEVICE_TYPES = ("thermostat", "hvac_fan")
@@ -38,8 +38,14 @@ def client_from_env(env: dict) -> VenstarClient | None:
 
 class VenstarTransport:
     def __init__(self, devices: dict[str, str], client: VenstarClient, setpoint_units: dict[str, str],
-                 readback_delay_s: float = READBACK_DELAY_S):
+                 readback_delay_s: float = READBACK_DELAY_S, areas: dict[str, str] | None = None,
+                 publish=None):
+        """`publish([(topic, payload)])`, if given, gets the command's readback as canonical state messages —
+        the bridge only polls every 30 s, so without it the PWA reads the OLD state right after a command
+        (Hugh, 2026-10-27: fan set On, the card still said Auto). `areas` = {device_id: area} for the topics."""
         self.devices, self.client = devices, client
+        self.areas = areas or {}
+        self.publish = publish
         self.units = setpoint_units                       # device_id -> the setpoint trait's unit (degF|degC)
         self.delay = readback_delay_s
 
@@ -66,10 +72,38 @@ class VenstarTransport:
                 return reject(f"unsupported {trait}/{action} on a {kind}")
             self.client.control(params)
             time.sleep(self.delay)
-            reported = read(self.client.info())
+            after = self.client.info()
+            reported = read(after)
         except VenstarError as e:
             return reject(str(e))
         except (OSError, ValueError, KeyError) as e:      # unreachable / malformed -> no-ack, never a crash
             log.warning("venstar %s: %s", device_id, e)
             return None
+        if self.publish is not None:
+            ents = {d: (t, self.areas[d]) for d, t in self.devices.items() if d in self.areas}
+            ts = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+            try:
+                self.publish(state_messages(after, ents, ts))
+            except Exception as e:                        # telemetry is best-effort; the command succeeded
+                log.warning("venstar readback publish failed: %s", e)
         return protocol.build_ack(cmd_id=cmd["id"], status="ok", reported_state=reported, source="commanded")
+
+
+def mqtt_state_publisher(broker: str, port: int):
+    """A `publish` for VenstarTransport: one short-lived broker connection per command (like the Levoit
+    transport), retained like the bridge's own messages."""
+    import json
+
+    def publish(msgs):
+        import paho.mqtt.client as mqtt
+        from ..util.mqtt_creds import apply_credentials
+        c = mqtt.Client(mqtt.CallbackAPIVersion.VERSION2)
+        apply_credentials(c)
+        c.connect(broker, port, 30)
+        c.loop_start()
+        try:
+            for topic, payload in msgs:
+                c.publish(topic, json.dumps(payload), qos=1, retain=True).wait_for_publish(3)
+        finally:
+            c.loop_stop(); c.disconnect()
+    return publish
