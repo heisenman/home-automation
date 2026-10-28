@@ -497,6 +497,62 @@ _ROOM_NOTABLE_SKIP = set(_ROOM_FIXED_METRICS) | {
 }
 
 
+def _notable(sensors: list[dict]) -> list[dict]:
+    """The free-form `notable` tail: every catalogued metric that isn't a fixed column or an internal, from
+    `sensors` in order (first sensor to report a metric wins — stable). Units ASCII-folded for panel fonts."""
+    notable, seen = [], set()
+    for s in sensors:
+        for k, v in (s.get("metrics") or {}).items():
+            if k in _ROOM_NOTABLE_SKIP or k in seen or v is None:
+                continue
+            spec = METRIC_CATALOG.get(k)
+            if spec is None:                                 # unknown/derived -> keep the tail clean
+                continue
+            seen.add(k)
+            p = spec["precision"]
+            # ASCII-fold the unit for the panel's mono font (µ->u ³->3 ²->2; ° kept — font has it)
+            unit = spec["unit"].translate({0xB5: "u", 0xB3: "3", 0xB2: "2"})
+            notable.append({"key": k, "label": spec["label"], "unit": unit,
+                            "value": round(float(v), p) if p else int(round(float(v)))})
+    return notable
+
+
+def build_panel_sensors(sensors: list[dict], areas: dict | None = None) -> dict:
+    """One row per SENSOR for the D1001 "Sensors" list (Catherine, 2026-10-27) — the E1001 room row's columns
+    (temperature / humidity / dewpoint / air band / notable tail), but per device, so a person can hide the
+    ones they don't care about (the panel keeps that choice). Ordered by room (areas.yaml order, then
+    unknown rooms by slug), then name. A device with nothing to show in any column is omitted. Temps stay
+    °C (the panel converts). Pure over the sensor list."""
+    areas = areas or {}
+    order = {slug: i for i, slug in enumerate(areas)}
+    rows = []
+    for s in sensors:
+        m = s.get("metrics") or {}
+        aq = s.get("air_quality_report") or {}
+        band = aq.get("air_quality_band")
+        # the Air column already shows the unified score; shadow-experiment metrics stay off a wall panel
+        notable = [n for n in _notable([s]) if n["key"] != "air_quality" and "(shadow)" not in n["label"]]
+        t, h, d = m.get("temperature_c"), m.get("humidity_pct"), m.get("dewpoint_c")
+        if t is None and h is None and band is None and not notable:
+            continue
+        room = s.get("room") or s.get("area") or ""
+        rows.append({
+            "device_id": s["device_id"],
+            "name": s.get("name") or s["device_id"],
+            "room": room,
+            "room_name": (areas.get(room) or {}).get("name") or room,
+            "temperature_c": round(t, 1) if t is not None else None,
+            "humidity_pct": int(round(h)) if h is not None else None,
+            "dewpoint_c": round(d, 1) if d is not None else None,
+            "air_band": band,
+            "air_band_label": aq.get("air_quality_band_label") if band is not None else None,
+            "notable": notable,
+            "age_s": round(s["age_s"]) if s.get("age_s") is not None else None,
+        })
+    rows.sort(key=lambda r: (order.get(r["room"], len(order)), r["room"], r["name"].lower()))
+    return {"sensors": rows}
+
+
 def build_panel_rooms(sensors: list[dict]) -> dict:
     """One row per ROOM for the E1001 landscape dashboard (Hugh 2026-07-19). Fixed climate columns
     (temperature/humidity/dewpoint) + the room air-quality band, then a free-form `notable` tail — any
@@ -528,20 +584,7 @@ def build_panel_rooms(sensors: list[dict]) -> dict:
             dps = [d for s in rs if (d := (s.get("metrics") or {}).get("dewpoint_c")) is not None]
             dew = _mean(dps) if dps else None
         aq = resolve_room_air_quality(rs)
-        notable, seen = [], set()
-        for s in rs:                                         # first sensor to report a metric wins (stable)
-            for k, v in (s.get("metrics") or {}).items():
-                if k in _ROOM_NOTABLE_SKIP or k in seen or v is None:
-                    continue
-                spec = METRIC_CATALOG.get(k)
-                if spec is None:                             # unknown/derived -> keep the tail clean
-                    continue
-                seen.add(k)
-                p = spec["precision"]
-                # ASCII-fold the unit for the panel's mono font (µ->u ³->3 ²->2; ° kept — font has it)
-                unit = spec["unit"].translate({0xB5: "u", 0xB3: "3", 0xB2: "2"})
-                notable.append({"key": k, "label": spec["label"], "unit": unit,
-                                "value": round(float(v), p) if p else int(round(float(v)))})
+        notable = _notable(rs)
         rooms.append({
             "room": room,
             "temperature_c": round(temp, 1) if temp is not None else None,

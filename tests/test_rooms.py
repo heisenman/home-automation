@@ -294,3 +294,23 @@ def test_panel_rooms_air_band_from_worst_gas_node():
                                        "air_quality_basis": "absolute", "air_quality": 55}}]
     r = V.build_panel_rooms(sensors)["rooms"][0]
     assert r["air_band"] == 3 and r["air_band_label"] == "Fair"
+
+
+# ── build_panel_sensors: one row per sensor (D1001 "Sensors" list) ────────────────────────────────
+def test_panel_sensors_rows_order_and_columns():
+    areas = {"kitchen": {"name": "Kitchen"}, "crawlspace": {"name": "Crawlspace"}}
+    sensors = [
+        _s("radon_crawl", "crawlspace", temperature_c=17.04, humidity_pct=66.4, dewpoint_c=10.9, radon_bqm3=38.0),
+        {**_s("gas_k", "kitchen"), "name": "Kitchen gas",
+         "air_quality_report": {"air_quality_band": 2, "air_quality_band_label": "Poor"}},
+        _s("meter_k", "kitchen", temperature_c=21.0, humidity_pct=45.0, battery_pct=90),
+        _s("plug_x", "garage", fan_on=1),                    # nothing to show -> omitted
+    ]
+    rows = V.build_panel_sensors(sensors, areas)["sensors"]
+    assert [r["device_id"] for r in rows] == ["gas_k", "meter_k", "radon_crawl"]   # areas order, then name
+    k = rows[1]
+    assert k["room_name"] == "Kitchen" and k["temperature_c"] == 21.0 and k["humidity_pct"] == 45
+    assert k["notable"] == [] and k["air_band"] is None                 # battery is not notable
+    assert rows[0]["air_band"] == 2 and rows[0]["air_band_label"] == "Poor" and rows[0]["name"] == "Kitchen gas"
+    r = rows[2]
+    assert r["temperature_c"] == 17.0 and [n["key"] for n in r["notable"]] == ["radon_bqm3"]

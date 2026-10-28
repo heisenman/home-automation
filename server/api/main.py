@@ -993,6 +993,29 @@ def panel_rooms():
     return build_panel_rooms(sensors)
 
 
+@app.get("/api/v1/panel/sensors", include_in_schema=True)
+def panel_sensors():
+    """One row per SENSOR for the D1001 "Sensors" list: the /panel/rooms columns (temp/humidity/dewpoint, air
+    band, notable tail) per device, grouped by room in areas.yaml order. Hiding rows is the panel's own
+    per-unit choice, not stored here. Read-only."""
+    import time
+
+    from server.api.viewmodel import build_panel_sensors, build_sensor_list
+    from server.control import control_store as store
+    hc = _hot_conn() if DB_PATH.exists() else None
+    cc = _control_conn()
+    try:
+        meta = store.all_device_meta(cc) if cc is not None else {}
+        calib = store.all_calibration(cc) if cc is not None else {}
+        sensors = build_sensor_list(hc, time.time(), meta=meta, calib=calib)
+    finally:
+        if hc is not None:
+            hc.close()
+        if cc is not None:
+            cc.close()
+    return build_panel_sensors(sensors, _load_yaml_section(AREAS_YAML, "areas"))
+
+
 def _load_yaml_section(path: Path, section: str) -> dict:
     """Read `section:` out of a small instance YAML; {} on any absence/parse error (never fatal)."""
     if not path.exists():
