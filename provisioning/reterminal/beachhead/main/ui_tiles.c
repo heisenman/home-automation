@@ -649,7 +649,6 @@ void ui_tiles_start(const char *sensors_url)
     lv_obj_set_layout(s_map, LV_LAYOUT_NONE);
     lv_obj_clear_flag(s_map, LV_OBJ_FLAG_SCROLLABLE);
     lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
-    lv_obj_add_flag(s_sensors, LV_OBJ_FLAG_HIDDEN);
 
     // Devices-management screen: a scrollable vertical list (device rows grouped by room). Fills the
     // leftover height like the map (only one of the two is ever visible); its own content scrolls.
