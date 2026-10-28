@@ -7,6 +7,9 @@
 // temps in °C, converted here for display). Each row has a hide button; hidden sensors are THIS PANEL's
 // choice (NVS namespace "senslist"), not a house-wide setting — the Devices screen's Hidden status is the
 // house-wide one. Hidden sensors drop out of the room grid; Edit mode shows them dimmed with an un-hide button.
+// Edit mode also has up/down arrows on each room heading: the room order is this panel's too (NVS "rooms").
+// In the grid, tapping Room/Temp/Hum/Dew/Air sorts the rows (high-to-low first, tap again to flip); "Your
+// order" returns to the arrow order. The sort is not saved.
 #pragma once
 #include "lvgl.h"
 #include "cJSON.h"
