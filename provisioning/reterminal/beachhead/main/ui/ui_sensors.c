@@ -3,6 +3,7 @@
 // Edit list where sensors are hidden / un-hidden. Fonts compiled: montserrat 14/20/28 only.
 #include "ui/ui_sensors.h"
 #include "ui/ui_format.h"   // ascii_fold, aq_band_color, disp_val
+#include "ui/ui_pick.h"     // Other column: which extra reading to graph
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>   // strcasecmp
@@ -47,6 +48,16 @@ enum { SORT_NONE, SORT_ROOM, SORT_TEMP, SORT_HUM, SORT_DEW, SORT_AIR };
 static int s_sort_col = SORT_NONE;
 static bool s_sort_asc;
 static void (*s_changed)(void);
+static void (*s_open_graph)(const char *device_id, const char *metric);
+
+// The last render's sensor rows, kept until the next render: a grid value's double-tap user_data points at
+// its row here. Freed only after lv_obj_clean() has deleted the labels that point into it (both under the
+// LVGL lock, like the double-tap itself), so a tap can never see a freed row.
+static cJSON *s_rows;
+
+// The open Other-column menu's choices, copied out of s_rows (a refresh may free that while it's open).
+static char s_pick_id[ID_LEN];
+static char s_pick_key[UI_PICK_MAX][24];
 
 // per-row button payloads (device ids) — stable storage for the click user_data across one render
 #define MAX_ROWS 96
@@ -158,6 +169,65 @@ static void on_edit(lv_event_t *e)
     if (s_changed) s_changed();
 }
 
+// grid double-taps: user_data = the sensor's row in s_rows
+static const char *row_id(cJSON *e)
+{
+    cJSON *j = cJSON_GetObjectItem(e, "device_id");
+    return cJSON_IsString(j) ? j->valuestring : NULL;
+}
+
+static void open_graph(cJSON *e, const char *metric)
+{
+    const char *id = row_id(e);
+    if (!id || !s_open_graph) return;
+    ESP_LOGI(TAG, "double-tap %s/%s -> graph", id, metric);
+    s_open_graph(id, metric);
+}
+
+static void on_dbl_temp(lv_event_t *e) { open_graph(lv_event_get_user_data(e), "temperature_c"); }
+static void on_dbl_hum(lv_event_t *e)  { open_graph(lv_event_get_user_data(e), "humidity_pct"); }
+static void on_dbl_dew(lv_event_t *e)  { open_graph(lv_event_get_user_data(e), "dewpoint_c"); }
+static void on_dbl_air(lv_event_t *e)  { open_graph(lv_event_get_user_data(e), "air_quality"); }
+
+static void on_pick(int i)
+{
+    if (i >= 0 && i < UI_PICK_MAX && s_open_graph) {
+        ESP_LOGI(TAG, "picked %s/%s -> graph", s_pick_id, s_pick_key[i]);
+        s_open_graph(s_pick_id, s_pick_key[i]);
+    }
+}
+
+// Other column: one notable reading -> its graph; several -> a menu of them (labels as the server wrote them)
+static void on_dbl_notable(lv_event_t *ev)
+{
+    cJSON *e = lv_event_get_user_data(ev), *it;
+    const char *id = row_id(e);
+    if (!id) return;
+    char labels[UI_PICK_MAX][24];
+    const char *lp[UI_PICK_MAX];
+    int n = 0;
+    cJSON_ArrayForEach(it, cJSON_GetObjectItem(e, "notable")) {
+        cJSON *k = cJSON_GetObjectItem(it, "key"), *lb = cJSON_GetObjectItem(it, "label");
+        if (!cJSON_IsString(k) || n >= UI_PICK_MAX) continue;
+        snprintf(s_pick_key[n], sizeof s_pick_key[n], "%s", k->valuestring);
+        ascii_fold(cJSON_IsString(lb) ? lb->valuestring : k->valuestring, labels[n], sizeof labels[n]);
+        lp[n] = labels[n];
+        n++;
+    }
+    if (n == 0) return;
+    snprintf(s_pick_id, sizeof s_pick_id, "%s", id);
+    if (n == 1) { on_pick(0); return; }
+    cJSON *jnm = cJSON_GetObjectItem(e, "name");
+    ui_pick_open(cJSON_IsString(jnm) ? jnm->valuestring : id, lp, n, on_pick);
+}
+
+// make a grid value line double-tappable
+static void dbl_tap(lv_obj_t *l, lv_event_cb_t cb, cJSON *row)
+{
+    lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(l, cb, LV_EVENT_DOUBLE_CLICKED, row);
+}
+
 // ── widgets ──────────────────────────────────────────────────────────────────
 static lv_obj_t *row_box(lv_obj_t *parent, bool card)
 {
@@ -232,7 +302,7 @@ static lv_obj_t *col_box(lv_obj_t *row, int w)
     return c;
 }
 
-static void line(lv_obj_t *col, const char *txt, const lv_font_t *font, uint32_t color, bool right)
+static lv_obj_t *line(lv_obj_t *col, const char *txt, const lv_font_t *font, uint32_t color, bool right)
 {
     lv_obj_t *l = lv_label_create(col);
     lv_label_set_text(l, txt);
@@ -241,6 +311,7 @@ static void line(lv_obj_t *col, const char *txt, const lv_font_t *font, uint32_t
     lv_obj_set_style_text_color(l, lv_color_hex(color), 0);
     lv_label_set_long_mode(l, LV_LABEL_LONG_DOT);
     if (right) lv_obj_set_style_text_align(l, LV_TEXT_ALIGN_RIGHT, 0);
+    return l;
 }
 
 // notable tail: "Radon 48Bq  Pressure 1010hPa" (server-authored labels/units); "" when the sensor has none
@@ -322,21 +393,23 @@ static void room_row(lv_obj_t *parent, const char *room_name, cJSON **ss, int n)
         cJSON *e = ss[i], *j;
         uint32_t vc = is_stale(e) ? C_DIM : C_TEXT;
         if (cJSON_IsNumber(j = cJSON_GetObjectItem(e, "temperature_c"))) {
-            fmt_temp(j, buf, sizeof buf); line(ct, buf, &lv_font_montserrat_20, vc, true); kt++;
+            fmt_temp(j, buf, sizeof buf); dbl_tap(line(ct, buf, &lv_font_montserrat_20, vc, true), on_dbl_temp, e); kt++;
         }
         if (cJSON_IsNumber(j = cJSON_GetObjectItem(e, "humidity_pct"))) {
-            snprintf(buf, sizeof buf, "%d%%", j->valueint); line(ch, buf, &lv_font_montserrat_20, vc, true); kh++;
+            snprintf(buf, sizeof buf, "%d%%", j->valueint);
+            dbl_tap(line(ch, buf, &lv_font_montserrat_20, vc, true), on_dbl_hum, e); kh++;
         }
         if (cJSON_IsNumber(j = cJSON_GetObjectItem(e, "dewpoint_c"))) {
-            fmt_temp(j, buf, sizeof buf); line(cd, buf, &lv_font_montserrat_20, vc, true); kd++;
+            fmt_temp(j, buf, sizeof buf); dbl_tap(line(cd, buf, &lv_font_montserrat_20, vc, true), on_dbl_dew, e); kd++;
         }
         cJSON *jb = cJSON_GetObjectItem(e, "air_band"), *jbl = cJSON_GetObjectItem(e, "air_band_label");
         if (cJSON_IsNumber(jb) && cJSON_IsString(jbl)) {
             ascii_fold(jbl->valuestring, buf, sizeof buf);
-            line(ca, buf, &lv_font_montserrat_20, vc == C_DIM ? C_DIM : aq_band_color(jb->valueint), true); ka++;
+            lv_obj_t *l = line(ca, buf, &lv_font_montserrat_20, vc == C_DIM ? C_DIM : aq_band_color(jb->valueint), true);
+            dbl_tap(l, on_dbl_air, e); ka++;
         }
         fmt_notable(e, buf, sizeof buf);
-        if (buf[0]) line(cn, buf, &lv_font_montserrat_14, vc, false);
+        if (buf[0]) dbl_tap(line(cn, buf, &lv_font_montserrat_14, vc, false), on_dbl_notable, e);
     }
     if (!kt) line(ct, "-", &lv_font_montserrat_20, C_DIM, true);
     if (!kh) line(ch, "-", &lv_font_montserrat_20, C_DIM, true);
@@ -386,13 +459,18 @@ static const char *room_name_of(cJSON *rows, const char *room)
 }
 
 // ── render ───────────────────────────────────────────────────────────────────
-void ui_sensors_render(cJSON *doc, lv_obj_t *parent, void (*changed)(void))
+void ui_sensors_render(cJSON *doc, lv_obj_t *parent, void (*changed)(void),
+                       void (*open_graph)(const char *device_id, const char *metric))
 {
     s_changed = changed;
+    s_open_graph = open_graph;
     lv_coord_t y = lv_obj_get_scroll_y(parent);
-    lv_obj_clean(parent);
+    lv_obj_clean(parent);                                       // deletes the labels pointing into s_rows...
 
-    cJSON *rows = doc ? cJSON_GetObjectItem(doc, "sensors") : NULL;
+    cJSON *src = doc ? cJSON_GetObjectItem(doc, "sensors") : NULL;
+    if (s_rows) cJSON_Delete(s_rows);                           // ...so the old copy can go
+    s_rows = cJSON_IsArray(src) ? cJSON_Duplicate(src, 1) : NULL;
+    cJSON *rows = s_rows;
     if (!cJSON_IsArray(rows)) {
         cell(row_box(parent, false), "No sensor data (offline?)", 0, &lv_font_montserrat_20, C_DIM, false);
         return;

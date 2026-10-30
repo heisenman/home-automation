@@ -56,6 +56,7 @@ static lv_obj_t *s_graph;     // graph-builder view container (docs/design/d1001
 static lv_obj_t *s_graphbtn;  // "Graphs" entry button in the title row (shown only on the house map)
 static lv_obj_t *s_sensors;   // sensors-list view container (ui/ui_sensors)
 static lv_obj_t *s_sensbtn;   // "Sensors" entry button in the title row (shown only on the house map)
+static lv_obj_t *s_tosens;    // "Sensors >" button at the title row's right (shown only on the Graphs screen)
 static lv_obj_t *s_batt_lbl;  // battery indicator in the top bar
 
 static char s_room[28];            // selected room slug for room-zoom; "" = house map (landing)
@@ -129,6 +130,24 @@ static void on_sensors_clicked(lv_event_t *e)
 // A hide/un-hide/show-hidden tap in the sensors list -> re-render now (not at the next 10 s tick).
 static void on_sensors_changed(void)
 {
+    s_nav_dirty = true;
+}
+
+// A double-tapped value in the sensors grid -> the Graphs screen, opened on that sensor's metric over 24 h.
+static void on_sensor_graph(const char *device_id, const char *metric)
+{
+    ui_graph_preselect(device_id, metric, 24);
+    s_sensview = false;          // the sensors branch is checked before the graphs one
+    s_graphview = true;
+    s_nav_dirty = true;
+}
+
+// "Sensors >" on the Graphs screen -> back to the sensors list ("< House" still goes to the map).
+static void on_tosens_clicked(lv_event_t *e)
+{
+    (void)e;
+    s_graphview = false;
+    s_sensview = true;
     s_nav_dirty = true;
 }
 
@@ -234,7 +253,7 @@ static void do_render_cycle(bool nav)
         char *bs = ui_http_get(s_sens_url, &ls);         // /api/v1/panel/sensors
         cJSON *rs = (bs && ls > 0) ? cJSON_Parse(bs) : NULL;
         if (lvgl_port_lock(0)) {
-            ui_sensors_render(rs, s_sensors, on_sensors_changed);
+            ui_sensors_render(rs, s_sensors, on_sensors_changed, on_sensor_graph);
             lv_obj_clear_flag(s_sensors, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_map, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_grid, LV_OBJ_FLAG_HIDDEN);
@@ -243,6 +262,7 @@ static void do_render_cycle(bool nav)
             lv_obj_add_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_graphbtn, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_sensbtn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_tosens, LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(s_back, LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(s_header, "Sensors");
             lvgl_port_unlock();
@@ -266,6 +286,7 @@ static void do_render_cycle(bool nav)
             lv_obj_add_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_graphbtn, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_sensbtn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_clear_flag(s_tosens, LV_OBJ_FLAG_HIDDEN);   // Graphs -> Sensors
             lv_obj_clear_flag(s_back, LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(s_header, "Graphs");
             lvgl_port_unlock();
@@ -293,6 +314,7 @@ static void do_render_cycle(bool nav)
             lv_obj_add_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_graphbtn, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_sensbtn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_tosens, LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(s_back, LV_OBJ_FLAG_HIDDEN);
             lv_label_set_text(s_header, "Devices");
             lvgl_port_unlock();
@@ -319,6 +341,7 @@ static void do_render_cycle(bool nav)
                 lv_obj_add_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_graphbtn, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_add_flag(s_sensbtn, LV_OBJ_FLAG_HIDDEN);
+                lv_obj_add_flag(s_tosens, LV_OBJ_FLAG_HIDDEN);
                 lv_obj_clear_flag(s_back, LV_OBJ_FLAG_HIDDEN);
                 lv_label_set_text(s_header, s_room_name);
             }
@@ -346,6 +369,7 @@ static void do_render_cycle(bool nav)
             lv_obj_add_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_graphbtn, LV_OBJ_FLAG_HIDDEN);
             lv_obj_add_flag(s_sensbtn, LV_OBJ_FLAG_HIDDEN);
+            lv_obj_add_flag(s_tosens, LV_OBJ_FLAG_HIDDEN);
             lv_obj_clear_flag(s_back, LV_OBJ_FLAG_HIDDEN);   // back button beside the title
             lvgl_port_unlock();
         }
@@ -374,6 +398,7 @@ static void do_render_cycle(bool nav)
                 lv_obj_clear_flag(s_devbtn, LV_OBJ_FLAG_HIDDEN);   // Devices entry only on the map
                 lv_obj_clear_flag(s_graphbtn, LV_OBJ_FLAG_HIDDEN); // Graphs entry only on the map
                 lv_obj_clear_flag(s_sensbtn, LV_OBJ_FLAG_HIDDEN);  // Sensors entry only on the map
+                lv_obj_add_flag(s_tosens, LV_OBJ_FLAG_HIDDEN);
                 lv_label_set_text(s_header, "House");
                 lvgl_port_unlock();
             }
@@ -620,6 +645,24 @@ void ui_tiles_start(const char *sensors_url)
     lv_obj_set_style_text_font(sblbl, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(sblbl, lv_color_hex(0xffffff), 0);
     lv_obj_center(sblbl);
+
+    // "Sensors >" -> back to the sensors list, at the right end across from "< House". Graphs screen only.
+    s_tosens = lv_obj_create(title_row);
+    lv_obj_set_size(s_tosens, 156, 46);
+    lv_obj_set_style_bg_color(s_tosens, lv_color_hex(0x16204a), 0);
+    lv_obj_set_style_border_color(s_tosens, lv_color_hex(0x2f7e7a), 0);
+    lv_obj_set_style_border_width(s_tosens, 2, 0);
+    lv_obj_set_style_radius(s_tosens, 10, 0);
+    lv_obj_set_style_pad_all(s_tosens, 0, 0);
+    lv_obj_clear_flag(s_tosens, LV_OBJ_FLAG_SCROLLABLE);
+    lv_obj_add_flag(s_tosens, LV_OBJ_FLAG_CLICKABLE);
+    lv_obj_add_event_cb(s_tosens, on_tosens_clicked, LV_EVENT_CLICKED, NULL);
+    lv_obj_t *tslbl = lv_label_create(s_tosens);
+    lv_label_set_text(tslbl, "Sensors  " LV_SYMBOL_RIGHT);
+    lv_obj_set_style_text_font(tslbl, &lv_font_montserrat_20, 0);
+    lv_obj_set_style_text_color(tslbl, lv_color_hex(0xffffff), 0);
+    lv_obj_center(tslbl);
+    lv_obj_add_flag(s_tosens, LV_OBJ_FLAG_HIDDEN);
 
     // The screen itself scrolls vertically: [header] -> [tile grid] -> [expansion stack].
     lv_obj_set_scrollbar_mode(scr, LV_SCROLLBAR_MODE_AUTO);

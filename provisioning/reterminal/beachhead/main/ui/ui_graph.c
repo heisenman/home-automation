@@ -50,7 +50,20 @@ static uint32_t s_gen;                          // bumped on trace/range/nav cha
 struct graph_req { uint32_t gen; };
 static QueueHandle_t s_gq;
 
+// a trace to open with on the next render (ui_graph_preselect, from the Sensors grid's double-tap)
+static bool s_pre;
+static char s_pre_id[40], s_pre_metric[24];
+static int s_pre_hours;
+
 int ui_graph_hours(void) { return s_hours; }
+
+void ui_graph_preselect(const char *device_id, const char *metric, int hours)
+{
+    snprintf(s_pre_id, sizeof s_pre_id, "%s", device_id ? device_id : "");
+    snprintf(s_pre_metric, sizeof s_pre_metric, "%s", metric ? metric : "");
+    s_pre_hours = hours;
+    s_pre = true;
+}
 
 // ── trace catalog ────────────────────────────────────────────────────────────
 static void build_catalog(cJSON *sensors)
@@ -219,6 +232,12 @@ void ui_graph_render(cJSON *sensors, lv_obj_t *parent)
     s_gen++;                                     // invalidate any in-flight fetch against old objects
     s_trace = -1; s_chart = NULL; s_ser = NULL; s_note = NULL;
     build_catalog(sensors);
+    bool pre = s_pre;
+    s_pre = false;
+    if (pre) {
+        for (int i = 0; i < N_RANGES; i++)
+            if (RANGES[i].hours == s_pre_hours) s_hours = s_pre_hours;   // only a preset (the buttons show it)
+    }
 
     lv_obj_clean(parent);                        // rebuild from scratch on nav-in
     lv_obj_set_flex_flow(parent, LV_FLEX_FLOW_COLUMN);
@@ -293,6 +312,19 @@ void ui_graph_render(cJSON *sensors, lv_obj_t *parent)
     lv_label_set_text(s_note, s_ncat ? "pick a trace to plot" : "no graphable metrics available");
     lv_obj_set_style_text_font(s_note, &lv_font_montserrat_20, 0);
     lv_obj_set_style_text_color(s_note, lv_color_hex(0x94a3b8), 0);
+
+    if (pre) {                                   // opened from the Sensors grid: pick the trace and fetch it
+        for (int i = 0; i < s_ncat; i++)
+            if (strcmp(s_cat[i].source, s_pre_id) == 0 && strcmp(s_cat[i].metric, s_pre_metric) == 0) { s_trace = i; break; }
+        if (s_trace >= 0) {
+            lv_dropdown_set_selected(dd, s_trace + 1);   // option 0 is the placeholder; doesn't fire VALUE_CHANGED
+            lv_label_set_text(s_note, "loading...");
+            request_fetch();
+        } else {
+            lv_label_set_text(s_note, "no graph for that reading");
+        }
+        ESP_LOGI(TAG, "preselect %s/%s -> %s", s_pre_id, s_pre_metric, s_trace >= 0 ? "found" : "not in catalog");
+    }
 
     ESP_LOGI(TAG, "graphs view rendered (range=%dh, %d traces)", s_hours, s_ncat);
 }

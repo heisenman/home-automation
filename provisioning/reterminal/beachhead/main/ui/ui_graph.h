@@ -14,6 +14,11 @@
 // LVGL lock.
 void ui_graph_render(cJSON *sensors, lv_obj_t *parent);
 
+// Make the NEXT ui_graph_render open with (device_id, metric) already picked at `hours` and fetching —
+// the Sensors grid's double-tap. If the catalog has no such trace, the view says so instead. Caller holds
+// the LVGL lock.
+void ui_graph_preselect(const char *device_id, const char *metric, int hours);
+
 // Currently-selected range, in hours (driven by the range control). Consumed by the fetch worker.
 int ui_graph_hours(void);
 
