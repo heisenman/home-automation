@@ -531,3 +531,54 @@ int ha_replica_rung_query(const char *device_id, const char *metric, int hours, 
     xSemaphoreGive(s_db_mutex);
     return n;
 }
+
+int ha_replica_rung_range(const char *device_id, const char *metric, long t0, long t1,
+                          long *out_t, double *out_v, int nbins)
+{
+    if (!s_db_ready || !s_db_mutex || !s_db_path[0]) return -1;
+    if (t1 <= t0 || nbins < 1) return 0;
+    long span = t1 - t0;
+    double *sum = calloc(nbins, sizeof(double)), *tsum = calloc(nbins, sizeof(double));
+    int *cnt = calloc(nbins, sizeof(int));
+    if (!sum || !tsum || !cnt) { free(sum); free(tsum); free(cnt); return -1; }
+    if (xSemaphoreTake(s_db_mutex, pdMS_TO_TICKS(300)) != pdTRUE) {   // busy -> let caller fall back
+        free(sum); free(tsum); free(cnt);
+        return -1;
+    }
+
+    long rows = 0;
+    sqlite3 *db = NULL;
+    if (sqlite3_open_v2(s_db_path, &db, SQLITE_OPEN_READONLY, NULL) == SQLITE_OK) {
+        static const char *q =
+            "SELECT bucket_start, vmean FROM rung WHERE res=?1 AND device_id=?2 AND metric=?3 "
+            "AND bucket_start>=?4 AND bucket_start<=?5 AND vmean IS NOT NULL ORDER BY bucket_start";
+        for (int i = start_rung(span); i < NRUNGS && rows == 0; i++) {   // escalate coarser on an empty rung
+            sqlite3_stmt *st = NULL;
+            if (sqlite3_prepare_v2(db, q, -1, &st, NULL) != SQLITE_OK) continue;
+            sqlite3_bind_text (st, 1, RUNGS[i].name, -1, SQLITE_STATIC);
+            sqlite3_bind_text (st, 2, device_id,    -1, SQLITE_STATIC);
+            sqlite3_bind_text (st, 3, metric,       -1, SQLITE_STATIC);
+            sqlite3_bind_int64(st, 4, t0);
+            sqlite3_bind_int64(st, 5, t1);
+            while (sqlite3_step(st) == SQLITE_ROW) {
+                long bs = (long)sqlite3_column_int64(st, 0);
+                int b = (int)((double)(bs - t0) * nbins / span);
+                if (b < 0) b = 0;
+                if (b >= nbins) b = nbins - 1;
+                sum[b] += sqlite3_column_double(st, 1);
+                tsum[b] += (double)bs;
+                cnt[b]++;
+                rows++;
+            }
+            sqlite3_finalize(st);
+        }
+        sqlite3_close(db);
+    }
+    xSemaphoreGive(s_db_mutex);
+
+    int n = 0;
+    for (int b = 0; b < nbins; b++)
+        if (cnt[b]) { out_t[n] = (long)(tsum[b] / cnt[b]); out_v[n] = sum[b] / cnt[b]; n++; }
+    free(sum); free(tsum); free(cnt);
+    return n;
+}

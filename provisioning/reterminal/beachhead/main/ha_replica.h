@@ -27,6 +27,15 @@ void ha_replica_sync_files_now(void);
 // stack (≥16 KB).
 int ha_replica_rung_query(const char *device_id, const char *metric, int hours, double *out, int cap);
 
+// Time-windowed variant for the graph builder's time axis (2026-10-30): the rows of (device_id, metric)
+// with bucket_start in [t0, t1] (epoch seconds, UTC), averaged into `nbins` equal time slots so a 1-day
+// window at 1min (1440 rows) still comes back as at most `nbins` points. Writes each non-empty slot as
+// (mean bucket_start, mean vmean) into out_t/out_v oldest->newest and returns how many; empty slots are
+// skipped (a gap in the data stays a gap). Same rung choice + coarser escalation as ha_replica_rung_query,
+// and the same -1 = no replica / busy contract. Needs the same >=16 KB caller stack.
+int ha_replica_rung_range(const char *device_id, const char *metric, long t0, long t1,
+                          long *out_t, double *out_v, int nbins);
+
 // SD hot-plug hooks (driven by ha_sdcard_watch's on_change). Insert: re-inventory the local
 // replica so chart queries can use it immediately instead of waiting for the next sync cycle.
 // Remove: mark the local cache gone so ha_replica_rung_query() falls back to the network rather

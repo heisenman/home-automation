@@ -1,6 +1,7 @@
 # D1001 graph builder — design log (full free-form parity)
 
-Status: **DESIGN** (running log → ADR on acceptance). Owner: dev. Target device: D1001 panel
+Status: **DESIGN** (running log → ADR on acceptance). **Built so far:** P2a, P2b (2026-07-13); P2c +
+time axis + custom range (v124-graph-axis, 2026-10-30 — see §10). Owner: dev. Target device: D1001 panel
 (`provisioning/reterminal/beachhead`, ESP32-P4, LVGL). Decision to pursue **full free-form parity**
 with the PWA builder was Hugh's call (2026-07-13), over a simplified fixed-panel version.
 
@@ -136,3 +137,32 @@ including build/flash/verify), and that ~70 % of the data plane already exists:
 follow-up). Each phase is independently cable-flash-verifiable, so it can land incrementally. (For
 contrast, the earlier recon's "1–2 weeks" assumed building the chart/data plane from scratch — it's
 already here.)
+
+## 10. 2026-10-30 — P2c + time axis + custom range (v124-graph-axis, Catherine)
+
+Asked for: the PWA's time-axis labels, custom date range, and several traces per graph with a legend
+(multi-panel P2d and weather P2e not asked for yet).
+
+- **Several traces, one graph:** up to 6 (`MAX_SEL`), colored by position with the PWA's `PALETTE`.
+  Same unit → one real scale; mixed units → each trace normalized to its own 0–100 % with a note, as in
+  `AdaptiveChart`. °C traces display in °F (so temperature + dew point share a scale).
+- **Legend** = the trace list: swatch, label in its color, real min–max in display units, and ✕ to remove
+  it (replaces the PWA's separate chips). "+ add trace…" stays a dropdown; duplicates and the 7th trace
+  are refused with a note (and a log line).
+- **Time axis** (`ui/ui_graph_axis.c`): the PWA's rules — day lines at local midnight, hour ticks for
+  windows ≤ 7 d, labels under the day lines, hour labels on a 1/2/3/6/12 h step when fewer than 2
+  midnights are shown, thinned to ≤ 7. The x domain is the requested window (the PWA uses the data's
+  own span), so a sensor that stopped reporting shows the gap. Y labels: top/middle/bottom.
+- **Custom range** (`ui/ui_daterange.c`): §5's deferred follow-up, done with `lv_roller`s — Start and End
+  as day (Today … 89 days back) + hour; End at the current hour = until now. The chosen window shows
+  under the range buttons.
+- **Data with timestamps:** the chart is now `LV_CHART_TYPE_SCATTER` with x = seconds into the window.
+  New `ha_replica_rung_range(id, metric, t0, t1, …)` returns timestamped points averaged into
+  `GRAPH_POINTS` time slots (same rung choice + coarser escalation). This also fixes a P2b bug:
+  `ha_replica_rung_query` took the newest `GRAPH_POINTS` 1-minute buckets, so "24h" showed ~3.3 h.
+  HTTP fallback: `start`/`end` + `res=auto` + `limit` (the server picks the rung and decimates).
+- **No wall clock** (year < 2020): falls back to the old "last N hours" query with no time axis, and
+  Custom is refused with a note. (The readings endpoint still calls the panel "clockless"; it isn't any
+  more — RTC holdover + SNTP.)
+- Open: §7's 30-day `GRAPH_POINTS` question is now answered for the local path by binning; the
+  per-point readout stays out of scope (§1).
