@@ -50,9 +50,9 @@ static bool s_sort_asc;
 static void (*s_changed)(void);
 static void (*s_open_graph)(const char *device_id, const char *metric);
 
-// The last render's sensor rows, kept until the next render: a grid value's double-tap user_data points at
+// The last render's sensor rows, kept until the next render: a grid value's tap user_data points at
 // its row here. Freed only after lv_obj_clean() has deleted the labels that point into it (both under the
-// LVGL lock, like the double-tap itself), so a tap can never see a freed row.
+// LVGL lock, like the tap itself), so a tap can never see a freed row.
 static cJSON *s_rows;
 
 // The open Other-column menu's choices, copied out of s_rows (a refresh may free that while it's open).
@@ -169,7 +169,7 @@ static void on_edit(lv_event_t *e)
     if (s_changed) s_changed();
 }
 
-// grid double-taps: user_data = the sensor's row in s_rows
+// grid taps: user_data = the sensor's row in s_rows
 static const char *row_id(cJSON *e)
 {
     cJSON *j = cJSON_GetObjectItem(e, "device_id");
@@ -180,14 +180,14 @@ static void open_graph(cJSON *e, const char *metric)
 {
     const char *id = row_id(e);
     if (!id || !s_open_graph) return;
-    ESP_LOGI(TAG, "double-tap %s/%s -> graph", id, metric);
+    ESP_LOGI(TAG, "tap %s/%s -> graph", id, metric);
     s_open_graph(id, metric);
 }
 
-static void on_dbl_temp(lv_event_t *e) { open_graph(lv_event_get_user_data(e), "temperature_c"); }
-static void on_dbl_hum(lv_event_t *e)  { open_graph(lv_event_get_user_data(e), "humidity_pct"); }
-static void on_dbl_dew(lv_event_t *e)  { open_graph(lv_event_get_user_data(e), "dewpoint_c"); }
-static void on_dbl_air(lv_event_t *e)  { open_graph(lv_event_get_user_data(e), "air_quality"); }
+static void on_tap_temp(lv_event_t *e) { open_graph(lv_event_get_user_data(e), "temperature_c"); }
+static void on_tap_hum(lv_event_t *e)  { open_graph(lv_event_get_user_data(e), "humidity_pct"); }
+static void on_tap_dew(lv_event_t *e)  { open_graph(lv_event_get_user_data(e), "dewpoint_c"); }
+static void on_tap_air(lv_event_t *e)  { open_graph(lv_event_get_user_data(e), "air_quality"); }
 
 static void on_pick(int i)
 {
@@ -198,7 +198,7 @@ static void on_pick(int i)
 }
 
 // Other column: one notable reading -> its graph; several -> a menu of them (labels as the server wrote them)
-static void on_dbl_notable(lv_event_t *ev)
+static void on_tap_notable(lv_event_t *ev)
 {
     cJSON *e = lv_event_get_user_data(ev), *it;
     const char *id = row_id(e);
@@ -221,11 +221,12 @@ static void on_dbl_notable(lv_event_t *ev)
     ui_pick_open(cJSON_IsString(jnm) ? jnm->valuestring : id, lp, n, on_pick);
 }
 
-// make a grid value line double-tappable
-static void dbl_tap(lv_obj_t *l, lv_event_cb_t cb, cJSON *row)
+// make a grid value line tappable (single tap: LVGL's DOUBLE_CLICKED never reached these labels on the
+// panel, v122 — the debug log showed no handler call — while CLICKED works on the sort headers)
+static void tap_target(lv_obj_t *l, lv_event_cb_t cb, cJSON *row)
 {
     lv_obj_add_flag(l, LV_OBJ_FLAG_CLICKABLE);
-    lv_obj_add_event_cb(l, cb, LV_EVENT_DOUBLE_CLICKED, row);
+    lv_obj_add_event_cb(l, cb, LV_EVENT_CLICKED, row);
 }
 
 // ── widgets ──────────────────────────────────────────────────────────────────
@@ -393,23 +394,23 @@ static void room_row(lv_obj_t *parent, const char *room_name, cJSON **ss, int n)
         cJSON *e = ss[i], *j;
         uint32_t vc = is_stale(e) ? C_DIM : C_TEXT;
         if (cJSON_IsNumber(j = cJSON_GetObjectItem(e, "temperature_c"))) {
-            fmt_temp(j, buf, sizeof buf); dbl_tap(line(ct, buf, &lv_font_montserrat_20, vc, true), on_dbl_temp, e); kt++;
+            fmt_temp(j, buf, sizeof buf); tap_target(line(ct, buf, &lv_font_montserrat_20, vc, true), on_tap_temp, e); kt++;
         }
         if (cJSON_IsNumber(j = cJSON_GetObjectItem(e, "humidity_pct"))) {
             snprintf(buf, sizeof buf, "%d%%", j->valueint);
-            dbl_tap(line(ch, buf, &lv_font_montserrat_20, vc, true), on_dbl_hum, e); kh++;
+            tap_target(line(ch, buf, &lv_font_montserrat_20, vc, true), on_tap_hum, e); kh++;
         }
         if (cJSON_IsNumber(j = cJSON_GetObjectItem(e, "dewpoint_c"))) {
-            fmt_temp(j, buf, sizeof buf); dbl_tap(line(cd, buf, &lv_font_montserrat_20, vc, true), on_dbl_dew, e); kd++;
+            fmt_temp(j, buf, sizeof buf); tap_target(line(cd, buf, &lv_font_montserrat_20, vc, true), on_tap_dew, e); kd++;
         }
         cJSON *jb = cJSON_GetObjectItem(e, "air_band"), *jbl = cJSON_GetObjectItem(e, "air_band_label");
         if (cJSON_IsNumber(jb) && cJSON_IsString(jbl)) {
             ascii_fold(jbl->valuestring, buf, sizeof buf);
             lv_obj_t *l = line(ca, buf, &lv_font_montserrat_20, vc == C_DIM ? C_DIM : aq_band_color(jb->valueint), true);
-            dbl_tap(l, on_dbl_air, e); ka++;
+            tap_target(l, on_tap_air, e); ka++;
         }
         fmt_notable(e, buf, sizeof buf);
-        if (buf[0]) dbl_tap(line(cn, buf, &lv_font_montserrat_14, vc, false), on_dbl_notable, e);
+        if (buf[0]) tap_target(line(cn, buf, &lv_font_montserrat_14, vc, false), on_tap_notable, e);
     }
     if (!kt) line(ct, "-", &lv_font_montserrat_20, C_DIM, true);
     if (!kh) line(ch, "-", &lv_font_montserrat_20, C_DIM, true);

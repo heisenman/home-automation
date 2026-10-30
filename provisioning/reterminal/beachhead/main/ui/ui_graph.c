@@ -50,7 +50,7 @@ static uint32_t s_gen;                          // bumped on trace/range/nav cha
 struct graph_req { uint32_t gen; };
 static QueueHandle_t s_gq;
 
-// a trace to open with on the next render (ui_graph_preselect, from the Sensors grid's double-tap)
+// a trace to open with on the next render (ui_graph_preselect, from the Sensors grid's value tap)
 static bool s_pre;
 static char s_pre_id[40], s_pre_metric[24];
 static int s_pre_hours;

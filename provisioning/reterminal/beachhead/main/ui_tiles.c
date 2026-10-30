@@ -133,7 +133,7 @@ static void on_sensors_changed(void)
     s_nav_dirty = true;
 }
 
-// A double-tapped value in the sensors grid -> the Graphs screen, opened on that sensor's metric over 24 h.
+// A tapped value in the sensors grid -> the Graphs screen, opened on that sensor's metric over 24 h.
 static void on_sensor_graph(const char *device_id, const char *metric)
 {
     ui_graph_preselect(device_id, metric, 24);
