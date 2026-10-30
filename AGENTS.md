@@ -116,6 +116,17 @@ HOST_COORD_DIR=/home/visko/.claude/host/coord /home/visko/.claude/host/bin/coord
 HOST_COORD_DIR=/home/visko/.claude/host/coord /home/visko/.claude/host/bin/coord-local.py tail   # read replies
 ```
 
+**Deploying (Hugh, 2026-10-30: Catherine's dev may deploy PWA and D1001 updates itself)** — commit, then:
+
+```bash
+sudo -u visko /home/visko/home_automation/tools/team_deploy.sh push                    # git push origin main
+sudo -u visko /home/visko/home_automation/tools/team_deploy.sh pwa <commit>            # PWA/BFF -> ha-2
+sudo -u visko /home/visko/home_automation/tools/team_deploy.sh d1001 <commit> d1001_2  # then d1001-beachhead
+```
+
+`pwa` refuses commits outside `server/web/`, `server/api/`, `tests/`, `docs/`; `d1001` does one panel per run (panel 2
+first, check it reboots, then panel 1). Anything else still goes through the visko side.
+
 One-time git setup for a non-owner: `git config --global --add safe.directory /home/visko/home_automation`.
 
 ## Starting a task

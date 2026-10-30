@@ -32,6 +32,7 @@ full summary note.
 | `edge_nodes.py` | Loader for the per-node manifest `edge/esp32c6/nodes.yaml` (node_id→{mac,target,sensor,area,broker,ota_host}) — the cross-provisioning source of truth (ADR-0020), consumed by `enroll_node`/`node_bringup` + the OTA/flash identity gate. |
 | `edge_ota.py`, `edge_pull_history.py`, `edge_gatt.py` | OTA / GATT history / GATT ops against a node |
 | `ha2_deploy.sh <commit> <svc…>` | deploy a commit's changed files to ha-2: VIP inhibit (`.maintenance-fit`, auto-cleared) → one tar stream → md5-verify → restart services (one multiplexed ssh) |
+| `team_deploy.sh push\|pwa <c>\|d1001 <c> <panel>` | deploy gateway for Catherine's account: `sudo -u visko tools/team_deploy.sh …` pushes, deploys PWA/BFF-only commits to ha-2 (ha-api + ha-api-tls), or builds + OTAs ONE D1001 panel and waits for the new build with display on; posts the result to the host board as `deploy` (sudoers `/etc/sudoers.d/ha-team-deploy`) |
 | `mint_panel_token.py` | Panel operator token (reTerminal) |
 | `aranet_history.py`, `import_*_csv.py` | History backfill/import |
 | `gen_tls.py`, `gen_vapid.py` | Cert / key generation |
