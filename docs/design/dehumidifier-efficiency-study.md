@@ -65,9 +65,27 @@ One T/RH meter at the inlet and one at the outlet of each unit. Removal = ρ·ai
 - Gives instantaneous removal at every condition, which is exactly what the regression needs.
 - Cost: 4 meters (fewer if spares exist). The Aprilaire inlet meter also fills the missing inlet temperature.
 
-**C. Condensate truth (optional, for calibration).**
-Check method B against water actually collected: weigh or measure the Midea bucket for one known run, and the
-Aprilaire drain if it is reachable. A few spot checks are enough.
+**C. Condensate truth — the Midea bucket is already a meter (Hugh, 2026-10-31).**
+Every bucket-full event (Midea P2) is a known volume of water. The controller logs it as
+`interlock tank_full,error` on every tick until the bucket goes back in, so the last entry of each episode is
+the emptying time. Hugh sometimes pulls the bucket before it's full. That shows up as an error without
+tank_full (the unit's E6, compressor stopped for the pull), logged as `interlock error`.
+
+A **clean bucket** is the stretch from any emptying (P2 or E6) to the next P2, with no E6 in between. Its
+compressor hours and kWh (from the back-calculation) are a direct removal measurement once the bucket volume
+is known.
+- First pass, 2026-10-31: 26 P2 and 28 E6 episodes (Jun 26 → Oct 28) give **24 clean buckets**.
+  - Median ≈ 32.7 compressor h ≈ 15.5 kWh per bucket.
+  - Jun–Aug ≈ 29.6 h (living-room dew point ≈ 10 °C); October ≈ 34.6 h (≈ 8.7 °C).
+- Outliers to explain:
+  - Jul 2–4: 15–17 h.
+  - Jul 12, Oct 11, Oct 19: 41–47 h.
+  - Aug 31 → Sep 14: 249 h. That is impossible for one bucket, so there must be an unlogged dump or a drain hose.
+- **Needed:** the bucket's volume at P2, measured once by pouring a full bucket into a measuring container.
+- **Worth adding:** have the Midea driver record the unit's error code as a metric, so E6 vs P2 vs others come
+  from the device instead of being inferred from the tank flag.
+
+Still check method B against this. The Aprilaire drain, if reachable, can be spot-checked the same way.
 
 **D. Designed experiments (code-driven, not by hand).**
 Natural operation mixes everything together, so add a scheduled rotation over days and weathers:
