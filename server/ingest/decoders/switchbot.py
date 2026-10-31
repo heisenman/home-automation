@@ -27,6 +27,15 @@ Two wire formats observed on real hardware:
   Used by: WoSensorTHO (Outdoor Meter, 'w') and newer firmware variants.
   Service data present but only 3 bytes (model byte + 2 status bytes).
 
+  Leak — Water Leak Detector ('&' 0x26; pySwitchbot adv_parsers/leak.py, verified live 2026-10-31):
+    manufacturer data, 6-byte MAC prefix, then
+    [6]    state-change counter (steps by 2 on every wet/dry change — observed, unused)
+    [7]    battery % (& 0x7F); bit 7 = low battery
+    [8]    event flags: bit 0 = leak, bit 1 = tampered   (dry 0x98, wet 0xf9 on the bench unit)
+    [11]   leak-event counter (0 -> 1 -> 2 across two wet tests — observed)
+  The model byte is only in the scan-response service data (26 00 <batt>), which a PASSIVE scan never
+  sees — so a registered leak detector is decoded by its REGISTRY type (device_type_hint).
+
 Detection: manufacturer data company-id 0x0969, OR service data UUID fd3d.
 """
 
@@ -46,7 +55,9 @@ _MODEL_NAMES: dict[int, str] = {
     0x4F: "switchbot_meter_pro",       # 'O' WoSensorTHPro
     0x50: "switchbot_meter_pro",       # 'P' WoSensorTHPro alt
     0x77: "switchbot_meter_outdoor",   # 'w' WoSensorTHO
+    0x26: "switchbot_leak",            # '&' Water Leak Detector
 }
+LEAK_TYPE = "switchbot_leak"
 
 
 def is_switchbot(mfr_data: dict, svc_data: dict) -> bool:
@@ -58,8 +69,10 @@ def decode(
     mfr_data: dict[int, bytes],
     svc_data: dict[str, bytes],
     rssi: int,
+    device_type_hint: str | None = None,
 ) -> dict | None:
-    """Return decoded metrics dict or None if this advertisement cannot be parsed."""
+    """Return decoded metrics dict or None if this advertisement cannot be parsed. `device_type_hint` is
+    the registry's type for this MAC: it picks the leak decoder when the advert itself can't say."""
     raw_mfr = mfr_data.get(MANUFACTURER_ID, b"")
     raw_svc = svc_data.get(SERVICE_UUID, b"")
 
@@ -69,6 +82,9 @@ def decode(
     )
 
     device_type = _infer_device_type(raw_mfr, raw_svc)
+    if LEAK_TYPE in (device_type, device_type_hint):
+        metrics = _decode_leak(raw_mfr)
+        return {"device_type": LEAK_TYPE, "metrics": metrics} if metrics is not None else None
     metrics = _decode_meter(raw_svc, raw_mfr)
 
     if metrics is None:
@@ -89,6 +105,16 @@ def _infer_device_type(raw_mfr: bytes, raw_svc: bytes) -> str:
         model_byte = raw_svc[0] & 0x7F
         return _MODEL_NAMES.get(model_byte, f"switchbot_unknown_0x{model_byte:02x}")
     return "switchbot_meter"
+
+
+def _decode_leak(mfr: bytes) -> dict | None:
+    """Water Leak Detector manufacturer data (MAC prefix included) -> leak/tampered/battery/event count."""
+    if len(mfr) < 9:
+        return None
+    out = {"leak": mfr[8] & 0x01, "tampered": (mfr[8] >> 1) & 0x01, "battery_pct": mfr[7] & 0x7F}
+    if len(mfr) >= 12:
+        out["leak_event_count"] = mfr[11]
+    return out
 
 
 def _decode_meter(svc: bytes, mfr: bytes) -> dict | None:

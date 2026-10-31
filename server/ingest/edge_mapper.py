@@ -213,6 +213,13 @@ class EdgeMapper:
         # valid sighting feeding the topology/backfill graph + the standby's inherited map).
         self._record_reach(device_id, node, in_meta.get("rssi"))
 
+        # A leak detector's advert has no model byte in a passive scan, so the edge firmware decodes it as a
+        # METER (dry -> -0.8 C, wet -> -0.9 C). Drop those before the preferred-source gate: they are not
+        # leak data, and a node that relays them must not win the device from ha-2's own scanner, which
+        # decodes the real leak flag by registry type. Follow-up: edge firmware relays it raw.
+        if device_type == "switchbot_leak" and "leak" not in metrics:
+            return
+
         # ADR-0015 Phase A preferred-source gate: observe this source's reach, and if a different source
         # is the assigned one for this device, DROP (it'll be republished from its preferred source).
         if self._dedup:

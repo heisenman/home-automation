@@ -198,7 +198,8 @@ class Scanner:
         # address — goes to the /raw discovery topic instead, so it's inspectable for onboarding without
         # spawning junk "unknown_<mac>" tiles (a rotating MAC would otherwise create one per rotation).
         if switchbot.is_switchbot(mfr, svc):
-            result = switchbot.decode(mac, mfr, svc, rssi)
+            result = switchbot.decode(mac, mfr, svc, rssi,
+                                      device_type_hint=self._registry.get(mac, {}).get("device_type"))
             if result and mac in self._registry:
                 self._publish(mac, result["device_type"], result["metrics"], rssi, "ble-adv")
             else:
