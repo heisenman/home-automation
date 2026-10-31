@@ -5,6 +5,9 @@
 # the same tag is fine.  Steps: re-emit secrets.h (reuse the node's HMAC secret) -> brand version.txt
 # (<node>@<fw>) -> reconfigure+build -> scp to ha-2 ~/ota-canary -> signed edge_ota (serve .1.210, broker .1.200).
 # WiFi: taken from the board's own secrets.h when it has one; an empty-wifi build is refused unless WIFI_IN_NVS=1.
+# GENERIC=1: build the ADR-0036 generic image (identity "generic@<target>", nothing baked) for a node whose
+# identity + secret live in its NVS (node-born secret: sgp41_*). The signing secret is then read from ha-2's
+# LUT ON ha-2, so it never crosses to this box.
 set -euo pipefail
 NODE="${1:?usage: ota_edge_node.sh <node_id> <board_subdir> [fw_tag]}"
 BOARD="${2:?board_subdir, e.g. esp32c6 or esp32s3-eth}"
@@ -38,24 +41,33 @@ restore() { [ -f "$KEEP/secrets.h" ] && cp -p "$KEEP/secrets.h" "$BDIR/main/secr
             [ -f "$KEEP/version.txt" ] && cp -p "$KEEP/version.txt" "$BDIR/version.txt"; rm -rf "$KEEP"; }
 trap restore EXIT
 
-echo "[$NODE] emit secrets + brand ${NODE}@${FW}"
-HA_MASTER_PASSPHRASE="$(cat instance/.master_pass)" venv/bin/python3 tools/enroll_node.py \
-  --node-id "$NODE" --from-manifest --reuse "${BASE_ARGS[@]}" --out "$BDIR/main/secrets.h" >/dev/null 2>&1
-[ -n "${BASE_COPY:-}" ] && rm -f "$BASE_COPY"
-if [ -z "$(wifi_ssid "$BDIR/main/secrets.h")" ] && [ "${WIFI_IN_NVS:-0}" != 1 ]; then
-  echo "[$NODE] REFUSING: image would have EMPTY wifi. If $NODE keeps wifi in NVS, re-run with WIFI_IN_NVS=1;"
-  echo "         otherwise put its wifi in $BDIR/main/secrets.h (the board's own base) and re-run."
-  exit 1
+if [ "${GENERIC:-0}" = 1 ]; then
+  grep -q '^generic@' "$BDIR/version.txt" || { echo "[$NODE] GENERIC=1 but $BDIR/version.txt isn't generic@"; exit 1; }
+  BRAND=$(cat "$BDIR/version.txt")
+  echo "[$NODE] generic image ($BRAND), reporting $FW"
+  printf '\n#define HA_FW_VERSION "%s"\n' "$FW" >> "$BDIR/main/secrets.h"
+else
+  echo "[$NODE] emit secrets + brand ${NODE}@${FW}"
+  HA_MASTER_PASSPHRASE="$(cat instance/.master_pass)" venv/bin/python3 tools/enroll_node.py \
+    --node-id "$NODE" --from-manifest --reuse "${BASE_ARGS[@]}" --out "$BDIR/main/secrets.h" >/dev/null 2>&1
+  [ -n "${BASE_COPY:-}" ] && rm -f "$BASE_COPY"
+  if [ -z "$(wifi_ssid "$BDIR/main/secrets.h")" ] && [ "${WIFI_IN_NVS:-0}" != 1 ]; then
+    echo "[$NODE] REFUSING: image would have EMPTY wifi. If $NODE keeps wifi in NVS, re-run with WIFI_IN_NVS=1;"
+    echo "         otherwise put its wifi in $BDIR/main/secrets.h (the board's own base) and re-run."
+    exit 1
+  fi
+  printf '%s@%s' "$NODE" "$FW" > "$BDIR/version.txt"
+  # the version the node REPORTS (status/hello "fw"); app_main falls back to a stale default without it
+  printf '\n#define HA_FW_VERSION "%s"\n' "$FW" >> "$BDIR/main/secrets.h"
+  
+  BRAND="${NODE}@${FW}"
 fi
-printf '%s@%s' "$NODE" "$FW" > "$BDIR/version.txt"
-# the version the node REPORTS (status/hello "fw"); app_main falls back to a stale default without it
-printf '\n#define HA_FW_VERSION "%s"\n' "$FW" >> "$BDIR/main/secrets.h"
-
 echo "[$NODE] build (log -> $LOG)"
 ( cd "$BDIR" && source ~/esp/esp-idf/export.sh >/dev/null 2>&1 \
   && idf.py reconfigure >/dev/null 2>&1 && idf.py build ) > "$LOG" 2>&1
 BIN=$(ls "$BDIR"/build/ha-edge-*.bin | grep -vE 'bootloader|partition|ota_data' | head -1)
-grep -qa "${NODE}@${FW}" "$BIN" || { echo "[$NODE] BRAND VERIFY FAIL"; exit 1; }
+grep -qa "$BRAND" "$BIN" || { echo "[$NODE] BRAND VERIFY FAIL"; exit 1; }
+grep -qa "$FW" "$BIN" || { echo "[$NODE] FW VERSION VERIFY FAIL"; exit 1; }
 
 echo "[$NODE] scp -> ha-2"
 scp -i ~/.ssh/id_cluster -o ConnectTimeout=8 "$BIN" "visko@192.168.1.210:~/ota-canary/${NODE}-${FW}.bin" >/dev/null 2>&1
@@ -64,7 +76,13 @@ R=$(ssh -i ~/.ssh/id_cluster -o ConnectTimeout=8 visko@192.168.1.210 "md5sum ~/o
 [ "$L" = "$R" ] || { echo "[$NODE] MD5 MISMATCH"; exit 1; }
 
 echo "[$NODE] OTA from ha-2 (serve .1.210, broker .1.200)"
-SECRET=$(grep -oP 'HA_CMD_SECRET\s+"\K[^"]+' "$BDIR/main/secrets.h")
-ssh -i ~/.ssh/id_cluster -o ConnectTimeout=8 visko@192.168.1.210 \
-  "HA_CMD_SECRET='$SECRET' ~/ota-venv/bin/python3 ~/home_automation/tools/edge_ota.py \
-     --node $NODE --bin ~/ota-canary/${NODE}-${FW}.bin --serve-ip 192.168.1.210 --broker 192.168.1.200"
+if [ "${GENERIC:-0}" = 1 ]; then
+  ssh -i ~/.ssh/id_cluster -o ConnectTimeout=8 visko@192.168.1.210 \
+    "cd ~/home_automation && HA_CMD_SECRET=\"\$(venv/bin/python -c 'from server.control import secret_store as S; e=S.load_lut(\"instance/node_secrets.enc\", S.load_master(None))[\"$NODE\"]; print(e[\"cmd_secret\"] if isinstance(e, dict) else e)')\" \
+     ~/ota-venv/bin/python3 tools/edge_ota.py --node $NODE --bin ~/ota-canary/${NODE}-${FW}.bin --serve-ip 192.168.1.210 --broker 192.168.1.200"
+else
+  SECRET=$(grep -oP 'HA_CMD_SECRET\s+"\K[^"]+' "$BDIR/main/secrets.h")
+  ssh -i ~/.ssh/id_cluster -o ConnectTimeout=8 visko@192.168.1.210 \
+    "HA_CMD_SECRET='$SECRET' ~/ota-venv/bin/python3 ~/home_automation/tools/edge_ota.py \
+       --node $NODE --bin ~/ota-canary/${NODE}-${FW}.bin --serve-ip 192.168.1.210 --broker 192.168.1.200"
+fi
