@@ -16,6 +16,11 @@ typedef struct {
     int   humidity_pct;
     int   battery_pct;       // -1 if not present
     bool  valid;             // true if temperature+humidity decoded and in range
+    // Format B (manufacturer-data) decodes keep the 0x0969 bytes as heard (MAC prefix included), so the
+    // relay can forward them raw: a passive scan can't tell a leak detector from a meter, but the server
+    // can, by registry type (server/ingest/decoders/switchbot.py, 2026-10-31). raw_mfr_len 0 = not kept.
+    uint8_t raw_mfr[24];
+    int   raw_mfr_len;
 } sb_reading_t;
 
 // svc/mfr point at the payload AFTER the UUID / company-id (matching the Python dicts):

@@ -81,6 +81,8 @@ typedef struct {
     float t; int h; int b;
     int rn;                   // last radon (Aranet path only); unused for SwitchBot slots
     int batt_cache;           // last GOOD battery% for this MAC (-1 = none yet); backfills packets lacking it
+    int f8;                   // last raw mfr[8] (-1 = none): a leak detector's flags byte — a leak must
+                              // publish at once, and its meter guess moves only 0.1 C (not > TEMP_EPS)
 } dedup_t;
 static dedup_t s_seen[DEDUP_SLOTS];
 
@@ -110,6 +112,7 @@ static void batt_cache_apply(dedup_t *slot, const uint8_t mac[6], sb_reading_t *
     if (!slot->used || memcmp(slot->mac, mac, 6) != 0) {   // claim a fresh/evicted slot for this MAC
         memcpy(slot->mac, mac, 6); slot->used = true;
         slot->last_ms = 0; slot->t = -1000.0f; slot->h = -1; slot->b = -1; slot->rn = -1; slot->batt_cache = -1;
+        slot->f8 = -1;
     }
     if (r->battery_pct >= 0) slot->batt_cache = r->battery_pct;                // a packet carrying battery
     else if (slot->batt_cache >= 0) r->battery_pct = slot->batt_cache;         // backfill one that lacks it
@@ -120,13 +123,17 @@ static bool should_publish(dedup_t *slot, const uint8_t mac[6], const sb_reading
     if (!slot->used || memcmp(slot->mac, mac, 6) != 0) {
         memcpy(slot->mac, mac, 6); slot->used = true;
         slot->last_ms = now; slot->t = r->temperature_c; slot->h = r->humidity_pct; slot->b = r->battery_pct;
+        slot->f8 = r->raw_mfr_len > 8 ? r->raw_mfr[8] : -1;
         return true;
     }
-    bool changed = (r->temperature_c - slot->t > TEMP_EPS) || (slot->t - r->temperature_c > TEMP_EPS)
+    int f8 = r->raw_mfr_len > 8 ? r->raw_mfr[8] : -1;
+    bool changed = (f8 != slot->f8)
+                || (r->temperature_c - slot->t > TEMP_EPS) || (slot->t - r->temperature_c > TEMP_EPS)
                 || (r->humidity_pct - slot->h >= HUM_EPS) || (slot->h - r->humidity_pct >= HUM_EPS)
                 || (r->battery_pct >= 0 && (r->battery_pct - slot->b >= BATT_EPS || slot->b - r->battery_pct >= BATT_EPS));
     if (changed || (now - slot->last_ms) >= REPUBLISH_MIN_MS) {
         slot->last_ms = now; slot->t = r->temperature_c; slot->h = r->humidity_pct; slot->b = r->battery_pct;
+        slot->f8 = f8;
         return true;
     }
     return false;

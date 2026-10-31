@@ -56,6 +56,8 @@ bool sb_decode(const uint8_t *svc, int svc_len,
     } else if (mfr && mfr_len >= 11) {
         // Format B: manufacturer data with 6-byte MAC prefix (Outdoor / newer Pro):
         // bytes after MAC are mfr[6..]; temp at mfr[8,9], humidity mfr[10].
+        out->raw_mfr_len = mfr_len < (int)sizeof(out->raw_mfr) ? mfr_len : (int)sizeof(out->raw_mfr);
+        memcpy(out->raw_mfr, mfr, out->raw_mfr_len);
         if (!parse_th(mfr[8], mfr[9], mfr[10], &temp, &hum)) return false;
     } else {
         return false;

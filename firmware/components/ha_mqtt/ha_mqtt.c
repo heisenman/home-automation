@@ -523,18 +523,30 @@ bool ha_mqtt_is_connected(void) { return s_connected; }
 // Generic relayed-BLE-device publish (ADR-0020): emit the canonical home/edge/<node>/<mac>/adv envelope
 // with a caller-built device_type + metrics JSON. edge_mapper ingests it by MAC (device-type-agnostic),
 // so any decoder (SwitchBot, Aranet, …) reuses this — the server needs no per-type change.
+static void publish_device_raw(const char *mac_str, const char *device_type, const char *metrics_json,
+                               int rssi, const char *raw_hex);
+
 void ha_mqtt_publish_device(const char *mac_str, const char *device_type, const char *metrics_json, int rssi) {
+    publish_device_raw(mac_str, device_type, metrics_json, rssi, NULL);
+}
+
+// raw_hex (optional): the advert's 0x0969 bytes as heard, carried in meta.raw_mfr so the server can decode a
+// type the node can't identify (edge_mapper: leak detectors, 2026-10-31).
+static void publish_device_raw(const char *mac_str, const char *device_type, const char *metrics_json,
+                               int rssi, const char *raw_hex) {
     if (!s_connected) return;
     char mf[13]; macflat(mac_str, mf);
     char topic[80];
     snprintf(topic, sizeof(topic), "home/edge/%s/%s/adv", s_node, mf);
     char ts[24];
     if (!ha_sntp_iso_utc(ts, sizeof(ts))) ts[0] = '\0';
-    char payload[320];
+    char payload[384];
+    char raw[64] = "";
+    if (raw_hex && raw_hex[0]) snprintf(raw, sizeof(raw), ",\"raw_mfr\":\"%s\"", raw_hex);
     int n = snprintf(payload, sizeof(payload),
         "{\"schema\":1,\"node\":\"%s\",\"mac\":\"%s\",\"device_type\":\"%s\","
-        "\"ts\":\"%s\",\"transport\":\"ble-adv\",\"metrics\":%s,\"meta\":{\"rssi\":%d}}",
-        s_node, mac_str, device_type, ts, metrics_json, rssi);
+        "\"ts\":\"%s\",\"transport\":\"ble-adv\",\"metrics\":%s,\"meta\":{\"rssi\":%d%s}}",
+        s_node, mac_str, device_type, ts, metrics_json, rssi, raw);
     if (n <= 0 || n >= (int)sizeof(payload)) return;
     esp_mqtt_client_publish(s_client, topic, payload, n, 1, false);
 }
@@ -547,7 +559,9 @@ void ha_mqtt_publish_reading(const char *mac_str, const sb_reading_t *r, int rss
     else
         snprintf(metrics, sizeof(metrics), "{\"temperature_c\":%.1f,\"humidity_pct\":%d}",
                  r->temperature_c, r->humidity_pct);
-    ha_mqtt_publish_device(mac_str, r->device_type, metrics, rssi);
+    char raw[2 * sizeof(r->raw_mfr) + 1] = "";
+    for (int i = 0; i < r->raw_mfr_len; i++) snprintf(raw + 2 * i, 3, "%02x", r->raw_mfr[i]);
+    publish_device_raw(mac_str, r->device_type, metrics, rssi, raw);
 }
 
 void ha_mqtt_publish_history(const char *mac_str, const char *payload) {

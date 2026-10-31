@@ -74,3 +74,19 @@ def test_mapper_keeps_local_leak_frames_as_is():
     m.on_message(c, None, _msg("local", {"leak": 1, "tampered": 0, "battery_pct": 41}, -65))
     canon = [p for t, p in c.pubs if t == "home/kitchen/leak_kitchen_sink/state"]
     assert canon[-1]["metrics"]["battery_pct"] == 41
+
+
+def test_mapper_decodes_the_raw_bytes_an_updated_node_forwards():
+    reg = {MAC: {"device_id": "leak_kitchen_sink", "area": "kitchen", "device_type": "switchbot_leak"}}
+    c = _Client()
+    m = EdgeMapper(reg, c, relay_dedup=False)
+    msg = _msg("s3-crawlspace", {"temperature_c": -0.9, "humidity_pct": 0}, -71)
+    body = json.loads(msg.payload)
+    body["meta"]["raw_mfr"] = WET.hex()
+
+    class M:
+        topic = msg.topic
+        payload = json.dumps(body).encode()
+    m.on_message(c, None, M())
+    canon = [p for t, p in c.pubs if t == "home/kitchen/leak_kitchen_sink/state"]
+    assert canon[-1]["metrics"] == {"leak": 1, "tampered": 0, "battery_pct": 41, "leak_event_count": 2}

@@ -29,6 +29,15 @@ if [ -n "$(wifi_ssid "$BDIR/main/secrets.h")" ]; then
   BASE_ARGS=(--base-secrets "$BASE_COPY")
 fi
 
+# The branded secrets.h/version.txt are build-only: put the tree's own copies back on ANY exit, so the
+# checkout isn't left carrying one node's identity for the next build.
+KEEP=$(mktemp -d "/tmp/ota-${NODE}-keep.XXXXXX")
+cp -p "$BDIR/main/secrets.h" "$KEEP/secrets.h" 2>/dev/null || true
+cp -p "$BDIR/version.txt" "$KEEP/version.txt" 2>/dev/null || true
+restore() { [ -f "$KEEP/secrets.h" ] && cp -p "$KEEP/secrets.h" "$BDIR/main/secrets.h";
+            [ -f "$KEEP/version.txt" ] && cp -p "$KEEP/version.txt" "$BDIR/version.txt"; rm -rf "$KEEP"; }
+trap restore EXIT
+
 echo "[$NODE] emit secrets + brand ${NODE}@${FW}"
 HA_MASTER_PASSPHRASE="$(cat instance/.master_pass)" venv/bin/python3 tools/enroll_node.py \
   --node-id "$NODE" --from-manifest --reuse "${BASE_ARGS[@]}" --out "$BDIR/main/secrets.h" >/dev/null 2>&1
@@ -39,6 +48,8 @@ if [ -z "$(wifi_ssid "$BDIR/main/secrets.h")" ] && [ "${WIFI_IN_NVS:-0}" != 1 ];
   exit 1
 fi
 printf '%s@%s' "$NODE" "$FW" > "$BDIR/version.txt"
+# the version the node REPORTS (status/hello "fw"); app_main falls back to a stale default without it
+printf '\n#define HA_FW_VERSION "%s"\n' "$FW" >> "$BDIR/main/secrets.h"
 
 echo "[$NODE] build (log -> $LOG)"
 ( cd "$BDIR" && source ~/esp/esp-idf/export.sh >/dev/null 2>&1 \

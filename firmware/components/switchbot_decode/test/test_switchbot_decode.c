@@ -40,6 +40,14 @@ int main(void) {
     uint8_t svcBad[6] = {0x54, 0x00, 0x64, 0x07, 0x96, 0x65};  // 101%
     check("bad hum rejected", !sb_decode(svcBad, 6, NULL, 0, &r));
 
+    // Water Leak Detector (passive scan: no service data). Real bench frame, MAC replaced. The node can
+    // only guess "meter" (-0.9 C / 0 %) — it must keep the raw bytes for the server to decode the leak.
+    uint8_t mfrL[19] = {0xaa,0xbb,0xcc,0x00,0x00,0x01, 0x0e,0x29,0xf9,0x00,0x00,0x02,0x74,0x3c,0x05,0,0,0,0};
+    check("leak frame decodes as meter guess", sb_decode(NULL, 0, mfrL, 19, &r) && r.valid);
+    check("leak guess temp=-0.9", fabs(r.temperature_c + 0.9f) < 0.001);
+    check("leak raw kept (19 B)", r.raw_mfr_len == 19 && memcmp(r.raw_mfr, mfrL, 19) == 0);
+    check("format A keeps no raw", sb_decode(svcA, 6, NULL, 0, &r) && r.raw_mfr_len == 0);
+
     printf(fails ? "\n%d CHECK(S) FAILED\n" : "\nALL CHECKS PASS\n", fails);
     return fails ? 1 : 0;
 }

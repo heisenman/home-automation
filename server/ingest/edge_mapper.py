@@ -74,6 +74,18 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def leak_from_raw(raw_hex: str) -> dict | None:
+    """Decode a leak detector from the raw 0x0969 bytes an updated edge node forwards (meta.raw_mfr) —
+    the full decode: leak, tampered, battery, event counter."""
+    from server.ingest.decoders import switchbot
+    try:
+        mfr = bytes.fromhex(raw_hex)
+    except (TypeError, ValueError):
+        return None
+    r = switchbot.decode("", {switchbot.MANUFACTURER_ID: mfr}, {}, 0, device_type_hint=switchbot.LEAK_TYPE)
+    return r["metrics"] if r else None
+
+
 def leak_from_edge_meter_frame(metrics: dict) -> dict | None:
     """Invert the edge firmware's meter decode of a SwitchBot leak advert. The meter decode reads the flags
     byte's low nibble as tenths of a degree with a zero, negative integer part, and humidity 0. So nibble =
@@ -230,7 +242,8 @@ class EdgeMapper:
         # barely hears the kitchen-sink unit). Anything else is not a leak frame and is dropped.
         # Follow-up: edge firmware relays it raw (FOLLOWUPS 2026-10-31).
         if device_type == "switchbot_leak" and "leak" not in metrics:
-            metrics = leak_from_edge_meter_frame(metrics)
+            raw = (payload.get("meta") or {}).get("raw_mfr")
+            metrics = leak_from_raw(raw) if raw else leak_from_edge_meter_frame(metrics)
             if metrics is None:
                 return
 
