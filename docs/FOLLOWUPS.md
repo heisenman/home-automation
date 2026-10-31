@@ -29,12 +29,14 @@ leak,battery` and set the overlay to hidden.
   - plug_02..08 and sgp40_stdby2 read offline on 2026-10-31.
   - **Done 2026-10-31:** s3-crawlspace, sgp41_stdby2 (GENERIC=1), coffice_c6, standby_c6, hoffice_c6,
     cbed_c6, hbed_c6, hbed_s3. All passed self-test; every gas sensor reported again afterwards.
-  - **✗ sgp41_mech (the mech-closet SGP41, `gas_mech_closet_sgp41`) — USB candidate.** It received the
-    signed OTA command three times (seen on its cmd topic while connected) but never downloaded or logged
-    anything. It also closes its own MQTT connection and reconnects every 40–80 s (clean disconnect; 641
-    connects in the 2026-10-31 broker log, and the pattern goes back to at least 10-30). Its data still flows
-    between drops. Next: USB serial log, then cable-flash v30. **Tool bug:** edge_ota reports "ROLLED BACK"
-    when the node never started the OTA (no download); it should say "OTA never started".
+  - **✅ sgp41_mech (the mech-closet SGP41) 2026-10-31 16:0x PDT**, OTA'd while on USB power at .210. In the
+    closet it had ignored three OTA commands. There it restarts every 40–80 s (fresh `hello` on every
+    reconnect; 652 broker connects on 10-31; at least since 10-30). On bench USB power it ran stable for 3+ min.
+    `standby_c6` on the same closet splitter reconnected 10× on 10-31, against ~2 for other nodes. **Suspect: the
+    USB-C splitter powering both C6s + sensors in the mech closet (Hugh).** After re-installing, watch the
+    reconnect counts (`grep "New client connected" /var/log/mosquitto/mosquitto.log` on ha-2, per IP: .116
+    = sgp41_mech, .111 = standby_c6). Note: opening the C6's USB serial port resets it. **Tool bug:** edge_ota
+    reports "ROLLED BACK" when the node never started the OTA; it should say "OTA never started".
   - Recipe: `tools/ota_edge_node.sh <node> <board> v30-rawmfr`. It now sets HA_FW_VERSION and restores the
     tree's secrets.h/version.txt.
 - **Not leak-related:** `tests/test_grid_shed.py::test_window_spec_wrapping_midnight_lands_on_the_next_day`
