@@ -154,7 +154,12 @@ furnace heat runs (kept — heating doesn't change the water content, only RH), 
 - Still to confirm: where the Aprilaire's own loop joins the HVAC ducts, so the supply meter sits downstream of
   where its air comes in.
 - These meters get registered as **study devices**: in the HA network and recorded, but kept out of the PWA's
-  regular room views.
+  regular room views. Recipe: register on ha-2 with `tools/intake_sensor.py register` (area = the unit's
+  room), then set the control.db overlay to hidden with a "Study: …" name. Hidden devices drop out of
+  build_sensor_list, the panels and the room rollups.
+- **Registered 2026-10-31 (14:56–14:58 PDT):** `study_midea_inlet` and `study_midea_outlet` (switchbot_meter,
+  living_room, hidden). Both record; neither is listed by /api/v1/panel/sensors. Ignore their first readings
+  after power-on, until they settle (Hugh).
 
 ## 4. Analysis
 
