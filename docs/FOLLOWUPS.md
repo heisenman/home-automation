@@ -27,6 +27,14 @@ leak,battery` and set the overlay to hidden.
   - hbed_s3 (`edge/esp32s3-eth`, v20).
   - Special builds: hvac_c6 (v9), dehum_c6 (v11), plug_01 (v3), shades_s3 (offline).
   - plug_02..08 and sgp40_stdby2 read offline on 2026-10-31.
+  - **Done 2026-10-31:** s3-crawlspace, sgp41_stdby2 (GENERIC=1), coffice_c6, standby_c6, hoffice_c6,
+    cbed_c6, hbed_c6, hbed_s3. All passed self-test; every gas sensor reported again afterwards.
+  - **✗ sgp41_mech (the mech-closet SGP41, `gas_mech_closet_sgp41`) — USB candidate.** It received the
+    signed OTA command three times (seen on its cmd topic while connected) but never downloaded or logged
+    anything. It also closes its own MQTT connection and reconnects every 40–80 s (clean disconnect; 641
+    connects in the 2026-10-31 broker log, and the pattern goes back to at least 10-30). Its data still flows
+    between drops. Next: USB serial log, then cable-flash v30. **Tool bug:** edge_ota reports "ROLLED BACK"
+    when the node never started the OTA (no download); it should say "OTA never started".
   - Recipe: `tools/ota_edge_node.sh <node> <board> v30-rawmfr`. It now sets HA_FW_VERSION and restores the
     tree's secrets.h/version.txt.
 - **Not leak-related:** `tests/test_grid_shed.py::test_window_spec_wrapping_midnight_lands_on_the_next_day`
