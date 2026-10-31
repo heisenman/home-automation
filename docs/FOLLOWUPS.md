@@ -16,11 +16,19 @@ units coming: intake each with `tools/intake_sensor.py register --device-type sw
 leak,battery` and set the overlay to hidden.
 - **Open — leak alert in the GUI.** Hugh wants leak events pushed to the GUI as something the user sees
   (not the devices as tiles). Shape: a `build_alerts` kind `leak` (critical) → the existing ntfy bridge tag.
-- **Open — edge firmware decodes leak adverts as a meter** (-0.8 °C dry / -0.9 °C wet). Since @HEAD+1, the
-  edge-mapper recovers `leak`/`tampered` from those frames: the meter decode reads the flags nibble as
-  tenths. So `s3-crawlspace` (-71 dBm under the sink) backs up ha-2, which hears it at only -90…-98 dBm.
-  Battery and the event counter still come only from ha-2. Proper fix: the edge firmware relays unknown
-  SwitchBot types raw.
+- **Edge raw relay (bdbf5db, fw `v30-rawmfr`):** nodes forward the manufacturer-data bytes (`meta.raw_mfr`),
+  and edge_mapper decodes leak detectors from them. Nodes without it fall back to inverting their meter
+  guess (leak/tampered only). The update also carries d94b2c6 (signed commands must carry ts).
+  **Rollout:** ✅ `s3-crawlspace` 2026-10-31 15:32 PDT (OTA from ha-2, WiFi from NVS,
+  `WIFI_IN_NVS=1`); verified full leak metrics via s3-crawlspace. **Next, one at a time with Hugh on hand
+  for USB:**
+  - **C6 relays** (`edge/esp32c6`): cbed_c6, hbed_c6, hoffice_c6, standby_c6 (v23); coffice_c6, sgp41_mech,
+    sgp41_stdby2 (v29).
+  - hbed_s3 (`edge/esp32s3-eth`, v20).
+  - Special builds: hvac_c6 (v9), dehum_c6 (v11), plug_01 (v3), shades_s3 (offline).
+  - plug_02..08 and sgp40_stdby2 read offline on 2026-10-31.
+  - Recipe: `tools/ota_edge_node.sh <node> <board> v30-rawmfr`. It now sets HA_FW_VERSION and restores the
+    tree's secrets.h/version.txt.
 - **Not leak-related:** `tests/test_grid_shed.py::test_window_spec_wrapping_midnight_lands_on_the_next_day`
   fails on 2026-10-31 because tonight's 22:00–02:00 window spans the DST fall-back (5 h, not 4). Check
   whether `_local_window` handles DST, or only the test assumes 4 h.
