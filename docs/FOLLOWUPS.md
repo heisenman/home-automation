@@ -25,7 +25,12 @@ leak,battery` and set the overlay to hidden.
   - **C6 relays** (`edge/esp32c6`): cbed_c6, hbed_c6, hoffice_c6, standby_c6 (v23); coffice_c6, sgp41_mech,
     sgp41_stdby2 (v29).
   - hbed_s3 (`edge/esp32s3-eth`, v20).
-  - Special builds: hvac_c6 (v9), dehum_c6 (v11), plug_01 (v3), shades_s3 (offline).
+  - Special builds: **not needed for v30.** hvac_c6, dehum_c6 and plug_01 don't run the BLE scanner, so
+    the raw relay changes nothing on them (checked 2026-10-31). shades_s3 is offline.
+  - **Separate, planned with Hugh present:** hvac_c6 (v9, 10-05) and dehum_c6 (v11, 10-06) predate d94b2c6
+    (ts-mandatory signed commands, 10-12). All server signers already stamp ts, so this is defence in
+    depth. They drive the ERV/Aprilaire/dehum, so update them at a planned time. plug_01 v3 (10-19) already
+    has it.
   - plug_02..08 and sgp40_stdby2 read offline on 2026-10-31.
   - **Done 2026-10-31:** s3-crawlspace, sgp41_stdby2 (GENERIC=1), coffice_c6, standby_c6, hoffice_c6,
     cbed_c6, hbed_c6, hbed_s3. All passed self-test; every gas sensor reported again afterwards.
