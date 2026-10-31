@@ -48,11 +48,29 @@ def _msg(node, metrics, rssi):
     return M()
 
 
-def test_mapper_drops_edge_meter_misdecode_and_keeps_local_leak_frames():
+def test_mapper_recovers_leak_from_the_edge_meter_misdecode():
+    reg = {MAC: {"device_id": "leak_kitchen_sink", "area": "kitchen", "device_type": "switchbot_leak"}}
+    c = _Client()
+    m = EdgeMapper(reg, c, relay_dedup=False)
+    m.on_message(c, None, _msg("s3-crawlspace", {"temperature_c": -0.9, "humidity_pct": 0}, -71))  # wet
+    m.on_message(c, None, _msg("s3-crawlspace", {"temperature_c": -0.8, "humidity_pct": 0}, -71))  # dry
+    m.on_message(c, None, _msg("s3-crawlspace", {"temperature_c": 21.5, "humidity_pct": 40}, -71))  # not a leak frame
+    canon = [p for t, p in c.pubs if t == "home/kitchen/leak_kitchen_sink/state"]
+    assert [p["metrics"] for p in canon] == [{"leak": 1, "tampered": 0}, {"leak": 0, "tampered": 0}]
+
+
+def test_edge_inversion_matches_the_decoder_on_the_real_frames():
+    from server.ingest.edge_mapper import leak_from_edge_meter_frame
+    for frame in (DRY, WET):
+        meter = switchbot.decode(MAC, {MFR_ID: frame}, {}, -60)["metrics"]          # what the edge sends
+        leak = switchbot.decode(MAC, {MFR_ID: frame}, {}, -60, device_type_hint="switchbot_leak")["metrics"]
+        assert leak_from_edge_meter_frame(meter) == {"leak": leak["leak"], "tampered": leak["tampered"]}
+
+
+def test_mapper_keeps_local_leak_frames_as_is():
     reg = {MAC: {"device_id": "leak_kitchen_sink", "area": "kitchen", "device_type": "switchbot_leak"}}
     c = _Client()
     m = EdgeMapper(reg, c, relay_dedup=True)
-    m.on_message(c, None, _msg("hoffice_c6", {"temperature_c": -0.9, "humidity_pct": 0}, -40))  # strong but bogus
     m.on_message(c, None, _msg("local", {"leak": 1, "tampered": 0, "battery_pct": 41}, -65))
     canon = [p for t, p in c.pubs if t == "home/kitchen/leak_kitchen_sink/state"]
-    assert [p["metrics"].get("leak") for p in canon] == [1]
+    assert canon[-1]["metrics"]["battery_pct"] == 41

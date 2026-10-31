@@ -16,9 +16,11 @@ units coming: intake each with `tools/intake_sensor.py register --device-type sw
 leak,battery` and set the overlay to hidden.
 - **Open — leak alert in the GUI.** Hugh wants leak events pushed to the GUI as something the user sees
   (not the devices as tiles). Shape: a `build_alerts` kind `leak` (critical) → the existing ntfy bridge tag.
-- **Open — edge firmware decodes leak adverts as a meter** (-0.8 °C dry / -0.9 °C wet). edge-mapper drops
-  those, so only ha-2's own scanner reports leaks. Have the edge firmware relay unknown SwitchBot types raw,
-  so the relays add redundancy for a safety sensor.
+- **Open — edge firmware decodes leak adverts as a meter** (-0.8 °C dry / -0.9 °C wet). Since @HEAD+1, the
+  edge-mapper recovers `leak`/`tampered` from those frames: the meter decode reads the flags nibble as
+  tenths. So `s3-crawlspace` (-71 dBm under the sink) backs up ha-2, which hears it at only -90…-98 dBm.
+  Battery and the event counter still come only from ha-2. Proper fix: the edge firmware relays unknown
+  SwitchBot types raw.
 - **Not leak-related:** `tests/test_grid_shed.py::test_window_spec_wrapping_midnight_lands_on_the_next_day`
   fails on 2026-10-31 because tonight's 22:00–02:00 window spans the DST fall-back (5 h, not 4). Check
   whether `_local_window` handles DST, or only the test assumes 4 h.

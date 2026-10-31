@@ -74,6 +74,17 @@ def _utc_now() -> str:
     return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
 
 
+def leak_from_edge_meter_frame(metrics: dict) -> dict | None:
+    """Invert the edge firmware's meter decode of a SwitchBot leak advert. The meter decode reads the flags
+    byte's low nibble as tenths of a degree with a zero, negative integer part, and humidity 0. So nibble =
+    round(-T * 10), leak = bit 0 and tampered = bit 1. Returns None for anything that isn't that shape."""
+    t, h = metrics.get("temperature_c"), metrics.get("humidity_pct")
+    if t is None or h not in (0, 0.0) or not -1.5 <= t <= 0:
+        return None
+    n = round(-t * 10)
+    return {"leak": n & 1, "tampered": (n >> 1) & 1}
+
+
 class EdgeMapper:
     def __init__(self, registry: dict[str, dict], client: mqtt.Client, relay_dedup: bool = False,
                  quarantine=None):
@@ -214,11 +225,14 @@ class EdgeMapper:
         self._record_reach(device_id, node, in_meta.get("rssi"))
 
         # A leak detector's advert has no model byte in a passive scan, so the edge firmware decodes it as a
-        # METER (dry -> -0.8 C, wet -> -0.9 C). Drop those before the preferred-source gate: they are not
-        # leak data, and a node that relays them must not win the device from ha-2's own scanner, which
-        # decodes the real leak flag by registry type. Follow-up: edge firmware relays it raw.
+        # METER. That decode is reversible: temperature = -(flags byte & 0x0F) / 10, so dry 0x98 -> -0.8 C and
+        # wet 0xf9 -> -0.9 C. Recover leak/tampered from it, so the relays back up ha-2's own scanner (which
+        # barely hears the kitchen-sink unit). Anything else is not a leak frame and is dropped.
+        # Follow-up: edge firmware relays it raw (FOLLOWUPS 2026-10-31).
         if device_type == "switchbot_leak" and "leak" not in metrics:
-            return
+            metrics = leak_from_edge_meter_frame(metrics)
+            if metrics is None:
+                return
 
         # ADR-0015 Phase A preferred-source gate: observe this source's reach, and if a different source
         # is the assigned one for this device, DROP (it'll be republished from its preferred source).
