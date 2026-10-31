@@ -240,6 +240,7 @@ def main() -> int:
     r.add_argument("--capabilities", default=",".join(DEFAULT_CAPS))
     r.add_argument("--notes", default="")
     r.add_argument("--reload", action="store_true", help="restart ha-scanner/ha-edge-mapper after adding")
+    r.add_argument("--registry", default=str(DEFAULT_REGISTRY))
     r.set_defaults(func=cmd_register)
 
     args = p.parse_args()
