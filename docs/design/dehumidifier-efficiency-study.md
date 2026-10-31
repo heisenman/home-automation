@@ -151,9 +151,19 @@ compressor 464 W + 8.8 W/°C × (T − 21 °C); mode 1 = 1.4 W; and a ~35 W fan 
 reported mode 99 % of the time, and the estimate is within 1.5 % of the meter over Oct 19–30. Total: 811 kWh
 (835 kWh with a 30 W allowance for high fan) from Jun 24 to Oct 31, about 6.2 kWh/day.
 
-## 7. Decisions open
+## 7. Decisions
 
-- Target variable and limits: indoor dew-point ceiling (summer and winter), and RH floor/ceiling for comfort.
-- Whether to buy or place the method-B meters.
-- Whether the automatic rotation (D) is acceptable, and on which days or hours.
-- Whether PG&E time-of-use pricing goes into the cost (the cheapest gram at 5 pm is not the cheapest at 2 am).
+**Settled (Hugh, 2026-10-31):**
+- **No hard-coded targets.** The end product is a **UI** that shows the user the efficiency and energy impact of
+  their settings: water removed, kWh, and L/kWh at the current conditions. The user picks the trade-off. The
+  control law exposes these as preferences rather than fixed thresholds (supersedes the target wording in §5).
+- **Automatic rotation (D) is approved.** Design details are under discussion (2026-10-31).
+- **Pricing:** fixed rate today, not time-of-use. Cost is a later, separate "energy → dollars" layer on top of
+  kWh; the study itself is in kWh and litres.
+- **Power metering is already complete for the study:** Midea = `plug_hall`, Aprilaire = `dehum_pm`, ERV =
+  `erv_pm`. Hugh's spare plug meters aren't needed here. Method B needs **temperature/RH** meters, not power
+  meters.
+
+**Open:**
+- How many temperature/RH meters are spare, and where they can physically go (§3B).
+- Rotation specifics (§3D): blower handling, block length, allowed hours, guardrail band.
