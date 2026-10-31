@@ -81,9 +81,13 @@ is known.
   - Jul 2–4: 15–17 h.
   - Jul 12, Oct 11, Oct 19: 41–47 h.
   - Aug 31 → Sep 14: 249 h. That is impossible for one bucket, so there must be an unlogged dump or a drain hose.
-- **Needed:** the bucket's volume at P2, measured once by pouring a full bucket into a measuring container.
-- **Worth adding:** have the Midea driver record the unit's error code as a metric, so E6 vs P2 vs others come
-  from the device instead of being inferred from the tank flag.
+- **Bucket:** 4.25 gal = 15.9 L nominal (Hugh, from the published spec). The P2 float may trip below the brim,
+  so one measured full bucket would firm this up. At 15.9 L per bucket:
+  - **Jun–Aug:** 0.54 L per compressor-hour, **1.14 L/kWh** (median 29.2 h, 13.9 kWh per bucket).
+  - **Sep–Oct:** 0.46 L per compressor-hour, **0.97 L/kWh** (median 34.3 h, 16.3 kWh per bucket).
+  - So efficiency fell ~15 % as the living-room dew point fell ~1.2 °C and the inlet cooled ~1 °C.
+- **Done 2026-10-31:** the controller now publishes the unit's raw `error_code` and `tank_full` (0/1) on every
+  poll, so from now on P2 vs E6 come from the device instead of being inferred.
 
 Still check method B against this. The Aprilaire drain, if reachable, can be spot-checked the same way.
 

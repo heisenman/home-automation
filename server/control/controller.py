@@ -808,6 +808,13 @@ class Controller:
             metrics["fan_speed"] = st["fan"]                   # current fan level
         if "mode" in st:
             metrics["mode"] = st["mode"]                       # operating mode (Set=1/Continuous=2/Dry=4)
+        # the unit's own fault/alert code + bucket flag, recorded every poll (0 = none). The dehumidifier study
+        # uses them to tell a full bucket (P2) from an early pull (E6) instead of inferring it from the
+        # interlock log (Hugh, 2026-10-31; docs/design/dehumidifier-efficiency-study.md §3C).
+        if "error" in st:
+            metrics["error_code"] = st["error"]
+        if st.get("tank_full") is not None:
+            metrics["tank_full"] = int(st["tank_full"])
         # ADR-0027: single shared stamp. area from the reload-aware control registry (self.registry, kept
         # fresh by _refresh_registry each tick); the helper stamps a fresh ts per call (the writer keys on
         # (device_id, ts, metric), so a stale ts would collide and freeze onboard RH). writer reads area

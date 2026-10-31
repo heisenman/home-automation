@@ -198,6 +198,17 @@ def test_interlock_tank_full_forces_off():
         assert rows[0]["source"] == "safety"
 
 
+def test_published_state_records_error_code_and_tank_flag():
+    """The study needs the unit's raw error code and bucket flag as data, not only as an interlock."""
+    with tempfile.TemporaryDirectory() as tmp:
+        ctrl, iss, db = _make(tmp, STATUS_ON_TANK.replace("error = 0", "error = 38"))
+        ctrl.mqtt = _FakeMqtt()
+        ctrl.inject_reading("meter_pro_living_room", 60.0, ts=NOW - 30)
+        ctrl.tick(now=NOW)
+        st = [p for t, p in ctrl.mqtt.published if t.endswith("/state")][-1]
+        assert st["metrics"]["error_code"] == 38 and st["metrics"]["tank_full"] == 1
+
+
 class _FakeMqtt:
     def __init__(self):
         self.published = []
