@@ -91,15 +91,70 @@ is known.
 
 Still check method B against this. The Aprilaire drain, if reachable, can be spot-checked the same way.
 
-**D. Designed experiments (code-driven, not by hand).**
-Natural operation mixes everything together, so add a scheduled rotation over days and weathers:
+**D. Designed experiments — the automatic rotation (approved 2026-10-31; design below is the proposal).**
+Natural operation mixes everything together (units run together, weather moves at the same time), so a
+scheduler rotates the levers in fixed blocks, around the clock, for several weeks.
 
-    Midea only / Aprilaire only / both / neither / ERV boost only
+*Arms (one per block):*
 
-- Blocks of 1–2 h, randomised order, inside comfort guardrails (abort a block if living-room RH > 50 % or < 35 %).
-- Implemented as a controller scene or override schedule with a log, per "long tests must be code-driven": it
-  has to run without a Claude session.
-- One metered Midea high-fan run settles the 30 W high-fan assumption in the back-calculation.
+| Arm | Midea | Aprilaire (+ furnace blower) | ERV | Notes |
+|---|---|---|---|---|
+| 0 Neither | off | off | base level | **baseline** — how fast the house gains or loses water by itself; subtracted from every other arm |
+| M Midea | on (low fan) | off | base | |
+| A Aprilaire | off | on | base | blower follows, as in production |
+| MA Both | on | on | base | |
+| E ERV boost | off | off | boost | only when outdoor dew point < indoor dew point − 2 °C; otherwise it would add water |
+| M+ Midea high fan | on (high fan) | off | base | occasional; also settles the high-fan power question in the back-calculation |
+
+*Blocks:*
+- 90 min each: the first 30 min are discarded (compressor start-up, coil wetting, the house responding), and
+  the last 60 min are measured.
+- One cycle = every eligible arm once, in a **new random order each cycle**, so no arm is always at night or
+  always during cooking. That's ≈7.5 h per cycle, ≈3 cycles a day.
+- Runs **24 h a day** (Hugh, 2026-10-31).
+
+*Furnace blower:* it **follows the Aprilaire, as in production** (Hugh: better circulation, and that is how it
+will run). Consequences:
+- The Aprilaire arms include blower mixing and the others don't. That's production-faithful, so the results
+  apply directly.
+- The whole-house balance (method A) will see Midea-dried air spread more slowly in arm M than in MA. The
+  across-unit meters (method B) don't care.
+
+*Guardrails* (a block ends early; the early end is logged and is itself data — the rise rate in arm 0 is the
+house's moisture load):
+- House RH **above 47–48 %** (Hugh, 2026-10-31) ends the block, and the scheduler runs the cheapest drying arm
+  next. Measured on the living-room sensor that production control uses, with the house mean logged alongside.
+- 35 % hasn't been reached in the history, so the low guard is only a safety backstop.
+- A full Midea bucket (P2) ends an M, MA or M+ block.
+- Every unit keeps its own protections: interlocks, minimum on/off times, the Aprilaire's low-inlet-temperature
+  gate.
+- Any PWA command to a study device pauses the study for that device, the same way a press releases the
+  follow coupling. A **"pause study" scene** stops everything at once.
+
+*Flagged, not interrupted* (excluded at analysis time): showers (bathroom RH spikes), cooking (kitchen VOC),
+furnace heat runs (kept — heating doesn't change the water content, only RH), and events Hugh labels.
+
+*Mechanism:*
+- A scheduler module in ha-controller, driving the existing override path (the same one as a PWA override)
+  rather than a new actuator path.
+- Each block is a row in a control.db study table: arm, planned and actual start and end, how it ended, and
+  inlet conditions at the start.
+- It runs with no Claude session involved ("long tests must be code-driven"), and the PWA shows that a study
+  is running and which block.
+
+*Duration:* several weeks, covering cold-dry and mild-damp spells. Summer is covered by the Midea's history
+(the bucket data in method C) until next year.
+
+*Study meters (Hugh, 2026-10-31):*
+- 3 outdoor-type temperature/RH meters on hand, 3 more arriving 2026-11-01.
+- **Midea inlet + outlet first (2026-10-31).**
+- **HVAC tomorrow:** one in the return (intake) grille and one in a supply duct (C bed).
+- Return → supply measures the whole air handler. Removal = furnace blower airflow × ΔW (from the 59TP5 manual
+  for the fan speed in use). That holds with heat on too, because heating doesn't change W.
+- Still to confirm: where the Aprilaire's own loop joins the HVAC ducts, so the supply meter sits downstream of
+  where its air comes in.
+- These meters get registered as **study devices**: in the HA network and recorded, but kept out of the PWA's
+  regular room views.
 
 ## 4. Analysis
 
@@ -165,5 +220,5 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   meters.
 
 **Open:**
-- How many temperature/RH meters are spare, and where they can physically go (§3B).
-- Rotation specifics (§3D): blower handling, block length, allowed hours, guardrail band.
+- Study meter intake as separate study devices (§3D, with Hugh).
+- Rotation (§3D): Hugh to review the full proposal. Blower = follows Aprilaire; 24 h; upper guard 47–48 % are settled.
