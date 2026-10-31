@@ -41,7 +41,7 @@ both, or neither, to remove excess indoor moisture at the lowest energy cost.
 
 | Item | Value | Source |
 |---|---|---|
-| House | floor plan outer wall ≈ 1,575 ft² (146 m²) × ceiling 94 in (Hugh, uniform) → **≈ 12,300 ft³ (349 m³)**. ERV 92 cfm ≈ 0.45 ACH, 132 cfm ≈ 0.64 ACH | `instance/house-geometry.json`; Hugh |
+| House | floor plan outer wall ≈ 1,575 ft² (146 m²) × ceiling 94 in (Hugh, uniform) → **≈ 12,300 ft³ (349 m³)**, provisional: the listing says ~1,750 ft², and Hugh trusts our plan more; a careful re-measure may come later. Volume only scales the whole-house balance (method A); per-unit numbers from methods B/C don't use it. ERV 92 cfm ≈ 0.45 ACH, 132 cfm ≈ 0.64 ACH | `instance/house-geometry.json`; Hugh |
 | Midea MAD50S1QWT | 50 pt/day and **IEF 2.01 L/kWh at the DOE test point (65 °F / 60 %)**. Bucket 4.25 gal / 15.9 L (Hugh: manufacturer figure confirmed). Airflow: no authoritative figure (an aggregator's 430 CFM is implausible for this unit) → calibrate in place (below) | ENERGY STAR #4512372 |
 | Aprilaire E070 | 70 ppd @ 80 °F/60 %, 53 ppd @ 73 °F/60 %. **EF 2.1 / 1.8 L/kWh** at those points. Airflow 200 / 170 / 140 CFM at 0.0 / 0.2 / 0.4 in. w.c. (dry coil). 5.8 A. Discharge temperature rise 10–30 °F. **Dehumidifies only with inlet ≥ 50 °F AND dew point ≥ 40 °F** | Aprilaire spec sheet form 960 |
 | Furnace Carrier 59TP5A060-14 | 5-speed ECM, 11×8 wheel, 3/4 HP. Air delivery (bottom return + filter) at 0.1 / 0.3 / 0.5 in. w.c.: tap 1 Red 785/655/530, 2 Org 1160/1080/1000, 3 Blu 1010/925/835, 4 Yel 1325/1255/1185, 5 Gry 1720/1620/1505 CFM. Rated heating airflow 1000 (high) / 780 (low) CFM @ 0.12 in. **Which tap the continuous fan (G) uses is unknown**: read it off the control board | 59TP5A-02PD product data |
