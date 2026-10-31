@@ -7,6 +7,22 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 🟡 2026-10-31 — SwitchBot Water Leak Detectors (first: `leak_kitchen_sink`, 9022c0e)
+
+Live on ha-2 from 15:17 PDT. Records `leak`, `tampered`, `battery_pct` and `leak_event_count` to hot.db (the
+event log for now, per Hugh). It's hidden from the device views. Decoded by registry type
+`switchbot_leak` (byte 8 bit 0 = leak, verified with two wet tests; layout from pySwitchbot leak.py). More
+units coming: intake each with `tools/intake_sensor.py register --device-type switchbot_leak --capabilities
+leak,battery` and set the overlay to hidden.
+- **Open — leak alert in the GUI.** Hugh wants leak events pushed to the GUI as something the user sees
+  (not the devices as tiles). Shape: a `build_alerts` kind `leak` (critical) → the existing ntfy bridge tag.
+- **Open — edge firmware decodes leak adverts as a meter** (-0.8 °C dry / -0.9 °C wet). edge-mapper drops
+  those, so only ha-2's own scanner reports leaks. Have the edge firmware relay unknown SwitchBot types raw,
+  so the relays add redundancy for a safety sensor.
+- **Not leak-related:** `tests/test_grid_shed.py::test_window_spec_wrapping_midnight_lands_on_the_next_day`
+  fails on 2026-10-31 because tonight's 22:00–02:00 window spans the DST fall-back (5 h, not 4). Check
+  whether `_local_window` handles DST, or only the test assumes 4 h.
+
 ## 🟡 2026-10-26 — Central HVAC: Venstar T7850 heat fixed with the RIBU1C isolation relay (ADR-0043)
 
 Installed in the hallway 2026-10-26 (192.168.1.118, local API HTTP, no login). The furnace ran ~20 min with the unit
