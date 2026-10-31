@@ -7,9 +7,13 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
-## 🟡 2026-10-31 — SwitchBot Water Leak Detectors (first: `leak_kitchen_sink`, 9022c0e)
+## 🟡 2026-10-31 — SwitchBot Water Leak Detectors (4 live: kitchen sink, master bath sink, hall bath sinks 1+2)
 
-Live on ha-2 from 15:17 PDT. Records `leak`, `tampered`, `battery_pct` and `leak_event_count` to hot.db (the
+Live on ha-2 from 15:17 PDT. Units (all hidden, "Leak: …" names): `leak_kitchen_sink` (kitchen),
+`leak_master_bath` (master_bath, 16:36), `leak_h_bathroom_1` / `_2` (h_bathroom = hall bath, 16:47 / 16:51).
+Reception at install: kitchen — s3-crawlspace −68…−72 (best), ha-2 −90…−98. Master bath — ha-2 −80…−88,
+s3-crawlspace ~−90. Hall bath — ha-2 −72…−82 (best), sgp41_stdby2 ~−101, and the H bed relays hear none.
+sink 1 is the most marginal (1–2 readings/2 min); add a relay near the hall bath if it drops out. Records `leak`, `tampered`, `battery_pct` and `leak_event_count` to hot.db (the
 event log for now, per Hugh). It's hidden from the device views. Decoded by registry type
 `switchbot_leak` (byte 8 bit 0 = leak, verified with two wet tests; layout from pySwitchbot leak.py). More
 units coming: intake each with `tools/intake_sensor.py register --device-type switchbot_leak --capabilities
