@@ -221,7 +221,7 @@ furnace heat runs (kept — heating doesn't change the water content, only RH), 
 
 | Phase | Work | Needs Hugh |
 |---|---|---|
-| 0 | Data audit: pick per-room sensors, calibrate Open-Meteo vs local, measure ceiling height, collect the manual figures (airflow, rated capacity) | ceiling height; manuals |
+| 0 | ✅ 2026-10-31 — [findings + decisions](dehumidifier-efficiency-study-phase0.md) (`tools/dehum_audit.py`): room set for the house average, local outdoor primary, Aprilaire state from power, Midea onboard T +0.84 °C. Ceiling 94 in, specs in §2. Still open: study-pair zero offset (a day of idle), HVAC meters + continuous-fan tap (2026-11-01) | outdoor meter sun? |
 | 1 | Method A on existing history (Midea Jun 24 →, Aprilaire Oct 6 →); first removal and efficiency estimates | — |
 | 2 | Install inlet/outlet meters (method B); optional condensate spot checks (C) | sensors on hand? placement |
 | 3 | Designed-experiment schedule (D), several weeks across weather | OK to rotate the units automatically |
