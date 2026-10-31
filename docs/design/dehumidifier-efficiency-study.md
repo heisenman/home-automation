@@ -35,7 +35,28 @@ both, or neither, to remove excess indoor moisture at the lowest energy cost.
 | ERV airflow | `erv_attic` supply/exhaust cfm, rpm, boost | Oct 4 → | |
 | Furnace / blower | `thermostat_hall` hvac_state, `hvac_blower` | Oct 26 → | the blower follows `dehum_attic` (follow coupling) |
 | Occupancy proxy | `gas_c_bed` eCO₂, bathroom RH spikes | Jul → | showers and cooking are moisture pulses; flag and exclude, or model |
-| House volume | `instance/house-geometry.json` (floor plan, 22 px/ft) | — | floor area from the plan; **ceiling height must be measured** |
+| House volume | `instance/house-geometry.json` (floor plan, 22 px/ft) + ceiling 94 in | — | ≈ 349 m³ (see reference figures) |
+
+**Reference figures (Phase 0 prep, 2026-10-31):**
+
+| Item | Value | Source |
+|---|---|---|
+| House | floor plan outer wall ≈ 1,575 ft² (146 m²) × ceiling 94 in (Hugh, uniform) → **≈ 12,300 ft³ (349 m³)**. ERV 92 cfm ≈ 0.45 ACH, 132 cfm ≈ 0.64 ACH | `instance/house-geometry.json`; Hugh |
+| Midea MAD50S1QWT | 50 pt/day and **IEF 2.01 L/kWh at the DOE test point (65 °F / 60 %)**. Bucket 4.25 gal / 15.9 L (Hugh: manufacturer figure confirmed). Airflow: no authoritative figure (an aggregator's 430 CFM is implausible for this unit) → calibrate in place (below) | ENERGY STAR #4512372 |
+| Aprilaire E070 | 70 ppd @ 80 °F/60 %, 53 ppd @ 73 °F/60 %. **EF 2.1 / 1.8 L/kWh** at those points. Airflow 200 / 170 / 140 CFM at 0.0 / 0.2 / 0.4 in. w.c. (dry coil). 5.8 A. Discharge temperature rise 10–30 °F. **Dehumidifies only with inlet ≥ 50 °F AND dew point ≥ 40 °F** | Aprilaire spec sheet form 960 |
+| Furnace Carrier 59TP5A060-14 | 5-speed ECM, 11×8 wheel, 3/4 HP. Air delivery (bottom return + filter) at 0.1 / 0.3 / 0.5 in. w.c.: tap 1 Red 785/655/530, 2 Org 1160/1080/1000, 3 Blu 1010/925/835, 4 Yel 1325/1255/1185, 5 Gry 1720/1620/1505 CFM. Rated heating airflow 1000 (high) / 780 (low) CFM @ 0.12 in. **Which tap the continuous fan (G) uses is unknown**: read it off the control board | 59TP5A-02PD product data |
+
+**In-place airflow calibration (no spec needed).** A dehumidifier puts all its electrical power, plus the
+latent heat of the water it condenses, back into the air as sensible heat. So with metered power P and the
+inlet→outlet changes ΔT (rise) and ΔW (drop):  ρ·Q·c_p·ΔT = P + ρ·Q·h_fg·ΔW  →  **Q = P / (ρ·(c_p·ΔT − h_fg·ΔW))**.
+Water removed is then ρ·Q·ΔW. That gives airflow for each unit from its own runs, cross-checked against the
+Midea bucket (§3C). The same balance across the air handler (return → C bed supply, furnace off) yields blower
+airflow, with the Aprilaire's metered power as the heat source plus the blower motor's own heat (unmetered,
+~0.1–0.3 kW, an error term to bound).
+
+**Winter limit worth knowing:** the house dew point on 2026-10-30/31 was ≈ 43–45 °F (7.0–7.6 g/m³). The E070's
+40 °F dew-point floor is close, so on cold dry nights the Aprilaire may run its fan without being able to remove
+water. Watch for that in the data, and gate it in the control law.
 
 **Gaps that limit the study:**
 - No **condensate measurement** (the true answer for removal rate).
