@@ -222,7 +222,7 @@ furnace heat runs (kept — heating doesn't change the water content, only RH), 
 | Phase | Work | Needs Hugh |
 |---|---|---|
 | 0 | ✅ 2026-10-31 — [findings + decisions](dehumidifier-efficiency-study-phase0.md) (`tools/dehum_audit.py`): room set for the house average, local outdoor primary, Aprilaire state from power, Midea onboard T +0.84 °C. Ceiling 94 in, specs in §2. Still open: study-pair zero offset (a day of idle), HVAC meters + continuous-fan tap (2026-11-01) | outdoor meter sun? |
-| 1 | Method A on existing history (Midea Jun 24 →, Aprilaire Oct 6 →); first removal and efficiency estimates | — |
+| 1 | First pass ✅ 2026-10-31 — [findings](dehumidifier-efficiency-study-phase1.md): an air-only balance can't measure removal (the house buffers ≈26× its air volume). Per-unit efficiency → B + C. A becomes a two-node house model fitted with B/C removal as known inputs | — |
 | 2 | Install inlet/outlet meters (method B); optional condensate spot checks (C) | sensors on hand? placement |
 | 3 | Designed-experiment schedule (D), several weeks across weather | OK to rotate the units automatically |
 | 4 | Fit surfaces → control law → shadow → switch over | approve switch-over |
@@ -244,7 +244,7 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   +2–3 °C over the grid is real microclimate (wall/garage heat), not solar loading.
 - 2026-10-26 ~17:00 PDT spray foam; 2026-10-29 ~17:00 PDT oak-plank waxing (mineral spirits). Both are VOC
   events, not moisture events, but exclude the hours in case of window opening and ventilation changes.
-- 2026-10-31 15:00–15:20 PDT Midea leak-detector wet tests (kitchen sink area, seconds of water; negligible).
+- 2026-10-31 15:00–15:20 PDT kitchen leak-detector wet tests (seconds of water on a cloth; negligible).
 
 ## 7. Decisions
 
