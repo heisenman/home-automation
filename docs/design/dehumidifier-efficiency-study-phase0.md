@@ -21,8 +21,8 @@ appended below. Re-run: `ssh 192.168.1.200 'cd ~/home_automation && python3 - --
    - Backfill gets an hour-of-day bias correction. Treat its AH as ±1 g/m³, which is as large as typical
      indoor–outdoor differences. So the summer whole-house balance (method A) is weak, and **summer Midea
      efficiency rests on the bucket method (C)**.
-   - Open question for Hugh: does the outdoor meter get midday sun? (A sun-warmed meter keeps AH roughly
-     right but inflates T.)
+   - Answered (Hugh): the outdoor meter sits under the garage's north overhang and never gets direct sun, so
+     the midday +2–3 °C is real local microclimate. All the more reason to prefer it.
 3. **Aprilaire on/off comes from its power meter**, not `unit_running`.
    - `unit_running` and `unit_rh_pct` have a 286-hour hole (Oct 6 10:00 → ~Oct 18 PT, the RS-485/REMOTE
      changeover). `dh_call` and `dehum_pm` are complete.

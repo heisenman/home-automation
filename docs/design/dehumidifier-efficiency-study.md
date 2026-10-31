@@ -232,6 +232,20 @@ compressor 464 W + 8.8 W/°C × (T − 21 °C); mode 1 = 1.4 W; and a ~35 W fan 
 reported mode 99 % of the time, and the estimate is within 1.5 % of the meter over Oct 19–30. Total: 811 kWh
 (835 kWh with a 30 W allowance for high fan) from Jun 24 to Oct 31, about 6.2 kWh/day.
 
+## 6b. Study log (labelled events the analysis must respect)
+
+- **2026-10-31 16:21 PDT: Midea powered OFF at its plug** (`plug_01` relay off; its automation `enabled=false`)
+  — Hugh: the Aprilaire is doing the work fine. From here the regime is "Aprilaire only". The Midea study
+  meters now see idle air, which is a free zero-offset calibration. To restore: `tools/plug_cmd.py plug_01 on`,
+  then re-enable its policy.
+- **2026-10-31 ~16:20 PDT: mech-closet USB-C splitter replaced** with Hugh's spare (sgp41_mech had been
+  restarting every 40–80 s). Compare broker reconnects for .116 (sgp41_mech) / .111 (standby_c6) before and after.
+- **Outdoor meter placement** (Hugh): under the garage's north overhang, never in direct sun. So its midday
+  +2–3 °C over the grid is real microclimate (wall/garage heat), not solar loading.
+- 2026-10-26 ~17:00 PDT spray foam; 2026-10-29 ~17:00 PDT oak-plank waxing (mineral spirits). Both are VOC
+  events, not moisture events, but exclude the hours in case of window opening and ventilation changes.
+- 2026-10-31 15:00–15:20 PDT Midea leak-detector wet tests (kitchen sink area, seconds of water; negligible).
+
 ## 7. Decisions
 
 **Settled (Hugh, 2026-10-31):**
