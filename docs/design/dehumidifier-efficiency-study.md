@@ -281,11 +281,14 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
        the same size as the precision target. It has to be modelled (cfm × moisture difference) or measured.
     3. Rigid metal doesn't exchange moisture, so supply ΔAH holds at any register. The ducts run in the attic,
        whose environment is `meter_attic` (Hugh): 21–23 °C / 39–42 % over 2026-10-31→11-01 with 2–10 °C outdoors,
-       i.e. a **conditioned attic inside the envelope**. So the loop loses almost nothing in fan-only operation
+       i.e. a **conditioned attic inside the envelope** (Hugh: fully insulated and mostly air-sealed; treat it as
+       conditioned space). So the loop loses almost nothing in fan-only operation
        (air ≈ attic temperature) and only the heat-call excess during heating, and that heat stays in the house.
        Register ΔT is usable with the blower on and the furnace idle; during heat calls, treat it with caution.
     - The attic air (≈ 7.8 g/m³ vs ≈ 8.1 in the rooms) is part of the conditioned volume, and its materials part of
-      the buffer. Method A's V = 349 m³ (rooms only) undercounts; add the attic volume when the two-node model is built.
+      the buffer. Method A's V = 349 m³ (rooms only) undercounts. In the two-node model the attic is the second node
+      (`meter_attic`), coupled to the rooms by the ducts, the Aprilaire and the ERV, with a small leak of its own
+      ("mostly" sealed). Its volume needs the roof geometry (pitch, footprint).
     4. A meter in the Aprilaire's own discharge, with the return meter as its inlet, measures it directly from
        its own ~140–200 cfm (≈5× the signal, and a well-conditioned in-place airflow). A meter in the ERV's
        fresh-air delivery measures ventilation drying directly. With both, the return→supply pair becomes a
