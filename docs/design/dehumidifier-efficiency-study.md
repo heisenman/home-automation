@@ -259,6 +259,10 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   - Heat ran 15–40 % of each hour. The coldest room was 20.1–20.6 °C. The heat exchanger is sealed, so the
     supply air gains no water from heating, and a
     return→supply ΔAH taken during a heat call with the Aprilaire off is a zero reference for the HVAC pair.
+- **2026-11-01 13:21–13:28 PST: HVAC study pair registered** (hidden, switchbot_meter): `study_hvac_return`
+  (return grille, area hall) and `study_hvac_supply` (**H office** supply register, Hugh's choice instead of C bed).
+  Discard their first 10–60 min while they settle. Still open: whether the H office branch is downstream of
+  where the Aprilaire's loop joins the ducts.
 - **Furnace note (Hugh, 2026-11-01: combustion and exhaust can dry a space).** Correct at the house level, even
   though the supply airstream gains no water. Three paths, all strongest when it's cold and dry outside:
   1. *Combustion air.* The 59TP5 is (by its 59-series prefix, to confirm from the manual) a condensing furnace,
