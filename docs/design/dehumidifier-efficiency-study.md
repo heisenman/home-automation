@@ -263,6 +263,25 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   (return grille, area hall) and `study_hvac_supply` (**H office** supply register, Hugh's choice instead of C bed).
   Discard their first 10–60 min while they settle. Still open: whether the H office branch is downstream of
   where the Aprilaire's loop joins the ducts.
+- **Duct topology (Hugh, 2026-11-01).**
+  - Supply: a 16–18 in. round trunk loop; each register hangs off it on a short 4 in. flex run (≈1–7 ft) into a
+    standard rectangular register box. Return: an ~18 in. round duct into the mech closet, then rectangular stack
+    through the furnace/blower and back out to the supply loop.
+  - The **Aprilaire and the ERV both draw from the return just above the ceiling grille** and both **discharge
+    at the round-to-rectangular supply transition**. There is no backdraft damper on the furnace stack, so with
+    the blower off their discharge splits between the supply loop and back through the furnace cabinet toward
+    the return, where the Aprilaire can re-ingest its own dry air. That's why the Aprilaire runs paired with the
+    blower.
+  - Consequences for method B:
+    1. The return-grille meter is effectively the Aprilaire's (and the ERV exhaust's) inlet.
+    2. The supply meter sees the Aprilaire **and the ERV's fresh air** mixed into the blower stream. The ERV
+       runs all the time at 66–132 cfm with outdoor-driven moisture, so the "zero" from blower-on / Aprilaire-off
+       minutes includes an ERV term ≈ (Q_erv / Q_blower)·(W_erv,supply − W_return). Tonight that's ~−0.1 g/m³,
+       the same size as the precision target. It has to be modelled (cfm × moisture difference) or measured.
+    3. A meter in the Aprilaire's own discharge, with the return meter as its inlet, measures it directly from
+       its own ~140–200 cfm (≈5× the signal, and a well-conditioned in-place airflow). A meter in the ERV's
+       fresh-air delivery measures ventilation drying directly. With both, the return→supply pair becomes a
+       cross-check instead of the primary measurement.
 - **Furnace note (Hugh, 2026-11-01: combustion and exhaust can dry a space).** Correct at the house level, even
   though the supply airstream gains no water. Three paths, all strongest when it's cold and dry outside:
   1. *Combustion air.* The 59TP5 is (by its 59-series prefix, to confirm from the manual) a condensing furnace,
