@@ -264,7 +264,8 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   Discard their first 10–60 min while they settle. Still open: whether the H office branch is downstream of
   where the Aprilaire's loop joins the ducts.
 - **Duct topology (Hugh, 2026-11-01).**
-  - Supply: a 16–18 in. round trunk loop; each register hangs off it on a short 4 in. flex run (≈1–7 ft) into a
+  - Supply: an ~18 in. **rigid aluminum** round trunk loop around almost the whole house perimeter (~8 m³ of air;
+    transit ≈ 20 s at blower flow, ≈ 1 min on ERV + Aprilaire flow alone); each register hangs off it on a short 4 in. flex run (≈1–7 ft) into a
     standard rectangular register box. Return: an ~18 in. round duct into the mech closet, then rectangular stack
     through the furnace/blower and back out to the supply loop.
   - The **Aprilaire and the ERV both draw from the return just above the ceiling grille** and both **discharge
@@ -278,7 +279,10 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
        runs all the time at 66–132 cfm with outdoor-driven moisture, so the "zero" from blower-on / Aprilaire-off
        minutes includes an ERV term ≈ (Q_erv / Q_blower)·(W_erv,supply − W_return). Tonight that's ~−0.1 g/m³,
        the same size as the precision target. It has to be modelled (cfm × moisture difference) or measured.
-    3. A meter in the Aprilaire's own discharge, with the return meter as its inlet, measures it directly from
+    3. Rigid metal doesn't exchange moisture, so supply ΔAH holds at any register. Supply *temperature* doesn't:
+       the long perimeter loop sheds heat (to the attic, if that's where it runs), so register ΔT is not usable for
+       energy balances — one more reason the in-place airflow lives at the Aprilaire's own discharge.
+    4. A meter in the Aprilaire's own discharge, with the return meter as its inlet, measures it directly from
        its own ~140–200 cfm (≈5× the signal, and a well-conditioned in-place airflow). A meter in the ERV's
        fresh-air delivery measures ventilation drying directly. With both, the return→supply pair becomes a
        cross-check instead of the primary measurement.
