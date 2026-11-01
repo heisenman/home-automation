@@ -325,8 +325,8 @@ what's behind, and what's waiting on Hugh. An open Claude session also reviews i
 
 | Gate | Due (PT) | Pass criteria | Unlocks |
 |---|---|---|---|
-| **G2a** HVAC meters zeroed | Tue Nov 3 | HVAC pair (`study_hvac_return`, `study_hvac_supply`) registered + reporting. Zero offset from ≥ 6 h of blower-on / Aprilaire-idle minutes over ≥ 2 days, SE ≤ 0.05 g/m³ (heat cycles give ~2.5 h a day of these, in short stretches). Fan tap and furnace venting known (Hugh). Midea pair offset from ≥ 12 idle h (met 2026-11-01: −0.40 ± 0.06 g/m³) | Across-handler measurement of the Aprilaire |
-| **G2b** Phase 2 done | Sun Nov 8 | ≥ 5 Aprilaire runs (one run = one call; the E070 cycles its compressor off ~4 min an hour) measured across the air handler. Half-range ≤ ±20 % of the median L/kWh. All runs 0.3–2.5 L/kWh | Build the rotation scheduler; Midea plug back on for its arms; **Hugh's go-ahead to rotate** |
+| **G2a** HVAC meters zeroed | Tue Nov 3 | HVAC pair (`study_hvac_return`, `study_hvac_supply`) registered + reporting. Zero model fitted from Aprilaire-idle stretches, ≥ 6 h blower-on and ≥ 3 h blower-off over ≥ 2 days, offset SE ≤ 0.05 g/m³: supply − return = offset + the ERV's fresh air (blower off: the loop carries ERV air only; blower on: diluted by fan- or heat-speed airflow), each × (W_out − W_return). No extra meters (decision 2026-11-01). Fan tap and furnace venting known (Hugh). Midea pair offset from ≥ 12 idle h (met 2026-11-01: −0.40 ± 0.06 g/m³) | Across-handler measurement of the Aprilaire |
+| **G2b** Phase 2 done | Sun Nov 8 | ≥ 5 Aprilaire runs (one run = one call; the E070 cycles its compressor off ~4 min an hour) measured across the air handler, after subtracting the offset and the fitted ERV term minute by minute, with fan-tap airflow (heat-speed rated 780/1000 cfm during heat calls). Half-range ≤ ±20 % of the median L/kWh. All runs 0.3–2.5 L/kWh | Build the rotation scheduler; Midea plug back on for its arms; **Hugh's go-ahead to rotate** |
 | **P3** Rotation coverage | Sun Nov 15, then weekly (22, 29, Dec 6) | Each arm ≥ 8 valid blocks, baseline ≥ 10. Each unit ≥ 2 inlet dew-point bins (< 7.5, 7.5–9.5, ≥ 9.5 °C) with ≥ 4 blocks. Each unit's L/kWh 95 % CI within ±15 %. The scheduler writes control.db `study_block` (arm, inlet_dp_c, l_per_kwh, end_reason) | Phase 4: fit surfaces, control law in shadow |
 
 Expected Phase 4 start ≈ Nov 29 – Dec 6; the limiter is weather variety (at least one mild damp spell), not block
@@ -338,6 +338,13 @@ airflow estimate is ill-conditioned. A meter in the E070's own discharge (`study
 make it well-conditioned and give ~5× the ΔAH signal.
 
 ## 7. Decisions
+
+- **2026-11-01 — no more study meters unless absolutely necessary (Hugh).** The return meter is the inlet for both
+  the Aprilaire and the ERV (attic ≈ house conditions, both measured), and the H office register plus the desk
+  sensor show what comes out in each state. The ERV and Aprilaire are separated by operating state (blower off =
+  ERV air only in the loop; blower on, Aprilaire idle = diluted ERV; Aprilaire on = both) instead of by
+  dedicated discharge meters. Cost: the Aprilaire signal stays diluted (~0.6 g/m³), so per-run precision is
+  ~±10–15 % rather than a few %; fine for the regression.
 
 **Settled (Hugh, 2026-10-31):**
 - **No hard-coded targets.** The end product is a **UI** that shows the user the efficiency and energy impact of

@@ -32,6 +32,8 @@ MANUAL = {
 TAP_CFM = {1: (785, 655, 530), 2: (1160, 1080, 1000), 3: (1010, 925, 835), 4: (1325, 1255, 1185),
            5: (1720, 1620, 1505)}
 
+HEAT_CFM = {1: 780, 2: 1000}                   # rated heating airflow low/high stage @ 0.12 in. (§2)
+
 ROOMS = ["meter_pro_living_room", "meter_kitchen", "meter_c_bed", "meter_pro_c_office", "meter_pro_h_bed"]
 OUTDOOR, CRAWL, LR = "switchbot_outdoor", "ometer_crawlspace", "meter_pro_living_room"
 MID_IN, MID_OUT = "study_midea_inlet", "study_midea_outlet"
@@ -123,6 +125,70 @@ def offset_stats(delta):
             "se": sd / math.sqrt(len(ch))}
 
 
+def ols(X, y):
+    """Least squares with standard errors (normal equations + Gauss-Jordan; no numpy on ha-2). As dehum_phase1."""
+    n, p = len(X), len(X[0])
+    A = [[sum(X[r][i] * X[r][j] for r in range(n)) for j in range(p)] for i in range(p)]
+    bv = [sum(X[r][i] * y[r] for r in range(n)) for i in range(p)]
+    M = [A[i][:] + [1.0 if i == j else 0.0 for j in range(p)] for i in range(p)]
+    for col in range(p):
+        piv = max(range(col, p), key=lambda r: abs(M[r][col]))
+        M[col], M[piv] = M[piv], M[col]
+        dd = M[col][col]
+        if abs(dd) < 1e-12:
+            return None
+        M[col] = [v / dd for v in M[col]]
+        for r in range(p):
+            if r != col:
+                f = M[r][col]
+                M[r] = [vr - f * vc for vr, vc in zip(M[r], M[col])]
+    inv = [row[p:] for row in M]
+    beta = [sum(inv[i][j] * bv[j] for j in range(p)) for i in range(p)]
+    res = [y[r] - sum(beta[i] * X[r][i] for i in range(p)) for r in range(n)]
+    s2 = sum(e * e for e in res) / max(n - p, 1)
+    return beta, [math.sqrt(max(inv[i][i] * s2, 0)) for i in range(p)]
+
+
+def zero_model(delta, state, x, cfm):
+    """Fit the HVAC pair's no-Aprilaire behaviour (study doc §6b, duct topology). With the Aprilaire idle, supply −
+    return AH = sensor offset + the ERV's fresh air mixed in:
+        blower off (S0): the loop carries ERV air only        → b0·x
+        blower on, fan (S1f) / heat speed (S1h): diluted      → g·cfm·x/100
+    x = W_out − W_return (g/m³). b0 = mixing at the register × (1 − ERV latent effectiveness); g = 100(1 − ε)/Q_blower.
+    Fitted on contiguous same-state stretches (chunk means). Returns {"beta", "se", "n", "hours"} or None."""
+    rows = []
+    for st in ("S0", "S1f", "S1h"):
+        sub = {k: v for k, v in delta.items() if state.get(k) == st and k in x and k in cfm}
+        cur, last = [], None
+        for k in sorted(sub):
+            if cur and (k - last > 60 or len(cur) >= 60):
+                rows.append((st, cur))
+                cur = []
+            cur.append(k)
+            last = k
+        if cur:
+            rows.append((st, cur))
+    rows = [(st, ks) for st, ks in rows if len(ks) >= 5]
+    if len(rows) < 6:
+        return None
+    X, y = [], []
+    for st, ks in rows:
+        mx = S.mean(x[k] for k in ks)
+        mcx = S.mean(cfm[k] * x[k] / 100 for k in ks)
+        X.append([1.0, mx if st == "S0" else 0.0, mcx if st == "S1f" else 0.0, mcx if st == "S1h" else 0.0])
+        y.append(S.mean(delta[k] for k in ks))
+    present = [j for j in range(4) if any(r[j] for r in X)]
+    fit = ols([[r[j] for j in present] for r in X], y)
+    if fit is None:
+        return None
+    beta, se = [0.0] * 4, [None] * 4
+    for i, j in enumerate(present):
+        beta[j], se[j] = fit[0][i], fit[1][i]
+    hours = {st: sum(len(ks) for s2, ks in rows if s2 == st) / 60 for st in ("S0", "S1f", "S1h")}
+    days = {pt(k).date() for _, ks in rows for k in ks}
+    return {"beta": beta, "se": se, "n": len(rows), "hours": hours, "days": len(days)}
+
+
 def runs_from(power, on_w, gap_min=6, min_len=30):
     """Contiguous minutes with power > on_w -> [(start, end_exclusive)]. Gaps <= gap_min are bridged: the E070
     cycles its compressor off ~4 min every hour within one call, and a run here means one call."""
@@ -155,6 +221,7 @@ def main():
     apr = d.series("dehum_pm", "power_w", study_a, now)
     blower = d.series("hvac_blower", "running", study_a, now)
     hstate = d.series("thermostat_hall", "hvac_state", study_a, now)    # Venstar state: 0 idle, 1 heat, 2 cool
+    stage = d.series("thermostat_hall", "active_stage", study_a, now)
     mid_p = d.series("plug_hall", "power_w", study_a, now)
     apr_runs = runs_from(apr, APR_ON_W)
     tap = MANUAL["fan_tap"]
@@ -168,12 +235,32 @@ def main():
     fresh = reg and all(d.series(x, "humidity_pct", now - 6 * 3600, now) for x in (HV_RET, HV_SUP))
     apr_idle = {k: v < APR_IDLE_W for k, v in apr.items()}
     blower_on = {k: v >= 0.99 for k, v in blower.items()}
+    blower_off = {k: v <= 0.01 for k, v in blower.items()}
     # heat cycles are short (10-20 min), so the blower only has to hold 3 min; the Aprilaire must have been idle
-    # 15 min so its last wet/dry air has cleared the ducts
-    zero_min = [k for k in blower_on if held(blower_on, k, 3) and held(apr_idle, k, 15)]
-    hv_zero = pair_delta(d, HV_RET, HV_SUP, zero_min, study_a, now) if reg else None
-    hz = offset_stats(hv_zero) if hv_zero else None
-    heat_share = (sum(1 for k in zero_min if hstate.get(k, 0) >= 0.5) / len(zero_min)) if zero_min else 0
+    # 15 min so its last wet/dry air has cleared the ducts; blower-off needs 10 min for the loop to hold ERV air only
+    state = {}
+    for k in blower:
+        if not held(apr_idle, k, 15):
+            continue
+        if held(blower_off, k, 10):
+            state[k] = "S0"
+        elif held(blower_on, k, 3):
+            state[k] = "S1h" if hstate.get(k, 0) >= 0.5 else "S1f"
+    zm = None
+    erv_cfm = d.series("erv_attic", "supply_cfm", study_a, now)
+    w_out = d.ah_series(OUTDOOR, study_a - 1800, now)
+    if reg:
+        w_ret = d.ah_series(HV_RET, study_a, now)
+        hv_delta = pair_delta(d, HV_RET, HV_SUP, list(blower), study_a, now) or {}
+        okeys = sorted(w_out)
+        xdiff, j = {}, 0
+        for k in sorted(w_ret):                      # outdoor meter reports less often: last value within 15 min
+            while j + 1 < len(okeys) and okeys[j + 1] <= k:
+                j += 1
+            if okeys and okeys[j] <= k and k - okeys[j] <= 900:
+                xdiff[k] = w_out[okeys[j]] - w_ret[k]
+        zm = zero_model({k: v for k, v in hv_delta.items() if k in state}, state, xdiff, erv_cfm)
+    hz = {"mean": zm["beta"][0], "se": zm["se"][0]} if zm else None
     mid_idle = {k: mid_p.get(k, 999) < 5 for k in mid_p}
     mz = offset_stats(pair_delta(d, MID_IN, MID_OUT, [k for k in mid_idle if held(mid_idle, k, 60)], study_a, now)
                       or {})
@@ -181,11 +268,16 @@ def main():
         crit("HVAC pair registered and reporting", fresh,
              "both reporting" if fresh else ("registered, not reporting in 6 h" if reg else
                                              f"not registered yet ({HV_RET}, {HV_SUP})")),
-        crit("HVAC pair zero offset: ≥ 6 blower-only h over ≥ 2 days, SE ≤ 0.05 g/m³",
-             bool(hz and hz["hours"] >= 6 and hz["days"] >= 2 and hz["se"] <= 0.05),
-             (f"{hz['hours']:.1f} h in {hz['chunks']} stretches / {hz['days']} d, offset {hz['mean']:+.3f} ± {hz['se']:.3f} g/m³ "
-              f"(stretch SD {hz['sd']:.3f}; {heat_share:.0%} of the minutes during heat)") if hz else
-             f"{len(zero_min)} blower-only minutes so far, no paired meter data"),
+        crit("HVAC pair zero model: ≥ 6 h blower-on and ≥ 3 h blower-off (Aprilaire idle) over ≥ 2 days, "
+             "offset SE ≤ 0.05 g/m³",
+             bool(zm and zm["hours"]["S1f"] + zm["hours"]["S1h"] >= 6 and zm["hours"]["S0"] >= 3
+                  and zm["days"] >= 2 and zm["se"][0] is not None and zm["se"][0] <= 0.05),
+             (f"offset {zm['beta'][0]:+.3f} ± {zm['se'][0]:.3f} g/m³; ERV terms: blower-off b0 {zm['beta'][1]:+.2f}, "
+              f"fan g {zm['beta'][2]:+.3f}, heat g {zm['beta'][3]:+.3f} (per 100 cfm·g/m³); hours S0/S1f/S1h "
+              + "/".join(f"{zm['hours'][q]:.1f}" for q in ("S0", "S1f", "S1h")) + f" over {zm['days']} d")
+             if zm else (f"{sum(1 for v in state.values() if v != 'S0')} blower-on and "
+                         f"{sum(1 for v in state.values() if v == 'S0')} blower-off Aprilaire-idle minutes; "
+                         + ("not enough paired stretches to fit yet" if reg else "no paired meter data"))),
         crit("Continuous-fan tap known", tap is not None, f"tap {tap} ≈ {q_fan / CFM:.0f} cfm" if tap else
              "read the tap the G (fan) terminal uses off the 59TP5 control board"),
         crit("Furnace venting known", MANUAL["furnace_venting"] is not None,
@@ -207,13 +299,19 @@ def main():
         dl = pair_delta(d, HV_RET, HV_SUP, mins, ms, me) if reg else None
         row = {"start": s, "end": e, "kwh": kwh, "heat": sum(1 for k in range(s, e, 60) if hstate.get(k, 0) >= .5)
                / ((e - s) / 60), "d_ah": None, "lpkwh": None}
-        if dl and len(dl) >= 15:
-            corr = S.mean(dl.values()) - (hz["mean"] if hz else 0)
-            row["d_ah"] = corr
-            if q_fan and hz:
-                frac = len(dl) / ((me - ms) / 60)
-                g = -corr * q_fan * (me - ms) / 3600 * frac          # g removed over the measured part
-                row["lpkwh"] = g / 1000 / (kwh * (me - ms) / (e - s))
+        if dl and len(dl) >= 15 and zm:
+            ex = []                                  # per minute: (corrected ΔAH, airflow m3/h or None)
+            for k, v in dl.items():
+                heat = hstate.get(k, 0) >= 0.5
+                g = zm["beta"][3] if heat else zm["beta"][2]
+                xk = xdiff.get(k)
+                erv_term = g * erv_cfm.get(k, 0) * xk / 100 if xk is not None else 0.0
+                q = (HEAT_CFM.get(round(stage.get(k, 2)), HEAT_CFM[2]) * CFM) if heat else q_fan
+                ex.append((v - zm["beta"][0] - erv_term, q))
+            row["d_ah"] = S.mean(c for c, _ in ex)
+            if all(q for _, q in ex):
+                grams = -sum(c * q / 60 for c, q in ex)              # g removed over the measured minutes
+                row["lpkwh"] = grams / 1000 / (kwh * len(ex) / ((e - s) / 60))
         run_rows.append(row)
     eff = [r["lpkwh"] for r in run_rows if r["lpkwh"] is not None]
     spread = ((max(eff) - min(eff)) / 2 / S.median(eff)) if len(eff) >= 2 and S.median(eff) > 0 else None
