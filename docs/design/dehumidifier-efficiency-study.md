@@ -153,7 +153,7 @@ house's moisture load):
   follow coupling. A **"pause study" scene** stops everything at once.
 
 *Flagged, not interrupted* (excluded at analysis time): showers (bathroom RH spikes), cooking (kitchen VOC),
-furnace heat runs (kept — heating doesn't change the water content, only RH), and events Hugh labels.
+furnace heat runs (kept, but as a regressor: the firing fraction; see the furnace note in §6b), and events Hugh labels.
 
 *Mechanism:*
 - A scheduler module in ha-controller, driving the existing override path (the same one as a PWA override)
@@ -171,7 +171,8 @@ furnace heat runs (kept — heating doesn't change the water content, only RH), 
 - **Midea inlet + outlet first (2026-10-31).**
 - **HVAC tomorrow:** one in the return (intake) grille and one in a supply duct (C bed).
 - Return → supply measures the whole air handler. Removal = furnace blower airflow × ΔW (from the 59TP5 manual
-  for the fan speed in use). That holds with heat on too, because heating doesn't change W.
+  for the fan speed in use). That holds with heat on too: the heat exchanger is sealed, so the supply air gains
+  heat but not water. (The furnace can still dry the *house*; see the furnace note in §6b.)
 - Still to confirm: where the Aprilaire's own loop joins the HVAC ducts, so the supply meter sits downstream of
   where its air comes in.
 - These meters get registered as **study devices**: in the HA network and recorded, but kept out of the PWA's
@@ -255,8 +256,23 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   - Aprilaire: call ON 18:19 PDT at LR 46.0 %, OFF 22:08 at 43.6 % (3 h 49 min, ≈2.0 kWh, 527 W while running).
     House-average AH fell 8.26 → 7.98 and rebounded to 8.18 by midnight: the buffering again.
     The unit's own RH sensor read 36–39 % while the LR Pro read 44–46 %.
-  - Heat ran 15–40 % of each hour. The coldest room was 20.1–20.6 °C. Heating doesn't change AH, so a
+  - Heat ran 15–40 % of each hour. The coldest room was 20.1–20.6 °C. The heat exchanger is sealed, so the
+    supply air gains no water from heating, and a
     return→supply ΔAH taken during a heat call with the Aprilaire off is a zero reference for the HVAC pair.
+- **Furnace note (Hugh, 2026-11-01: combustion and exhaust can dry a space).** Correct at the house level, even
+  though the supply airstream gains no water. Three paths, all strongest when it's cold and dry outside:
+  1. *Combustion air.* The 59TP5 is (by its 59-series prefix, to confirm from the manual) a condensing furnace,
+     installable as direct-vent (two pipes, outdoor combustion air) or one-pipe (combustion air drawn from the
+     space). If one-pipe, it exhausts roughly 7–11 cfm of indoor air while firing, made up by drier outdoor air.
+     That's about 40 g/h at high fire with tonight's 2 g/m³ difference. The combustion water itself leaves in
+     the flue gas and the condensate drain.
+  2. *Stack effect.* Infiltration rises with the indoor–outdoor temperature difference, which is also what makes
+     the furnace run. So a leakage term that ignores ΔT will wrongly hand credit to the furnace.
+  3. *Duct leakage.* With the blower running, leaky attic ducts pressurize or depressurize the house and drive
+     extra exchange. The blower is paired with the Aprilaire, so this confounds the A arms with the others.
+  - Model consequence: the house balance gets a leakage term scaled by ΔT (stack) and by blower-on, plus a
+    furnace firing-fraction term × (W_out − W_in). The across-unit (B) measurement is unaffected.
+  - To check: is the furnace two-pipe (both PVC pipes run outside) or one-pipe (intake open in its closet)?
 
 ## 7. Decisions
 
