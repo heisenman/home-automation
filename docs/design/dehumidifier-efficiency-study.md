@@ -288,7 +288,14 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
     - The attic air (≈ 7.8 g/m³ vs ≈ 8.1 in the rooms) is part of the conditioned volume, and its materials part of
       the buffer. Method A's V = 349 m³ (rooms only) undercounts. In the two-node model the attic is the second node
       (`meter_attic`), coupled to the rooms by the ducts, the Aprilaire and the ERV, with a small leak of its own
-      ("mostly" sealed). Its volume needs the roof geometry (pitch, footprint).
+      ("mostly" sealed).
+    - Attic geometry (Hugh, 2026-11-01): 7/12 pitch, R-49 closed-cell spray foam on the underside of the roof
+      deck, cavity empty apart from framing, ducts and the mechanicals. Volume from the floor-plan footprint
+      (instance/house-geometry.json, ridge assumed along the long axis): **≈ 6,000 ft³ (170 m³) if hipped,
+      ≈ 7,300 ft³ (207 m³) if gabled** — +50–60 % on the 349 m³ of rooms. Roof form to confirm.
+    - Closed-cell foam at that depth is a vapor retarder, so the roof deck no longer trades moisture with the
+      attic air; the attic's buffer is the exposed framing and anything stored up there, and its moisture comes
+      and goes through the house.
     4. A meter in the Aprilaire's own discharge, with the return meter as its inlet, measures it directly from
        its own ~140–200 cfm (≈5× the signal, and a well-conditioned in-place airflow). A meter in the ERV's
        fresh-air delivery measures ventilation drying directly. With both, the return→supply pair becomes a
