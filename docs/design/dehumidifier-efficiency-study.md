@@ -245,6 +245,18 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
 - 2026-10-26 ~17:00 PDT spray foam; 2026-10-29 ~17:00 PDT oak-plank waxing (mineral spirits). Both are VOC
   events, not moisture events, but exclude the hours in case of window opening and ventilation changes.
 - 2026-10-31 15:00–15:20 PDT kitchen leak-detector wet tests (seconds of water on a cloth; negligible).
+- **Night of 2026-10-31 → 11-01 (first winter-regime night, Midea off):**
+  - Midea study pair idle zero offset: outlet − inlet = **−0.49 g/m³ AH** (−2.9 % RH, +0.10 °C).
+    The 1-min SD is 0.40; hourly means run −0.3 to −0.7. That is about 20–25 % of the expected running signal,
+    so it must be subtracted. A position-swap test would separate sensor bias from placement.
+  - Outdoor dew point was 2–7 °C, against 8.7–9 °C indoors; outdoor AH was 5.6–7.5 g/m³ against 8.1 indoors.
+    The crawl (≈7.6 g/m³) was also drier than the house. So ventilation and leakage were drying the house, and the
+    ERV (66–92 cfm, ≈52 W) acted as a dehumidifier. The control law needs ventilation as an actuator in this regime.
+  - Aprilaire: call ON 18:19 PDT at LR 46.0 %, OFF 22:08 at 43.6 % (3 h 49 min, ≈2.0 kWh, 527 W while running).
+    House-average AH fell 8.26 → 7.98 and rebounded to 8.18 by midnight: the buffering again.
+    The unit's own RH sensor read 36–39 % while the LR Pro read 44–46 %.
+  - Heat ran 15–40 % of each hour. The coldest room was 20.1–20.6 °C. Heating doesn't change AH, so a
+    return→supply ΔAH taken during a heat call with the Aprilaire off is a zero reference for the HVAC pair.
 
 ## 7. Decisions
 
