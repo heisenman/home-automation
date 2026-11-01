@@ -290,9 +290,9 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
       (`meter_attic`), coupled to the rooms by the ducts, the Aprilaire and the ERV, with a small leak of its own
       ("mostly" sealed).
     - Attic geometry (Hugh, 2026-11-01): 7/12 pitch, R-49 closed-cell spray foam on the underside of the roof
-      deck, cavity empty apart from framing, ducts and the mechanicals. Volume from the floor-plan footprint
-      (instance/house-geometry.json, ridge assumed along the long axis): **≈ 6,000 ft³ (170 m³) if hipped,
-      ≈ 7,300 ft³ (207 m³) if gabled** — +50–60 % on the 349 m³ of rooms. Roof form to confirm.
+      deck, cavity empty apart from framing, ducts and the mechanicals. Volume (Hugh's model: 7/12 over the whole floor-plan footprint, ridge along the long axis,
+      then drop 10–15 % for the minor front hip): 6,910 ft³ gabled → **≈ 6,050 ft³ (171 m³), range 166–176 m³**.
+      Conditioned total ≈ **520 m³** (rooms 349 + attic 171).
     - Closed-cell foam at that depth is a vapor retarder, so the roof deck no longer trades moisture with the
       attic air; the attic's buffer is the exposed framing and anything stored up there, and its moisture comes
       and goes through the house.
