@@ -38,6 +38,7 @@ full summary note.
 | `gen_tls.py`, `gen_vapid.py` | Cert / key generation |
 | `power_report.py`, `mesh_probe.py`, `gap_watcher.py` | Diagnostics |
 | `aq_experiment_report.py` (+ `.sh`) | Daily AQ v2 shadow-experiment report — runs on ha-2 read-only, filed on .210 under `instance/aq-experiment/reports/` by `ha-aq-experiment-report.timer` (SENSOR-METHODOLOGY §9.5) |
+| `dehum_readiness.py` (+ `_report.sh`) | Dehumidifier-study readiness gates (G2a/G2b/P3) + last-24 h stats — piped to ha-2 read-only, filed daily on .210 under `instance/dehum-study/reports/` (status.json + history) by visko crontab 14:41 UTC (study doc §6c). Also `dehum_audit.py` (Phase 0), `dehum_phase1.py` (Phase 1) |
 | `host-leds.sh` | Box operability LEDs |
 | `gen_module_matrix.py` | Generate/`--check` the firmware device×module matrix (`edge/MATRIX.md`) from each build's `CMakeLists` (ADR-0020 drift-guard; pinned by `tests/test_module_matrix.py`) |
 

@@ -224,7 +224,7 @@ furnace heat runs (kept, but as a regressor: the firing fraction; see the furnac
 |---|---|---|
 | 0 | ✅ 2026-10-31 — [findings + decisions](dehumidifier-efficiency-study-phase0.md) (`tools/dehum_audit.py`): room set for the house average, local outdoor primary, Aprilaire state from power, Midea onboard T +0.84 °C. Ceiling 94 in, specs in §2. Still open: study-pair zero offset (a day of idle), HVAC meters + continuous-fan tap (2026-11-01) | outdoor meter sun? |
 | 1 | First pass ✅ 2026-10-31 — [findings](dehumidifier-efficiency-study-phase1.md): an air-only balance can't measure removal (the house buffers ≈26× its air volume). Per-unit efficiency → B + C. A becomes a two-node house model fitted with B/C removal as known inputs | — |
-| 2 | Install inlet/outlet meters (method B); optional condensate spot checks (C) | sensors on hand? placement |
+| 2 | Install inlet/outlet meters (method B); optional condensate spot checks (C). Gates G2a/G2b in §6c | sensors on hand? placement |
 | 3 | Designed-experiment schedule (D), several weeks across weather | OK to rotate the units automatically |
 | 4 | Fit surfaces → control law → shadow → switch over | approve switch-over |
 
@@ -273,6 +273,28 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   - Model consequence: the house balance gets a leakage term scaled by ΔT (stack) and by blower-on, plus a
     furnace firing-fraction term × (W_out − W_in). The across-unit (B) measurement is unaffected.
   - To check: is the furnace two-pipe (both PVC pipes run outside) or one-pipe (intake open in its closet)?
+
+## 6c. Readiness schedule (agreed 2026-11-01)
+
+Each gate has dated pass/fail criteria, computed from live data by `tools/dehum_readiness.py` (read-only, runs on
+ha-2). `tools/dehum_readiness_report.sh` files it daily on .210 at 06:41 PT (visko crontab, 14:41 UTC) under
+`instance/dehum-study/reports/`: `<date>.md` + `latest.md`, `status.json` (gate status, machine-readable) and
+`status-history.jsonl` (one line per day). So a missed review date doesn't lose track: the status shows what's met,
+what's behind, and what's waiting on Hugh. An open Claude session also reviews it daily (session cron).
+
+| Gate | Due (PT) | Pass criteria | Unlocks |
+|---|---|---|---|
+| **G2a** HVAC meters zeroed | Tue Nov 3 | HVAC pair (`study_hvac_return`, `study_hvac_supply`) registered + reporting. Zero offset from ≥ 6 h of blower-on / Aprilaire-idle minutes over ≥ 2 days, SE ≤ 0.05 g/m³ (heat cycles give ~2.5 h a day of these, in short stretches). Fan tap and furnace venting known (Hugh). Midea pair offset from ≥ 12 idle h (met 2026-11-01: −0.40 ± 0.06 g/m³) | Across-handler measurement of the Aprilaire |
+| **G2b** Phase 2 done | Sun Nov 8 | ≥ 5 Aprilaire runs (one run = one call; the E070 cycles its compressor off ~4 min an hour) measured across the air handler. Half-range ≤ ±20 % of the median L/kWh. All runs 0.3–2.5 L/kWh | Build the rotation scheduler; Midea plug back on for its arms; **Hugh's go-ahead to rotate** |
+| **P3** Rotation coverage | Sun Nov 15, then weekly (22, 29, Dec 6) | Each arm ≥ 8 valid blocks, baseline ≥ 10. Each unit ≥ 2 inlet dew-point bins (< 7.5, 7.5–9.5, ≥ 9.5 °C) with ≥ 4 blocks. Each unit's L/kWh 95 % CI within ±15 %. The scheduler writes control.db `study_block` (arm, inlet_dp_c, l_per_kwh, end_reason) | Phase 4: fit surfaces, control law in shadow |
+
+Expected Phase 4 start ≈ Nov 29 – Dec 6; the limiter is weather variety (at least one mild damp spell), not block
+count. This winter's fit covers indoor dew points of only ~7–10 °C; the humid end waits for summer.
+
+Not used as a G2b criterion: an in-place airflow check *across the whole air handler*. The Aprilaire's sensible
+rise and latent term nearly cancel once diluted in ~1,000 cfm (cp·ΔT ≈ 1.4 kJ/kg vs h_fg·ΔW ≈ 1.2 kJ/kg), so the
+airflow estimate is ill-conditioned. A meter in the E070's own discharge (`study_apr_discharge`, optional) would
+make it well-conditioned and give ~5× the ΔAH signal.
 
 ## 7. Decisions
 
