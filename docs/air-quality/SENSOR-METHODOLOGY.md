@@ -651,3 +651,11 @@ Hugh: "how much combustion gas is noticed by the sensors in the same room". Tool
   blower's step up to heat speed. Hugh's pipe check will tell which.
 - **Not a safety verdict.** These are uncalibrated MOX sensors. A CO alarm in the mech closet is the right
   instrument for that question.
+
+### 10.3 Confounders and status (Hugh, 2026-11-02)
+- A CO alarm is already in the mech closet. The question is whether to improve exhaust removal, not safety.
+  For now, about double the VOC with no NOx events is acceptable.
+- **The mech closet still has an open hole to the crawlspace.** When the blower or burner pulls on the closet,
+  crawl air (≈14–15 °C) is a likely source of the cool inflow seen at starts, and it brings crawl VOCs (and radon)
+  with it. So part of the "burner" VOC signal may be crawl air. **Re-run after the hole is plugged**, and log the
+  plugging date here and as an event window in the tool, to split the two.
