@@ -238,14 +238,18 @@ def main():
     blower_off = {k: v <= 0.01 for k, v in blower.items()}
     # heat cycles are short (10-20 min), so the blower only has to hold 3 min; the Aprilaire must have been idle
     # 15 min so its last wet/dry air has cleared the ducts; blower-off needs 10 min for the loop to hold ERV air only
+    # Heat calls are excluded, with 25 min after each: the supply meter reads +1.6-1.9 g/m3 during a call and
+    # drifts back as its body cools (2026-11-02 03:16 cycle) — a sensor artifact at 30-37 °C / 20-30 % RH, since
+    # real combustion water would need the whole flame's output in the supply air.
+    no_heat = {k: hstate.get(k, 0) < 0.5 for k in blower}
     state = {}
     for k in blower:
-        if not held(apr_idle, k, 15):
+        if not (held(apr_idle, k, 15) and held(no_heat, k, 25)):
             continue
         if held(blower_off, k, 10):
             state[k] = "S0"
         elif held(blower_on, k, 3):
-            state[k] = "S1h" if hstate.get(k, 0) >= 0.5 else "S1f"
+            state[k] = "S1f"
     zm = None
     erv_cfm = d.series("erv_attic", "supply_cfm", study_a, now)
     w_out = d.ah_series(OUTDOOR, study_a - 1800, now)
@@ -262,19 +266,29 @@ def main():
         zm = zero_model({k: v for k, v in hv_delta.items() if k in state}, state, xdiff, erv_cfm)
     hz = {"mean": zm["beta"][0], "se": zm["se"][0]} if zm else None
     mid_idle = {k: mid_p.get(k, 999) < 5 for k in mid_p}
-    mz = offset_stats(pair_delta(d, MID_IN, MID_OUT, [k for k in mid_idle if held(mid_idle, k, 60)], study_a, now)
-                      or {})
+    # blower-off only: with the blower on, supply air reaches the pair unevenly (outlet − inlet +1.2-1.7 g/m3 on
+    # 2026-11-01 21-01 h with the Midea off), so its zero is per blower state; the blower-on zero is reported apart
+    mid_ok = [k for k in mid_idle if held(mid_idle, k, 60)]
+    mid_d = pair_delta(d, MID_IN, MID_OUT, [k for k in mid_ok if held(blower_off, k, 10)], study_a, now) or {}
+    mz = offset_stats(mid_d)
+    by_day = {}
+    for k, v in mid_d.items():
+        by_day.setdefault(pt(k).date(), []).append(v)
+    mid_days = {dd: S.mean(v) for dd, v in by_day.items() if len(v) >= 180}       # days with ≥ 3 h
+    mid_drift = (max(mid_days.values()) - min(mid_days.values())) if len(mid_days) >= 2 else None
+    mzb = offset_stats(pair_delta(d, MID_IN, MID_OUT, [k for k in mid_ok if held(blower_on, k, 10)], study_a, now)
+                       or {})
     g2a = [
         crit("HVAC pair registered and reporting", fresh,
              "both reporting" if fresh else ("registered, not reporting in 6 h" if reg else
                                              f"not registered yet ({HV_RET}, {HV_SUP})")),
-        crit("HVAC pair zero model: ≥ 6 h blower-on and ≥ 3 h blower-off (Aprilaire idle) over ≥ 2 days, "
+        crit("HVAC pair zero model: ≥ 2 h fan-only and ≥ 3 h blower-off (Aprilaire idle, no heat) over ≥ 2 days, "
              "offset SE ≤ 0.05 g/m³",
-             bool(zm and zm["hours"]["S1f"] + zm["hours"]["S1h"] >= 6 and zm["hours"]["S0"] >= 3
+             bool(zm and zm["hours"]["S1f"] >= 2 and zm["hours"]["S0"] >= 3
                   and zm["days"] >= 2 and zm["se"][0] is not None and zm["se"][0] <= 0.05),
              (f"offset {zm['beta'][0]:+.3f} ± {zm['se'][0]:.3f} g/m³; ERV terms: blower-off b0 {zm['beta'][1]:+.2f}, "
-              f"fan g {zm['beta'][2]:+.3f}, heat g {zm['beta'][3]:+.3f} (per 100 cfm·g/m³); hours S0/S1f/S1h "
-              + "/".join(f"{zm['hours'][q]:.1f}" for q in ("S0", "S1f", "S1h")) + f" over {zm['days']} d")
+              f"fan g {zm['beta'][2]:+.3f} (per 100 cfm·g/m³); hours blower-off/fan-only "
+              f"{zm['hours']['S0']:.1f}/{zm['hours']['S1f']:.1f} over {zm['days']} d")
              if zm else (f"{sum(1 for v in state.values() if v != 'S0')} blower-on and "
                          f"{sum(1 for v in state.values() if v == 'S0')} blower-off Aprilaire-idle minutes; "
                          + ("not enough paired stretches to fit yet" if reg else "no paired meter data"))),
@@ -282,9 +296,13 @@ def main():
              "read the tap the G (fan) terminal uses off the 59TP5 control board"),
         crit("Furnace venting known", MANUAL["furnace_venting"] is not None,
              MANUAL["furnace_venting"] or "two-pipe or one-pipe? (two PVC pipes outside, or intake open in closet)"),
-        crit("Midea pair zero offset (≥ 12 idle h)", bool(mz and mz["hours"] >= 12),
-             f"{mz['hours']:.1f} h, offset {mz['mean']:+.3f} ± {mz['se']:.3f} g/m³ (hourly SD {mz['sd']:.3f})"
-             if mz else "not enough idle hours"),
+        crit("Midea pair zero offset, blower off (≥ 12 idle h, daily means within 0.15 g/m³)",
+             bool(mz and mz["hours"] >= 12 and mid_drift is not None and mid_drift <= 0.15),
+             (f"{mz['hours']:.1f} h, offset {mz['mean']:+.3f} ± {mz['se']:.3f} g/m³ (hourly SD {mz['sd']:.3f})"
+              if mz else "not enough idle hours")
+             + (f"; daily means " + ", ".join(f"{dd:%m-%d} {v:+.2f}" for dd, v in sorted(mid_days.items()))
+                if mid_days else "")
+             + (f"; blower on: {mzb['mean']:+.3f} ± {mzb['se']:.3f} over {mzb['hours']:.1f} h" if mzb else "")),
     ]
     gates.append(("G2a", "HVAC meters zeroed", g2a))
 
@@ -295,18 +313,16 @@ def main():
         if me - ms < 20 * 60:
             continue
         kwh = sum(apr.get(k, 0) for k in range(s, e, 60)) / 60 / 1000
-        mins = [k for k in range(ms, me, 60) if blower.get(k, 0) >= 0.99]
+        mins = [k for k in range(ms, me, 60) if blower.get(k, 0) >= 0.99 and held(no_heat, k, 25)]
         dl = pair_delta(d, HV_RET, HV_SUP, mins, ms, me) if reg else None
         row = {"start": s, "end": e, "kwh": kwh, "heat": sum(1 for k in range(s, e, 60) if hstate.get(k, 0) >= .5)
                / ((e - s) / 60), "d_ah": None, "lpkwh": None}
         if dl and len(dl) >= 15 and zm:
             ex = []                                  # per minute: (corrected ΔAH, airflow m3/h or None)
             for k, v in dl.items():
-                heat = hstate.get(k, 0) >= 0.5
-                g = zm["beta"][3] if heat else zm["beta"][2]
                 xk = xdiff.get(k)
-                erv_term = g * erv_cfm.get(k, 0) * xk / 100 if xk is not None else 0.0
-                q = (HEAT_CFM.get(round(stage.get(k, 2)), HEAT_CFM[2]) * CFM) if heat else q_fan
+                erv_term = zm["beta"][2] * erv_cfm.get(k, 0) * xk / 100 if xk is not None else 0.0
+                q = q_fan
                 ex.append((v - zm["beta"][0] - erv_term, q))
             row["d_ah"] = S.mean(c for c, _ in ex)
             if all(q for _, q in ex):

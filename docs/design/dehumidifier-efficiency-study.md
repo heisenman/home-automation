@@ -300,6 +300,20 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
        its own ~140–200 cfm (≈5× the signal, and a well-conditioned in-place airflow). A meter in the ERV's
        fresh-air delivery measures ventilation drying directly. With both, the return→supply pair becomes a
        cross-check instead of the primary measurement.
+- **Night of 2026-11-01 → 11-02 (HVAC pair's first night):**
+  - Heat setpoint 73–74 °F; the hall held 72.0 °F. Aprilaire ran 21:34–01:55 PST (4 h 21 min, 2.27 kWh).
+  - **Heat calls: the supply meter reads +1.6–1.9 g/m³ above the return throughout a call** (03:16 cycle:
+    supply 24→36 °C, 37→22 % RH) and drifts back over ~15 min as its body cools. Real water would need roughly
+    the furnace's entire combustion water in the supply air, so this is treated as a sensor artifact at
+    30–37 °C / 20–30 % RH. Heat-call minutes plus 25 min are now excluded from the HVAC pair.
+  - With heat excluded, the blower never runs without the Aprilaire (it only follows the Aprilaire or a heat
+    call). So there are **no fan-only, Aprilaire-idle minutes**, and the HVAC pair's offset can't be separated from
+    the ERV term (fit: +0.75 ± 0.30 g/m³). Fix: short fan-only blocks (proposal to Hugh, 2026-11-02).
+  - Blower-off minutes behave as expected: the supply register runs 0.6–0.7 g/m³ drier than the return, between
+    return and outdoor air. The loop is carrying the ERV's fresh air.
+  - **The Midea pair is disturbed by the blower.** With the Midea off, outlet − inlet was +1.2–1.7 g/m³ while the
+    blower ran (21–01 h). Its blower-off offset also moved between days (11-01 −0.01, 11-02 +0.30 g/m³). So its
+    zero is per blower state, and the readiness check now requires daily means within 0.15 g/m³.
 - **Furnace note (Hugh, 2026-11-01: combustion and exhaust can dry a space).** Correct at the house level, even
   though the supply airstream gains no water. Three paths, all strongest when it's cold and dry outside:
   1. *Combustion air.* The 59TP5 is (by its 59-series prefix, to confirm from the manual) a condensing furnace,
