@@ -343,6 +343,12 @@ what's behind, and what's waiting on Hugh. An open Claude session also reviews i
 | **G2b** Phase 2 done | Sun Nov 8 | ≥ 5 Aprilaire runs (one run = one call; the E070 cycles its compressor off ~4 min an hour) measured across the air handler, after subtracting the offset and the fitted ERV term minute by minute, with fan-tap airflow (heat-speed rated 780/1000 cfm during heat calls). Half-range ≤ ±20 % of the median L/kWh. All runs 0.3–2.5 L/kWh | Build the rotation scheduler; Midea plug back on for its arms; **Hugh's go-ahead to rotate** |
 | **P3** Rotation coverage | Sun Nov 15, then weekly (22, 29, Dec 6) | Each arm ≥ 8 valid blocks, baseline ≥ 10. Each unit ≥ 2 inlet dew-point bins (< 7.5, 7.5–9.5, ≥ 9.5 °C) with ≥ 4 blocks. Each unit's L/kWh 95 % CI within ±15 %. The scheduler writes control.db `study_block` (arm, inlet_dp_c, l_per_kwh, end_reason) | Phase 4: fit surfaces, control law in shadow |
 
+**Fan-only zero blocks (Hugh, 2026-11-02):** blower ON at 10:00 and 15:00 PT for 30 min, with the Aprilaire and heat
+idle (`tools/fan_block.py` via `fan_block.sh`, visko crontab on .210, log `instance/dehum-study/fan_blocks.log`).
+Normal operation never runs the blower without the Aprilaire or a heat call, so this is the only source of
+fan-only minutes for the HVAC pair's zero. The blocks stop themselves once that criterion passes. The cron times
+are in UTC: shift them 1 h at DST.
+
 Expected Phase 4 start ≈ Nov 29 – Dec 6; the limiter is weather variety (at least one mild damp spell), not block
 count. This winter's fit covers indoor dew points of only ~7–10 °C; the humid end waits for summer.
 

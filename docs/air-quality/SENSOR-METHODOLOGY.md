@@ -617,3 +617,37 @@ cross-family problem at its root; (2) real CO₂ (SCD41) in bedrooms/offices —
 - **Check-in:** read `latest.md`; the **Flags** section lists anything worth raising (promotion candidate,
   sampler gap, refit drift, NOx/PM events, BME drift flattening).
 - **Baselines to beat (7 d ending 10-10, v1):** mech band agreement 60 %, Pearson 0.21, event hit-rate 9 %.
+
+## 10. Study 3 (2026-11-02) — does the mech closet notice the furnace's combustion?
+
+Hugh: "how much combustion gas is noticed by the sensors in the same room". Tool: `tools/furnace_closet_aq.py`
+(read-only on ha-2), filed daily on .210 under `instance/furnace-aq/reports/` (cron 06:43 PT via `tools/ha2_report.sh`).
+
+### 10.1 Method
+- Furnace state comes from the Venstar (`thermostat_hall` hvac_state, from 2026-10-26; first heat call 18:31 PDT
+  that day). There is no earlier furnace record.
+- **The confound:** a heat call also starts the blower, and the blower alone changes the closet's air. Blower-only
+  starts cool the closet ~1.3 °C and move the VOC signal strongly, from air pulled through the closet.
+- So events are split three ways and compared at the same offsets from their start, against the 15 min before:
+  - **A**: heat call with the blower off before.
+  - **B**: heat call while the blower is already running with the Aprilaire. This is combustion only, and the
+    cleanest test.
+  - **C**: blower start with no heat (Aprilaire follow and, from 2026-11-02, the dehumidifier study's fan-only
+    blocks). This is the air-movement control.
+- SGP41 raw signals are primary. The indexes restart with the node, and `sgp41_mech` rebooted every 40–80 s
+  until the splitter swap on 2026-10-31.
+
+### 10.2 First read (2026-11-02; A 36, B 15, C 7)
+- **SGP41 VOC: yes, clearly.** In class B the VOC raw falls by 180–240 ticks within 6–15 min (the VOC index
+  rises ≈ +100, n = 4 after the splitter fix), then recovers within ~30 min of the call ending. With the blower
+  already running, that's tied to the burner, not to air movement. Source not identifiable: MOX VOC sensors
+  respond to CO, H₂, ignition puffs and odorant as well as VOCs.
+- **SGP41 NOx: no.** The index never left baseline. The raw signal moves a little in B (+12 at 3 min, −30 to −40
+  at 15–30 min), but within what C shows.
+- **BME680 gas resistance: barely** (−1.9 ± 0.9 % at +10 min in B). It is much less sensitive than the SGP41 here.
+- **Closet temperature:** heat adds +1.2 to +2.0 °C over blower-only by 10–20 min (cabinet/flue losses). In B it
+  first *drops* ~0.8 °C for 3–6 min, with RH up, even though the blower was already running. That suggests air
+  drawn into the closet when the burner starts: combustion air from the closet (a one-pipe install) or the
+  blower's step up to heat speed. Hugh's pipe check will tell which.
+- **Not a safety verdict.** These are uncalibrated MOX sensors. A CO alarm in the mech closet is the right
+  instrument for that question.

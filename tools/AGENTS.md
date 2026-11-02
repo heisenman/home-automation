@@ -39,6 +39,9 @@ full summary note.
 | `power_report.py`, `mesh_probe.py`, `gap_watcher.py` | Diagnostics |
 | `aq_experiment_report.py` (+ `.sh`) | Daily AQ v2 shadow-experiment report — runs on ha-2 read-only, filed on .210 under `instance/aq-experiment/reports/` by `ha-aq-experiment-report.timer` (SENSOR-METHODOLOGY §9.5) |
 | `dehum_readiness.py` (+ `_report.sh`) | Dehumidifier-study readiness gates (G2a/G2b/P3) + last-24 h stats — piped to ha-2 read-only, filed daily on .210 under `instance/dehum-study/reports/` (status.json + history) by visko crontab 14:41 UTC (study doc §6c). Also `dehum_audit.py` (Phase 0), `dehum_phase1.py` (Phase 1) |
+| `fan_block.py` (+ `.sh`) | Dehumidifier study fan-only zero blocks — blower ON 10:00/15:00 PT for 30 min via the control-API press path, skips if Aprilaire/heat/person's fan setting, hands off to the follow coupling; cron on .210 until the HVAC zero passes (study doc §6c) |
+| `furnace_closet_aq.py` | Mech-closet AQ vs furnace heat calls (A heat / B heat-while-blowing / C blower-only), read-only on ha-2; daily via `ha2_report.sh` → `instance/furnace-aq/reports/` (SENSOR-METHODOLOGY §10) |
+| `ha2_report.sh` | Generic: pipe a read-only stdlib script to ha-2 and file its markdown on .210 under `instance/<name>/reports/` |
 | `host-leds.sh` | Box operability LEDs |
 | `gen_module_matrix.py` | Generate/`--check` the firmware device×module matrix (`edge/MATRIX.md`) from each build's `CMakeLists` (ADR-0020 drift-guard; pinned by `tests/test_module_matrix.py`) |
 
