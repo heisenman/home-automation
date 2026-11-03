@@ -314,6 +314,16 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   - **The Midea pair is disturbed by the blower.** With the Midea off, outlet − inlet was +1.2–1.7 g/m³ while the
     blower ran (21–01 h). Its blower-off offset also moved between days (11-01 −0.01, 11-02 +0.30 g/m³). So its
     zero is per blower state, and the readiness check now requires daily means within 0.15 g/m³.
+- **2026-11-02 fan-only blocks + first measured Aprilaire run (review 2026-11-03):**
+  - Both blocks ran and returned to Auto cleanly. 10:00: supply − return settled at +0.06 to +0.15 g/m³ (blower off
+    before: −0.71 to −0.79). 15:00: a heat call started inside the block, so most of it is excluded. Running the
+    blower may itself trigger the call by mixing air to the hall thermostat. Fan-only total: 0.6 h of the 2 h needed.
+  - Aprilaire 17:37–22:45 PST (308 min, 2.68 kWh), steady 18:30–22:00. Raw supply − return about −0.15 g/m³,
+    against about +0.10 fan-only. That's an Aprilaire effect of about −0.25 g/m³. Expected at ~1000 cfm
+    (1700 m³/h) and 0.5–1 L/kWh at ~0.5 kW: −0.15 to −0.3 g/m³. **The signal is the same size as today's zero
+    uncertainty**, so the ≤0.05 g/m³ SE target and the fan tap (cfm) both matter.
+  - The readiness report shows this run as +0.094 "corrected" because its fan-only ERV term is fitted on 0.6 h
+    of data. It isn't a real reversal; it should settle as fan-only hours build.
 - **Furnace note (Hugh, 2026-11-01: combustion and exhaust can dry a space).** Correct at the house level, even
   though the supply airstream gains no water. Three paths, all strongest when it's cold and dry outside:
   1. *Combustion air.* The 59TP5 is (by its 59-series prefix, to confirm from the manual) a condensing furnace,
