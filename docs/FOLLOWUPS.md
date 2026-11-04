@@ -159,8 +159,34 @@ heat/cool run time · §5 step 7 (clock + schedule) · D1001 alert reader · com
     rpm/CFM and PM decay calibrates the signal. Then a shadow series per filter, like the AQ experiment.
 - **Experiment tracking:** `.210` `ha-aq-experiment-report.timer` (daily 14:30 UTC) →
   `instance/aq-experiment/reports/latest.md` (Flags section first). Promotion criterion in the ADR amendment.
-- **OPEN (Hugh decides):** hardware — SGP41+SHT4x for the 3 BME680s, SCD41 CO₂ for bedrooms/offices, or SEN66 per
-  room; T/RH meter for the mech closet. **OPEN:** NOx spike 09-14 15:15 likely a restart transient — unverified.
+- **DECIDED (Hugh, 2026-11-04): consolidate onto Sensirion SEN69C, one per room, starting with the BME680s.**
+  The SEN69C covers PM1–10, T/RH, VOC index, NOx index, formaldehyde in ppb, and real CO₂. It costs < 15 % more
+  than the SEN66, so the cheaper variant isn't worth it. Its VOC/NOx are the same self-normalizing Gas Index as the
+  SGP41; the absolute VOC-class number is the formaldehyde.
+  - Current gas sensors, inferred from metric shapes:
+    - BME680 in `gas_h_office`, `gas_hbed`, `gas_mech_closet`;
+    - SGP41 `gas_h_office_sgp41`, `gas_mech_closet_sgp41` (the doubles added to cover the BME680s);
+    - SGP40-class `gas_c_office`, `gas_kitchen`;
+    - SGP30 `gas_c_bed`;
+    - no gas sensor in the living room or attic.
+  - **Stage 1:** replace the 3 BME680s: H office, H bed, mech closet. Then retire the H-office SGP41. Keep the
+    mech-closet SGP41 until the closet study (SENSOR-METHODOLOGY §10) has its after-plug re-run. The closet unit
+    also gives CO₂ during heat calls: a sealed two-pipe furnace should show none.
+  - **Stage 2:** replace C bed (SGP30), C office and kitchen. Add the living room and attic (July foam). Optional
+    spare as a travelling reference. Target is 8–9 units.
+  - **Each swap:**
+    - co-locate all new units 2–3 d first (formaldehyde is ±20 % per unit);
+    - run old and new side by side a few weeks, then retire the old;
+    - give the new device its own id; keep the old history, and move the room's AQ-index basis over.
+  - **End state:** one sensor family per room. Most of the cross-family compensation (`server/gas_compensation.py`,
+    ADR-0035 basis flags, the BME drift work) can then be retired. That's the payoff of consolidating.
+  - **Before code:**
+    - DEVICE-INTAKE and CONFORMANCE for the new ability set (PM, CO₂, HCHO);
+    - a new SEN6x driver module in the gas-node firmware;
+    - check supply current (fan + laser) against each node's power;
+    - remember deployed C6 gas nodes may reject OTA (cable-flash; see memory c6-fleet-ota-reject).
+  - T/RH meter for the mech closet: superseded by the SEN69C there.
+- **OPEN:** NOx spike 09-14 15:15 likely a restart transient — unverified.
 - **NOT updated:** the `.210` air-gap-standby checkout (`~/ha-airgap-standby`, `ha-ag-gas-quality-sampler`) still
   runs v1 only — dev convenience, not needed for the experiment.
 
