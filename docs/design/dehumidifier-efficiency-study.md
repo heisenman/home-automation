@@ -425,6 +425,29 @@ make it well-conditioned and give ~5× the ΔAH signal.
   - Summer targets stay ≈ 45 % RH, so the comparison point is 70–75 °F at 45–50 % RH. Ask Santa Fe for data there.
     This study gives the E070's measured baseline at that point.
 
+- **Drift alert, condition-compensated (Hugh, 2026-11-03: "the compensation for external factors can't be
+  overstated").** `tools/dehum_drift.py`, filed daily on .210 under `instance/dehum-drift/`. It looks for the slow
+  refrigerant leak that copper-coil whole-house units are known for, and for airflow faults, which look the same.
+  - **Indicators, one value per run:**
+    - compressor power (a fault pushes it down);
+    - compressor pauses per hour (frost on a starved coil pushes it up);
+    - system L/kWh including the blower estimate (down; only once G2a passes).
+  - **Compensation:** each run is compared with a frozen per-unit baseline model at the *same* inlet temperature, dew
+    point, line voltage, heat share and blower share. A run is not scored, and is learned into the baseline only
+    while the unit is healthy, if any of these hold:
+    - its conditions fall outside what the baseline has seen;
+    - the baseline is thin there (leverage > 0.08);
+    - it's within 20 min of compressor start or 2 min of a pause.
+  - **Decision:** two-sided CUSUM (k 0.5, h 5) on unit-variance z. One indicator drifting = watch; two = alert,
+    with "check filter and ducts first". A good-direction shift = "changed" (log a MAINT event to restart the baseline).
+  - **Simulated before trusting it:** residual SD 2 W, 40 seeds per case. A −0.5 W/run leak was caught 40/40, a median
+    of 9 runs after onset (≈ 4.5 W, < 1 %). Healthy false watch 1/40, and 2/40 across a +4 °C dew-point season change.
+    Two-indicator false alert 0. An earlier version that scored thin-baseline runs raised 13/40 on the season change.
+  - **First live runs:** 555–559 W across four Aprilaire runs at inlet 21 °C / dew point 7 °C. The baseline needs
+    20 runs, about 1–2 weeks.
+  - **Midea:** configured, scored when it runs again.
+  - **Next:** once validated, move it onto ha-2 with a notification. Prod must not depend on .210.
+
 **Open:**
 - Study meter intake as separate study devices (§3D, with Hugh).
 - Rotation (§3D): Hugh to review the full proposal. Blower = follows Aprilaire; 24 h; upper guard 47–48 % are settled.

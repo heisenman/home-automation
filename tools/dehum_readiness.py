@@ -35,6 +35,9 @@ TAP_CFM = {1: (785, 655, 530), 2: (1160, 1080, 1000), 3: (1010, 925, 835), 4: (1
            5: (1720, 1620, 1505)}
 
 HEAT_CFM = {1: 780, 2: 1000}                   # rated heating airflow low/high stage @ 0.12 in. (§2)
+# Furnace blower at the fan tap, while it runs for the Aprilaire (no backdraft damper, so it must). Not metered:
+# estimate for the X13 at tap 1, ~100-200 W (study doc §7, 2026-11-03). Counted in the Aprilaire's system L/kWh.
+BLOWER_FAN_W = 150
 
 ROOMS = ["meter_pro_living_room", "meter_kitchen", "meter_c_bed", "meter_pro_c_office", "meter_pro_h_bed"]
 OUTDOOR, CRAWL, LR = "switchbot_outdoor", "ometer_crawlspace", "meter_pro_living_room"
@@ -148,7 +151,7 @@ def ols(X, y):
     beta = [sum(inv[i][j] * bv[j] for j in range(p)) for i in range(p)]
     res = [y[r] - sum(beta[i] * X[r][i] for i in range(p)) for r in range(n)]
     s2 = sum(e * e for e in res) / max(n - p, 1)
-    return beta, [math.sqrt(max(inv[i][i] * s2, 0)) for i in range(p)]
+    return beta, [math.sqrt(max(inv[i][i] * s2, 0)) for i in range(p)], inv, s2
 
 
 def zero_model(delta, state, x, cfm):
@@ -318,7 +321,8 @@ def main():
         mins = [k for k in range(ms, me, 60) if blower.get(k, 0) >= 0.99 and held(no_heat, k, 25)]
         dl = pair_delta(d, HV_RET, HV_SUP, mins, ms, me) if reg else None
         row = {"start": s, "end": e, "kwh": kwh, "heat": sum(1 for k in range(s, e, 60) if hstate.get(k, 0) >= .5)
-               / ((e - s) / 60), "d_ah": None, "lpkwh": None}
+               / ((e - s) / 60), "d_ah": None, "lpkwh": None, "lpkwh_sys": None}
+        blower_kwh = sum(BLOWER_FAN_W for k in range(s, e, 60) if blower.get(k, 0) >= 0.5) / 60 / 1000
         if dl and len(dl) >= 15 and zm:
             ex = []                                  # per minute: (corrected ΔAH, airflow m3/h or None)
             for k, v in dl.items():
@@ -329,7 +333,9 @@ def main():
             row["d_ah"] = S.mean(c for c, _ in ex)
             if all(q for _, q in ex):
                 grams = -sum(c * q / 60 for c, q in ex)              # g removed over the measured minutes
-                row["lpkwh"] = grams / 1000 / (kwh * len(ex) / ((e - s) / 60))
+                share = len(ex) / ((e - s) / 60)             # measured minutes / run minutes
+                row["lpkwh"] = grams / 1000 / (kwh * share)
+                row["lpkwh_sys"] = grams / 1000 / ((kwh + blower_kwh) * share)
         run_rows.append(row)
     eff = [r["lpkwh"] for r in run_rows if r["lpkwh"] is not None]
     spread = ((max(eff) - min(eff)) / 2 / S.median(eff)) if len(eff) >= 2 and S.median(eff) > 0 else None
@@ -427,17 +433,21 @@ def main():
     print(f"| Heat call / blower on | {S.mean(hs) if hs else 0:.0%} / {S.mean(bl) if bl else 0:.0%} |")
     print(f"| ERV supply cfm | {f(erv, 0)} |\n")
     if r24:
-        print("| Aprilaire run (PT) | min | kWh | heat share | ΔAH corr g/m³ | L/kWh |\n|---|---|---|---|---|---|")
+        print("| Aprilaire run (PT) | min | kWh | heat share | ΔAH corr g/m³ | L/kWh | L/kWh incl. blower |\n"
+              "|---|---|---|---|---|---|---|")
         for r in r24:
             print(f"| {pt(r['start']):%m-%d %H:%M}–{pt(r['end']):%H:%M} | {(r['end'] - r['start']) // 60} | "
                   f"{r['kwh']:.2f} | {r['heat']:.0%} | "
                   f"{'—' if r['d_ah'] is None else format(r['d_ah'], '+.3f')} | "
-                  f"{'—' if r['lpkwh'] is None else format(r['lpkwh'], '.2f')} |")
+                  f"{'—' if r['lpkwh'] is None else format(r['lpkwh'], '.2f')} | "
+                  f"{'—' if r['lpkwh_sys'] is None else format(r['lpkwh_sys'], '.2f')} |")
         print()
     missing = [k for k, v in MANUAL.items() if v is None]
     if missing:
         print(f"Waiting on Hugh: {', '.join(missing)} (edit MANUAL in tools/dehum_readiness.py).")
+    return {"runs": run_rows, "zero_ok": g2a[1]["ok"]}
 
 
-if __name__ == "__main__":
+# tools/dehum_drift.py bundles this file as a library (it sets _AS_LIBRARY before this source); don't run then
+if __name__ == "__main__" and not globals().get("_AS_LIBRARY"):
     main()
