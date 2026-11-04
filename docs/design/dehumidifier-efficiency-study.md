@@ -409,6 +409,22 @@ make it well-conditioned and give ~5× the ΔAH signal.
   `erv_pm`. Hugh's spare plug meters aren't needed here. Method B needs **temperature/RH** meters, not power
   meters.
 
+- **Furnace blower energy is estimated, not metered (Hugh, 2026-11-03).** There's no practical way to meter the blower,
+  so the study counts an estimate for the X13 motor at tap 1 (fan-only, ≈ 655 cfm): **~100–200 W**, to be replaced
+  by the published blower power if it can be found. While the Aprilaire runs, the blower is required, because there's
+  no backdraft damper. So the Aprilaire's system L/kWh = water ÷ (dehum_pm kWh + blower estimate).
+- **Winter heat credit is small.** Electricity costs far more than gas per unit of heat (Hugh, 2026-11-03), so
+  dehumidifier heat displacing furnace gas barely offsets it. Winter drying: ventilation first.
+- **Hardware direction (Hugh, 2026-11-03; not yet bought):**
+  - Once the crawlspace is sealed, move the E070 there. It's sold as a crawlspace unit: inlet 50–104 °F, dew
+    point ≥ 40 °F, defrost down to 41 °F. The crawlspace runs 58–67 °F at a dew point of about 8 °C (46 °F), well
+    inside that range.
+  - Replace it in the attic with a pre-cooler unit, Ultra-Aire XT105H or an equivalent. It's rated 4.2 L/kWh at
+    80/60 and 3.8 L/kWh at 70/60, against the E070's 1.8–2.1. It has its own 206 cfm blower at 0.2 in., so it
+    can run without the furnace blower if the install includes a backdraft/check damper.
+  - Summer targets stay ≈ 45 % RH, so the comparison point is 70–75 °F at 45–50 % RH. Ask Santa Fe for data there.
+    This study gives the E070's measured baseline at that point.
+
 **Open:**
 - Study meter intake as separate study devices (§3D, with Hugh).
 - Rotation (§3D): Hugh to review the full proposal. Blower = follows Aprilaire; 24 h; upper guard 47–48 % are settled.
