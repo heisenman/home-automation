@@ -130,6 +130,19 @@ def offset_stats(delta):
             "se": sd / math.sqrt(len(ch))}
 
 
+def drift_test(days, sd):
+    """Do daily offset means differ by more than their own SEs? χ² of the means about their inverse-variance
+    weighted mean, df = days − 1; p from the Wilson–Hilferty approximation. Returns (χ², p). Each day's SE uses
+    the pooled chunk SD (sd) over its chunk count: a short day's own SD from a few chunks can be absurdly small
+    (11-04: ±0.01 from 5 chunks) and would dominate the weights."""
+    w = [x["chunks"] / sd ** 2 for x in days]
+    m = sum(wi * x["mean"] for wi, x in zip(w, days)) / sum(w)
+    chi2 = sum(wi * (x["mean"] - m) ** 2 for wi, x in zip(w, days))
+    df = len(days) - 1
+    z = ((chi2 / df) ** (1 / 3) - (1 - 2 / (9 * df))) / math.sqrt(2 / (9 * df))
+    return chi2, 0.5 * math.erfc(z / math.sqrt(2))
+
+
 def ols(X, y):
     """Least squares with standard errors (normal equations + Gauss-Jordan; no numpy on ha-2). As dehum_phase1."""
     n, p = len(X), len(X[0])
@@ -278,9 +291,11 @@ def main():
     mz = offset_stats(mid_d)
     by_day = {}
     for k, v in mid_d.items():
-        by_day.setdefault(pt(k).date(), []).append(v)
-    mid_days = {dd: S.mean(v) for dd, v in by_day.items() if len(v) >= 180}       # days with ≥ 3 h
-    mid_drift = (max(mid_days.values()) - min(mid_days.values())) if len(mid_days) >= 2 else None
+        by_day.setdefault(pt(k).date(), {})[k] = v
+    # day-to-day drift judged against each day's own SE (Hugh agreed 2026-11-04): a fixed 0.15 g/m³ range was
+    # tighter than the noise (day SEs 0.06-0.18), so it would only ever pass by luck
+    mid_days = {dd: st for dd, sub in by_day.items() if len(sub) >= 180 and (st := offset_stats(sub))}  # ≥ 3 h days
+    mid_drift = drift_test(list(mid_days.values()), mz["sd"]) if len(mid_days) >= 2 and mz else None
     mzb = offset_stats(pair_delta(d, MID_IN, MID_OUT, [k for k in mid_ok if held(blower_on, k, 10)], study_a, now)
                        or {})
     g2a = [
@@ -301,11 +316,14 @@ def main():
              "read the tap the G (fan) terminal uses off the 59TP5 control board"),
         crit("Furnace venting known", MANUAL["furnace_venting"] is not None,
              MANUAL["furnace_venting"] or "two-pipe or one-pipe? (two PVC pipes outside, or intake open in closet)"),
-        crit("Midea pair zero offset, blower off (≥ 12 idle h, daily means within 0.15 g/m³)",
-             bool(mz and mz["hours"] >= 12 and mid_drift is not None and mid_drift <= 0.15),
+        crit("Midea pair zero offset, blower off (≥ 12 idle h over ≥ 2 days, no day-to-day drift beyond the days' "
+             "own SE at p < 0.05, offset SE ≤ 0.08 g/m³)",
+             bool(mz and mz["hours"] >= 12 and mz["se"] <= 0.08 and mid_drift is not None and mid_drift[1] >= 0.05),
              (f"{mz['hours']:.1f} h, offset {mz['mean']:+.3f} ± {mz['se']:.3f} g/m³ (hourly SD {mz['sd']:.3f})"
               if mz else "not enough idle hours")
-             + (f"; daily means " + ", ".join(f"{dd:%m-%d} {v:+.2f}" for dd, v in sorted(mid_days.items()))
+             + (f"; daily means " + ", ".join(f"{dd:%m-%d} {v['mean']:+.2f} ± {mz['sd'] / math.sqrt(v['chunks']):.2f}"
+                                             for dd, v in sorted(mid_days.items()))
+                + (f" (drift χ² {mid_drift[0]:.1f}, p {mid_drift[1]:.2f})" if mid_drift else "")
                 if mid_days else "")
              + (f"; blower on: {mzb['mean']:+.3f} ± {mzb['se']:.3f} over {mzb['hours']:.1f} h" if mzb else "")),
     ]

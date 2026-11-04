@@ -335,6 +335,12 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
     the ~−0.2 g/m³ Aprilaire signal repeats. The fitted correction (−0.09, −0.02) is still unsettled.
   - The 10:00 fan-only block was skipped because the Aprilaire was running; the 15:00 block was clean. Fan-only
     total 1.0 h; zero-model SE 0.045 g/m³ now meets the ≤0.05 target, but hours are still short.
+- **2026-11-04 review:**
+  - The Midea criterion now uses an SE-based drift test. The daily means (−0.01, +0.11, −0.08, −0.01 g/m³)
+    differ by about 1 SE, so there is no drift. The criterion passes, and G2a is 4/5. Only the HVAC-pair zero
+    is left: 1.0 of 2 fan-only h, SE 0.053.
+  - Aprilaire: 14.6 h and 8.25 kWh in 24 h at 45 % RH, while outdoor air was drier than the house 80 % of hours,
+    rain included (outdoor dew point mean 6.2 °C, indoor 8.1).
 - **Fan tap and venting answered (Hugh, 2026-11-03 evening):**
   - Photo `wire_taps_1`: the taps are still factory-wired. Red (motor tap 1) is on LO HT, blue (3) on HI HT, grey (5) on
     COOL, and yellow and orange are on the spares. Fan-only is taken to run at the LO HT speed (the board has no
@@ -371,7 +377,7 @@ what's behind, and what's waiting on Hugh. An open Claude session also reviews i
 
 | Gate | Due (PT) | Pass criteria | Unlocks |
 |---|---|---|---|
-| **G2a** HVAC meters zeroed | Tue Nov 3 | HVAC pair (`study_hvac_return`, `study_hvac_supply`) registered + reporting. Zero model fitted from Aprilaire-idle stretches, ≥ 6 h blower-on and ≥ 3 h blower-off over ≥ 2 days, offset SE ≤ 0.05 g/m³: supply − return = offset + the ERV's fresh air (blower off: the loop carries ERV air only; blower on: diluted by fan- or heat-speed airflow), each × (W_out − W_return). No extra meters (decision 2026-11-01). Fan tap and furnace venting known (Hugh). Midea pair offset from ≥ 12 idle h (met 2026-11-01: −0.40 ± 0.06 g/m³) | Across-handler measurement of the Aprilaire |
+| **G2a** HVAC meters zeroed | Tue Nov 3 | HVAC pair (`study_hvac_return`, `study_hvac_supply`) registered + reporting. Zero model fitted from Aprilaire-idle stretches, ≥ 6 h blower-on and ≥ 3 h blower-off over ≥ 2 days, offset SE ≤ 0.05 g/m³: supply − return = offset + the ERV's fresh air (blower off: the loop carries ERV air only; blower on: diluted by fan- or heat-speed airflow), each × (W_out − W_return). No extra meters (decision 2026-11-01). Fan tap and furnace venting known (Hugh). Midea pair offset, blower off, from ≥ 12 idle h over ≥ 2 days: no day-to-day drift beyond the days' own SE (χ², p ≥ 0.05) and offset SE ≤ 0.08 g/m³. This replaced a fixed 0.15 g/m³ range that was tighter than the noise (Hugh agreed 2026-11-04). Met 2026-11-04: −0.011 ± 0.071, p 0.85 | Across-handler measurement of the Aprilaire |
 | **G2b** Phase 2 done | Sun Nov 8 | ≥ 5 Aprilaire runs (one run = one call; the E070 cycles its compressor off ~4 min an hour) measured across the air handler, after subtracting the offset and the fitted ERV term minute by minute, with fan-tap airflow (heat-speed rated 780/1000 cfm during heat calls). Half-range ≤ ±20 % of the median L/kWh. All runs 0.3–2.5 L/kWh | Build the rotation scheduler; Midea plug back on for its arms; **Hugh's go-ahead to rotate** |
 | **P3** Rotation coverage | Sun Nov 15, then weekly (22, 29, Dec 6) | Each arm ≥ 8 valid blocks, baseline ≥ 10. Each unit ≥ 2 inlet dew-point bins (< 7.5, 7.5–9.5, ≥ 9.5 °C) with ≥ 4 blocks. Each unit's L/kWh 95 % CI within ±15 %. The scheduler writes control.db `study_block` (arm, inlet_dp_c, l_per_kwh, end_reason) | Phase 4: fit surfaces, control law in shadow |
 
