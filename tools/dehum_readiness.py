@@ -24,8 +24,10 @@ CFM = 1.699                                     # m3/h per cfm
 
 # Facts only Hugh can supply. Edit + commit when he answers (the report lists what is still missing).
 MANUAL = {
-    "fan_tap": None,            # continuous-fan (G) tap 1-5, read off the 59TP5 control board
-    "furnace_venting": None,    # "two-pipe" (outdoor combustion air) | "one-pipe" (combustion air from the space)
+    # continuous-fan (G) tap 1-5. Hugh 2026-11-03: factory wiring, red = motor tap 1 on LO HT; fan-only is taken to
+    # run at the LO HT speed (this board has no separate fan terminal; confirm in the installation manual)
+    "fan_tap": 1,
+    "furnace_venting": "two-pipe",   # Hugh 2026-11-03: both PVC pipes run outside (photo); combustion air is outdoor
     "static_in_wc": 0.3,        # assumed external static for the tap table (§2); refine if measured
 }
 # 59TP5A060 air delivery at 0.1 / 0.3 / 0.5 in. w.c. (59TP5A-02PD, §2)

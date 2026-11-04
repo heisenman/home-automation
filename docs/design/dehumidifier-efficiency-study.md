@@ -335,6 +335,15 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
     the ~−0.2 g/m³ Aprilaire signal repeats. The fitted correction (−0.09, −0.02) is still unsettled.
   - The 10:00 fan-only block was skipped because the Aprilaire was running; the 15:00 block was clean. Fan-only
     total 1.0 h; zero-model SE 0.045 g/m³ now meets the ≤0.05 target, but hours are still short.
+- **Fan tap and venting answered (Hugh, 2026-11-03 evening):**
+  - Photo `wire_taps_1`: the taps are still factory-wired. Red (motor tap 1) is on LO HT, blue (3) on HI HT, grey (5) on
+    COOL, and yellow and orange are on the spares. Fan-only is taken to run at the LO HT speed (the board has no
+    separate fan terminal; still to confirm in the installation manual). So fan_tap = 1, ≈ 655 cfm at 0.3 in.
+  - G2a is now 3/5.
+  - The first L/kWh values (−0.48, −0.24, +0.20, +0.06) are not plausible, because they use the still-unsettled
+    fitted zero. A check from the raw contrast (≈ −0.2 g/m³ × 1110 m³/h ≈ 220 g/h at ≈ 0.5 kW) gives ≈ 0.45 L/kWh.
+    That is low against the rated 1.8–2.1 at 60 % RH, but believable at 45 % RH and 22 °C. Wait for the zero model to
+    pass before reading the per-run numbers.
 - **Furnace note (Hugh, 2026-11-01: combustion and exhaust can dry a space).** Correct at the house level, even
   though the supply airstream gains no water. Three paths, all strongest when it's cold and dry outside:
   1. *Combustion air.* The 59TP5 is (by its 59-series prefix, to confirm from the manual) a condensing furnace,
@@ -349,6 +358,8 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   - Model consequence: the house balance gets a leakage term scaled by ΔT (stack) and by blower-on, plus a
     furnace firing-fraction term × (W_out − W_in). The across-unit (B) measurement is unaffected.
   - To check: is the furnace two-pipe (both PVC pipes run outside) or one-pipe (intake open in its closet)?
+  - **Answered (Hugh, 2026-11-03, photo): two-pipe** — both PVC pipes run outside, so path 1 (combustion air from
+    the house) is out. Furnace drying is stack effect and duct leakage only.
 
 ## 6c. Readiness schedule (agreed 2026-11-01)
 
