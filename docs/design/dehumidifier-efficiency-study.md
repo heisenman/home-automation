@@ -448,6 +448,28 @@ make it well-conditioned and give ~5× the ΔAH signal.
   - **Midea:** configured, scored when it runs again.
   - **Next:** once validated, move it onto ha-2 with a notification. Prod must not depend on .210.
 
+- **VOC dilution rides on the Phase 3 rotation; no separate ERV experiment (Hugh, 2026-11-04: "run in parallel if it
+  doesn't interfere, otherwise after").**
+  - **Why it would interfere:** changing the ERV rate now would interfere with the study.
+    - In winter, extra ventilation dries the house, so the Aprilaire would run less and G2b (≥ 5 runs by Nov 8)
+      would slip.
+    - Phase 3 already rotates the ERV as an arm (E). A second ERV schedule would confound it.
+    - The HVAC-pair zero model would be fine: it already carries ERV cfm as a term.
+  - **What happens instead:** each `study_block` also records VOC outcomes. These are the block means of
+    `voc_raw_comp`, the compensated raw SGP signal that doesn't self-normalize, for every room's gas node, plus the
+    SGP30 TVOC in C bed. They're compared between E and non-E arms at matched outdoor and indoor conditions. A 24 h
+    block is ≫ the ~3 h air-change time (≈ 0.3 ACH at ~93 cfm over ≈ 520 m³), so each block reaches the new level.
+  - **Expected payoff:** VOC reduction per extra ERV cfm, against its heat and humidity cost, for the ventilation
+    model.
+  - **Background:**
+    - The house is in a high-emission period: closed-cell foam from ~July 2026, plus construction and new materials
+      throughout.
+    - Filtration today: MERV 13 on both ERV inputs (particles only); a carbon furnace filter (works only while the
+      blower runs); thin carbon sheets in 4–5 purifiers (likely saturated).
+    - The SGP40/41 indexes and BME680 can't show an average level, because they self-normalize. Only the raw
+      compensated signal and the SGP30 estimate can (SGP30 C bed: median ≈ 384 ppb ethanol-eq over 14 d).
+    - Formaldehyde is not well covered by these sensors.
+
 **Open:**
 - Study meter intake as separate study devices (§3D, with Hugh).
 - Rotation (§3D): Hugh to review the full proposal. Blower = follows Aprilaire; 24 h; upper guard 47–48 % are settled.
