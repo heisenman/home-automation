@@ -324,6 +324,17 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
     uncertainty**, so the ≤0.05 g/m³ SE target and the fan tap (cfm) both matter.
   - The readiness report shows this run as +0.094 "corrected" because its fan-only ERV term is fitted on 0.6 h
     of data. It isn't a real reversal; it should settle as fan-only hours build.
+- **2026-11-03 (warm day, review 20:30 PST):**
+  - Outdoor 7.8–14.7 °C (mean 11.2, against 6.2 on 11-01 and 7.8 on 11-02). Outdoor air was drier than the house 81 %
+    of hours, down from 99 %. Heat setpoint unchanged at 73 °F; hall held 72 °F with no heat call after 05:40.
+  - Heat-call fraction by day: 17 % → 10 % → 5 %. Aprilaire energy rose 1.9 → 3.7 → 5.2 kWh. That matches
+    furnace and ventilation drying falling off as it warms (study doc furnace note). It's one week of weather,
+    so treat it as a pointer, not a result.
+  - Aprilaire ran 07:00–14:03 (7 h, 3.51 kWh, no heat) and 17:19–20:18. Return AH fell 7.60 → 7.19 g/m³ over the
+    day run. Raw supply − return was about −0.15 g/m³ in all three measured runs, against +0.05 to +0.10 fan-only. So
+    the ~−0.2 g/m³ Aprilaire signal repeats. The fitted correction (−0.09, −0.02) is still unsettled.
+  - The 10:00 fan-only block was skipped because the Aprilaire was running; the 15:00 block was clean. Fan-only
+    total 1.0 h; zero-model SE 0.045 g/m³ now meets the ≤0.05 target, but hours are still short.
 - **Furnace note (Hugh, 2026-11-01: combustion and exhaust can dry a space).** Correct at the house level, even
   though the supply airstream gains no water. Three paths, all strongest when it's cold and dry outside:
   1. *Combustion air.* The 59TP5 is (by its 59-series prefix, to confirm from the manual) a condensing furnace,
