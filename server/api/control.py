@@ -13,6 +13,7 @@ import re
 from typing import Any
 
 from server.control.issuer import CommandIssuer, Result
+from server.control import dry_boost
 
 # Result.status -> HTTP status code
 _STATUS_HTTP = {
@@ -315,6 +316,40 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
                 return bad("outdoor_gate.min_dewpoint_c must be a number in -30..30 °C")
             cur["min_dewpoint_c"] = g["min_dewpoint_c"]
         pol["outdoor_gate"] = cur
+    if "dry_boost" in patch:
+        # level-mode ventilator (the ERV): boost while outdoor air is drier than the house (Hugh 2026-11-04;
+        # server/control/dry_boost.py). outdoor_sensor null = disabled.
+        g = patch["dry_boost"]
+        if not isinstance(g, dict):
+            return bad("dry_boost must be an object")
+        cur = dict(pol.get("dry_boost") or {})
+        if "outdoor_sensor" in g:
+            if g["outdoor_sensor"] is not None and (not isinstance(g["outdoor_sensor"], str)
+                                                    or not g["outdoor_sensor"]):
+                return bad("dry_boost.outdoor_sensor must be a sensor id or null (null = no boost)")
+            cur["outdoor_sensor"] = g["outdoor_sensor"]
+        if "indoor_sensors" in g:
+            ss = g["indoor_sensors"]
+            if not isinstance(ss, list) or any(not isinstance(x, str) or not x for x in ss):
+                return bad("dry_boost.indoor_sensors must be a list of sensor ids")
+            cur["indoor_sensors"] = list(dict.fromkeys(ss))
+        ranges = {"on_delta_c": (0, 15), "off_delta_c": (-5, 15), "rh_on": (20, 80), "rh_floor": (20, 80),
+                  "min_room_c": (5, 30), "min_on_min": (0, 240), "min_off_min": (0, 240), "stale_min": (1, 120)}
+        for k, (lo, hi) in ranges.items():
+            if k in g:
+                if not _is_num(g[k]) or not lo <= g[k] <= hi:
+                    return bad(f"dry_boost.{k} must be a number in {lo}..{hi}")
+                cur[k] = g[k]
+        if "level" in g:
+            if not isinstance(g["level"], int) or isinstance(g["level"], bool) or not 1 <= g["level"] <= 4:
+                return bad("dry_boost.level must be an integer level 1..4")
+            cur["level"] = g["level"]
+        eff = {**dry_boost.DEFAULTS, **cur}
+        if eff["off_delta_c"] >= eff["on_delta_c"] or eff["rh_floor"] >= eff["rh_on"]:
+            return bad("dry_boost needs off_delta_c < on_delta_c and rh_floor < rh_on (hysteresis)")
+        if eff["outdoor_sensor"] and not eff["indoor_sensors"]:
+            return bad("dry_boost needs indoor_sensors when outdoor_sensor is set")
+        pol["dry_boost"] = cur
     if "force_run" in patch:
         # leased-call devices (the Aprilaire): every automation call is a FORCE-RUN (RS-485 on=0x02 — run
         # regardless of the unit's own dew-point logic). Hugh, 2026-10-06: the house-RH decision is ours.

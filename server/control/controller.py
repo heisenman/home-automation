@@ -19,13 +19,14 @@ import time
 from pathlib import Path
 
 from server.comms import events as ev
-from server.control import actuator_state, bootstrap, control_store as store, follow
+from server.control import actuator_state, bootstrap, control_store as store, dry_boost, follow
 from server.control.midea_driver import GarbledStatus
 from server.control.registry import load_control_registry
 from server.util.psychro import dewpoint_c
 from server.util.registry_reload import RegistryReloader
 from server.control.automation import (
-    DEFAULT_SCENE, DeviceState, Override, Policy, Reading, Resolution, _gate, apply_scene, house_tod, in_window,
+    DEFAULT_SCENE, DeviceState, Override, Policy, Reading, Resolution, _gate, _level_for, apply_scene, house_tod,
+    in_window,
     resolve, schedule_off_now)
 from server.control.secret_store import available_master
 
@@ -468,6 +469,41 @@ class Controller:
                           f"{res.reason}; skipped: outdoor dew point {dp:.1f}°C < {lim:.1f}°C "
                           f"(dry outside — ventilation dries the house; E8 territory)")
 
+    def _apply_dry_boost(self, device_id, pol, policy, sensor, res, dev_state, override, now):
+        """Raise a level-mode ventilator (the ERV) to `dry_boost.level` while outdoor air is drier than the
+        house (server/control/dry_boost.py). Applies only to a running rule/default resolution: safety, an
+        operator override, a scene or a schedule beat it. When a boost ends, the air-quality band level is
+        re-applied directly — its deadband would otherwise "hold" the boosted level."""
+        raw = pol.get("dry_boost") or {}
+        if not raw.get("outdoor_sensor"):
+            return res
+        cfg = dry_boost.config(raw)
+        states = self.__dict__.setdefault("_dry_boost", {})
+        active, since = states.get(device_id, (False, None))
+        if (override is not None and override.active(now)) or not res.running or res.source not in ("rule",
+                                                                                                    "default"):
+            if active:
+                states[device_id] = (False, now)
+            return res
+        with self._lock:
+            readings = dict(self.readings)
+        cond, why = dry_boost.conditions(readings, cfg, now)
+        want, note = dry_boost.decide(cfg, cond, active, since, now, why)
+        if want != active:
+            states[device_id] = (want, now)
+        level = int(cfg["level"])
+        if want:
+            if res.level is not None and res.level >= level:
+                return Resolution(res.running, res.act, res.source, f"{res.reason}; {note}", level=res.level)
+            return Resolution(True, (not dev_state.running) or dev_state.level != level, "rule",
+                              f"{res.reason}; {note} -> level {level}", level=level)
+        if active and policy.strategy == "threshold_ranged" and sensor is not None \
+                and (now - sensor.ts) <= policy.sensor_stale_s:
+            lvl = _level_for(sensor.value, policy.bands)
+            return Resolution(True, (not dev_state.running) or dev_state.level != lvl, "rule",
+                              f"sensor {sensor.value:.0f} -> speed {lvl}; {note}", level=lvl)
+        return Resolution(res.running, res.act, res.source, f"{res.reason}; {note}", level=res.level)
+
     def _apply_airflow_interlock(self, conn, device_id, pol, res, dev_state, now):
         """A dehumidifier in series with an ERV must not run on stagnant air. Allowed while the ERV is moving
         air, or when the ERV's own automation will be raised by the floor. Blocked when the ERV is in an
@@ -680,6 +716,8 @@ class Controller:
         res = self._apply_airflow_interlock(conn, device_id, pol, res, dev_state, now)
         res = self._apply_outdoor_gate(pol, res, dev_state, now)
         lm = self._level_modes(device_id) if drv is None else None
+        if lm is not None:
+            res = self._apply_dry_boost(device_id, pol, policy, sensor, res, dev_state, override, now)
         if lm is not None and res.level is not None and lm["labels"] and res.level > len(lm["labels"]):
             # a band asking above the device's top level (e.g. bands written when Turbo was a level) means
             # "the top level" — clamp BEFORE deciding to act, or it re-commands the same mode every tick
