@@ -372,6 +372,14 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   set the ERV (mean AQ of four gas nodes: < 60 high, 60–75 medium, else low), which explains the 64–133 cfm range.
   Every boost and release is in `control_log` with the dew points; ERV cfm is recorded as before.
 
+- **2026-11-05 07:06 PST — Midea back on, as lead unit** (Hugh: the Aprilaire-only window is done; the Midea pair
+  zero passed 11-04). Plug `plug_hall` pressed on by Hugh, since HA couldn't switch PG03 plugs yet. Then, through
+  the HA API (`PUT /control/<id>/policy`): `dehumidifier_living_room` enabled at 46/43 % (living room), and
+  `dehum_attic` (Aprilaire) raised to 48/45 % as the backup. The Midea started at 07:06, drawing 362 W. Why: the
+  Midea measured 0.97–1.14 L/kWh against the Aprilaire's ~0.46–0.59 at these conditions. The Aprilaire had run
+  19 h non-stop in wet weather, blocking the fan-only zero runs. Midea runs are now measured across the unit
+  (B) and against the bucket.
+
 ## 6c. Readiness schedule (agreed 2026-11-01)
 
 Each gate has dated pass/fail criteria, computed from live data by `tools/dehum_readiness.py` (read-only, runs on
