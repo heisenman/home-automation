@@ -138,3 +138,32 @@ last set.
   start-up (`fan_mode` 20) and settles into LOW, not its previous mode.
 - **`fan_mode` 2 = OVR latched** (max airflow, mode writes ignored). Caused by a SHORT OVR pulse; firmware v8
   prevents it (45 s minimum hold). Clear: PWA banner button, or power-cycle via `erv_pm`.
+
+## Entry 4 — ERV automation: air quality, plus the dew-point dry boost
+
+**Asserted state:** `erv_attic`'s policy on ha-2 is enabled, with the air-quality rule (mean AQ of the gas nodes
+→ low/med/high) and `dry_boost` set (`outdoor_sensor` `switchbot_outdoor`, five room meters). The ERV goes to
+high while the house dew point is ≥ 2 °C above outdoor and the house RH is ≥ 41 %. Design:
+`docs/design/dehumidifier-efficiency-study.md` §7; code `server/control/dry_boost.py`.
+
+**Verified (2026-11-04 19:13 PST):** policy set; the first tick logged `dry boost idle: dp in 7.9 / out 9.1 °C
+(Δ -1.2), RH 42 %, coldest room 19.8 °C`. That is correct: outdoor air was wetter than indoors.
+
+**Re-check (on ha-2):**
+```sh
+cd ~/home_automation && python3 -c "
+import sqlite3, json
+c = sqlite3.connect('file:instance/db/control.db?mode=ro', uri=True)
+print(json.loads(c.execute('select json from automation_policy where device_id=\"erv_attic\"').fetchone()[0]).get('dry_boost'))
+for r in c.execute('select ts, reason, act, status from control_log where device_id=\"erv_attic\" order by rowid desc limit 3'): print(r)"
+```
+
+**Expected:** (1) the `dry_boost` dict prints with `outdoor_sensor` set. (2) Recent reasons end in
+`dry boost idle|waiting|held|ended: …` or `dry boost: … -> level 3` (shown as `high`), each with the dew points.
+(3) While it says `dry boost`, the ERV's `fan_mode_name` (Entry 3) is `high`.
+
+**Gotchas:**
+- **No `dry boost` text at all** = the policy lost the key, or the controller is running pre-1df7eea code.
+- `dry boost off: outdoor reading stale/missing` = `switchbot_outdoor` has been silent > 15 min. It's a BLE
+  meter, normally every ~100 s.
+- Boost state is in memory: a controller restart drops it, and it re-arms on the next qualifying tick.

@@ -367,6 +367,11 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   - **Answered (Hugh, 2026-11-03, photo): two-pipe** — both PVC pipes run outside, so path 1 (combustion air from
     the house) is out. Furnace drying is stack effect and duct leakage only.
 
+- **2026-11-04 19:13 PST — ERV dry boost live** (commit 1df7eea, policy `erv_attic.dry_boost`). From here on the
+  ERV runs high while the outdoor dew point is ≥ 2 °C below the house mean. Before this, the air-quality rule alone
+  set the ERV (mean AQ of four gas nodes: < 60 high, 60–75 medium, else low), which explains the 64–133 cfm range.
+  Every boost and release is in `control_log` with the dew points; ERV cfm is recorded as before.
+
 ## 6c. Readiness schedule (agreed 2026-11-01)
 
 Each gate has dated pass/fail criteria, computed from live data by `tools/dehum_readiness.py` (read-only, runs on
@@ -479,3 +484,19 @@ make it well-conditioned and give ~5× the ΔAH signal.
 **Open:**
 - Study meter intake as separate study devices (§3D, with Hugh).
 - Rotation (§3D): Hugh to review the full proposal. Blower = follows Aprilaire; 24 h; upper guard 47–48 % are settled.
+
+- **ERV dew-point dry boost (Hugh, 2026-11-04: "this can supersede AQ-related actuation"; precedence chosen:
+  boost wins, AQ otherwise).**
+  - **Rule** (`server/control/dry_boost.py`): ERV to high while indoor dew point (mean of the five room meters)
+    − outdoor (`switchbot_outdoor`) ≥ 2 °C, indoor RH ≥ 41 % and every room ≥ 18 °C. It releases below 1 °C
+    (after 30 min on), or at once at RH ≤ 40 % (Hugh's floor) or a room under 18 °C. Restarts wait 30 min; a
+    stale outdoor reading (> 15 min) means no boost. Safety, operator overrides, scenes and schedules still win.
+  - **Why now, though the VOC entry above held the ERV still:** Hugh judged the automation worth having and a fair
+    test of the model. G2b needs no new Aprilaire runs (7 recorded), only the settled zero, so fewer runs cost
+    little. The zero model carries ERV cfm, and boosts add the cfm contrast it needs.
+  - **Floor uses the house mean RH**, which reads ~3 points under the living room (42 vs 45 % on 11-04), so the
+    boost stops while the living room is still ~43 %.
+  - **Phase 3 must own it:** the rotation has to suspend the boost outside its ERV arm (and run it in the arm),
+    or the arms are confounded. Build that switch with the scheduler.
+  - **Model test:** the house balance should predict each boost's drying from Δ(AH) × the extra cfm × (1 − the
+    ERV core's latent recovery). The latent recovery is unknown; boosts are what measure it.
