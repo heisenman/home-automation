@@ -494,8 +494,9 @@ make it well-conditioned and give ~5× the ΔAH signal.
   - **Why now, though the VOC entry above held the ERV still:** Hugh judged the automation worth having and a fair
     test of the model. G2b needs no new Aprilaire runs (7 recorded), only the settled zero, so fewer runs cost
     little. The zero model carries ERV cfm, and boosts add the cfm contrast it needs.
-  - **Floor uses the house mean RH**, which reads ~3 points under the living room (42 vs 45 % on 11-04), so the
-    boost stops while the living room is still ~43 %.
+  - **Floor uses the house mean RH**, which reads ~3 points under the living room (42 vs 45 % on 11-04).
+    **Hugh 2026-11-04: floor set to 39 % (start at 40 %) on the five-room mean**, so the boost stops with the
+    living room near 42 %. Live policy: `rh_floor` 39, `rh_on` 40.
   - **Phase 3 must own it:** the rotation has to suspend the boost outside its ERV arm (and run it in the arm),
     or the arms are confounded. Build that switch with the scheduler.
   - **Model test:** the house balance should predict each boost's drying from Δ(AH) × the extra cfm × (1 − the

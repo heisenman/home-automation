@@ -143,7 +143,7 @@ last set.
 
 **Asserted state:** `erv_attic`'s policy on ha-2 is enabled, with the air-quality rule (mean AQ of the gas nodes
 → low/med/high) and `dry_boost` set (`outdoor_sensor` `switchbot_outdoor`, five room meters). The ERV goes to
-high while the house dew point is ≥ 2 °C above outdoor and the house RH is ≥ 41 %. Design:
+high while the house dew point is ≥ 2 °C above outdoor and the house RH is ≥ 40 % (floor 39 %, Hugh 2026-11-04). Design:
 `docs/design/dehumidifier-efficiency-study.md` §7; code `server/control/dry_boost.py`.
 
 **Verified (2026-11-04 19:13 PST):** policy set; the first tick logged `dry boost idle: dp in 7.9 / out 9.1 °C
