@@ -163,6 +163,8 @@ heat/cool run time · §5 step 7 (clock + schedule) · D1001 alert reader · com
   The SEN69C covers PM1–10, T/RH, VOC index, NOx index, formaldehyde in ppb, and real CO₂. It costs < 15 % more
   than the SEN66, so the cheaper variant isn't worth it. Its VOC/NOx are the same self-normalizing Gas Index as the
   SGP41; the absolute VOC-class number is the formaldehyde.
+  - **ON HOLD (Hugh, 2026-11-04):** the SEN69C isn't stocked in the US yet and tariffs are steep, so the purchase waits.
+    Nothing changes in the meantime: the current sensors and `gas_compensation.py` stay as they are.
   - Current gas sensors, inferred from metric shapes:
     - BME680 in `gas_h_office`, `gas_hbed`, `gas_mech_closet`;
     - SGP41 `gas_h_office_sgp41`, `gas_mech_closet_sgp41` (the doubles added to cover the BME680s);
