@@ -167,3 +167,27 @@ for r in c.execute('select ts, reason, act, status from control_log where device
 - `dry boost off: outdoor reading stale/missing` = `switchbot_outdoor` has been silent > 15 min. It's a BLE
   meter, normally every ~100 s.
 - Boost state is in memory: a controller restart drops it, and it re-arms on the next qualifying tick.
+
+## Entry 5 — Smart plugs are switchable from HA
+
+**Asserted state:** six plugs are manual-only switches in ha-2's `instance/control.yaml` (commit 0b909f0):
+`plug_hall` (Midea; PG03 on our firmware, node `plug_01`) and the Tasmota S31s `dehum_pm`, `erv_pm`,
+`airgap_router_pm`, `failover_pm`, `plug_g11`. Their mode defaults are on/off, except `failover_pm` and
+`plug_g11` (the computers), which are power-cycle only. The mode a person selects is stored in control.db as
+`power_mode:<id>`. Commands and mode changes need an admin.
+
+**Verified (2026-11-05 ~08:00 PST):** ON sent to `plug_hall` and `dehum_pm` (both already on) returned
+`status ok` with `reported {on: true}`. That is the PG03 signed path and the Tasmota path, each confirmed by
+the plug's own readback. `/api/v1/displays` listed all six: `On`, a power-cycle control, and
+`off_allowed: false` on the two computers.
+
+**Re-check (on ha-2; harmless, it only re-asserts ON):** POST
+`/devices/<id>/command {"trait":"switchable","action":"set","args":{"on":true}}` with the admin bearer. Expected:
+`200 … "reported":{"on":true}`.
+
+**Gotchas:**
+- **`no-ack` from a Tasmota plug** = no `stat/<id>/RESULT` within ~12 s. Usually the S31 is off the network.
+- **An Off on `airgap_router_pm` cuts HA's own path to it.** Only its button turns it back on (Hugh chose on/off).
+- **Power-cycle is plug-timed.** S31: `Backlog Power 0; Delay <s*10>; Power 1`. PG03: `plug_cycle`. The readback
+  confirms the OFF half; the plug restores power by itself.
+- `plug_02..08` were offline on 2026-10-31 and aren't registered. Add each as `device_type: plug` when deployed.
