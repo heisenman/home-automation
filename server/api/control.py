@@ -13,7 +13,7 @@ import re
 from typing import Any
 
 from server.control.issuer import CommandIssuer, Result
-from server.control import dry_boost
+from server.control import dry_boost, plug_power
 
 # Result.status -> HTTP status code
 _STATUS_HTTP = {
@@ -1467,11 +1467,25 @@ def make_router(issuer: CommandIssuer, confirm_verifier=None, api_authz=None, ad
     # Request/Response params — with `from __future__ import annotations` those local-scope types
     # aren't resolvable by FastAPI's hint analysis and get mis-read as query params (422).
     @router.post("/{device_id}/command", dependencies=[Depends(require_admin)])
-    async def post_command(device_id: str, body: dict = Body(...)):
+    async def post_command(device_id: str, body: dict = Body(...), authorization: str | None = Header(default=None)):
         # handle_command can block for seconds (a Midea LAN command shells out to the CLI, up to a 40s
         # subprocess timeout). Run it off the event loop so one device command doesn't stall the whole
         # async API (reads, other clients) while it waits on the appliance.
         from starlette.concurrency import run_in_threadpool
+        if plug_power.has_mode(issuer.registry, device_id) and (admin_authz is None or not admin_authz(authorization)):
+            # switching a smart plug cuts an appliance's (or a computer's) mains: ADMIN, like power-cycle below
+            raise HTTPException(status_code=401, detail="unauthorized", headers={"WWW-Authenticate": "Bearer"})
+        if control_db is not None and plug_power.has_mode(issuer.registry, device_id):
+            # a smart plug in power-cycle-only mode refuses a plain OFF (server/control/plug_power.py)
+            import sqlite3
+            c = sqlite3.connect(str(control_db))
+            try:
+                why = plug_power.refusal(plug_power.get_mode(c, issuer.registry, device_id), body.get("trait"),
+                                         body.get("action"), body.get("args") or {})
+            finally:
+                c.close()
+            if why:
+                return JSONResponse(status_code=409, content={"status": "rejected", "reason": why})
         code, payload = await run_in_threadpool(handle_command, issuer, device_id, body, confirm_verifier)
         if control_db is not None and code == 200 and body.get("trait") == "switchable":
             await run_in_threadpool(release_follow, control_db, device_id)
@@ -1482,6 +1496,19 @@ def make_router(issuer: CommandIssuer, confirm_verifier=None, api_authz=None, ad
         if admin_authz is None or not admin_authz(authorization):
             raise HTTPException(status_code=401, detail="unauthorized",
                                 headers={"WWW-Authenticate": "Bearer"})
+
+    @router.put("/{device_id}/power-mode", dependencies=[Depends(require_admin_only)])
+    async def put_power_mode(device_id: str, body: dict = Body(...)):
+        # a smart plug's power mode: on_off | cycle_only (server/control/plug_power.py)
+        if control_db is None:
+            return JSONResponse(status_code=503, content={"status": "unavailable", "reason": "no control db"})
+        import sqlite3
+        c = sqlite3.connect(str(control_db))
+        try:
+            code, payload = plug_power.handle_set_mode(c, issuer.registry, device_id, body)
+        finally:
+            c.close()
+        return JSONResponse(status_code=code, content=payload)
 
     @router.post("/{device_id}/power-cycle", dependencies=[Depends(require_admin_only)])
     async def post_power_cycle(device_id: str):

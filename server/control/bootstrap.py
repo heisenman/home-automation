@@ -11,6 +11,7 @@ import yaml
 
 from server.control.dehum_driver import DehumEdgeTransport, dehum_devices_of
 from server.control.erv_driver import ErvEdgeTransport, erv_devices_of
+from server.control.plug_driver import PlugEdgeTransport, TasmotaPlugTransport, plug_devices_of, tasmota_plugs_of
 from server.control.host_led import HostLedTransport
 from server.control.issuer import CommandIssuer, MqttTransport, RoutingTransport
 from server.control.levoit_driver import LevoitMqttTransport, load_levoit_devices
@@ -80,6 +81,16 @@ def build_issuer(master: str, *, control_registry: Path, node_secrets_lut: Path,
     if dehum_devices:
         dt = DehumEdgeTransport(dehum_devices, lut, broker=broker, port=port)
         overrides.update({d: dt for d in dehum_devices})
+    # smart plugs (Hugh, 2026-11-05): PG03 on our firmware = signed edge commands (device_type plug); Tasmota
+    # S31s = plain MQTT on the authenticated broker (device_type tasmota_plug). Both power-cycle PLUG-side.
+    plug_devices = plug_devices_of(registry)
+    if plug_devices:
+        pt = PlugEdgeTransport(plug_devices, lut, broker=broker, port=port)
+        overrides.update({d: pt for d in plug_devices})
+    tasmota_plugs = tasmota_plugs_of(registry)
+    if tasmota_plugs:
+        tt = TasmotaPlugTransport(tasmota_plugs, broker=broker, port=port)
+        overrides.update({d: tt for d in tasmota_plugs})
     # Venstar thermostat (ADR-0043): a LAN-HTTP local driver serving two entities — the thermostat (mode +
     # heat/cool setpoints) and the furnace blower (fan on/auto). Address + credentials: instance/venstar.env.
     venstar_devices = venstar_devices_of(registry)

@@ -82,6 +82,17 @@ def _switchable_set(args, cfg):
     return out
 
 
+def _switchable_cycle(args, cfg):
+    """{off_s}: off, then back on after off_s seconds — timed by the DEVICE (a smart plug), so it completes even
+    when the device feeds the box or network the command came through. Only where the trait cfg declares
+    `cycle` (its default/maximum off time)."""
+    cyc = cfg.get("cycle")
+    if not cyc:
+        raise TraitError("this device has no power-cycle")
+    hi = int((cyc or {}).get("max_s", 120)) if isinstance(cyc, dict) else 120
+    return {"off_s": _as_number_in_range(args.get("off_s", 10), "off_s", 1, hi, integer=True)}
+
+
 def _ranged_set(args, cfg):
     lo, hi = cfg.get("min", 0), cfg.get("max", 100)
     return {"level": _as_number_in_range(args.get("level"), "level", lo, hi, integer=True)}
@@ -148,7 +159,7 @@ def _mode_safe(cfg):
 _TRAITS: dict[str, Trait] = {
     "switchable": Trait(
         name="switchable", state_keys=("on",),
-        actions={"set": _switchable_set},
+        actions={"set": _switchable_set, "cycle": _switchable_cycle},
         sensitive_actions=frozenset(),
         safe_state=lambda cfg: {"on": bool(cfg.get("safe_on", False))},
     ),

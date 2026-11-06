@@ -129,3 +129,25 @@ devices:
         now_metric: fan_on_setting
         activity: {metric: running, labels: {0: idle, 1: running}}
         follow: {device: dehum_attic}
+
+  # Smart plugs as switches (Hugh, 2026-11-05; server/control/plug_driver.py + plug_power.py). Manual-only,
+  # admin-only. `cycle` = a PLUG-timed power-cycle (off, then the plug turns itself back on after N s), so it
+  # completes even when the plug feeds the box or router the command came through. `power_mode` is the
+  # DEFAULT (selectable per plug in the PWA): on_off, or cycle_only (Off refused; for plugs feeding computers).
+  #   device_type: plug          -> PG03 on our firmware: signed edge commands via its node (LUT cmd_secret)
+  #   device_type: tasmota_plug  -> Tasmota S31: cmnd/<tasmota>/POWER (topic defaults to the device_id); its
+  #                                 issuer secret goes in instance/control_secrets.yaml like other node: server devices
+  plug_hall:
+    node: plug_01
+    area: hall
+    device_type: plug
+    manual: true
+    traits:
+      switchable: {label: Power, now_metric: relay_on, power_mode: on_off, cycle: {max_s: 120}}
+  failover_pm:
+    node: server
+    area: h_office
+    device_type: tasmota_plug
+    manual: true
+    traits:
+      switchable: {label: Power, now_metric: relay_on, power_mode: cycle_only, cycle: {max_s: 120}}

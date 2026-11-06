@@ -941,7 +941,7 @@ def _setpoint_label(cfg: dict) -> tuple[str, str]:
     return "Setpoint", unit
 
 
-def build_controls(traits_cfg: dict | None, manual: bool = False) -> list[dict]:
+def build_controls(traits_cfg: dict | None, manual: bool = False, power_mode: str | None = None) -> list[dict]:
     """Ordered, render-ready control descriptors for a controllable device (shared-ui-spec Phase 0).
     `override` is always present (every build_display device has a control policy); setpoint/ranged/
     indicator are emitted iff the device's traits_cfg declares that trait. Ranges/labels/admin/action are
@@ -978,8 +978,27 @@ def build_controls(traits_cfg: dict | None, manual: bool = False) -> list[dict]:
             "kind": "switchable", "trait": "switchable", "label": cfg.get("label") or "Power", "admin": True,
             "now_key": "switch_on", "on_label": cfg.get("on_label") or "On",
             "off_label": cfg.get("off_label") or "Off",
+            # a smart plug in power-cycle-only mode refuses Off (server/control/plug_power.py)
+            "off_allowed": power_mode != "cycle_only",
             "action": {"method": "POST", "path": _CMD_PATH, "trait": "switchable", "action": "set",
                        "arg_key": "on"}})
+        if cfg.get("cycle"):
+            # plug-side power-cycle: off, then back on after N s, timed by the PLUG (completes even when it
+            # feeds the box or router this command came through)
+            cyc = cfg["cycle"] if isinstance(cfg["cycle"], dict) else {}
+            mx = int(cyc.get("max_s", 120))
+            controls.append({
+                "kind": "cycle", "trait": "switchable", "label": cyc.get("label") or "Power-cycle", "admin": True,
+                "options": [{"value": n, "label": f"{n} s off"} for n in (cyc.get("presets_s") or [10, 30, 60])
+                            if 0 < int(n) <= mx],
+                "action": {"method": "POST", "path": _CMD_PATH, "trait": "switchable", "action": "cycle",
+                           "arg_key": "off_s"}})
+        if power_mode is not None:
+            from server.control.plug_power import MODE_LABELS, MODES
+            controls.append({
+                "kind": "power_mode", "label": "Power mode", "admin": True, "now": power_mode,
+                "options": [{"value": m, "label": MODE_LABELS[m]} for m in MODES],
+                "action": {"method": "PUT", "path": "/devices/{id}/power-mode", "arg_key": "mode"}})
     if "setpoint" in tc:
         cfg = tc.get("setpoint") or {}
         label, unit = _setpoint_label(cfg)
@@ -1033,6 +1052,15 @@ def build_controls(traits_cfg: dict | None, manual: bool = False) -> list[dict]:
             "action": {"method": "POST", "path": _CMD_PATH, "trait": "indicator", "action": "set",
                        "arg_key": "on"}})
     return controls
+
+
+def _plug_mode(control_conn, registry, device_id: str) -> str | None:
+    """A smart plug's selected power mode (on_off | cycle_only), None for every other device."""
+    from server.control import plug_power
+    try:
+        return plug_power.get_mode(control_conn, registry, device_id)
+    except Exception:
+        return None
 
 
 def _device_area(hot_conn, device_id: str) -> str | None:
@@ -1206,7 +1234,8 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         "onboard": onboard,
         "actuator": actuator,
         "traits": traits,                              # raw — kept for back-compat during migration
-        "controls": build_controls(traits, manual=manual),  # shared-ui-spec: server-authored render-ready controls
+        "controls": build_controls(traits, manual=manual,
+                                   power_mode=_plug_mode(control_conn, registry, device_id)),  # shared-ui-spec: server-authored render-ready controls
         "manual": manual,                              # manual-only actuator: no policy, no automation
         "state_label": manual_state_label(traits, actuator) if manual else None,   # e.g. "Heat · heating"
         "state_active": actuator.get("active"),        # its activity is non-idle (pill colour)

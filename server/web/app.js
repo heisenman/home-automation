@@ -516,13 +516,16 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
   const act = vm.actuator || {};
   const cmds = (vm.controls || []).filter((c) =>
     c.kind === "setpoint" || c.kind === "ranged" || c.kind === "mode" || c.kind === "indicator" ||
-    c.kind === "timed" || c.kind === "switchable");
+    c.kind === "timed" || c.kind === "switchable" || c.kind === "cycle" || c.kind === "power_mode");
   const spCtl = cmds.find((c) => c.kind === "setpoint");
   const rgCtl = cmds.find((c) => c.kind === "ranged");
   const modeCtl = cmds.find((c) => c.kind === "mode");
   const indCtl = cmds.find((c) => c.kind === "indicator");
   const tmCtl = cmds.find((c) => c.kind === "timed");
   const swCtl = cmds.find((c) => c.kind === "switchable");
+  const cyCtl = cmds.find((c) => c.kind === "cycle");          // smart plug: plug-timed power-cycle
+  const pmCtl = cmds.find((c) => c.kind === "power_mode");     // smart plug: on/off vs power-cycle only
+  const devName = vm.name || vm.device_id;
   // a channelled setpoint (thermostat heat + cool): one input per channel, keyed by channel
   const [chTarget, setChTarget] = useState(() => Object.fromEntries(((spCtl && spCtl.channels) || [])
     .map((ch) => [ch.key, act[ch.now_key] ?? ""])));
@@ -572,8 +575,37 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
           <div class="controls">
             <button class="btn sm ${act[swCtl.now_key] === true ? "primary" : ""}" disabled=${busy === "switchable"}
               onClick=${() => cmd(swCtl, true, "switchable")}>${swCtl.on_label}</button>
+            ${swCtl.off_allowed !== false && html`
             <button class="btn sm ${act[swCtl.now_key] === false ? "primary" : ""}" disabled=${busy === "switchable"}
-              onClick=${() => cmd(swCtl, false, "switchable")}>${swCtl.off_label}</button>
+              onClick=${() => (!cyCtl || confirm(`Switch ${devName} OFF? It stays off until switched back on.`))
+                && cmd(swCtl, false, "switchable")}>${swCtl.off_label}</button>`}
+          </div>
+          ${swCtl.off_allowed === false && html`<span class="note">Off disabled: power-cycle only</span>`}
+        </div>`}
+      ${cyCtl && html`
+        <div class="field"><label>${cyCtl.label}</label>
+          <div class="controls">
+            ${cyCtl.options.map((o) => html`
+              <button class="btn sm" disabled=${busy === "cycle"}
+                onClick=${() => confirm(`Power-cycle ${devName}: off for ${o.value} s, then the plug turns itself back on?`)
+                  && cmd(cyCtl, o.value, "cycle")}>${o.label}</button>`)}
+          </div>
+        </div>`}
+      ${pmCtl && html`
+        <div class="field"><label>${pmCtl.label}</label>
+          <div class="controls">
+            ${pmCtl.options.map((o) => html`
+              <button class="btn sm ${pmCtl.now === o.value ? "primary" : ""}" disabled=${busy === "power_mode"}
+                onClick=${async () => {
+                  if (!isAdmin) return onNeedAdmin();
+                  setBusy("power_mode"); setErr("");
+                  try {
+                    await adminSend(pmCtl.action.method, pmCtl.action.path.replace("{id}", vm.device_id),
+                      { [pmCtl.action.arg_key]: o.value });
+                    await onChange();
+                  } catch (e) { setErr(String(e.message)); }
+                  setBusy("");
+                }}>${o.label}</button>`)}
           </div>
         </div>`}
       ${spCtl && spCtl.channels && spCtl.channels.map((ch) => html`
