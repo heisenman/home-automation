@@ -380,6 +380,14 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   19 h non-stop in wet weather, blocking the fan-only zero runs. Midea runs are now measured across the unit
   (B) and against the bucket.
 
+- **2026-11-06 — G2a passed (5/5)**: HVAC-pair zero −0.096 ± 0.029 g/m³ (2.4 h fan-only, 46.6 h blower-off over
+  6 d); fan-only blocks now self-skip. First Midea-lead day: Midea 5.5 kWh in 460–468 W runs ~every 2 h, Aprilaire
+  0.5 h, living room 43–46 %. G2b then fails on the settled zero (Aprilaire −0.07…0.22 L/kWh). Raw check: the
+  return meter reads ≈ −0.42 g/m³ vs the house mean whether the Aprilaire runs or not (so it does NOT see
+  pre-dried air), and supply − return moves +0.04 → −0.11 when it runs, ≈ 0.15 g/m³ × 655 cfm ≈ 0.29 L/kWh —
+  the fitted ERV term (from 2.4 h of fan-only) likely eats part of the signal. Midea out − in while running:
+  −1.43 g/m³.
+
 ## 6c. Readiness schedule (agreed 2026-11-01)
 
 Each gate has dated pass/fail criteria, computed from live data by `tools/dehum_readiness.py` (read-only, runs on
