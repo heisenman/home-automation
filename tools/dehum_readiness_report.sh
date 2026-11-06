@@ -9,8 +9,18 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/instance/dehum-study/reports"
 mkdir -p "$OUT"
 f="$OUT/$(TZ=America/Los_Angeles date +%F).md"
-if ssh -o BatchMode=yes -o ConnectTimeout=30 "$HA2" 'cd home_automation && nice -n 15 python3 -' \
-     <"$ROOT/tools/dehum_readiness.py" >"$f.tmp" 2>"$OUT/last-error.log"; then
+# hysteresis: hand the last filed verdicts of the SE criteria to the report (dehum_readiness.py PREV_OK)
+prev="$(python3 -c 'import json,sys
+try:
+    s = json.load(open(sys.argv[1]))
+except Exception:
+    print("{}"); sys.exit()
+c = [x for g in s["gates"] for x in g["criteria"]]
+f = lambda p: any(x["ok"] for x in c if x["name"].startswith(p))
+print(repr({"hvac_zero": f("HVAC pair zero model"), "midea_zero": f("Midea pair zero offset")}))' "$OUT/status.json" 2>/dev/null || echo '{}')"
+if { echo "_PREV_OK = $prev"; cat "$ROOT/tools/dehum_readiness.py"; } |
+   ssh -o BatchMode=yes -o ConnectTimeout=30 "$HA2" 'cd home_automation && nice -n 15 python3 -' \
+     >"$f.tmp" 2>"$OUT/last-error.log"; then
   mv "$f.tmp" "$f"
   ln -sfn "$(basename "$f")" "$OUT/latest.md"
   sed -n '1s/^<!-- status: \(.*\) -->$/\1/p' "$f" >"$OUT/status.json"

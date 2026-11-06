@@ -194,7 +194,7 @@ def zero_model(delta, state, x, cfm):
         return None                                  # the run zero (S1f offset + g) needs fan-only stretches
     # The states share no parameter, so each is its own fit with its own residual variance: pooling them let the
     # noisier blower-off stretches inflate the fan-only SE 2x (0.132 vs 0.063 on 2026-11-06).
-    beta, se = [0.0] * 6, [None] * 6
+    beta, se, s1f = [0.0] * 6, [None] * 6, []
     slots = {"S1f": (0, 2), "S0": (4, 1), "S1h": (5, 3)}          # (offset index, ERV-term index)
     for st, (io, ix) in slots.items():
         sub = [ks for s2, ks in rows if s2 == st]
@@ -209,9 +209,11 @@ def zero_model(delta, state, x, cfm):
             continue
         beta[io], beta[ix] = fit[0]
         se[io], se[ix] = fit[1]
+        if st == "S1f":                              # per-chunk residual offsets, for the day-to-day drift test
+            s1f = [(ks[0], len(ks), yv - beta[ix] * xv) for ks, xv, yv in zip(sub, xs, ys)]
     hours = {st: sum(len(ks) for s2, ks in rows if s2 == st) / 60 for st in ("S0", "S1f", "S1h")}
     days = {pt(k).date() for _, ks in rows for k in ks}
-    return {"beta": beta, "se": se, "n": len(rows), "hours": hours, "days": len(days)}
+    return {"beta": beta, "se": se, "n": len(rows), "hours": hours, "days": len(days), "s1f": s1f}
 
 
 def runs_from(power, on_w, gap_min=6, min_len=30):
@@ -233,6 +235,42 @@ def runs_from(power, on_w, gap_min=6, min_len=30):
 
 def crit(name, ok, detail):
     return {"name": name, "ok": ok, "detail": detail}
+
+
+# Last filed report's verdicts ({"hvac_zero": bool, "midea_zero": bool}), prepended by dehum_readiness_report.sh.
+# Empty when run by hand: then there is no hysteresis, only the target and the preponderance path.
+PREV_OK = globals().get("_PREV_OK") or {}
+HOLD_X = 1.3                 # a passed SE criterion stays passed until SE exceeds HOLD_X × target
+
+
+def se_gate(key, se, target, prepond=None):
+    """An SE criterion that isn't a hard wall (Hugh 2026-11-06: "allow hysteresis and a preponderance of data to
+    eventually override your 0.05 hard number"). (ok, how):
+      SE ≤ target                                    -> pass;
+      passed in the last report and SE ≤ HOLD_X·target -> stays passed (hysteresis: noise can't flip it back);
+      `prepond` (a reason string)                    -> pass on the weight of evidence: enough data, no drift,
+                                                        SE under a looser ceiling (the caller decides)."""
+    if se is None:
+        return False, ""
+    if se <= target:
+        return True, ""
+    if PREV_OK.get(key) and se <= HOLD_X * target:
+        return True, f" — held: passed before, SE within {HOLD_X:g}× target"
+    if prepond:
+        return True, f" — preponderance of data: {prepond}"
+    return False, ""
+
+
+def day_drift(chunks, sd):
+    """Day-to-day drift test over [(minute key, n, value)] chunks: (chi2, p, days) or None (drift_test per day)."""
+    by = {}
+    for k, n, v in chunks:
+        by.setdefault(pt(k).date(), []).append(v)
+    days = [{"mean": S.mean(v), "chunks": len(v)} for v in by.values()]
+    if len(days) < 2 or not sd:
+        return None
+    chi2, p = drift_test(days, sd)
+    return chi2, p, len(days)
 
 
 def main():
@@ -305,18 +343,34 @@ def main():
     mid_drift = drift_test(list(mid_days.values()), mz["sd"]) if len(mid_days) >= 2 and mz else None
     mzb = offset_stats(pair_delta(d, MID_IN, MID_OUT, [k for k in mid_ok if held(blower_on, k, 10)], study_a, now)
                        or {})
+    # SE gates with hysteresis + a preponderance path (se_gate). HVAC: the fan-only offset after ≥ 6 h / 12 stretches
+    # over ≥ 4 days, no day-to-day drift beyond the stretches' own scatter, SE ≤ 2× target.
+    hv_ok, hv_how, hv_dr = False, "", None
+    if zm and zm["hours"]["S1f"] >= 2 and zm["hours"]["S0"] >= 3 and zm["days"] >= 2 and zm["se"][0] is not None:
+        res = [v for _, _, v in zm["s1f"]]
+        hv_dr = day_drift(zm["s1f"], S.stdev(res) if len(res) >= 2 else None)
+        pre = (f"{zm['hours']['S1f']:.1f} h fan-only in {len(res)} stretches over {hv_dr[2]} days, no drift "
+               f"(p {hv_dr[1]:.2f}), SE ≤ {2 * 0.05:.2f}"
+               if hv_dr and zm["hours"]["S1f"] >= 6 and len(res) >= 12 and hv_dr[2] >= 4 and hv_dr[1] >= 0.05
+               and zm["se"][0] <= 2 * 0.05 else None)
+        hv_ok, hv_how = se_gate("hvac_zero", zm["se"][0], 0.05, pre)
+    mid_ok_base = bool(mz and mz["hours"] >= 12 and mid_drift is not None and mid_drift[1] >= 0.05)
+    md_ok, md_how = se_gate("midea_zero", mz["se"] if mid_ok_base else None, 0.08,
+                            f"{mz['hours']:.0f} h over {len(mid_days)} days, SE ≤ 0.16"
+                            if mid_ok_base and mz["hours"] >= 36 and len(mid_days) >= 4 and mz["se"] <= 0.16 else None)
     g2a = [
         crit("HVAC pair registered and reporting", fresh,
              "both reporting" if fresh else ("registered, not reporting in 6 h" if reg else
                                              f"not registered yet ({HV_RET}, {HV_SUP})")),
         crit("HVAC pair zero model, offset per blower state: ≥ 2 h fan-only and ≥ 3 h blower-off (Aprilaire idle, "
-             "no heat) over ≥ 2 days, fan-only offset SE ≤ 0.05 g/m³",
-             bool(zm and zm["hours"]["S1f"] >= 2 and zm["hours"]["S0"] >= 3
-                  and zm["days"] >= 2 and zm["se"][0] is not None and zm["se"][0] <= 0.05),
+             "no heat) over ≥ 2 days, fan-only offset SE ≤ 0.05 g/m³ (or held / preponderance of data)",
+             hv_ok,
              (f"fan-only offset {zm['beta'][0]:+.3f} ± {zm['se'][0]:.3f} g/m³, ERV g {zm['beta'][2]:+.3f} ± "
               f"{zm['se'][2] or 0:.3f} (per 100 cfm·g/m³; physics ≈ 0.15·(1 − ε)); blower-off offset "
               f"{zm['beta'][4]:+.3f} ± {zm['se'][4] or 0:.3f}, b0 {zm['beta'][1]:+.2f}; hours blower-off/fan-only "
-              f"{zm['hours']['S0']:.1f}/{zm['hours']['S1f']:.1f} over {zm['days']} d")
+              f"{zm['hours']['S0']:.1f}/{zm['hours']['S1f']:.1f} over {zm['days']} d"
+              + (f"; fan-only day drift χ² {hv_dr[0]:.1f}, p {hv_dr[1]:.2f} over {hv_dr[2]} d" if hv_dr else "")
+              + hv_how)
              if zm else (f"{sum(1 for v in state.values() if v != 'S0')} blower-on and "
                          f"{sum(1 for v in state.values() if v == 'S0')} blower-off Aprilaire-idle minutes; "
                          + ("not enough paired stretches to fit yet" if reg else "no paired meter data"))),
@@ -325,15 +379,16 @@ def main():
         crit("Furnace venting known", MANUAL["furnace_venting"] is not None,
              MANUAL["furnace_venting"] or "two-pipe or one-pipe? (two PVC pipes outside, or intake open in closet)"),
         crit("Midea pair zero offset, blower off (≥ 12 idle h over ≥ 2 days, no day-to-day drift beyond the days' "
-             "own SE at p < 0.05, offset SE ≤ 0.08 g/m³)",
-             bool(mz and mz["hours"] >= 12 and mz["se"] <= 0.08 and mid_drift is not None and mid_drift[1] >= 0.05),
+             "own SE at p < 0.05, offset SE ≤ 0.08 g/m³, or held / preponderance of data)",
+             md_ok,
              (f"{mz['hours']:.1f} h, offset {mz['mean']:+.3f} ± {mz['se']:.3f} g/m³ (hourly SD {mz['sd']:.3f})"
               if mz else "not enough idle hours")
              + (f"; daily means " + ", ".join(f"{dd:%m-%d} {v['mean']:+.2f} ± {mz['sd'] / math.sqrt(v['chunks']):.2f}"
                                              for dd, v in sorted(mid_days.items()))
                 + (f" (drift χ² {mid_drift[0]:.1f}, p {mid_drift[1]:.2f})" if mid_drift else "")
                 if mid_days else "")
-             + (f"; blower on: {mzb['mean']:+.3f} ± {mzb['se']:.3f} over {mzb['hours']:.1f} h" if mzb else "")),
+             + (f"; blower on: {mzb['mean']:+.3f} ± {mzb['se']:.3f} over {mzb['hours']:.1f} h" if mzb else "")
+             + md_how),
     ]
     gates.append(("G2a", "HVAC meters zeroed", g2a))
 
