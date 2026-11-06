@@ -170,9 +170,12 @@ def ols(X, y):
 def zero_model(delta, state, x, cfm):
     """Fit the HVAC pair's no-Aprilaire behaviour (study doc §6b, duct topology). With the Aprilaire idle, supply −
     return AH = sensor offset + the ERV's fresh air mixed in:
-        blower off (S0): the loop carries ERV air only        → b0·x
-        blower on, fan (S1f) / heat speed (S1h): diluted      → g·cfm·x/100
+        blower off (S0): the loop carries ERV air only        → off_S0 + b0·x
+        blower on, fan (S1f) / heat speed (S1h): diluted      → off_S1 + g·cfm·x/100
     x = W_out − W_return (g/m³). b0 = mixing at the register × (1 − ERV latent effectiveness); g = 100(1 − ε)/Q_blower.
+    The sensor offset is PER BLOWER STATE (Hugh approved 2026-11-06): airflow over the pair shifts it (the Midea pair
+    −0.01 off vs +0.12 on), and one shared offset let 48 h of blower-off data set the zero for blower-on runs.
+    beta = [off_S1f, b0, g, g_h, off_S0, off_S1h]; beta[0] + beta[2] is what an Aprilaire run (fan speed) uses.
     Fitted on contiguous same-state stretches (chunk means). Returns {"beta", "se", "n", "hours"} or None."""
     rows = []
     for st in ("S0", "S1f", "S1h"):
@@ -187,21 +190,25 @@ def zero_model(delta, state, x, cfm):
         if cur:
             rows.append((st, cur))
     rows = [(st, ks) for st, ks in rows if len(ks) >= 5]
-    if len(rows) < 6:
-        return None
-    X, y = [], []
-    for st, ks in rows:
-        mx = S.mean(x[k] for k in ks)
-        mcx = S.mean(cfm[k] * x[k] / 100 for k in ks)
-        X.append([1.0, mx if st == "S0" else 0.0, mcx if st == "S1f" else 0.0, mcx if st == "S1h" else 0.0])
-        y.append(S.mean(delta[k] for k in ks))
-    present = [j for j in range(4) if any(r[j] for r in X)]
-    fit = ols([[r[j] for j in present] for r in X], y)
-    if fit is None:
-        return None
-    beta, se = [0.0] * 4, [None] * 4
-    for i, j in enumerate(present):
-        beta[j], se[j] = fit[0][i], fit[1][i]
+    if len(rows) < 6 or sum(1 for st, _ in rows if st == "S1f") < 3:
+        return None                                  # the run zero (S1f offset + g) needs fan-only stretches
+    # The states share no parameter, so each is its own fit with its own residual variance: pooling them let the
+    # noisier blower-off stretches inflate the fan-only SE 2x (0.132 vs 0.063 on 2026-11-06).
+    beta, se = [0.0] * 6, [None] * 6
+    slots = {"S1f": (0, 2), "S0": (4, 1), "S1h": (5, 3)}          # (offset index, ERV-term index)
+    for st, (io, ix) in slots.items():
+        sub = [ks for s2, ks in rows if s2 == st]
+        if not sub:
+            continue
+        xs = [S.mean(x[k] for k in ks) if st == "S0" else S.mean(cfm[k] * x[k] / 100 for k in ks) for ks in sub]
+        ys = [S.mean(delta[k] for k in ks) for ks in sub]
+        fit = ols([[1.0, xv] for xv in xs], ys) if len(sub) >= 3 else None
+        if fit is None:
+            if st == "S1f":
+                return None
+            continue
+        beta[io], beta[ix] = fit[0]
+        se[io], se[ix] = fit[1]
     hours = {st: sum(len(ks) for s2, ks in rows if s2 == st) / 60 for st in ("S0", "S1f", "S1h")}
     days = {pt(k).date() for _, ks in rows for k in ks}
     return {"beta": beta, "se": se, "n": len(rows), "hours": hours, "days": len(days)}
@@ -302,12 +309,13 @@ def main():
         crit("HVAC pair registered and reporting", fresh,
              "both reporting" if fresh else ("registered, not reporting in 6 h" if reg else
                                              f"not registered yet ({HV_RET}, {HV_SUP})")),
-        crit("HVAC pair zero model: ≥ 2 h fan-only and ≥ 3 h blower-off (Aprilaire idle, no heat) over ≥ 2 days, "
-             "offset SE ≤ 0.05 g/m³",
+        crit("HVAC pair zero model, offset per blower state: ≥ 2 h fan-only and ≥ 3 h blower-off (Aprilaire idle, "
+             "no heat) over ≥ 2 days, fan-only offset SE ≤ 0.05 g/m³",
              bool(zm and zm["hours"]["S1f"] >= 2 and zm["hours"]["S0"] >= 3
                   and zm["days"] >= 2 and zm["se"][0] is not None and zm["se"][0] <= 0.05),
-             (f"offset {zm['beta'][0]:+.3f} ± {zm['se'][0]:.3f} g/m³; ERV terms: blower-off b0 {zm['beta'][1]:+.2f}, "
-              f"fan g {zm['beta'][2]:+.3f} (per 100 cfm·g/m³); hours blower-off/fan-only "
+             (f"fan-only offset {zm['beta'][0]:+.3f} ± {zm['se'][0]:.3f} g/m³, ERV g {zm['beta'][2]:+.3f} ± "
+              f"{zm['se'][2] or 0:.3f} (per 100 cfm·g/m³; physics ≈ 0.15·(1 − ε)); blower-off offset "
+              f"{zm['beta'][4]:+.3f} ± {zm['se'][4] or 0:.3f}, b0 {zm['beta'][1]:+.2f}; hours blower-off/fan-only "
               f"{zm['hours']['S0']:.1f}/{zm['hours']['S1f']:.1f} over {zm['days']} d")
              if zm else (f"{sum(1 for v in state.values() if v != 'S0')} blower-on and "
                          f"{sum(1 for v in state.values() if v == 'S0')} blower-off Aprilaire-idle minutes; "
