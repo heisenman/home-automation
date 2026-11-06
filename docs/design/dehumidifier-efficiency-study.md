@@ -388,6 +388,14 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   the fitted ERV term (from 2.4 h of fan-only) likely eats part of the signal. Midea out − in while running:
   −1.43 g/m³.
 
+- **2026-11-06 — zero-model comparison (Hugh: go ahead).** The G2a model shares ONE sensor offset across blower
+  states, so 48 h of blower-off data set it (−0.099) against a raw fan-only +0.050 ± 0.046 — and the blower state
+  shifts a pair's offset (the Midea pair: −0.01 off, +0.12 on). Fitting the fan-only chunks alone (6 chunks,
+  2.4 h): offset +0.003 ± 0.063, ERV g +0.073 ± 0.065 per 100 cfm·g/m³ — on the physics prior
+  g ≈ 0.15·(1 − ε) for ε ≈ 0.5. Scored that way, the five Aprilaire runs read 0.21 / 0.32 / 0.36 / 0.23 /
+  0.26 L/kWh (median 0.26, ±27 %), vs −0.07…0.22 (±240 %) with the shared offset. But the fan-only offset SE
+  (0.063 g/m³) is worth ±0.12 L/kWh by itself: more fan-only hours are what tighten it.
+
 ## 6c. Readiness schedule (agreed 2026-11-01)
 
 Each gate has dated pass/fail criteria, computed from live data by `tools/dehum_readiness.py` (read-only, runs on
