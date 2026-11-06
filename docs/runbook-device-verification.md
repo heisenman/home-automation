@@ -176,7 +176,7 @@ for r in c.execute('select ts, reason, act, status from control_log where device
 `plug_g11` (the computers), which are power-cycle only. The mode a person selects is stored in control.db as
 `power_mode:<id>`. Commands and mode changes need an admin.
 
-**Verified (2026-11-05 ~08:00 PST):** ON sent to `plug_hall` and `dehum_pm` (both already on) returned
+**Verified (2026-11-06 ~07:45 PST):** ON sent to `plug_hall` and `dehum_pm` (both already on) returned
 `status ok` with `reported {on: true}`. That is the PG03 signed path and the Tasmota path, each confirmed by
 the plug's own readback. `/api/v1/displays` listed all six: `On`, a power-cycle control, and
 `off_allowed: false` on the two computers.
