@@ -70,7 +70,7 @@ must be handled — **not** by a naive "reaches https://" filter (that only find
 ### C. Periodic / maintenance — sneakernet, NOT a live relay
 | Dep | Criticality | State |
 |-----|-------------|-------|
-| **C1 · OS + security updates, `tzdata`, `ca-certificates`** | LOW-MED (ongoing) | Post-cutover ha-2 is sealed; patching is operator-initiated. Stale `ca-certificates` eventually breaks A2's TLS; stale `tzdata` breaks local-time math. Spec exists (`provisioning/03-sneakernet-updates.md`), tooling greenfield. |
+| **C1 · OS + security updates, `tzdata`, `ca-certificates`** | LOW-MED (ongoing) | Post-cutover ha-2 is sealed; patching is operator-initiated. Stale `ca-certificates` eventually breaks A2's TLS; stale `tzdata` breaks local-time math. Spec exists (`provisioning/03-sneakernet-updates.md`). **Apt relay built 2026-11-07:** `tools/ha2_apt_relay.py` + `tools/apt_bundle_apply.sh` (see `provisioning/airgap/sneakernet/README.md`); pip/wheel half still greenfield. |
 | **C2 · Firmware build artifacts** (ESP-IDF/PlatformIO/esphome) | N/A to ha-2 | Builds happen on **`.210`** (docker esphome). ha-2 never builds; OTAs served inside the air-gap net. |
 
 ### D. Air-gap lifecycle time-bombs — not "internet services", but silently fatal over time
