@@ -13,7 +13,10 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"; REPO="$(cd "$HERE/.." && p
 : "${ROLE:?set ROLE in instance/cluster.env}"
 
 case "$ROLE" in
-  primary) STATE=MASTER; PRIORITY=150;;
+  # the primary starts as BACKUP too: priority 150 still wins the election, but keepalived clears preempt_delay
+  # for an initial-MASTER instance ("preempt delay will not work with initial state MASTER", seen on ha-2's
+  # 2026-11-07 reboot: it reclaimed the VIP 4 s after start, not after 30 s stable). Hugh approved 2026-11-07.
+  primary) STATE=BACKUP; PRIORITY=150;;
   standby) STATE=BACKUP; PRIORITY=100;;
   *) echo "ERROR: ROLE must be primary|standby (got '$ROLE')"; exit 1;;
 esac

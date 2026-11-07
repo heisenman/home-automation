@@ -11,8 +11,10 @@
 
 - **ha-2 keepalived ignores its 30 s preempt delay.** Boot log: "preempt delay will not work with initial state
   MASTER - clearing"; ha-2 reclaimed the VIP 4 s after keepalived started (standby held it ~61 s, fine this time).
-  Fix: `state BACKUP` in ha-2's HA_DICTATOR instance (priority still wins; preempt_delay then applies). Host config
-  on prod → Hugh's go-ahead + a drill.
+  **Fixed 2026-11-07 ~11:50 PST (Hugh approved):** ha-2's HA_DICTATOR now `state BACKUP` (backup
+  `/etc/keepalived/keepalived.conf.bak-<ts>`), config-tested, reloaded with no VIP change; `failover/deploy.sh`
+  renders the primary as BACKUP/150 from now on. Takes effect at keepalived's next start — unproven until a restart
+  drill (expect ha-2 BACKUP → MASTER ~30 s after start).
 - **ha-battery-refresh fails on ha-2** (last 2026-11-06 10:32 UTC): `OSError: [Errno 30] Read-only file system:
   instance/.cbed_c6_cmd_seq` — the unit's sandbox (ProtectHome/ReadWritePaths) doesn't let it write the command
   sequence file. Fix in the unit's ReadWritePaths (systemd unit change → gated).
