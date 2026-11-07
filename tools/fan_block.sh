@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
-# fan_block.sh start|stop — the dehumidifier study's fan-only zero blocks (tools/fan_block.py, run on ha-2).
-# Fired by visko's crontab on .210 at 10:00 / 15:00 PT (start) and +30 min (stop, with a +40 min retry).
+# fan_block.sh start|check|stop — the dehumidifier study's fan-only zero blocks (tools/fan_block.py, run on ha-2).
+# Fired by visko's crontab on .210 at 10:00 / 15:00 PT (start) +30 min (check: end early unless conditions
+# still permit), +45 min (stop) and +55 min (stop retry).
 # Stops scheduling itself once the readiness report's HVAC zero-model criterion passes (study doc §6c).
 set -euo pipefail
 HA2="${HA2:-192.168.1.200}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 OUT="$ROOT/instance/dehum-study"
-verb="${1:?start|stop}"
+verb="${1:?start|check|stop}"
 if [ "$verb" = start ] && python3 - "$OUT/reports/status.json" <<'PY'
 import json, sys
 s = json.load(open(sys.argv[1]))

@@ -401,6 +401,12 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   fan-only offset SE ≤ 0.05. G2a is 4/5 again and the 10:00/15:00 fan-only blocks resume (they skip only once that
   passes). G2b reads 0.21–0.36 L/kWh (median 0.26, ±27 %) and slips past Nov 8 while the fan-only SE tightens.
 
+- **2026-11-06 PST — oiling and waxing, manual ERV boost (label for the analysis).** Hugh oiled and waxed
+  through the day (significant off-gassing); AQ fell 78 → 60 by 16:42 and Hugh set a 6 h ERV BOOST at 16:43
+  (to ~22:43) while outdoor air was the wetter (dp 11.2 vs 8.0 °C indoors). Exclude or label this window in the
+  VOC and moisture fits: an event-driven ERV high with a moisture load from outdoors. Same evening: the fan-only
+  blocks go to 45 min from 11-07 (Hugh agreed), since 2 × 30 min added only 0.5 usable h a day.
+
 ## 6c. Readiness schedule (agreed 2026-11-01)
 
 Each gate has dated pass/fail criteria, computed from live data by `tools/dehum_readiness.py` (read-only, runs on
@@ -415,7 +421,9 @@ what's behind, and what's waiting on Hugh. An open Claude session also reviews i
 | **G2b** Phase 2 done | Sun Nov 8 | ≥ 5 Aprilaire runs (one run = one call; the E070 cycles its compressor off ~4 min an hour) measured across the air handler, after subtracting the offset and the fitted ERV term minute by minute, with fan-tap airflow (heat-speed rated 780/1000 cfm during heat calls). Half-range ≤ ±20 % of the median L/kWh. All runs 0.3–2.5 L/kWh | Build the rotation scheduler; Midea plug back on for its arms; **Hugh's go-ahead to rotate** |
 | **P3** Rotation coverage | Sun Nov 15, then weekly (22, 29, Dec 6) | Each arm ≥ 8 valid blocks, baseline ≥ 10. Each unit ≥ 2 inlet dew-point bins (< 7.5, 7.5–9.5, ≥ 9.5 °C) with ≥ 4 blocks. Each unit's L/kWh 95 % CI within ±15 %. The scheduler writes control.db `study_block` (arm, inlet_dp_c, l_per_kwh, end_reason) | Phase 4: fit surfaces, control law in shadow |
 
-**Fan-only zero blocks (Hugh, 2026-11-02):** blower ON at 10:00 and 15:00 PT for 30 min, with the Aprilaire and heat
+**Fan-only zero blocks (Hugh, 2026-11-02):** blower ON at 10:00 and 15:00 PT for 30 min (45 min from 2026-11-07,
+Hugh: "if the conditions permit" — a `check` at +30 min ends the block unless the Aprilaire and heat are still idle
+and telemetry is fresh; the first 10 min of a state don't count, so 30 min gave only ~15–20 usable), with the Aprilaire and heat
 idle (`tools/fan_block.py` via `fan_block.sh`, visko crontab on .210, log `instance/dehum-study/fan_blocks.log`).
 Normal operation never runs the blower without the Aprilaire or a heat call, so this is the only source of
 fan-only minutes for the HVAC pair's zero. The blocks stop themselves once that criterion passes. The cron times

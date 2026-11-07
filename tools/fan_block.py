@@ -1,8 +1,9 @@
 #!/usr/bin/env python3
-"""Fan-only zero blocks for the dehumidifier study (Hugh, 2026-11-02: 10:00 and 15:00 PT, 30 min, until G2a's
-HVAC zero passes). Runs ON ha-2, piped by tools/fan_block.sh from .210's crontab:
+"""Fan-only zero blocks for the dehumidifier study (Hugh, 2026-11-02: 10:00 and 15:00 PT, until G2a's HVAC zero
+passes; 2026-11-06: 45 min instead of 30 "if conditions permit" — the first 10 min of a state don't count, so a 30-min
+block yielded only ~15-20 usable minutes). Runs ON ha-2, piped by tools/fan_block.sh from .210's crontab:
 
-    ssh 192.168.1.200 'cd ~/home_automation && venv/bin/python - start|stop|status' < tools/fan_block.py
+    ssh 192.168.1.200 'cd ~/home_automation && venv/bin/python - start|check|stop|status' < tools/fan_block.py
 
 The furnace blower (hvac_blower, Venstar fan setting) goes ON with the Aprilaire and heat idle, so the HVAC study
 pair sees blower air with nothing but the ERV mixed in — the state normal operation never produces, since the
@@ -12,6 +13,8 @@ Commands go through the same control-API path as a PWA press (POST /devices/hvac
 issuer's ack, logging and safety apply. Rules:
   start  skip if the Aprilaire is running, a heat call is on, the fan is already ON (a person's setting — not
          ours), or telemetry is stale. Otherwise fan ON, and a marker records that we did it.
+  check  at +30 min: keep going to +45 only if conditions still permit (telemetry fresh, Aprilaire idle, no heat
+         call); otherwise end the block now, by the same rules as stop.
   stop   only if the marker says we started it. If the fan was switched back to Auto by someone, just clear the
          marker. If the Aprilaire started meanwhile, leave the blower on and hand it to the follow coupling
          (engaged = True) so it goes off when the Aprilaire stops, exactly as if the follow had turned it on.
@@ -113,6 +116,18 @@ def stop():
     log("stop: fan back to Auto" if code == 200 else "stop: command failed", code=code, resp=resp, **s)
 
 
+def check():
+    if not MARKER.exists():
+        return log("check: no block of ours running")
+    s = state()
+    why = ("stale telemetry" if None in (s["apr_w"], s["heat"], s["fan_on"]) else
+           "Aprilaire running" if s["apr_w"] > APR_ON_W else "heat call" if s["heat"] >= 1 else None)
+    if why is None:
+        return log("check: conditions permit; block continues to +45 min", **s)
+    log(f"check: {why}; ending the block early", **s)
+    stop()
+
+
 if __name__ == "__main__":
     verb = sys.argv[1] if len(sys.argv) > 1 else "status"
-    {"start": start, "stop": stop}.get(verb, lambda: log("status", marker=MARKER.exists(), **state()))()
+    {"start": start, "check": check, "stop": stop}.get(verb, lambda: log("status", marker=MARKER.exists(), **state()))()
