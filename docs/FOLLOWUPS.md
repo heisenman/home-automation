@@ -7,6 +7,17 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 🟡 2026-11-07 — found during the ha-2 package update + reboot (kernel 6.12.115, via tools/ha2_apt_relay.py)
+
+- **ha-2 keepalived ignores its 30 s preempt delay.** Boot log: "preempt delay will not work with initial state
+  MASTER - clearing"; ha-2 reclaimed the VIP 4 s after keepalived started (standby held it ~61 s, fine this time).
+  Fix: `state BACKUP` in ha-2's HA_DICTATOR instance (priority still wins; preempt_delay then applies). Host config
+  on prod → Hugh's go-ahead + a drill.
+- **ha-battery-refresh fails on ha-2** (last 2026-11-06 10:32 UTC): `OSError: [Errno 30] Read-only file system:
+  instance/.cbed_c6_cmd_seq` — the unit's sandbox (ProtectHome/ReadWritePaths) doesn't let it write the command
+  sequence file. Fix in the unit's ReadWritePaths (systemd unit change → gated).
+- Bundle `~/apt-bundle-20261107-0458` (276 MB) left on ha-2; delete once the update has settled.
+
 ## 🟡 2026-10-31 — SwitchBot Water Leak Detectors (4 live: kitchen sink, master bath sink, hall bath sinks 1+2)
 
 Live on ha-2 from 15:17 PDT. Units (all hidden, "Leak: …" names): `leak_kitchen_sink` (kitchen),
