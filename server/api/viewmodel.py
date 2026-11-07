@@ -1014,8 +1014,13 @@ def build_controls(traits_cfg: dict | None, manual: bool = False, power_mode: st
             # one field per channel (a thermostat's heat + cool); each posts {channel, value} (ADR-0043)
             c["channels"] = [{"key": k, "label": (ch or {}).get("label") or f"{k.title()} to",
                               "min": (ch or {}).get("min"), "max": (ch or {}).get("max"),
-                              "now_key": f"{k}_setpoint"} for k, ch in chans.items()]
+                              "now_key": f"{k}_setpoint",
+                              # the warn-outside range, settable from the PWA (server/control/comfort.py)
+                              **({"comfort": (ch or {})["comfort"]} if (ch or {}).get("comfort") else {})}
+                             for k, ch in chans.items()]
             c["action"]["channel_key"] = "channel"
+            if any((ch or {}).get("comfort") for ch in chans.values()):
+                c["comfort_action"] = {"method": "PUT", "path": "/devices/{id}/comfort"}
         controls.append(c)
     if "ranged" in tc:
         cfg = tc.get("ranged") or {}
@@ -1182,6 +1187,9 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
         if ctl is not None:
             traits = getattr(ctl, "traits_cfg", None)
 
+    if traits:
+        from server.control import comfort as _comfort
+        traits = _comfort.with_overrides(control_conn, traits, device_id)   # the PWA-selected comfort range
     if hot_conn is not None and traits:
         actuator.update(trait_now_values(lambda m: _latest_any(device_id, m), traits))
 

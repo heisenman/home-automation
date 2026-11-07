@@ -416,6 +416,18 @@ function SettingsPanel({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
     setBusy(false);
   };
 
+  const sendComfort = async (body, key) => {
+    if (!isAdmin) return onNeedAdmin();
+    setBusy("comfort-" + key); setErr("");
+    try {
+      const r = await adminSend(spCtl.comfort_action.method,
+        spCtl.comfort_action.path.replace("{id}", vm.device_id), body);
+      if (r && r.comfort) setCfEdit({ ...cfEdit, [key]: { ...r.comfort } });
+      await onChange();
+    } catch (e) { setErr(String(e.message)); }
+    setBusy("");
+  };
+
   if (!open) {
     return html`<div class="settings"><button class="btn sm ghost"
         onClick=${() => setOpen(true)}>⚙ Settings</button></div>`;
@@ -529,6 +541,9 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
   // a channelled setpoint (thermostat heat + cool): one input per channel, keyed by channel
   const [chTarget, setChTarget] = useState(() => Object.fromEntries(((spCtl && spCtl.channels) || [])
     .map((ch) => [ch.key, act[ch.now_key] ?? ""])));
+  // each channel's comfort range (warn outside it), editable: {heat: {min, max}, ...}
+  const [cfEdit, setCfEdit] = useState(() => Object.fromEntries(((spCtl && spCtl.channels) || [])
+    .filter((ch) => ch.comfort).map((ch) => [ch.key, { ...ch.comfort }])));
   const spInit = spCtl ? (act[spCtl.now_key] ?? spCtl.safe_value ?? "") : "";
   const [open, setOpen] = useState(!!vm.manual);       // manual-only devices: the controls ARE the card
   const [target, setTarget] = useState(spInit);
@@ -545,6 +560,18 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
       const path = c.action.path.replace("{id}", vm.device_id);
       await adminSend(c.action.method, path,
         { trait: c.action.trait, action: c.action.action, args: { [c.action.arg_key]: value, ...(extra || {}) } });
+      await onChange();
+    } catch (e) { setErr(String(e.message)); }
+    setBusy("");
+  };
+
+  const sendComfort = async (body, key) => {
+    if (!isAdmin) return onNeedAdmin();
+    setBusy("comfort-" + key); setErr("");
+    try {
+      const r = await adminSend(spCtl.comfort_action.method,
+        spCtl.comfort_action.path.replace("{id}", vm.device_id), body);
+      if (r && r.comfort) setCfEdit({ ...cfEdit, [key]: { ...r.comfort } });
       await onChange();
     } catch (e) { setErr(String(e.message)); }
     setBusy("");
@@ -616,7 +643,21 @@ function ManualControl({ vm, isAdmin, onChange, onNeedAdmin }) {
             onClick=${() => cmd(spCtl, Number(chTarget[ch.key]), "setpoint-" + ch.key,
               { [spCtl.action.channel_key]: ch.key })}>Set</button>
           <span class="note">${ch.min}–${ch.max}${u}${act[ch.now_key] != null ? ` · now ${act[ch.now_key]}${u}` : ""}</span>
-        </div>`)}
+        </div>
+        ${ch.comfort && spCtl.comfort_action && cfEdit[ch.key] && html`
+        <div class="field"><label>${ch.key[0].toUpperCase() + ch.key.slice(1)} comfort range</label>
+          <input type="number" min=${ch.min} max=${ch.max} value=${cfEdit[ch.key].min}
+            onInput=${(e) => setCfEdit({ ...cfEdit, [ch.key]: { ...cfEdit[ch.key], min: e.target.value } })} />
+          <span>–</span>
+          <input type="number" min=${ch.min} max=${ch.max} value=${cfEdit[ch.key].max}
+            onInput=${(e) => setCfEdit({ ...cfEdit, [ch.key]: { ...cfEdit[ch.key], max: e.target.value } })} />
+          <button class="btn sm primary" disabled=${busy === "comfort-" + ch.key}
+            onClick=${() => sendComfort({ channel: ch.key, min: Number(cfEdit[ch.key].min),
+              max: Number(cfEdit[ch.key].max) }, ch.key)}>Set</button>
+          <button class="btn sm ghost" disabled=${busy === "comfort-" + ch.key}
+            onClick=${() => sendComfort({ channel: ch.key, reset: true }, ch.key)}>Default</button>
+          <span class="note">warns when the ${ch.key} setpoint is outside ${ch.comfort.min}–${ch.comfort.max}${u}</span>
+        </div>`}`)}
       ${spCtl && !spCtl.channels && html`
         <div class="field"><label>${spCtl.label}</label>
           <input type="number" min=${spCtl.min} max=${spCtl.max} value=${target}
@@ -785,6 +826,18 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
       setFlash("saved"); await onChange();
     } catch (e) { setErr(String(e.message)); }
     setBusy(false);
+  };
+
+  const sendComfort = async (body, key) => {
+    if (!isAdmin) return onNeedAdmin();
+    setBusy("comfort-" + key); setErr("");
+    try {
+      const r = await adminSend(spCtl.comfort_action.method,
+        spCtl.comfort_action.path.replace("{id}", vm.device_id), body);
+      if (r && r.comfort) setCfEdit({ ...cfEdit, [key]: { ...r.comfort } });
+      await onChange();
+    } catch (e) { setErr(String(e.message)); }
+    setBusy("");
   };
 
   if (!open) {

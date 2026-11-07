@@ -1510,6 +1510,20 @@ def make_router(issuer: CommandIssuer, confirm_verifier=None, api_authz=None, ad
             c.close()
         return JSONResponse(status_code=code, content=payload)
 
+    @router.put("/{device_id}/comfort", dependencies=[Depends(require_admin_only)])
+    async def put_comfort(device_id: str, body: dict = Body(...)):
+        # a thermostat channel's comfort range — the warn-outside band (server/control/comfort.py)
+        if control_db is None:
+            return JSONResponse(status_code=503, content={"status": "unavailable", "reason": "no control db"})
+        import sqlite3
+        from server.control import comfort
+        c = sqlite3.connect(str(control_db))
+        try:
+            code, payload = comfort.handle_set(c, issuer.registry, device_id, body)
+        finally:
+            c.close()
+        return JSONResponse(status_code=code, content=payload)
+
     @router.post("/{device_id}/power-cycle", dependencies=[Depends(require_admin_only)])
     async def post_power_cycle(device_id: str):
         import time as _t
