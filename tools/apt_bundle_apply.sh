@@ -11,7 +11,12 @@
 #   5. if a newer kernel is installed than the one running (or /run/reboot-required): ASK to reboot.
 #      Yes → inhibit cleared, reboot (on ha-2 the VIP moves to the standby and back). No → the active ha-* services
 #      are restarted so they pick up the new libraries, and the reboot is left for later.
+#
+# Unattended (an approved run over ssh):  --yes  install without the Y/n prompt (debconf non-interactive, keep
+# local config files);  --no-reboot  answer the reboot question "no" (the operator reboots later).
 set -euo pipefail
+YES=0; NOREBOOT=0
+for a in "$@"; do case "$a" in --yes) YES=1 ;; --no-reboot) NOREBOOT=1 ;; *) echo "unknown option $a" >&2; exit 2 ;; esac; done
 [ "$(id -u)" = 0 ] || { echo "run as root: sudo $0" >&2; exit 1; }
 B="$(cd "$(dirname "$0")" && pwd)"
 REPO="${HA_REPO:-/home/visko/home_automation}"
@@ -35,7 +40,12 @@ APT=(-o "Dir::Etc::SourceList=$B/sources.list" -o "Dir::Etc::SourceParts=-" -o "
      -o "Dir::Cache=$B/cache" -o "Acquire::Languages=none" -o "Acquire::By-Hash=no"
      -o "Acquire::IndexTargets::deb::DEP-11::DefaultEnabled=false" -o "APT::Sandbox::User=root")
 apt-get "${APT[@]}" update
-apt-get "${APT[@]}" dist-upgrade
+if [ "$YES" = 1 ]; then
+  DEBIAN_FRONTEND=noninteractive apt-get "${APT[@]}" -y -o Dpkg::Options::=--force-confdef \
+    -o Dpkg::Options::=--force-confold dist-upgrade
+else
+  apt-get "${APT[@]}" dist-upgrade
+fi
 
 running="$(uname -r)"
 newest="$(ls -1 /boot/vmlinuz-* 2>/dev/null | sed 's|/boot/vmlinuz-||' | sort -V | tail -1)"
@@ -43,7 +53,7 @@ if [ -e /run/reboot-required ] || { [ -n "$newest" ] && [ "$newest" != "$running
   echo
   echo "== reboot needed: running kernel $running, installed $newest"
   [ -f /run/reboot-required.pkgs ] && echo "   (requested by: $(sort -u /run/reboot-required.pkgs | tr '\n' ' '))"
-  read -r -p "Reboot now? [y/N] " ans </dev/tty || ans=n
+  if [ "$NOREBOOT" = 1 ]; then ans=n; else read -r -p "Reboot now? [y/N] " ans </dev/tty || ans=n; fi
   if [[ "$ans" =~ ^[Yy] ]]; then
     kill "${KEEP:-0}" 2>/dev/null || true; rm -f "$FIT"; trap - EXIT
     echo "== failover inhibit cleared; rebooting"
