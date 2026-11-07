@@ -109,6 +109,16 @@ is known.
   - So efficiency fell ~15 % as the living-room dew point fell ~1.2 °C and the inlet cooled ~1 °C.
 - **Done 2026-10-31:** the controller now publishes the unit's raw `error_code` and `tank_full` (0/1) on every
   poll, so from now on P2 vs E6 come from the device instead of being inferred.
+- **First device-reported clean bucket, 2026-11-07.** Hugh emptied the bucket just before the Midea went back on
+  at its plug (2026-11-05 07:05 PST). It reported `tank_full` 1 (raw `error_code` 37 = P2) at 13:09:44 PST on 11-07.
+  - 54.1 h on the plug, about 31.5 compressor-hours (1-min power ≥ 300 W, mean 469 W), the rest parked at ~1 W.
+  - Metered energy: plug_hall `energy_kwh` 78.868 → 93.596 = **14.73 kWh**. Metered, not the back-calculation.
+  - At 15.9 L: **1.08 L/kWh**, 0.50 L per compressor-hour. Sep–Oct (mostly back-calculated kWh) was 0.97 L/kWh.
+  - Inlet (study_midea_inlet, hourly mean over the bucket, on and off hours): 20.9 °C, 42 % RH, dew point ≈ 7.5 °C.
+    That is drier than Sep–Oct, yet the efficiency is higher, so check the back-calculated buckets against metered
+    ones before reading a trend into it.
+  - Recompute: `rungs.db` 1-min `plug_hall` `power_w` / `energy_kwh` between the emptying and the P2 transition in
+    hot.db (`dehumidifier_living_room` `tank_full`).
 
 Still check method B against this. The Aprilaire drain, if reachable, can be spot-checked the same way.
 
