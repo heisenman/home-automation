@@ -538,3 +538,12 @@ make it well-conditioned and give ~5× the ΔAH signal.
     or the arms are confounded. Build that switch with the scheduler.
   - **Model test:** the house balance should predict each boost's drying from Δ(AH) × the extra cfm × (1 − the
     ERV core's latent recovery). The latent recovery is unknown; boosts are what measure it.
+
+
+- **G2b plausibility check gets revised once G2a passes (Hugh, 2026-11-06 evening: agreed).** The 0.3–2.5 L/kWh
+  bound assumed the E070 near its 1.8–2.1 rating. The fitted runs read 0.15–0.35 (median ~0.27) and a raw
+  supply − return check that bypasses the fitted zero gave ~0.29, so a low reading looks like a property of this
+  unit, not a fault in the measurement. When G2a passes, I draft the new criterion for Hugh: pass a consistent
+  result (run agreement within ±20 %) that the raw check corroborates, even below the rating, keeping the upper
+  bound and a floor that catches a sign or offset error. Until then the old bound stays, so G2b can't pass on an
+  unsettled zero.
