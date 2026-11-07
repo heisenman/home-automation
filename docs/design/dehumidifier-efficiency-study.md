@@ -407,6 +407,9 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   VOC and moisture fits: an event-driven ERV high with a moisture load from outdoors. Same evening: the fan-only
   blocks go to 45 min from 11-07 (Hugh agreed), since 2 × 30 min added only 0.5 usable h a day.
 
+- **2026-11-07 09:58 PST — continuous fan hold replaces the timed fan-only blocks (Hugh).** Expect ~20 h/day of
+  fan-only minutes less heat calls, so G2a's 6 h preponderance threshold should be reached within a day.
+
 ## 6c. Readiness schedule (agreed 2026-11-01)
 
 Each gate has dated pass/fail criteria, computed from live data by `tools/dehum_readiness.py` (read-only, runs on
@@ -428,6 +431,16 @@ idle (`tools/fan_block.py` via `fan_block.sh`, visko crontab on .210, log `insta
 Normal operation never runs the blower without the Aprilaire or a heat call, so this is the only source of
 fan-only minutes for the HVAC pair's zero. The blocks stop themselves once that criterion passes. The cron times
 are in UTC: shift them 1 h at DST.
+
+**Continuous fan hold (Hugh, 2026-11-07 09:58 PST, replaces the timed blocks):** "turn the fan on constantly and
+then you disambiguate when heat is applied vs not" — extra fan use is fine for now. `fan_block.sh hold` every 10 min
+(visko crontab) keeps the blower's fan setting ON, re-asserting it if anything sets it to Auto; once the HVAC zero
+criterion passes it becomes `release` (fan back to Auto) by itself. The readiness analysis already sorts the
+minutes: fan-only = blower on, no heat call for 25 min, Aprilaire idle 15 min; heat-speed minutes are excluded;
+stretches are cut into ≤ 60-min chunks (adjacent chunks are correlated, so read the SE as somewhat optimistic and
+lean on the day-drift test). While it holds, no new blower-off minutes accrue (65 h on file is plenty), and the
+Midea pair sees blower-on air: score Midea runs with the blower-on offset (+0.119 ± 0.063), not the blower-off one.
+The timed-block crontab is saved at `instance/reboot-check/crontab-before-hold.txt`.
 
 Expected Phase 4 start ≈ Nov 29 – Dec 6; the limiter is weather variety (at least one mild damp spell), not block
 count. This winter's fit covers indoor dew points of only ~7–10 °C; the humid end waits for summer.

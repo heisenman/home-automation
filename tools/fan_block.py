@@ -3,7 +3,15 @@
 passes; 2026-11-06: 45 min instead of 30 "if conditions permit" — the first 10 min of a state don't count, so a 30-min
 block yielded only ~15-20 usable minutes). Runs ON ha-2, piped by tools/fan_block.sh from .210's crontab:
 
-    ssh 192.168.1.200 'cd ~/home_automation && venv/bin/python - start|check|stop|status' < tools/fan_block.py
+    ssh 192.168.1.200 'cd ~/home_automation && venv/bin/python - start|check|stop|hold|release|status' < tools/fan_block.py
+
+HOLD MODE (Hugh, 2026-11-07: "turn the fan on constantly and then you disambiguate when heat is applied vs not";
+extra fan use is fine for now). `hold` (every 10 min from cron) keeps the blower's fan setting ON continuously,
+re-asserting it if something set it back to Auto (e.g. the Aprilaire follow coupling, if the Aprilaire started a
+run while hold was off). The readiness analysis sorts the minutes itself: fan-only (blower on, no heat call for 25
+min, Aprilaire idle 15 min) vs heat speed (excluded) vs Aprilaire. `release` sets the fan back to Auto and ends hold;
+fan_block.sh calls it automatically once G2a's HVAC zero criterion passes. To stop hold early: fan_block.sh release
+(and take the `hold` line out of the crontab, or it resumes on the next tick).
 
 The furnace blower (hvac_blower, Venstar fan setting) goes ON with the Aprilaire and heat idle, so the HVAC study
 pair sees blower air with nothing but the ERV mixed in — the state normal operation never produces, since the
@@ -116,6 +124,37 @@ def stop():
     log("stop: fan back to Auto" if code == 200 else "stop: command failed", code=code, resp=resp, **s)
 
 
+HOLD = Path("instance/study_fan_hold.json")
+
+
+def hold():
+    s = state()
+    if not HOLD.exists():
+        MARKER.unlink(missing_ok=True)                 # a running timed block becomes part of the hold
+        HOLD.write_text(json.dumps({"started": time.time()}))
+        if s["fan_on"] == 1:
+            return log("hold: started; fan already ON", **s)
+    elif s["fan_on"] is None:
+        return log("hold: stale telemetry; not re-asserting", **s)
+    elif s["fan_on"] == 1:
+        return None                                    # steady state: nothing to log every 10 min
+    code, resp = fan(True)
+    log("hold: fan ON" if code == 200 else "hold: command failed", code=code, resp=resp, **s)
+
+
+def release():
+    if not HOLD.exists():
+        return log("release: no hold running")
+    s = state()
+    if s["apr_w"] is not None and s["apr_w"] > APR_ON_W:
+        return log("release: Aprilaire running; leaving the fan ON, retry next tick", **s)
+    code, resp = fan(False)
+    if code == 200:
+        HOLD.unlink()
+    log("release: fan back to Auto, hold ended" if code == 200 else "release: command failed", code=code, resp=resp,
+        **s)
+
+
 def check():
     if not MARKER.exists():
         return log("check: no block of ours running")
@@ -130,4 +169,4 @@ def check():
 
 if __name__ == "__main__":
     verb = sys.argv[1] if len(sys.argv) > 1 else "status"
-    {"start": start, "check": check, "stop": stop}.get(verb, lambda: log("status", marker=MARKER.exists(), **state()))()
+    {"start": start, "check": check, "stop": stop, "hold": hold, "release": release}.get(verb, lambda: log("status", marker=MARKER.exists(), **state()))()
