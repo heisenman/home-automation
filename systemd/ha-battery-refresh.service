@@ -18,6 +18,8 @@ ExecStart=/home/visko/home_automation/venv/bin/python3 tools/battery_refresh.py 
 NoNewPrivileges=yes
 ProtectSystem=strict
 ProtectHome=read-only
+# signing writes the per-node command counter, instance/.<node>_cmd_seq (server/control/edge_cmd.py)
+ReadWritePaths=/home/visko/home_automation/instance
 PrivateTmp=yes
 
 [Install]
