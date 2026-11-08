@@ -184,3 +184,67 @@ def test_api_validation():
     code, _ = handle_policy_update(conn, "erv_attic", {"dry_boost": {"outdoor_sensor": "switchbot_outdoor",
                                                                     "indoor_sensors": ROOMS}})
     assert code == 200 and store.get_policy(conn, "erv_attic")["dry_boost"]["outdoor_sensor"] == "switchbot_outdoor"
+
+
+# ── outdoor cross-check against Open-Meteo (Hugh, 2026-11-08: the outdoor meter reads RH high when wet) ──
+
+def _xc(**kw):
+    from server.control import dry_boost as db
+    return db.config({"outdoor_sensor": "out", "indoor_sensors": ["in"], "reference": "openmeteo", **kw})
+
+
+def test_crosscheck_agree_uses_sensor():
+    from server.control import dry_boost as db
+    dp, src = db.outdoor_dewpoint((10.0, 80.0), (10.0, 78.0, 1000.0), _xc(), 1000.0)
+    assert src.startswith("sensor") and dp == db.dewpoint_c(10.0, 80.0)
+
+
+def test_crosscheck_wet_sensor_uses_openmeteo():
+    from server.control import dry_boost as db
+    # 2026-11-08 13:00: sensor 15.1 °C / 77 % reads dp ~11; Open-Meteo 13.6 / 67 % → ~7.6 (kitchen fell to 7.1)
+    dp, src = db.outdoor_dewpoint((15.1, 90.0), (13.6, 67.0, 1000.0), _xc(), 1000.0)
+    assert src.startswith("Open-Meteo") and dp == db.dewpoint_c(13.6, 67.0)
+
+
+def test_crosscheck_dry_sensor_disagreeing_takes_wetter():
+    from server.control import dry_boost as db
+    # sensor wetter but not in its wet regime (RH < wet_rh): no reason to distrust it → the wetter (sensor)
+    dp, src = db.outdoor_dewpoint((15.0, 75.0), (15.0, 55.0, 1000.0), _xc(), 1000.0)
+    assert dp == db.dewpoint_c(15.0, 75.0) and "wetter" in src
+    # Open-Meteo wetter (the model can miss local dry air the other way): still the wetter
+    dp, src = db.outdoor_dewpoint((15.0, 55.0), (15.0, 75.0, 1000.0), _xc(), 1000.0)
+    assert dp == db.dewpoint_c(15.0, 75.0)
+
+
+def test_crosscheck_stale_or_off_falls_back_to_sensor():
+    from server.control import dry_boost as db
+    stale = (13.6, 67.0, 1000.0 - 46 * 60)
+    assert db.outdoor_dewpoint((15.1, 90.0), stale, _xc(), 1000.0)[1] == "sensor"
+    assert db.outdoor_dewpoint((15.1, 90.0), None, _xc(), 1000.0)[1] == "sensor"
+    assert db.outdoor_dewpoint((15.1, 90.0), (13.6, 67.0, 1000.0), _xc(reference=None), 1000.0)[1] == "sensor"
+
+
+def test_crosscheck_flows_into_decide():
+    from server.control import dry_boost as db
+    cfg = _xc()
+    now = 10_000.0
+    readings = {"out": {"m": {"temperature_c": 15.1, "humidity_pct": 90.0}, "ts": now},
+                "in": {"m": {"temperature_c": 22.5, "humidity_pct": 44.0}, "ts": now}}
+    off, _ = db.conditions(readings, cfg, now, None)               # sensor only: outdoor wetter → no boost
+    assert db.decide(cfg, off, False, None, now)[0] is False
+    on, _ = db.conditions(readings, cfg, now, (13.6, 67.0, now))    # cross-checked: outdoor ~7.6 vs house ~9.6
+    want, why = db.decide(cfg, on, False, None, now)
+    assert want is True and "Open-Meteo" in why
+
+
+def test_policy_accepts_reference(tmp_path):
+    import sqlite3
+    from server.api.control import handle_policy_update
+    from server.control import control_store as store
+    c = sqlite3.connect(tmp_path / "c.db")
+    store.init_db(c) if hasattr(store, "init_db") else store.ensure_schema(c)
+    store.set_policy(c, "erv", {"enabled": True, "source_sensor": "x", "control": {"strategy": "hysteresis",
+                     "on_above": 50, "off_below": 45}, "dry_boost": {"outdoor_sensor": "out", "indoor_sensors": ["in"]}})
+    code, _ = handle_policy_update(c, "erv", {"dry_boost": {"reference": "openmeteo", "wet_rh": 80}})
+    assert code == 200 and store.get_policy(c, "erv")["dry_boost"]["reference"] == "openmeteo"
+    assert handle_policy_update(c, "erv", {"dry_boost": {"reference": "nws"}})[0] == 400

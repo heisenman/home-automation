@@ -469,6 +469,25 @@ class Controller:
                           f"{res.reason}; skipped: outdoor dew point {dp:.1f}°C < {lim:.1f}°C "
                           f"(dry outside — ventilation dries the house; E8 territory)")
 
+    def _weather_reference(self):
+        """Open-Meteo's latest (temperature_c, humidity_pct, epoch) from weather.db (ha-2 pulls it via the air-gap
+        relay, ADR-0033), or None. Read-only; any failure means "no reference" and the boost uses the sensor alone."""
+        path = os.environ.get("HA_WEATHER_DB", "instance/db/weather.db")
+        try:
+            c = sqlite3.connect(f"file:{path}?mode=ro", uri=True, timeout=2)
+            try:
+                rows = dict(((m, (v, ts)) for m, v, ts in c.execute(
+                    "SELECT metric, value, ts FROM weather WHERE source='openmeteo' AND metric IN "
+                    "('temperature_c','humidity_pct') AND ts >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-6 hours') "
+                    "ORDER BY ts")))
+            finally:
+                c.close()
+            (t, ts_t), (h, ts_h) = rows["temperature_c"], rows["humidity_pct"]
+            ts = calendar.timegm(time.strptime(min(ts_t, ts_h)[:19], "%Y-%m-%dT%H:%M:%S"))
+            return float(t), float(h), ts
+        except Exception:
+            return None
+
     def _apply_dry_boost(self, device_id, pol, policy, sensor, res, dev_state, override, now):
         """Raise a level-mode ventilator (the ERV) to `dry_boost.level` while outdoor air is drier than the
         house (server/control/dry_boost.py). Applies only to a running rule/default resolution: safety, an
@@ -487,7 +506,8 @@ class Controller:
             return res
         with self._lock:
             readings = dict(self.readings)
-        cond, why = dry_boost.conditions(readings, cfg, now)
+        cond, why = dry_boost.conditions(readings, cfg, now,
+                                         self._weather_reference() if cfg.get("reference") == "openmeteo" else None)
         want, note = dry_boost.decide(cfg, cond, active, since, now, why)
         if want != active:
             states[device_id] = (want, now)

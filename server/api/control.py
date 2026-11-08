@@ -334,7 +334,8 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
                 return bad("dry_boost.indoor_sensors must be a list of sensor ids")
             cur["indoor_sensors"] = list(dict.fromkeys(ss))
         ranges = {"on_delta_c": (0, 15), "off_delta_c": (-5, 15), "rh_on": (20, 80), "rh_floor": (20, 80),
-                  "min_room_c": (5, 30), "min_on_min": (0, 240), "min_off_min": (0, 240), "stale_min": (1, 120)}
+                  "min_room_c": (5, 30), "min_on_min": (0, 240), "min_off_min": (0, 240), "stale_min": (1, 120),
+                  "agree_c": (0.2, 5), "wet_rh": (50, 100), "reference_stale_min": (15, 240)}
         for k, (lo, hi) in ranges.items():
             if k in g:
                 if not _is_num(g[k]) or not lo <= g[k] <= hi:
@@ -344,6 +345,10 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
             if not isinstance(g["level"], int) or isinstance(g["level"], bool) or not 1 <= g["level"] <= 4:
                 return bad("dry_boost.level must be an integer level 1..4")
             cur["level"] = g["level"]
+        if "reference" in g:
+            if g["reference"] not in (None, "openmeteo"):
+                return bad("dry_boost.reference must be \"openmeteo\" or null (sensor only)")
+            cur["reference"] = g["reference"]
         eff = {**dry_boost.DEFAULTS, **cur}
         if eff["off_delta_c"] >= eff["on_delta_c"] or eff["rh_floor"] >= eff["rh_on"]:
             return bad("dry_boost needs off_delta_c < on_delta_c and rh_floor < rh_on (hysteresis)")
