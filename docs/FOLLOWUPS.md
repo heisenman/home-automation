@@ -21,6 +21,13 @@
   (`systemd/ha-battery-refresh.service`, ReadWritePaths=instance like 17 other units); handed to Hugh as a drop-in
   (`/etc/systemd/system/ha-battery-refresh.service.d/rw-instance.conf`), installed by Claude on ha-2 at Hugh's request
   (he has no direct ha-2 access). **Proven 2026-11-08 07:39 PST:** a test sweep commanded 21/21 nodes, exit 0.
+- **Outdoor sensor `switchbot_outdoor` overreads humidity when it's wet** (found 2026-11-08). On a fixture on the
+  garage's north wall, exposed to rain and dew. Against Open-Meteo, 30 days: temperature agrees (±1 °C), but RH reads
+  +14 % at ≥ 95 %, +11 % at 80–95 %, +1 % below 80 %, so the dew point reads +1.4 °C (median), +2.2 °C when wet.
+  Ground truth 11-08 13:00: with windows open the kitchen dew point fell to 7.1 °C while the sensor said 10 °C outside.
+  Consumers: the ERV dry-boost (`erv_attic` policy `dry_boost.outdoor_sensor`, under-boosts), `tools/dehum_readiness.py`,
+  `dehum_phase1.py`, `dehum_audit.py`, `stack_effect_aq.py`. Fix: a rain/radiation shield or a sheltered spot (Hugh);
+  then decide whether dry-boost should cross-check Open-Meteo.
 - Bundle `~/apt-bundle-20261107-0458` (276 MB) left on ha-2; delete once the update has settled.
 
 ## 🟡 2026-10-31 — SwitchBot Water Leak Detectors (4 live: kitchen sink, master bath sink, hall bath sinks 1+2)

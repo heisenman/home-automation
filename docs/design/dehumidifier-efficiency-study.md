@@ -433,6 +433,10 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   (2.0 °C below the house); Nov 7–8 it held 20.8–21.3 °C while outdoor fell 13.8 → 10 °C (0.9–1.2 °C below).
   The Midea's moisture load dropped sharply from ~22:00 on 11-07, but the outdoor dew point fell to the house's at
   the same time, so that can't yet be credited to the sealing.
+- **2026-11-08 ~12:15–? PST — windows open to air out chemicals (Hugh).** Exclude from the water-balance and leakage
+  fits. It exposed an **outdoor-sensor bias**: switchbot_outdoor reads RH high when wet (dew point +1.4 °C median over
+  30 days, +2.2 °C at ≥ 95 % RH; see FOLLOWUPS). Every outdoor dew-point figure in this doc and the reports inherits
+  it, including the "outdoor wetter than house" drive on 11-06/07 (likely 1–2 °C less than reported).
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
