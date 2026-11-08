@@ -419,6 +419,18 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
 
 - **2026-11-07 09:58 PST — continuous fan hold replaces the timed fan-only blocks (Hugh).** Expect ~20 h/day of
   fan-only minutes less heat calls, so G2a's 6 h preponderance threshold should be reached within a day.
+- **2026-11-07 19:58 PST — G2a passes on the preponderance path** (ad hoc run): 12.4 h fan-only in 18 stretches over
+  6 days, offset −0.036 ± 0.059, no drift (p 0.14). The 11-08 06:41 report makes it official and the hold releases.
+  Re-scored G2b runs: 0.02, 0.14, 0.17, 0.36, 0.45 L/kWh (median 0.17). No new runs while the Midea leads.
+- **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
+  Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
+  ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
+  - Midea parked by a self-expiring `off` override (planned end + 60 min). Aprilaire thresholds 44/40 "so it runs
+    about as much as it can" (Hugh); back to its saved thresholds (48/45) at the end.
+  - `tools/dehum_block.sh start|stop|status` (runs `tools/dehum_block.py` on ha-2), from .210's crontab, each
+    retried. Log: `instance/dehum-study/dehum_blocks.log`. Fan on Auto, so the blower follows the Aprilaire.
+  - Purpose: the SYSTEM comparison Hugh wants (Aprilaire + blower vs Midea, at the house level, Phase 1 water
+    balance), with and without blower energy, plus more G2b runs. Not a matched pair: the weather won't repeat.
 
 ## 6c. Readiness schedule (agreed 2026-11-01)
 
