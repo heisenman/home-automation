@@ -440,6 +440,10 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
 - **2026-11-08 13:50 PST — ERV dry-boost cross-checks Open-Meteo** (Hugh: on before the block, so the block runs
   under one ERV behavior). Commit 104e411, `erv_attic` policy `dry_boost.reference: openmeteo`. 30-day backtest:
   boost-eligible hours 288 → 354. ERV data before and after this differ in boost hours.
+  **13:58 PST: start/release gap 2 / 1 °C → 1.5 / 0.75 °C (Hugh).** The 2 °C was an unmeasured default (margin
+  for meter error, which also hid the outdoor wet bias); the cross-check removes most of that bias. Rough yield:
+  ~25 g/h per 1 °C of gap at the boost's extra ~75 m³/h, assuming the core returns about half the moisture
+  (unmeasured; the block's boosts should pin it down), against the Midea's ~500 g/h.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
@@ -578,7 +582,7 @@ make it well-conditioned and give ~5× the ΔAH signal.
 - **ERV dew-point dry boost (Hugh, 2026-11-04: "this can supersede AQ-related actuation"; precedence chosen:
   boost wins, AQ otherwise).**
   - **Rule** (`server/control/dry_boost.py`): ERV to high while indoor dew point (mean of the five room meters)
-    − outdoor (`switchbot_outdoor`) ≥ 2 °C, indoor RH ≥ 41 % and every room ≥ 18 °C. It releases below 1 °C
+    − outdoor (`switchbot_outdoor`) ≥ 2 °C (1.5 °C from 2026-11-08, release 0.75, Open-Meteo cross-check), indoor RH ≥ 41 % and every room ≥ 18 °C. It releases below 1 °C
     (after 30 min on), or at once at RH ≤ 40 % (Hugh's floor) or a room under 18 °C. Restarts wait 30 min; a
     stale outdoor reading (> 15 min) means no boost. Safety, operator overrides, scenes and schedules still win.
   - **Why now, though the VOC entry above held the ERV still:** Hugh judged the automation worth having and a fair
