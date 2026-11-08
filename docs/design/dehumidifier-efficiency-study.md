@@ -422,6 +422,17 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
 - **2026-11-07 19:58 PST — G2a passes on the preponderance path** (ad hoc run): 12.4 h fan-only in 18 stretches over
   6 days, offset −0.036 ± 0.059, no drift (p 0.14). The 11-08 06:41 report makes it official and the hold releases.
   Re-scored G2b runs: 0.02, 0.14, 0.17, 0.36, 0.45 L/kWh (median 0.17). No new runs while the Midea leads.
+- **2026-11-06 18:18 PST — heat setpoint 73 → 75 °F (Hugh).** Central rooms warmed 1.5–2 °C, the perimeter less, so
+  the room-to-room RH gradient narrowed (e.g. C office −3.7 → +0.4 % vs the kitchen) with dew-point gaps unchanged:
+  the RH gradient had been mostly a temperature gradient. The kitchen is the driest room by dew point.
+- **2026-11-07 — ENVELOPE CHANGE: the last 14 perimeter openings into the attic closed (Hugh).** Each 8.5″ × 1.5″,
+  ≈ 178 in² (1.24 ft², 0.115 m²) in all; the last large openings from the original vented-attic design. Time of
+  day: _to confirm_. Treat it as a break in every house-model fit (infiltration, the attic node, Phase 1 water
+  balance): fit before and after separately. First look (confounded by the setpoint change and the fan hold): the
+  attic stopped tracking outdoor temperature overnight. Nov 5–6 it fell 20.7 → 18.6 °C with outdoor 10 → 8 °C
+  (2.0 °C below the house); Nov 7–8 it held 20.8–21.3 °C while outdoor fell 13.8 → 10 °C (0.9–1.2 °C below).
+  The Midea's moisture load dropped sharply from ~22:00 on 11-07, but the outdoor dew point fell to the house's at
+  the same time, so that can't yet be credited to the sealing.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
