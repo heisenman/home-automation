@@ -19,7 +19,8 @@
   instance/.cbed_c6_cmd_seq` — the unit's sandbox (ProtectHome/ReadWritePaths) doesn't let it write the command
   sequence file. Fix in the unit's ReadWritePaths (systemd unit change → gated). **Fix committed 2026-11-08**
   (`systemd/ha-battery-refresh.service`, ReadWritePaths=instance like 17 other units); handed to Hugh as a drop-in
-  (`/etc/systemd/system/ha-battery-refresh.service.d/rw-instance.conf`). Proven when a run ends with status 0.
+  (`/etc/systemd/system/ha-battery-refresh.service.d/rw-instance.conf`), installed by Claude on ha-2 at Hugh's request
+  (he has no direct ha-2 access). **Proven 2026-11-08 07:39 PST:** a test sweep commanded 21/21 nodes, exit 0.
 - Bundle `~/apt-bundle-20261107-0458` (276 MB) left on ha-2; delete once the update has settled.
 
 ## 🟡 2026-10-31 — SwitchBot Water Leak Detectors (4 live: kitchen sink, master bath sink, hall bath sinks 1+2)
