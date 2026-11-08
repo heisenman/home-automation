@@ -437,6 +437,9 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   fits. It exposed an **outdoor-sensor bias**: switchbot_outdoor reads RH high when wet (dew point +1.4 °C median over
   30 days, +2.2 °C at ≥ 95 % RH; see FOLLOWUPS). Every outdoor dew-point figure in this doc and the reports inherits
   it, including the "outdoor wetter than house" drive on 11-06/07 (likely 1–2 °C less than reported).
+- **2026-11-08 13:50 PST — ERV dry-boost cross-checks Open-Meteo** (Hugh: on before the block, so the block runs
+  under one ERV behavior). Commit 104e411, `erv_attic` policy `dry_boost.reference: openmeteo`. 30-day backtest:
+  boost-eligible hours 288 → 354. ERV data before and after this differ in boost hours.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
