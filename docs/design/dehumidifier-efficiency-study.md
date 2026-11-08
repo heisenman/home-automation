@@ -427,7 +427,7 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   the RH gradient had been mostly a temperature gradient. The kitchen is the driest room by dew point.
 - **2026-11-07 — ENVELOPE CHANGE: the last 14 perimeter openings into the attic closed (Hugh).** Each 8.5″ × 1.5″,
   ≈ 178 in² (1.24 ft², 0.115 m²) in all; the last large openings from the original vented-attic design. Time of
-  day: _to confirm_. Treat it as a break in every house-model fit (infiltration, the attic node, Phase 1 water
+  day: finished ≈ 18:00 PST 11-07 (Hugh), so "after" starts there. Treat it as a break in every house-model fit (infiltration, the attic node, Phase 1 water
   balance): fit before and after separately. First look (confounded by the setpoint change and the fan hold): the
   attic stopped tracking outdoor temperature overnight. Nov 5–6 it fell 20.7 → 18.6 °C with outdoor 10 → 8 °C
   (2.0 °C below the house); Nov 7–8 it held 20.8–21.3 °C while outdoor fell 13.8 → 10 °C (0.9–1.2 °C below).
