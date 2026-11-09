@@ -442,6 +442,10 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   a no-op because the VOC rule already had the ERV on high. The window also exposed an **outdoor-sensor bias**: switchbot_outdoor reads RH high when wet (dew point +1.4 °C median over
   30 days, +2.2 °C at ≥ 95 % RH; see FOLLOWUPS). Every outdoor dew-point figure in this doc and the reports inherits
   it, including the "outdoor wetter than house" drive on 11-06/07 (likely 1–2 °C less than reported).
+- **2026-11-08 ~12:15 → 11-09 ~07:00 PST — furnace fan On, and ERV boost override 22:56 → 05:56 PST (Hugh, airing
+  out chemicals).** Exclude from the fan-only and leakage fits. Overnight the dry-boost cross-check chose Open-Meteo
+  (dew point 1.8–7.1 °C) over the sensor (6.7 °C at RH 97 %, wet). House dew point held 9.5–9.7 °C under full ERV
+  flow with the Midea mostly parked, a hint that the ERV core returns much of the moisture (unmeasured).
 - **2026-11-08 13:50 PST — ERV dry-boost cross-checks Open-Meteo** (Hugh: on before the block, so the block runs
   under one ERV behavior). Commit 104e411, `erv_attic` policy `dry_boost.reference: openmeteo`. 30-day backtest:
   boost-eligible hours 288 → 354. ERV data before and after this differ in boost hours.
