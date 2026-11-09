@@ -457,6 +457,13 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   1-min rungs, which ha-2 keeps 7 days (`rollup.py`), so runs before 11-02 07:37 PST have dropped (6 → 4). The
   remaining runs also re-score daily because the zero model refits; it now includes the 11-08/09 forced fan-On
   hours (fan-only offset +0.012 ± 0.020 vs −0.025 ± 0.042 at the G2a pass), giving 0.29/0.44/0.24/0.48 L/kWh.
+- **2026-11-09 ~16:00 PST — readiness scoring uses the cross-checked outdoor AH (Hugh).** The ERV moisture term
+  took outdoor AH from switchbot_outdoor; it now follows the dry boost's Open-Meteo rule (`outdoor_ah` in
+  `tools/dehum_readiness.py`). The zero model refit sharply: fan-only offset +0.008 → +0.184 g/m³, ERV g
+  0.159 → 0.053 (≈ 65 % core moisture return, physically plausible where 0.159 implied none), and fan-only day drift
+  p 0.02 → 0.00. G2b runs re-score 0.63/0.78/0.61/0.56/0.62 L/kWh (3/3 by the current criteria), but the swing shows
+  the offset and the ERV term are nearly collinear at the usual ERV flow: provisional until runs at other ERV flows
+  separate them. **ERV held at level 1 (~66 cfm) 16:00 → 07:00 PST 11-10** (Hugh; `tools/erv_min.sh`, cron restore).
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.

@@ -18,7 +18,7 @@ from datetime import date, datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 PT = ZoneInfo("America/Los_Angeles")
-RUNGS, CONTROL = "instance/db/rungs.db", "instance/db/control.db"
+RUNGS, CONTROL, WEATHER = "instance/db/rungs.db", "instance/db/control.db", "instance/db/weather.db"
 RHO = 1.2                                       # kg/m3, air near 21 °C
 CFM = 1.699                                     # m3/h per cfm
 
@@ -86,6 +86,54 @@ class Data:
     def th(self, dev, a, b):
         t, h = self.series(dev, "temperature_c", a, b), self.series(dev, "humidity_pct", a, b)
         return {k: (t[k], h[k]) for k in t if k in h}
+
+
+# Outdoor cross-check, the ERV dry boost's rule (server/control/dry_boost.py outdoor_dewpoint, duplicated: a piped
+# script can't import it). switchbot_outdoor reads RH high when wet (dew point +1.4 °C median, +2.2 at ≥ 95 % RH vs
+# Open-Meteo, FOLLOWUPS), which inflated the ERV moisture term in the Aprilaire's ΔAH (Hugh, 2026-11-09).
+AGREE_C, WET_RH, REF_STALE_S = 1.5, 80.0, 45 * 60
+
+
+def openmeteo_th(a, b):
+    """Open-Meteo current conditions {epoch: (t, rh)} from weather.db, or {} if it can't be read."""
+    try:
+        w = sqlite3.connect(f"file:{WEATHER}?mode=ro", uri=True)
+        rows = w.execute("SELECT ts, metric, value FROM weather WHERE source='openmeteo' AND ts>=? AND ts<? AND "
+                         "metric IN ('temperature_c','humidity_pct')",
+                         (datetime.fromtimestamp(a - REF_STALE_S, timezone.utc).strftime("%Y-%m-%dT%H:%M"),
+                          datetime.fromtimestamp(b, timezone.utc).strftime("%Y-%m-%dT%H:%M"))).fetchall()
+    except sqlite3.Error:
+        return {}
+    by = {}
+    for ts, m, v in rows:
+        t = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+        k = int((t if t.tzinfo else t.replace(tzinfo=timezone.utc)).timestamp())
+        by.setdefault(k, {})[m] = v
+    return {k: (v["temperature_c"], v["humidity_pct"]) for k, v in by.items() if len(v) == 2}
+
+
+def outdoor_ah(d, a, b):
+    """Per-minute outdoor AH: the sensor, unless Open-Meteo disagrees by more than AGREE_C of dew point — then
+    Open-Meteo when the sensor is the wetter one at RH ≥ WET_RH (its wet bias), else the wetter of the two.
+    Open-Meteo older than REF_STALE_S: sensor only."""
+    sens, ref = d.th(OUTDOOR, a, b), openmeteo_th(a, b)
+    rk, j, out = sorted(ref), 0, {}
+    for k in sorted(sens):
+        t, h = sens[k]
+        while j + 1 < len(rk) and rk[j + 1] <= k:
+            j += 1
+        if not rk or rk[j] > k or k - rk[j] > REF_STALE_S:
+            out[k] = ah(t, h)
+            continue
+        rt, rh = ref[rk[j]]
+        ds, dr = dp(t, h), dp(rt, rh)
+        if abs(ds - dr) <= AGREE_C:
+            out[k] = ah(t, h)
+        elif ds > dr and h >= WET_RH:
+            out[k] = ah(rt, rh)
+        else:
+            out[k] = ah(t, h) if ds >= dr else ah(rt, rh)
+    return out
 
 
 def held(flags, k, n=STATE_SETTLE_MIN):
@@ -315,7 +363,7 @@ def main():
             state[k] = "S1f"
     zm = None
     erv_cfm = d.series("erv_attic", "supply_cfm", study_a, now)
-    w_out = d.ah_series(OUTDOOR, study_a - 1800, now)
+    w_out = outdoor_ah(d, study_a - 1800, now)       # cross-checked against Open-Meteo
     if reg:
         w_ret = d.ah_series(HV_RET, study_a, now)
         hv_delta = pair_delta(d, HV_RET, HV_SUP, list(blower), study_a, now) or {}
