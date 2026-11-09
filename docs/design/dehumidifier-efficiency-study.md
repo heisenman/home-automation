@@ -453,6 +453,10 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   for meter error, which also hid the outdoor wet bias); the cross-check removes most of that bias. Rough yield:
   ~25 g/h per 1 °C of gap at the boost's extra ~75 m³/h, assuming the core returns about half the moisture
   (unmeasured; the block's boosts should pin it down), against the Midea's ~500 g/h.
+- **2026-11-09 review — G2b 1/3 → 0/3 from data aging out, not a regression.** The readiness tool scores runs from
+  1-min rungs, which ha-2 keeps 7 days (`rollup.py`), so runs before 11-02 07:37 PST have dropped (6 → 4). The
+  remaining runs also re-score daily because the zero model refits; it now includes the 11-08/09 forced fan-On
+  hours (fan-only offset +0.012 ± 0.020 vs −0.025 ± 0.042 at the G2a pass), giving 0.29/0.44/0.24/0.48 L/kWh.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
