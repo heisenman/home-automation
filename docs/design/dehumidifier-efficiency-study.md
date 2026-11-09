@@ -433,11 +433,11 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   (2.0 °C below the house); Nov 7–8 it held 20.8–21.3 °C while outdoor fell 13.8 → 10 °C (0.9–1.2 °C below).
   The Midea's moisture load dropped sharply from ~22:00 on 11-07, but the outdoor dew point fell to the house's at
   the same time, so that can't yet be credited to the sealing.
-- **2026-11-08 ~12:15–~19:55 PST — windows open to air out chemicals (Hugh; closed by 19:55).** Exclude from the
+- **2026-11-08 ~12:15–~15:00 PST — windows open to air out chemicals (Hugh; close confirmed by the VOC step at 14:50–15:00).** Exclude from the
   water-balance and leakage fits. House dew point fell 9.3 → 8.6 °C (kitchen 8.6 → 7.3) by 13:00 while Open-Meteo
   outdoor sat at 7.5–8.1; from ~15:00 outdoor rose to 8.5–8.9 (sensor 9.0–9.4, RH 81–88 %, the two now agreeing)
   and the house went back to 9.3. VOC: pegged ~10:00 (index 500, raw ~29 950), cleaner than overnight by 14:00
-  (raw ~33 700–34 150), back up from ~16:00 (index 260–380, raw ~30 900–31 100 vs ~32 100–32 500 overnight).
+  (raw ~33 700–34 150), back up the moment they closed: raw fell ~1 500 in 10 min at 14:50–15:00 in the kitchen and office (index 260–380, raw ~30 900–31 100 vs ~32 100–32 500 overnight).
   ERV dry boost fired once, 18:30–19:00 PST, on Open-Meteo 7.7 °C vs sensor 9.3 °C at RH 88 % (wet-bias branch),
   a no-op because the VOC rule already had the ERV on high. The window also exposed an **outdoor-sensor bias**: switchbot_outdoor reads RH high when wet (dew point +1.4 °C median over
   30 days, +2.2 °C at ≥ 95 % RH; see FOLLOWUPS). Every outdoor dew-point figure in this doc and the reports inherits
