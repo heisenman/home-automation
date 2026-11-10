@@ -479,6 +479,10 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
 - **2026-11-09 16:15 PST — G2b compares runs at matched inlet dew point (Hugh).** Live: 2/3. Line 0.51 L/kWh at
   8 °C, +0.22 per °C, residual SD 25 % (needs ≤ 20 %); 4 runs at dp ≈ 7 °C (mean 0.27), block run 1 at 8.3 °C (0.57).
   Inlet RH is ≈ 40 % for all five, so dew point, not RH, separates them.
+- **2026-11-09 16:20 PST — G2b scores calls in 4-h segments (Hugh)** (`segments()`; a tail under 1 h joins the
+  segment before; coil-wetting skip on the first only). 5 calls → 13 segments: line 0.54 L/kWh at 8 °C, +0.28 per
+  °C; 12 segments at dp < 7.5 °C average 0.23 (0.05–0.36), scatter 50 % of 0.25 (≈ ±0.12 L/kWh absolute). Fails
+  agreement and the 0.1 floor (one 0.05): at dp ≈ 7 the 4-h signal is near the meters' noise.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.

@@ -278,6 +278,22 @@ def zero_model(delta, state, x, cfm, tret=None):
     return {"beta": beta, "se": se, "n": len(rows), "hours": hours, "days": len(days), "s1f": s1f}
 
 
+SEG_MIN, SEG_TAIL_MIN = 240, 60                 # G2b scores long calls in 4-h segments (Hugh 2026-11-09)
+
+
+def segments(runs, seg_min=SEG_MIN, tail_min=SEG_TAIL_MIN):
+    """Split each call into seg_min pieces -> [(start, end, first_of_call)]. A tail shorter than tail_min joins the
+    piece before it. At 44/40 the block's Aprilaire can run for days as ONE call, which would give G2b's
+    efficiency-vs-inlet-dew-point line a single point; segments give it one per 4 h across the day's dew points."""
+    out = []
+    for s, e in runs:
+        cuts = list(range(s, e, seg_min * 60)) + [e]
+        if len(cuts) > 2 and cuts[-1] - cuts[-2] < tail_min * 60:
+            del cuts[-2]
+        out += [(a, b, i == 0) for i, (a, b) in enumerate(zip(cuts, cuts[1:]))]
+    return out
+
+
 def runs_from(power, on_w, gap_min=6, min_len=30):
     """Contiguous minutes with power > on_w -> [(start, end_exclusive)]. Gaps <= gap_min are bridged: the E070
     cycles its compressor off ~4 min every hour within one call, and a run here means one call."""
@@ -461,8 +477,8 @@ def main():
     # ---- G2b: Aprilaire measured across the air handler ---------------------------------------------------
     run_rows = []
     ret_th = d.th(HV_RET, study_a, now) if reg else {}
-    for s, e in apr_runs:
-        ms, me = s + 20 * 60, e                      # skip coil wetting / mixing
+    for s, e, first in segments(apr_runs):
+        ms, me = (s + 20 * 60 if first else s), e    # skip coil wetting / mixing (first segment of a call only)
         if me - ms < 20 * 60:
             continue
         kwh = sum(apr.get(k, 0) for k in range(s, e, 60)) / 60 / 1000
@@ -513,9 +529,9 @@ def main():
                         f"{len(ys)} run(s), mean {S.mean(ys):.2f}")
     not_falling = dline is not None and dline["b"] >= -2 * (dline["sb"] or 0)
     g2b = [
-        crit("≥ 5 Aprilaire runs measured across the air handler", len(eff) >= 5,
+        crit("≥ 5 Aprilaire runs measured across the air handler (calls over 4 h count per 4-h segment)", len(eff) >= 5,
              f"{len(eff)} with L/kWh, {sum(1 for r in run_rows if r['d_ah'] is not None)} with ΔAH, "
-             f"{len(apr_runs)} runs since the study start"),
+             f"from {len(apr_runs)} calls since the study start"),
         crit("Runs agree at matched inlet dew point: scatter about the L/kWh-vs-dew-point line ≤ 20 % of its value at "
              "the median dew point (≤ 30 % with ≥ 10 runs)", agree,
              (f"line {dline['a']:.2f} {dline['b']:+.2f}/°C at {DP_REF} °C, residual SD {dline['rsd']:.2f} = "

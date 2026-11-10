@@ -28,3 +28,11 @@ def test_day_drift_flags_a_step_between_days():
     assert R.day_drift(steady, 0.05)[1] > 0.05
     assert R.day_drift(stepped, 0.05)[1] < 0.05
     assert R.day_drift(steady[:3], 0.05) is None                  # one day: no test
+
+
+def test_segments_split_long_calls():
+    """G2b scores calls over 4 h per 4-h segment (Hugh 2026-11-09); a tail under 1 h joins the segment before."""
+    h = 3600
+    assert R.segments([(0, 3 * h)]) == [(0, 3 * h, True)]
+    assert R.segments([(0, 9 * h)]) == [(0, 4 * h, True), (4 * h, 8 * h, False), (8 * h, 9 * h, False)]
+    assert R.segments([(0, 8 * h + 1800)]) == [(0, 4 * h, True), (4 * h, 8 * h + 1800, False)]
