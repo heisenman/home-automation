@@ -13,7 +13,7 @@ import re
 from typing import Any
 
 from server.control.issuer import CommandIssuer, Result
-from server.control import dry_boost, plug_power
+from server.control import dry_boost, plug_power, wet_trim
 
 # Result.status -> HTTP status code
 _STATUS_HTTP = {
@@ -355,6 +355,44 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
         if eff["outdoor_sensor"] and not eff["indoor_sensors"]:
             return bad("dry_boost needs indoor_sensors when outdoor_sensor is set")
         pol["dry_boost"] = cur
+    if "wet_trim" in patch:
+        # level-mode ventilator (the ERV): one level lower per step_c of outdoor-over-indoor dew point, down to off
+        # (Hugh 2026-11-10; server/control/wet_trim.py). step_c null = disabled; sensors default to dry_boost's.
+        g = patch["wet_trim"]
+        if not isinstance(g, dict):
+            return bad("wet_trim must be an object")
+        cur = dict(pol.get("wet_trim") or {})
+        if "step_c" in g:
+            if g["step_c"] is not None and (not _is_num(g["step_c"]) or not 0.5 <= g["step_c"] <= 15):
+                return bad("wet_trim.step_c must be a number in 0.5..15 °C per level, or null (disabled)")
+            cur["step_c"] = g["step_c"]
+        if "release_below" in g:
+            if g["release_below"] is not None and (not _is_num(g["release_below"])
+                                                   or not 0 <= g["release_below"] <= 100):
+                return bad("wet_trim.release_below must be a number in 0..100, or null (no air-quality release)")
+            cur["release_below"] = g["release_below"]
+        if "outdoor_sensor" in g:
+            if g["outdoor_sensor"] is not None and (not isinstance(g["outdoor_sensor"], str)
+                                                    or not g["outdoor_sensor"]):
+                return bad("wet_trim.outdoor_sensor must be a sensor id or null (null = the dry boost's)")
+            cur["outdoor_sensor"] = g["outdoor_sensor"]
+        if "indoor_sensors" in g:
+            ss = g["indoor_sensors"]
+            if not isinstance(ss, list) or any(not isinstance(x, str) or not x for x in ss):
+                return bad("wet_trim.indoor_sensors must be a list of sensor ids (empty = the dry boost's)")
+            cur["indoor_sensors"] = list(dict.fromkeys(ss))
+        ranges = {"hysteresis_c": (0, 5), "min_hold_min": (0, 240), "rh_min": (20, 80)}
+        for k, (lo, hi) in ranges.items():
+            if k in g:
+                if not _is_num(g[k]) or not lo <= g[k] <= hi:
+                    return bad(f"wet_trim.{k} must be a number in {lo}..{hi}")
+                cur[k] = g[k]
+        eff = wet_trim.config(cur, pol.get("dry_boost"))
+        if eff["step_c"] and eff["hysteresis_c"] >= eff["step_c"]:
+            return bad("wet_trim needs hysteresis_c < step_c")
+        if eff["step_c"] and not (eff["outdoor_sensor"] and eff["indoor_sensors"]):
+            return bad("wet_trim needs an outdoor sensor and indoor sensors (its own or the dry boost's)")
+        pol["wet_trim"] = cur
     if "force_run" in patch:
         # leased-call devices (the Aprilaire): every automation call is a FORCE-RUN (RS-485 on=0x02 — run
         # regardless of the unit's own dew-point logic). Hugh, 2026-10-06: the house-RH decision is ours.

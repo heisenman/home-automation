@@ -70,8 +70,11 @@ class Conditions:
         return self.dp_in - self.dp_out
 
 
-def outdoor_dewpoint(sensor: tuple, reference: tuple | None, cfg: dict, now: float) -> tuple[float, str]:
-    """(outdoor dew point, which source) from the sensor's (t, rh) and the reference's (t, rh, ts) or None."""
+def outdoor_dewpoint(sensor: tuple, reference: tuple | None, cfg: dict, now: float,
+                     doubt: str = "wetter") -> tuple[float, str]:
+    """(outdoor dew point, which source) from the sensor's (t, rh) and the reference's (t, rh, ts) or None.
+    `doubt` picks the side an unexplained disagreement resolves to: "wetter" (the boost: no boost on doubt) or
+    "drier" (the wet trim, server/control/wet_trim.py: no trim on doubt)."""
     dp_s = dewpoint_c(*sensor)
     if not cfg.get("reference") or reference is None or now - reference[2] > float(cfg["reference_stale_min"]) * 60:
         return dp_s, "sensor"
@@ -82,10 +85,12 @@ def outdoor_dewpoint(sensor: tuple, reference: tuple | None, cfg: dict, now: flo
         return dp_s, "sensor (Open-Meteo agrees)"
     if dp_s > dp_r and sensor[1] >= float(cfg["wet_rh"]):
         return dp_r, f"Open-Meteo (sensor {dp_s:.1f} °C at RH {sensor[1]:.0f} %: wet bias)"
-    return max(dp_s, dp_r), f"the wetter source (sensor {dp_s:.1f}, Open-Meteo {dp_r:.1f} °C disagree)"
+    pick = max if doubt == "wetter" else min
+    return pick(dp_s, dp_r), f"the {doubt} source (sensor {dp_s:.1f}, Open-Meteo {dp_r:.1f} °C disagree)"
 
 
-def conditions(readings: dict, cfg: dict, now: float, reference: tuple | None = None) -> tuple[Conditions | None, str]:
+def conditions(readings: dict, cfg: dict, now: float, reference: tuple | None = None,
+               doubt: str = "wetter") -> tuple[Conditions | None, str]:
     """Indoor/outdoor conditions from the controller's reading cache ({sid: {"m": {...}, "ts": epoch}}).
     `reference` = Open-Meteo's latest (t, rh, ts), used only with cfg reference set.
     Returns (None, why) when the outdoor reading or every indoor one is missing/stale."""
@@ -104,7 +109,7 @@ def conditions(readings: dict, cfg: dict, now: float, reference: tuple | None = 
     rooms = [x for x in (th(s) for s in cfg["indoor_sensors"]) if x is not None and dewpoint_c(*x) is not None]
     if not rooms:
         return None, "indoor readings stale/missing"
-    dp_out, src = outdoor_dewpoint(out, reference, cfg, now)
+    dp_out, src = outdoor_dewpoint(out, reference, cfg, now, doubt)
     return Conditions(dp_in=sum(dewpoint_c(*r) for r in rooms) / len(rooms), dp_out=dp_out,
                       rh_in=sum(h for _, h in rooms) / len(rooms), t_min=min(t for t, _ in rooms),
                       n_in=len(rooms), out_src=src), ""

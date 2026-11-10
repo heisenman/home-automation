@@ -509,6 +509,10 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   .210's crontab; log `instance/dehum-study/erv_night.log`. Block re-started with the new end (Midea `off` to Thu
   ~08:00, Aprilaire 44/40, saved 48/45 kept); its stop cron moved to 11-12 15:00Z. The Aprilaire's airflow interlock
   doesn't apply (`ventilation.device` unset since the duct split), so the ERV being off won't hold it.
+- **2026-11-10 — ERV wet trim built, left OFF (Hugh).** The mirror of the dry boost: the ERV drops one level per
+  user-set `step_c` °C of outdoor-over-indoor dew point, down to off (`server/control/wet_trim.py`, policy key
+  `wet_trim`). Hugh: the Aprilaire is mostly keeping up, so the ERV stays as is for now; the option exists. Not
+  enabled during the study (it would change ERV flow during runs); enabling it is one policy PUT. Runbook Entry 4.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.

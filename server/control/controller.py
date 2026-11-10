@@ -19,7 +19,7 @@ import time
 from pathlib import Path
 
 from server.comms import events as ev
-from server.control import actuator_state, bootstrap, control_store as store, dry_boost, follow
+from server.control import actuator_state, bootstrap, control_store as store, dry_boost, follow, wet_trim
 from server.control.midea_driver import GarbledStatus
 from server.control.registry import load_control_registry
 from server.util.psychro import dewpoint_c
@@ -60,8 +60,9 @@ LEVOIT_POLICY = {
 # Broan ERV (device_type erv). Seeded DISABLED: the ERV has no sensor of its own, so the operator picks which
 # air-quality sensors to average (ADR-0014 R2 — never auto-wired) and enables it in the PWA. Bands run on the
 # unified 0-100 index (higher = cleaner) at the ADR-0035 edges, so worse air -> higher level; level N is the
-# ERV's mode `levels[N-1]` (low/med/high/turbo). LOW is the floor: automation never turns it off — only an
-# explicit Off override / scene / schedule does (Hugh, 2026-10-04).
+# ERV's mode `levels[N-1]` (low/med/high/turbo). LOW is the floor: the air-quality rule never turns it off — an
+# explicit Off override / scene / schedule does (Hugh, 2026-10-04), and so can the opt-in wet trim (`wet_trim`,
+# server/control/wet_trim.py: one level per step_c of outdoor-over-indoor dew point, down to off; Hugh, 2026-11-10).
 ERV_POLICY = {
     "enabled": False,
     "source_sensor": None,
@@ -524,6 +525,49 @@ class Controller:
                               f"sensor {sensor.value:.0f} -> speed {lvl}; {note}", level=lvl)
         return Resolution(res.running, res.act, res.source, f"{res.reason}; {note}", level=res.level)
 
+    def _apply_wet_trim(self, device_id, pol, policy, sensor, res, dev_state, override, now):
+        """Lower a level-mode ventilator (the ERV) one level per `wet_trim.step_c` of outdoor-over-indoor dew point,
+        down to off (server/control/wet_trim.py). Applies only to a running threshold_ranged rule resolution with a
+        fresh sensor: safety, an operator override, a scene or a schedule beat it. The trim starts from the
+        air-quality BAND level, never the device's level: the band-edge hold compares against the device, so a
+        trimmed device would otherwise be held at its trimmed level and trimmed again."""
+        cfg = wet_trim.config(pol.get("wet_trim"), pol.get("dry_boost"))
+        states = self.__dict__.setdefault("_wet_trim", {})
+        cur, since, base = states.get(device_id, (0, None, None))
+        if not wet_trim.enabled(cfg):
+            states.pop(device_id, None)
+            return res
+        if ((override is not None and override.active(now)) or not res.running or res.source != "rule"
+                or policy.strategy != "threshold_ranged" or sensor is None
+                or (now - sensor.ts) > policy.sensor_stale_s):
+            if cur:
+                states[device_id] = (0, now, None)
+            return res
+        # the band level, with the rule's own band-edge hold applied against the remembered base
+        lvl = _level_for(sensor.value, policy.bands)
+        db = policy.deadband
+        if cur and base is not None and base != lvl and db > 0 and base in (
+                _level_for(sensor.value - db, policy.bands), _level_for(sensor.value + db, policy.bands)):
+            lvl = base
+        elif not cur and res.level is not None:
+            lvl = res.level
+        with self._lock:
+            readings = dict(self.readings)
+        cond, why = dry_boost.conditions(readings, cfg, now,
+                                         self._weather_reference() if cfg.get("reference") == "openmeteo" else None,
+                                         doubt="drier")
+        want, note = wet_trim.decide(cfg, cond, sensor.value, cur, since, now, why)
+        states[device_id] = (want, now if want != cur else since, lvl)
+        if not want and not cur:
+            return Resolution(res.running, res.act, res.source, f"{res.reason}; {note}", level=res.level)
+        target = max(0, lvl - want)
+        if target == 0:
+            return Resolution(False, dev_state.running, "rule", f"sensor {sensor.value:.0f} -> speed {lvl}; "
+                              f"{note} -> off")
+        return Resolution(True, (not dev_state.running) or dev_state.level != target, "rule",
+                          f"sensor {sensor.value:.0f} -> speed {lvl}; {note}"
+                          + (f" -> level {target}" if want else ""), level=target)
+
     def _apply_airflow_interlock(self, conn, device_id, pol, res, dev_state, now):
         """A dehumidifier in series with an ERV must not run on stagnant air. Allowed while the ERV is moving
         air, or when the ERV's own automation will be raised by the floor. Blocked when the ERV is in an
@@ -738,6 +782,7 @@ class Controller:
         lm = self._level_modes(device_id) if drv is None else None
         if lm is not None:
             res = self._apply_dry_boost(device_id, pol, policy, sensor, res, dev_state, override, now)
+            res = self._apply_wet_trim(device_id, pol, policy, sensor, res, dev_state, override, now)
         if lm is not None and res.level is not None and lm["labels"] and res.level > len(lm["labels"]):
             # a band asking above the device's top level (e.g. bands written when Turbo was a level) means
             # "the top level" — clamp BEFORE deciding to act, or it re-commands the same mode every tick

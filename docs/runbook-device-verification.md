@@ -167,6 +167,13 @@ for r in c.execute('select ts, reason, act, status from control_log where device
 - `dry boost off: outdoor reading stale/missing` = `switchbot_outdoor` has been silent > 15 min. It's a BLE
   meter, normally every ~100 s.
 - Boost state is in memory: a controller restart drops it, and it re-arms on the next qualifying tick.
+- **Wet trim (Hugh 2026-11-10, opt-in, OFF until `wet_trim.step_c` is set):** the mirror of the boost. One level
+  lower per `step_c` °C of outdoor-over-indoor dew point, down to `off`; released at once by air quality ≤
+  `release_below` (60), indoor RH < `rh_min` (45 %) or stale readings. Code `server/control/wet_trim.py`; sensors
+  and Open-Meteo cross-check default to `dry_boost`'s, but a sensor/Open-Meteo disagreement resolves to the DRIER
+  reading. Enabled, reasons gain `wet trim idle|held|off: …` or `wet trim −N (step S °C): … -> level L` / `-> off`.
+  Disabled = no `wet trim` text at all (expected while `step_c` is unset). Re-check: print `.get('wet_trim')` with
+  the script above.
 
 ## Entry 5 — Smart plugs are switchable from HA
 
