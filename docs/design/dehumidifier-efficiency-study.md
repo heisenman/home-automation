@@ -486,6 +486,11 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   **Pinned (Hugh, 16:25): no criterion changes until the block's data is in.** Proposal on hold: G2b agreement =
   SE of the line's value at the median dew point ≤ 20 % (≈ 13 % now), plausibility floor > 0. Revisit with the
   block's segments at higher dew points; refit the model and hypotheses first.
+- **2026-11-09 21:24 PST — block, first 9 h.** Unit-only L/kWh per 4-h segment 0.58 / 0.76 / 0.73 (incl. blower
+  0.45 / 0.61 / 0.58) at inlet dp 8.2–8.5 °C, ~570 W steady; the two segments under the ERV minimum read no lower.
+  Midea confirmed off (1.4 W). House-average AH 8.61 → 8.27 g/m³ (12:00–17:00), then a step to 8.64 at ~19:00:
+  **indoor source — heavy cooking and cleaning that evening (Hugh)**. Exclude ~18:30–22:00 from house-level water
+  balance fits (method A/C); the across-air-handler ΔAH (method B) is unaffected.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
