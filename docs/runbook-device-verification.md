@@ -172,8 +172,9 @@ for r in c.execute('select ts, reason, act, status from control_log where device
   `release_below` (60), indoor RH < `rh_min` (45 %) or stale readings. Code `server/control/wet_trim.py`; sensors
   and Open-Meteo cross-check default to `dry_boost`'s, but a sensor/Open-Meteo disagreement resolves to the DRIER
   reading. Enabled, reasons gain `wet trim idle|held|off: …` or `wet trim −N (step S °C): … -> level L` / `-> off`.
-  Disabled = no `wet trim` text at all (expected while `step_c` is unset). Re-check: print `.get('wet_trim')` with
-  the script above.
+  Disabled = no `wet trim` text at all. Re-check: print `.get('wet_trim')` with the script above.
+  **Set 2026-11-10 ~11:40 PST:** `{"enabled": false}` (Hugh: off until the step is chosen). PWA: the ERV's ⚙ Automation
+  panel → "Wet trim" (switch, step in °F of dew-point gap, air-quality release, RH minimum, live dew points).
 
 ## Entry 5 — Smart plugs are switchable from HA
 
