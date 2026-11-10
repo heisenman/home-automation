@@ -483,6 +483,9 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   segment before; coil-wetting skip on the first only). 5 calls → 13 segments: line 0.54 L/kWh at 8 °C, +0.28 per
   °C; 12 segments at dp < 7.5 °C average 0.23 (0.05–0.36), scatter 50 % of 0.25 (≈ ±0.12 L/kWh absolute). Fails
   agreement and the 0.1 floor (one 0.05): at dp ≈ 7 the 4-h signal is near the meters' noise.
+  **Pinned (Hugh, 16:25): no criterion changes until the block's data is in.** Proposal on hold: G2b agreement =
+  SE of the line's value at the median dew point ≤ 20 % (≈ 13 % now), plausibility floor > 0. Revisit with the
+  block's segments at higher dew points; refit the model and hypotheses first.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
