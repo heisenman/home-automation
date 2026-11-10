@@ -51,6 +51,7 @@ STATE_SETTLE_MIN = 10                           # minutes a state must hold befo
 DUE = {"G2a": date(2026, 11, 3), "G2b": date(2026, 11, 8), "P3": date(2026, 11, 15)}
 P3_ARMS = ["0", "M", "A", "MA", "E"]
 DP_BINS = [(-99, 7.5), (7.5, 9.5), (9.5, 99)]   # inlet dew point °C bins for coverage
+DP_REF = 8.0                                    # °C: G2b's efficiency-vs-inlet-dew-point line is quoted here
 
 
 def ah(t, rh):
@@ -459,6 +460,7 @@ def main():
 
     # ---- G2b: Aprilaire measured across the air handler ---------------------------------------------------
     run_rows = []
+    ret_th = d.th(HV_RET, study_a, now) if reg else {}
     for s, e in apr_runs:
         ms, me = s + 20 * 60, e                      # skip coil wetting / mixing
         if me - ms < 20 * 60:
@@ -467,7 +469,9 @@ def main():
         mins = [k for k in range(ms, me, 60) if blower.get(k, 0) >= 0.99 and held(no_heat, k, 25)]
         dl = pair_delta(d, HV_RET, HV_SUP, mins, ms, me) if reg else None
         row = {"start": s, "end": e, "kwh": kwh, "heat": sum(1 for k in range(s, e, 60) if hstate.get(k, 0) >= .5)
-               / ((e - s) / 60), "d_ah": None, "lpkwh": None, "lpkwh_sys": None}
+               / ((e - s) / 60), "d_ah": None, "lpkwh": None, "lpkwh_sys": None,
+               "dp_in": S.mean(dp(*ret_th[k]) for k in range(ms, me, 60) if k in ret_th)
+               if any(k in ret_th for k in range(ms, me, 60)) else None}
         blower_kwh = sum(BLOWER_FAN_W for k in range(s, e, 60) if blower.get(k, 0) >= 0.5) / 60 / 1000
         if dl and len(dl) >= 15 and zm:
             ex = []                                  # per minute: (corrected ΔAH, airflow m3/h or None)
@@ -485,16 +489,41 @@ def main():
                 row["lpkwh_sys"] = grams / 1000 / ((kwh + blower_kwh) * share)
         run_rows.append(row)
     eff = [r["lpkwh"] for r in run_rows if r["lpkwh"] is not None]
-    spread = ((max(eff) - min(eff)) / 2 / S.median(eff)) if len(eff) >= 2 and S.median(eff) > 0 else None
+    # Revised 2026-11-09 (Hugh): compare runs at MATCHED inlet dew point. The E070 derates steeply below its 60 % RH
+    # rating, so runs at different inlet conditions shouldn't agree (11-01→04 at dp ≈ 7 °C scored 0.2–0.4, the block's
+    # first run at ≈ 9 °C 0.57). Fit L/kWh = a + b·(dp_in − DP_REF) over the runs; agreement = the residual scatter
+    # around that line, plausibility = each run in range and efficiency not falling as the inlet gets wetter.
+    pts = [(r["dp_in"], r["lpkwh"]) for r in run_rows if r["lpkwh"] is not None and r["dp_in"] is not None]
+    dline = None
+    if len(pts) >= 3 and len({round(x, 1) for x, _ in pts}) >= 2:
+        fl = ols([[1.0, x - DP_REF] for x, _ in pts], [y for _, y in pts])
+        if fl is not None:
+            (a0, b1), (sa, sb) = fl[0], fl[1]
+            res = [y - (a0 + b1 * (x - DP_REF)) for x, y in pts]
+            mid = a0 + b1 * (S.median(x for x, _ in pts) - DP_REF)
+            dline = {"a": a0, "b": b1, "sb": sb, "rsd": math.sqrt(sum(v * v for v in res) / max(len(pts) - 2, 1)),
+                     "mid": mid}
+    rel = dline["rsd"] / dline["mid"] if dline and dline["mid"] > 0 else None
+    agree = rel is not None and len(pts) >= 5 and (rel <= 0.20 or (len(pts) >= 10 and rel <= 0.30))
+    bins = []
+    for lo, hi in DP_BINS:
+        ys = [y for x, y in pts if lo <= x < hi]
+        if ys:
+            bins.append(f"dp {'<' + str(hi) if lo < -50 else ('≥' + str(lo) if hi > 50 else f'{lo}–{hi}')} °C: "
+                        f"{len(ys)} run(s), mean {S.mean(ys):.2f}")
+    not_falling = dline is not None and dline["b"] >= -2 * (dline["sb"] or 0)
     g2b = [
         crit("≥ 5 Aprilaire runs measured across the air handler", len(eff) >= 5,
              f"{len(eff)} with L/kWh, {sum(1 for r in run_rows if r['d_ah'] is not None)} with ΔAH, "
              f"{len(apr_runs)} runs since the study start"),
-        crit("Run-to-run agreement within ±20 %", spread is not None and len(eff) >= 5 and spread <= 0.20,
-             f"half-range {spread:.0%} of median {S.median(eff):.2f} L/kWh" if spread is not None else "need ≥ 2 runs"),
-        crit("Efficiency plausible (0.3–2.5 L/kWh; E070 rated 1.8–2.1 at 60 % RH)",
-             bool(eff) and all(0.3 <= x <= 2.5 for x in eff),
-             ", ".join(f"{x:.2f}" for x in eff[-8:]) or "no runs yet"),
+        crit("Runs agree at matched inlet dew point: scatter about the L/kWh-vs-dew-point line ≤ 20 % of its value at "
+             "the median dew point (≤ 30 % with ≥ 10 runs)", agree,
+             (f"line {dline['a']:.2f} {dline['b']:+.2f}/°C at {DP_REF} °C, residual SD {dline['rsd']:.2f} = "
+              f"{rel:.0%} of {dline['mid']:.2f}; " if dline and rel is not None else "need ≥ 3 runs at ≥ 2 dew points; ")
+             + ("; ".join(bins) or "no runs with an inlet dew point")),
+        crit("Efficiency plausible (each run 0.1–2.5 L/kWh; not falling as the inlet gets wetter; E070 rated 1.8–2.1 "
+             "at 60 % RH)", bool(eff) and all(0.1 <= x <= 2.5 for x in eff) and not_falling,
+             ", ".join(f"{y:.2f} @ {x:.1f} °C" for x, y in pts[-8:]) or "no runs yet"),
     ]
     gates.append(("G2b", "Phase 2 done (method B live)", g2b))
 
@@ -580,11 +609,11 @@ def main():
     print(f"| Heat call / blower on | {S.mean(hs) if hs else 0:.0%} / {S.mean(bl) if bl else 0:.0%} |")
     print(f"| ERV supply cfm | {f(erv, 0)} |\n")
     if r24:
-        print("| Aprilaire run (PT) | min | kWh | heat share | ΔAH corr g/m³ | L/kWh | L/kWh incl. blower |\n"
-              "|---|---|---|---|---|---|---|")
+        print("| Aprilaire run (PT) | min | kWh | heat share | inlet dp °C | ΔAH corr g/m³ | L/kWh | L/kWh incl. blower |\n"
+              "|---|---|---|---|---|---|---|---|")
         for r in r24:
             print(f"| {pt(r['start']):%m-%d %H:%M}–{pt(r['end']):%H:%M} | {(r['end'] - r['start']) // 60} | "
-                  f"{r['kwh']:.2f} | {r['heat']:.0%} | "
+                  f"{r['kwh']:.2f} | {r['heat']:.0%} | {'—' if r['dp_in'] is None else format(r['dp_in'], '.1f')} | "
                   f"{'—' if r['d_ah'] is None else format(r['d_ah'], '+.3f')} | "
                   f"{'—' if r['lpkwh'] is None else format(r['lpkwh'], '.2f')} | "
                   f"{'—' if r['lpkwh_sys'] is None else format(r['lpkwh_sys'], '.2f')} |")
