@@ -499,7 +499,8 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   point alone doesn't explain the old low values. Candidate: the ERV term (g 0.054, vs physics ≈ 0.15·(1 − ε))
   under-credits high-flow runs. Check by grouping segments by ERV flow at matched dp.
   G2a showed 4/5: the Midea zero's 11-03 day aged out of the 7-day 1-min rungs (same as G2b's 11-09 drop); a reporting
-  artifact, not a new zero problem.
+  artifact, not a new zero problem. **Fixed (Hugh, 2026-11-10):** a gate once filed complete stays complete
+  (`gate_done`, first-complete date from status-history.jsonl); criteria that aged out show as 🔒 held.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.

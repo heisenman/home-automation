@@ -319,6 +319,16 @@ def crit(name, ok, detail):
 # Empty when run by hand: then there is no hysteresis, only the target and the preponderance path.
 PREV_OK = globals().get("_PREV_OK") or {}
 HOLD_X = 1.3                 # a passed SE criterion stays passed until SE exceeds HOLD_X × target
+PREV_DONE = globals().get("_PREV_DONE") or {}   # {gate id: date first filed complete}, from status-history.jsonl
+
+
+def gate_done(gid, cr):
+    """(complete, latched_since) for a gate. A gate once filed complete stays complete (Hugh 2026-11-10): its
+    criteria are scored over rolling windows (1-min rungs are kept 7 days), so a met criterion can fail later only
+    because its evidence aged out. Today's criteria are still shown, marked held."""
+    if all(x["ok"] for x in cr):
+        return True, None
+    return (True, PREV_DONE[gid]) if gid in PREV_DONE else (False, None)
 
 
 def se_gate(key, se, target, prepond=None):
@@ -576,8 +586,8 @@ def main():
         if gid == "P3":
             while due < today:
                 due += timedelta(days=7)
-        done = all(x["ok"] for x in cr)
-        status["gates"].append({"id": gid, "title": title, "due": DUE[gid].isoformat(), "next_check": due.isoformat(),
+        done, since = gate_done(gid, cr)
+        status["gates"].append({"latched_since": since,"id": gid, "title": title, "due": DUE[gid].isoformat(), "next_check": due.isoformat(),
                                 "complete": done, "met": sum(1 for x in cr if x["ok"]), "of": len(cr),
                                 "behind": (not done) and today > DUE[gid],
                                 "check_today": today in (DUE[gid], due) and not done,
@@ -590,10 +600,14 @@ def main():
     print(f"# Dehumidifier study — readiness {pt(now):%Y-%m-%d %H:%M %Z}\n")
     for g in status["gates"]:
         mark = "✅ complete" if g["complete"] else ("⚠️ behind" if g["behind"] else "⏳ open")
+        if g["latched_since"]:
+            mark += f" since {g['latched_since']}, held"
         print(f"## {g['id']} — {g['title']} ({mark}, {g['met']}/{g['of']}; due {g['due']}"
               f"{'' if g['complete'] else ', next check ' + g['next_check']})\n")
         for x in g["criteria"]:
-            print(f"- {'✅' if x['ok'] else '❌'} {x['name']}: {x['detail']}")
+            held_x = g["latched_since"] and not x["ok"]
+            print(f"- {'✅' if x['ok'] else ('🔒' if held_x else '❌')} {x['name']}: {x['detail']}"
+                  + (f" (met by {g['latched_since']}; today's window no longer shows it)" if held_x else ""))
         print()
 
     # daily statistics, last 24 h

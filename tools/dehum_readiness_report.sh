@@ -18,7 +18,19 @@ except Exception:
 c = [x for g in s["gates"] for x in g["criteria"]]
 f = lambda p: any(x["ok"] for x in c if x["name"].startswith(p))
 print(repr({"hvac_zero": f("HVAC pair zero model"), "midea_zero": f("Midea pair zero offset")}))' "$OUT/status.json" 2>/dev/null || echo '{}')"
-if { echo "_PREV_OK = $prev"; cat "$ROOT/tools/dehum_readiness.py"; } |
+# completed gates stay complete: the date each gate was first filed complete (dehum_readiness.py PREV_DONE)
+done="$(python3 -c 'import json,sys
+d = {}
+try:
+    for line in open(sys.argv[1]):
+        h = json.loads(line)
+        for gid, v in h["gates"].items():
+            if v[2] and gid not in d:
+                d[gid] = h["generated"][:10]
+except Exception:
+    pass
+print(repr(d))' "$OUT/status-history.jsonl" 2>/dev/null || echo '{}')"
+if { echo "_PREV_OK = $prev"; echo "_PREV_DONE = $done"; cat "$ROOT/tools/dehum_readiness.py"; } |
    ssh -o BatchMode=yes -o ConnectTimeout=30 "$HA2" 'cd home_automation && nice -n 15 python3 -' \
      >"$f.tmp" 2>"$OUT/last-error.log"; then
   mv "$f.tmp" "$f"

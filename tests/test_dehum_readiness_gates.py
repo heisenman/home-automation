@@ -36,3 +36,15 @@ def test_segments_split_long_calls():
     assert R.segments([(0, 3 * h)]) == [(0, 3 * h, True)]
     assert R.segments([(0, 9 * h)]) == [(0, 4 * h, True), (4 * h, 8 * h, False), (8 * h, 9 * h, False)]
     assert R.segments([(0, 8 * h + 1800)]) == [(0, 4 * h, True), (4 * h, 8 * h + 1800, False)]
+
+
+def test_completed_gate_stays_complete(monkeypatch):
+    """Hugh 2026-11-10: a gate once filed complete stays complete when its evidence ages out of the rolling window."""
+    ok, bad = {"ok": True}, {"ok": False}
+    monkeypatch.setattr(R, "PREV_DONE", {})
+    assert R.gate_done("G2a", [ok, ok]) == (True, None)
+    assert R.gate_done("G2a", [ok, bad]) == (False, None)
+    monkeypatch.setattr(R, "PREV_DONE", {"G2a": "2026-11-05"})
+    assert R.gate_done("G2a", [ok, bad]) == (True, "2026-11-05")
+    assert R.gate_done("G2a", [ok, ok]) == (True, None)           # met again today: nothing held
+    assert R.gate_done("G2b", [ok, bad]) == (False, None)
