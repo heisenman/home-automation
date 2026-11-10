@@ -491,6 +491,15 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   Midea confirmed off (1.4 W). House-average AH 8.61 → 8.27 g/m³ (12:00–17:00), then a step to 8.64 at ~19:00:
   **indoor source — heavy cooking and cleaning that evening (Hugh)**. Exclude ~18:30–22:00 from house-level water
   balance fits (method A/C); the across-air-handler ΔAH (method B) is unaffected.
+- **2026-11-10 07:30 PST — first night at the ERV minimum.** Overnight segments 0.73 / 0.86 / 0.83 L/kWh unit-only
+  (0.58 / 0.68 / 0.66 incl. blower) at inlet dp 8.3 / 7.8 / 7.7 °C. House-average AH 8.64 → 8.12 g/m³ by 02:00 PST, then
+  flat at 8.12 (RH 41 %) to 07:00 while outdoor dp ran 10–13 °C. ERV restore ran 07:00 (200), verified live (bands
+  60/3, 75/2, else 1; dry-boost 3; ~75 cfm). **Hypothesis to test after the block:** the 10 older segments at dp ≈ 7
+  (0.12–0.36) ran at normal/high ERV flow; tonight's at dp 7.7–7.8 ran at the minimum and score 0.83–0.86, so dew
+  point alone doesn't explain the old low values. Candidate: the ERV term (g 0.054, vs physics ≈ 0.15·(1 − ε))
+  under-credits high-flow runs. Check by grouping segments by ERV flow at matched dp.
+  G2a showed 4/5: the Midea zero's 11-03 day aged out of the 7-day 1-min rungs (same as G2b's 11-09 drop); a reporting
+  artifact, not a new zero problem.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
