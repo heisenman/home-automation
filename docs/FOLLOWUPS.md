@@ -7,6 +7,16 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 🟡 2026-11-09 — E070 to the crawlspace, controlled on dew point (Hugh; after the dehumidifier study)
+
+- **Why:** the E070 manages ~0.6 L/kWh in the house (inlet dew point ≈ 8 °C, ~1/3 of its rating). The crawlspace
+  runs 14.5–17.5 °C / 56–74 % RH (dew point ≈ 9–11 °C), inside the E070's limits (inlet ≥ 50 °F, dew point ≥ 40 °F).
+  Hugh plans to seal the crawlspace openings, and to replace the house unit with a more efficient one.
+- **Control:** a dew-point target from the crawlspace's existing temp/RH sensors, using whichever is most accurate
+  (cross-check them first), not the E070's own RH sensor. The target can move with conditions: a margin below the
+  coldest surface temperature (overnight low of the crawlspace meters, or a rim-joist meter), floored at the
+  E070's 40 °F (4.4 °C) dew-point limit, with hysteresis. Lower targets cost more energy per litre.
+
 ## 🟡 2026-11-07 — found during the ha-2 package update + reboot (kernel 6.12.115, via tools/ha2_apt_relay.py)
 
 - **ha-2 keepalived ignores its 30 s preempt delay.** Boot log: "preempt delay will not work with initial state
