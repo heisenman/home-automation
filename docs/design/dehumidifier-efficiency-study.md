@@ -470,6 +470,12 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   (−0.01 to +0.10). Sensor-only gives g 0.152: its wet bias squeezes the outdoor range. **The offset rises with
   return temperature, +0.097 ± 0.025 g/m³ per °C** (part of the day drift; g unchanged). Block run 1 (12:24–16:04):
   0.61 L/kWh pooled, 0.59 with the temperature term, 0.46 with no ERV term at all (the floor).
+- **2026-11-09 16:10 PST — daily report's fan-only zero gains the return-temperature term (Hugh).** Live fit: offset
+  +0.069 ± 0.033 at 21.5 °C, g 0.054 ± 0.009, +0.115 ± 0.029 per °C; fan-only day drift p 0.00 → 0.32. Runs
+  re-score 0.26/0.38/0.21/0.24 (11-01→11-04, inlet dp ≈ 7 °C) and 0.57 (block run 1, inlet dp ≈ 9 °C). Caveat:
+  the term can't be told from a step at the 11-06 18:18 setpoint change (return 20.6–22.2 °C before, 22.0–23.2
+  after; within-after temp 0.052 ± 0.064; step-only +0.18 ± 0.04). Both give the same scores. The early/late
+  split follows inlet dew point, as the E070 derating predicts, so G2b's ±20 % run agreement tests the wrong thing.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.

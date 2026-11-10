@@ -215,7 +215,10 @@ def ols(X, y):
     return beta, [math.sqrt(max(inv[i][i] * s2, 0)) for i in range(p)], inv, s2
 
 
-def zero_model(delta, state, x, cfm):
+T_REF = 21.5                                    # °C: the fan-only offset is quoted at this return temperature
+
+
+def zero_model(delta, state, x, cfm, tret=None):
     """Fit the HVAC pair's no-Aprilaire behaviour (study doc §6b, duct topology). With the Aprilaire idle, supply −
     return AH = sensor offset + the ERV's fresh air mixed in:
         blower off (S0): the loop carries ERV air only        → off_S0 + b0·x
@@ -223,7 +226,10 @@ def zero_model(delta, state, x, cfm):
     x = W_out − W_return (g/m³). b0 = mixing at the register × (1 − ERV latent effectiveness); g = 100(1 − ε)/Q_blower.
     The sensor offset is PER BLOWER STATE (Hugh approved 2026-11-06): airflow over the pair shifts it (the Midea pair
     −0.01 off vs +0.12 on), and one shared offset let 48 h of blower-off data set the zero for blower-on runs.
-    beta = [off_S1f, b0, g, g_h, off_S0, off_S1h]; beta[0] + beta[2] is what an Aprilaire run (fan speed) uses.
+    beta = [off_S1f, b0, g, g_h, off_S0, off_S1h, k_t]; beta[0] + beta[2] is what an Aprilaire run (fan speed) uses.
+    k_t (fan-only only, needs tret = return-meter °C): the pair's offset rises with return temperature, +0.097 ±
+    0.025 g/m³ per °C on the full archive (Hugh 2026-11-09, tools/dehum_erv_archive_fit.py); beta[0] is the offset
+    at T_REF.
     Fitted on contiguous same-state stretches (chunk means). Returns {"beta", "se", "n", "hours"} or None."""
     rows = []
     for st in ("S0", "S1f", "S1h"):
@@ -242,7 +248,7 @@ def zero_model(delta, state, x, cfm):
         return None                                  # the run zero (S1f offset + g) needs fan-only stretches
     # The states share no parameter, so each is its own fit with its own residual variance: pooling them let the
     # noisier blower-off stretches inflate the fan-only SE 2x (0.132 vs 0.063 on 2026-11-06).
-    beta, se, s1f = [0.0] * 6, [None] * 6, []
+    beta, se, s1f = [0.0] * 7, [None] * 7, []
     slots = {"S1f": (0, 2), "S0": (4, 1), "S1h": (5, 3)}          # (offset index, ERV-term index)
     for st, (io, ix) in slots.items():
         sub = [ks for s2, ks in rows if s2 == st]
@@ -250,15 +256,22 @@ def zero_model(delta, state, x, cfm):
             continue
         xs = [S.mean(x[k] for k in ks) if st == "S0" else S.mean(cfm[k] * x[k] / 100 for k in ks) for ks in sub]
         ys = [S.mean(delta[k] for k in ks) for ks in sub]
-        fit = ols([[1.0, xv] for xv in xs], ys) if len(sub) >= 3 else None
+        ts = ([S.mean(tret[k] for k in ks if k in tret) - T_REF if any(k in tret for k in ks) else None for ks in sub]
+              if st == "S1f" and tret else None)
+        use_t = ts is not None and None not in ts and len(sub) >= 6
+        fit = (ols([[1.0, xv, tv] for xv, tv in zip(xs, ts)], ys) if use_t else
+               ols([[1.0, xv] for xv in xs], ys) if len(sub) >= 3 else None)
         if fit is None:
             if st == "S1f":
                 return None
             continue
-        beta[io], beta[ix] = fit[0]
-        se[io], se[ix] = fit[1]
+        beta[io], beta[ix] = fit[0][:2]
+        se[io], se[ix] = fit[1][:2]
+        if use_t:
+            beta[6], se[6] = fit[0][2], fit[1][2]
         if st == "S1f":                              # per-chunk residual offsets, for the day-to-day drift test
-            s1f = [(ks[0], len(ks), yv - beta[ix] * xv) for ks, xv, yv in zip(sub, xs, ys)]
+            s1f = [(ks[0], len(ks), yv - beta[ix] * xv - (beta[6] * tv if use_t else 0.0))
+                   for ks, xv, yv, tv in zip(sub, xs, ys, ts or [0.0] * len(sub))]
     hours = {st: sum(len(ks) for s2, ks in rows if s2 == st) / 60 for st in ("S0", "S1f", "S1h")}
     days = {pt(k).date() for _, ks in rows for k in ks}
     return {"beta": beta, "se": se, "n": len(rows), "hours": hours, "days": len(days), "s1f": s1f}
@@ -374,7 +387,8 @@ def main():
                 j += 1
             if okeys and okeys[j] <= k and k - okeys[j] <= 900:
                 xdiff[k] = w_out[okeys[j]] - w_ret[k]
-        zm = zero_model({k: v for k, v in hv_delta.items() if k in state}, state, xdiff, erv_cfm)
+        t_ret = d.series(HV_RET, "temperature_c", study_a, now)
+        zm = zero_model({k: v for k, v in hv_delta.items() if k in state}, state, xdiff, erv_cfm, t_ret)
     hz = {"mean": zm["beta"][0], "se": zm["se"][0]} if zm else None
     mid_idle = {k: mid_p.get(k, 999) < 5 for k in mid_p}
     # blower-off only: with the blower on, supply air reaches the pair unevenly (outlet − inlet +1.2-1.7 g/m3 on
@@ -414,7 +428,10 @@ def main():
              "no heat) over ≥ 2 days, fan-only offset SE ≤ 0.05 g/m³ (or held / preponderance of data)",
              hv_ok,
              (f"fan-only offset {zm['beta'][0]:+.3f} ± {zm['se'][0]:.3f} g/m³, ERV g {zm['beta'][2]:+.3f} ± "
-              f"{zm['se'][2] or 0:.3f} (per 100 cfm·g/m³; physics ≈ 0.15·(1 − ε)); blower-off offset "
+              f"{zm['se'][2] or 0:.3f} (per 100 cfm·g/m³; physics ≈ 0.15·(1 − ε))"
+              + (f", temperature {zm['beta'][6]:+.3f} ± {zm['se'][6]:.3f} per °C (offset at {T_REF} °C)"
+                 if zm["se"][6] is not None else "")
+              + f"; blower-off offset "
               f"{zm['beta'][4]:+.3f} ± {zm['se'][4] or 0:.3f}, b0 {zm['beta'][1]:+.2f}; hours blower-off/fan-only "
               f"{zm['hours']['S0']:.1f}/{zm['hours']['S1f']:.1f} over {zm['days']} d"
               + (f"; fan-only day drift χ² {hv_dr[0]:.1f}, p {hv_dr[1]:.2f} over {hv_dr[2]} d" if hv_dr else "")
@@ -458,7 +475,8 @@ def main():
                 xk = xdiff.get(k)
                 erv_term = zm["beta"][2] * erv_cfm.get(k, 0) * xk / 100 if xk is not None else 0.0
                 q = q_fan
-                ex.append((v - zm["beta"][0] - erv_term, q))
+                t_term = zm["beta"][6] * (t_ret[k] - T_REF) if k in t_ret else 0.0
+                ex.append((v - zm["beta"][0] - erv_term - t_term, q))
             row["d_ah"] = S.mean(c for c, _ in ex)
             if all(q for _, q in ex):
                 grams = -sum(c * q / 60 for c, q in ex)              # g removed over the measured minutes
