@@ -501,6 +501,14 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   G2a showed 4/5: the Midea zero's 11-03 day aged out of the 7-day 1-min rungs (same as G2b's 11-09 drop); a reporting
   artifact, not a new zero problem. **Fixed (Hugh, 2026-11-10):** a gate once filed complete stays complete
   (`gate_done`, first-complete date from status-history.jsonl); criteria that aged out show as 🔒 held.
+- **2026-11-10 11:05 PST — ERV night pair (Hugh); block extended to Thu 11-12 07:00 PST.** To measure the ERV term
+  during Aprilaire runs directly: night 1 (Tue 22:00 → Wed 07:00) ERV `off` override, no ERV term at all (a clean
+  L/kWh reference); night 2 (Wed 22:00 → Thu 07:00) ERV `boost_on` (top level, ~124–130 cfm). Both overrides expire on
+  their own. Off-night guard: air-quality index (mean of the ERV policy's source sensors) ≤ 60 on two 10-min checks in
+  a row → override cleared, night 1's data ends there. `tools/erv_night.sh` (runs `tools/erv_night.py` on ha-2), from
+  .210's crontab; log `instance/dehum-study/erv_night.log`. Block re-started with the new end (Midea `off` to Thu
+  ~08:00, Aprilaire 44/40, saved 48/45 kept); its stop cron moved to 11-12 15:00Z. The Aprilaire's airflow interlock
+  doesn't apply (`ventilation.device` unset since the duct split), so the ERV being off won't hold it.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
