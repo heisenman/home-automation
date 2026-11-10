@@ -362,6 +362,10 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
         if not isinstance(g, dict):
             return bad("wet_trim must be an object")
         cur = dict(pol.get("wet_trim") or {})
+        if "enabled" in g:
+            if not isinstance(g["enabled"], bool):
+                return bad("wet_trim.enabled must be true or false")
+            cur["enabled"] = g["enabled"]
         if "step_c" in g:
             if g["step_c"] is not None and (not _is_num(g["step_c"]) or not 0.5 <= g["step_c"] <= 15):
                 return bad("wet_trim.step_c must be a number in 0.5..15 °C per level, or null (disabled)")
@@ -390,6 +394,8 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
         eff = wet_trim.config(cur, pol.get("dry_boost"))
         if eff["step_c"] and eff["hysteresis_c"] >= eff["step_c"]:
             return bad("wet_trim needs hysteresis_c < step_c")
+        if eff["enabled"] and not eff["step_c"] and "enabled" in g:
+            return bad("wet_trim needs step_c to be enabled")
         if eff["step_c"] and not (eff["outdoor_sensor"] and eff["indoor_sensors"]):
             return bad("wet_trim needs an outdoor sensor and indoor sensors (its own or the dry boost's)")
         pol["wet_trim"] = cur

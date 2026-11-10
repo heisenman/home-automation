@@ -818,6 +818,30 @@ def _outdoor_gate_view(hot_conn, gate: dict | None) -> dict | None:
     return out
 
 
+def _wet_trim_view(hot_conn, policy: dict, level_labels) -> dict | None:
+    """A level-mode ventilator's (the ERV's) wet trim (server/control/wet_trim.py) for the PWA editor: the
+    effective settings, whether it's live, and the dew points now from the outdoor meter and the indoor rooms
+    (the meter BEFORE the controller's Open-Meteo cross-check, so the editor can show what a step would do)."""
+    if not level_labels:
+        return None
+    from server.control import wet_trim
+    cfg = wet_trim.config(policy.get("wet_trim"), policy.get("dry_boost"))
+    out = {k: cfg.get(k) for k in ("enabled", "step_c", "release_below", "rh_min", "hysteresis_c", "min_hold_min",
+                                   "outdoor_sensor")}
+    out["indoor_count"] = len(cfg.get("indoor_sensors") or [])
+    out["active"] = wet_trim.enabled(cfg)
+    out["dp_out_now_c"] = out["dp_in_now_c"] = None
+    if hot_conn is not None and cfg.get("outdoor_sensor"):
+        def dp(sid):
+            t = _latest(hot_conn, sid, "temperature_c", 1) or _latest(hot_conn, sid, "temperature_c", 0)
+            h = _latest(hot_conn, sid, "humidity_pct", 1) or _latest(hot_conn, sid, "humidity_pct", 0)
+            return dewpoint_c(t[0] if t else None, h[0] if h else None)
+        out["dp_out_now_c"] = dp(cfg["outdoor_sensor"])
+        ins = [d for d in (dp(s) for s in cfg.get("indoor_sensors") or []) if d is not None]
+        out["dp_in_now_c"] = sum(ins) / len(ins) if ins else None
+    return out
+
+
 def verify_power_alert(hot_conn, device_id: str, traits_cfg: dict | None, now: float) -> dict | None:
     """'Called but not running': a leased call (the Aprilaire's DH) has been closed longer than `grace_min`
     while the plug feeding the unit reads under `min_w`. The E070 has no status output and its lockouts
@@ -1237,6 +1261,7 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
             "aggregate": policy.get("aggregate") or "first",
             # level-mode devices (ERV): band level N is this mode — the editor labels levels with these
             "level_labels": _level_labels(traits),
+            "wet_trim": _wet_trim_view(hot_conn, policy, _level_labels(traits)),   # ERV only (None otherwise)
         },
         "sensor": sensor,
         "onboard": onboard,

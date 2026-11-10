@@ -7,7 +7,7 @@ fresh air brings moisture the dehumidifiers then have to remove. The trim lowers
     Δ = outdoor dew point − indoor dew point        drops = floor(Δ / step_c)  (0 when Δ ≤ 0)
     level = max(0, air-quality level − drops)       level 0 = the ERV's off mode
 
-`step_c` is the user's choice (null = disabled). Hysteresis: a drop is taken at k·step_c and given back only below
+`step_c` is the user's choice; `enabled` false (the PWA switch) or step_c null = disabled. Hysteresis: a drop is taken at k·step_c and given back only below
 k·step_c − hysteresis_c, and the drop count holds at least min_hold_min between changes (except a release, below).
 
 No trim — released at once — when:
@@ -31,6 +31,7 @@ import math
 from server.control import dry_boost
 
 DEFAULTS = {
+    "enabled": True,            # the PWA's switch: False keeps the settings but trims nothing
     "step_c": None,             # °C of outdoor-over-indoor dew point per one-level drop; None = disabled
     "hysteresis_c": 0.5,
     "min_hold_min": 15,
@@ -55,7 +56,8 @@ def config(raw: dict | None, dry_raw: dict | None = None) -> dict:
 
 
 def enabled(cfg: dict) -> bool:
-    return bool(cfg.get("step_c")) and bool(cfg.get("outdoor_sensor")) and bool(cfg.get("indoor_sensors"))
+    return (cfg.get("enabled") is not False and bool(cfg.get("step_c")) and bool(cfg.get("outdoor_sensor"))
+            and bool(cfg.get("indoor_sensors")))
 
 
 def drops_for(delta: float, step: float, cur: int, hyst: float) -> int:

@@ -202,3 +202,30 @@ def test_api_validation():
     assert code == 200 and store.get_policy(conn, "erv_attic")["wet_trim"] == {"step_c": 2.5, "release_below": None}
     code, _ = handle_policy_update(conn, "erv_attic", {"wet_trim": {"step_c": None}})
     assert code == 200
+
+
+def test_enabled_flag_keeps_the_settings_but_trims_nothing(tmp_path):
+    ctrl, iss = _make(tmp_path, trim={**TRIM, "enabled": False})
+    _air(ctrl, 4.5)
+    ctrl.tick(now=NOW)
+    assert _erv(iss) == []
+    assert not W.enabled(W.config({"step_c": 2, "enabled": False}, {"outdoor_sensor": "o", "indoor_sensors": ["i"]}))
+
+
+def test_api_enabled_flag():
+    from server.api.control import handle_policy_update
+    conn = sqlite3.connect(":memory:")
+    store.ensure_schema(conn)
+    store.set_policy(conn, "erv_attic", {**C.ERV_POLICY, "dry_boost": {"outdoor_sensor": "o", "indoor_sensors": ROOMS}})
+    assert handle_policy_update(conn, "erv_attic", {"wet_trim": {"enabled": "yes"}})[0] == 400
+    assert handle_policy_update(conn, "erv_attic", {"wet_trim": {"enabled": True}})[0] == 400   # no step to run on
+    code, _ = handle_policy_update(conn, "erv_attic", {"wet_trim": {"enabled": False, "step_c": 2.0, "rh_min": 45}})
+    assert code == 200 and store.get_policy(conn, "erv_attic")["wet_trim"]["enabled"] is False
+
+
+def test_view_reports_settings_and_dew_points():
+    from server.api.viewmodel import _wet_trim_view
+    pol = {"dry_boost": {"outdoor_sensor": "o", "indoor_sensors": ["i"]}, "wet_trim": {"enabled": False, "step_c": 2}}
+    v = _wet_trim_view(None, pol, ["Low", "Med", "High"])
+    assert v["enabled"] is False and v["step_c"] == 2 and v["active"] is False and v["indoor_count"] == 1
+    assert _wet_trim_view(None, pol, None) is None                  # not a level-mode device
