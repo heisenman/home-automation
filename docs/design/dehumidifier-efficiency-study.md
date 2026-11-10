@@ -464,6 +464,12 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   p 0.02 → 0.00. G2b runs re-score 0.63/0.78/0.61/0.56/0.62 L/kWh (3/3 by the current criteria), but the swing shows
   the offset and the ERV term are nearly collinear at the usual ERV flow: provisional until runs at other ERV flows
   separate them. **ERV held at level 1 (~66 cfm) 16:00 → 07:00 PST 11-10** (Hugh; `tools/erv_min.sh`, cron restore).
+- **2026-11-09 16:05 PST — ERV term refit on the full archive** (`tools/dehum_erv_archive_fit.py`; 47 fan-only
+  stretches, 32 h, ERV 66–132 cfm). Cross-checked outdoor: offset +0.181 ± 0.018, g 0.053 ± 0.011, consistent across
+  ERV flow bands (≤ 80 cfm 0.018 ± 0.026, 80–110 0.072 ± 0.050, > 110 0.051 ± 0.010); single-day fits wobble
+  (−0.01 to +0.10). Sensor-only gives g 0.152: its wet bias squeezes the outdoor range. **The offset rises with
+  return temperature, +0.097 ± 0.025 g/m³ per °C** (part of the day drift; g unchanged). Block run 1 (12:24–16:04):
+  0.61 L/kWh pooled, 0.59 with the temperature term, 0.46 with no ERV term at all (the floor).
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
