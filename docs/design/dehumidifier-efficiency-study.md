@@ -520,6 +520,12 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   volume, not the nominal one, so it backs the nominal-volume figures. Bucket out 19:51–20:01 (raw error 37), then 0.
   Same day, Aprilaire alone: 23.6 h compressor of 24, house-average AH flat ~8.7 g/m³ (RH ~44 %) from 09:00 with
   outdoor dp 12–14.8 °C (wetter than the house all 24 h), ERV mostly low (~69 cfm); unit-only 0.59–0.86 L/kWh.
+- **2026-11-10 20:10 PST — wet trim scheduled for Wed daytime (Hugh).** On at 3.0 °C (5.4 °F) per level Wed 11-11
+  07:10 PST, back off 21:50 PST before the ERV-high night; both are one-shot cron jobs on .210
+  (`tools/wet_trim_set.sh TAG on STEP|off` → `tools/wet_trim_set.py` on ha-2) that delete their own tagged lines
+  once the read-back matches. Neither test night is affected (their overrides beat the trim). With good air the ERV
+  sits at low, so one step = off: Wed's ERV is off whenever outdoor dp is ≥ 3 °C over indoor, unless the air-quality
+  mean is ≤ 60 or the house RH < 45 %. C (C bed) away for weeks (Hugh): its sensor's low AQ isn't occupancy.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
