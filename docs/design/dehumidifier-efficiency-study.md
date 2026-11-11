@@ -536,6 +536,10 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   vs 30 % (the five old dp < 7.5 °C runs, mean 0.24, all at normal/high ERV flow). Wet trim went on at 07:10 (read-
   back matched, its cron lines removed). At 07:05 the ERV resumed at high via the dry boost, not the trim: the
   outdoor sensor read 99 % RH (wet bias → Open-Meteo dp 5.7 °C vs indoor 8.4), so outdoor air counts as drier.
+- **2026-11-11 daily review — raw check of the off night.** Raw supply − return AH −0.20 g/m³ (00:04–04:04 PST) vs
+  −0.415 corrected: the zero model supplies ~half the signal (fan-only offset +0.071 plus k_t·0.9 °C, return 22.4 °C;
+  no ERV term). So the L/kWh carry about ±12 % systematic from the zero's SE alone, and a raw-only reading is ~0.40.
+  The drift report has no Aprilaire runs since 11-04: the block is one continuous call, which it doesn't segment.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
