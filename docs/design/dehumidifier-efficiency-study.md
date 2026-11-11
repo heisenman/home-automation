@@ -513,6 +513,13 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   user-set `step_c` °C of outdoor-over-indoor dew point, down to off (`server/control/wet_trim.py`, policy key
   `wet_trim`). Hugh: the Aprilaire is mostly keeping up, so the ERV stays as is for now; the option exists. Not
   enabled during the study (it would change ERV flow during runs); enabling it is one policy PUT. Runbook Entry 4.
+- **2026-11-10 19:51 PST — Midea bucket measured: a little over 42 cups ≈ 9.9 L (Hugh).** One clean bucket: emptied
+  11-07 13:11 PST (after the P2), not touched since (Hugh), Midea parked from 11-09 12:00 (block). plug_hall
+  `energy_kwh` 93.596 → 103.170 = **9.57 kWh**, 19.9 compressor-h (1-min power ≥ 300 W, mean 479 W) →
+  **≈ 1.04 L/kWh, 0.50 L per compressor-hour** (the 11-07 P2 bucket at a nominal 15.9 L: 1.08 / 0.50). A measured
+  volume, not the nominal one, so it backs the nominal-volume figures. Bucket out 19:51–20:01 (raw error 37), then 0.
+  Same day, Aprilaire alone: 23.6 h compressor of 24, house-average AH flat ~8.7 g/m³ (RH ~44 %) from 09:00 with
+  outdoor dp 12–14.8 °C (wetter than the house all 24 h), ERV mostly low (~69 cfm); unit-only 0.59–0.86 L/kWh.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
