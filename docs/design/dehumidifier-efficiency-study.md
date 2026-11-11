@@ -526,6 +526,16 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   once the read-back matches. Neither test night is affected (their overrides beat the trim). With good air the ERV
   sits at low, so one step = off: Wed's ERV is off whenever outdoor dp is ≥ 3 °C over indoor, unless the air-quality
   mean is ≤ 60 or the house RH < 45 %. C (C bed) away for weeks (Hugh): its sensor's low AQ isn't occupancy.
+- **2026-11-11 — ERV-off night ran complete (Tue 22:00 → Wed 07:05 PST).** `off` override at 22:00, cleared by the
+  07:05 stop; the guard never tripped (air-quality mean 69–76 on all 54 checks, floor 60), so the whole night counts.
+  Aprilaire, no ERV term: **0.82 L/kWh at inlet dp 7.9 °C (00:04–04:04), 0.84 at 7.6 °C (04:04–06:37)** unit-only
+  (0.65/0.67 incl. blower), vs 0.79 at 7.7 °C on the ERV-minimum night (11-10 04:04–08:04): at low flow the ERV term
+  isn't distorting the result; the high night tests high flow. House-average AH (9 room meters) 8.39 → 7.86 g/m³
+  22:00–06:00 (≈ −0.07 g/m³/h) while outdoor dp fell 11.4 → 7.9 °C; the prior evening with the ERV on it held flat.
+  Daily report: G2a "complete since 11-06, held" (latch works); G2b 2/3, plausibility now passes, run agreement 33 %
+  vs 30 % (the five old dp < 7.5 °C runs, mean 0.24, all at normal/high ERV flow). Wet trim went on at 07:10 (read-
+  back matched, its cron lines removed). At 07:05 the ERV resumed at high via the dry boost, not the trim: the
+  outdoor sensor read 99 % RH (wet bias → Open-Meteo dp 5.7 °C vs indoor 8.4), so outdoor air counts as drier.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
