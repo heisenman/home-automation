@@ -356,7 +356,7 @@ class Controller:
             if not dry_run and self._law.due(now):              # the unified law, in shadow: logs, never acts
                 try:
                     house, current = self._law_context(conn, pols, now)
-                    self._law.run(conn, now, self.registry, house, current)
+                    self._law.run(conn, now, self.registry, house, current, self._study.arm)
                 except Exception:
                     log.exception("law context failed")
         finally:
@@ -596,9 +596,18 @@ class Controller:
         house = law_solve.House(t_in, rh, t_rh, w_out, t_out, aq, heating, cooling)
         current = {}
         for d in by_fn["dehumidify"]:
-            r = conn.execute("SELECT desired FROM control_log WHERE device_id=? ORDER BY rowid DESC LIMIT 1",
-                             (d,)).fetchone()
-            current[d] = int(bool(r[0])) if r else None
+            # the unit's own state first (the Midea's mode, the Aprilaire's call pin); else the last decision that
+            # actually saw the device (a restart's "no telemetry yet" rows say nothing about it)
+            mst, t = self._last_status.get(d), tel.get(d) or {}
+            mcfg = self._mode_cfg(d)
+            if mst is not None and mcfg and mst.get("mode") is not None:
+                current[d] = int(int(mst["mode"]) == mcfg["run_val"] and mst.get("running") is not False)
+            elif t.get("running") is not None:
+                current[d] = int(bool(t["running"]))
+            else:
+                r = conn.execute("SELECT desired FROM control_log WHERE device_id=? AND status != 'no-status' "
+                                 "ORDER BY rowid DESC LIMIT 1", (d,)).fetchone()
+                current[d] = int(bool(r[0])) if r else None
         for d in by_fn["ventilate"] + by_fn["purify_air"]:
             t = tel.get(d) or {}
             current[d] = (int(t["fan"]) if t.get("running") and t.get("fan") is not None

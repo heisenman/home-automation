@@ -127,6 +127,9 @@ def test_shadow_logs_and_holds(tmp_path):
     assert "midea" not in plan                                # rule-enrolled: left out of the comparison
     v = SH.view(conn, store, NOW + 2000)
     assert v["agreement_24h"]["apr"]["ticks"] >= 1
+    sh.run(conn, NOW + 2400, REG, h, {"midea": 1}, study_arm="MA")      # the experiment, not the rules
+    v2 = SH.view(conn, store, NOW + 2400)
+    assert v2["study_ticks_24h"] == 1 and v2["agreement_24h"]["apr"]["ticks"] == v["agreement_24h"]["apr"]["ticks"]
 
 
 class Iss:
@@ -146,6 +149,8 @@ def test_controller_runs_the_shadow_and_commands_nothing_new(tmp_path):
     reg = parse_control_registry(yaml.safe_load(open("config-examples/control.example.yaml")))
     iss = Iss()
     ctrl = C.Controller(iss, {}, reg, db)
+    assert not ctrl._law.due(ctrl._law.last_run + 60)          # waits 2 min after start for telemetry
+    ctrl._law.last_run = 0.0
     for sid in B.ROOMS:
         ctrl.readings[sid] = {"m": {"temperature_c": 21.5, "humidity_pct": 47.0}, "ts": NOW - 30}
     ctrl.tick(now=NOW)

@@ -2508,6 +2508,9 @@ function LawPanel({ isAdmin, onNeedAdmin, onClose }) {
                 <td class="note">${conf(m.confidence)}</td></tr>`;
             })}
           </tbody></table></div>
+          ${v.study_ticks_24h > 0 && html`<p class="note">The dehumidifier study's rotation is driving the units: its
+            ${v.study_ticks_24h} decisions in the last 24 h compare against the experiment, so they're left out of
+            "Agree 24 h".</p>`}
           <h4 class="scope-hd">Last decision <span class="scope-sub">· ${when}${v.stale ? " · STALE" : ""}</span></h4>
           ${last ? html`<ul class="note">${last.reasons.map((r) => html`<li>${r}</li>`)}</ul>
             ${(last.alternatives || []).length > 0 && html`<p class="note">Next best: ${last.alternatives.map((a) =>

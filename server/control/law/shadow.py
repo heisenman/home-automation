@@ -17,6 +17,7 @@ from server.control.law import solve as S
 log = logging.getLogger("ha.control.law")
 
 INTERVAL_S = 300
+STARTUP_S = 120
 MIN_HOLD_S = 900
 KEEP_DAYS = 60
 SCHEMA = """
@@ -27,24 +28,28 @@ CREATE INDEX IF NOT EXISTS idx_law_shadow_ts ON law_shadow(ts);
 
 
 class Shadow:
-    def __init__(self, store):
+    def __init__(self, store, now: float | None = None):
         self.store = store
-        self.last_run = 0.0
+        # first decision 2 min after start: device telemetry arrives over the first ticks, and a decision made
+        # before it would compare against "unknown"
+        self.last_run = (time.time() if now is None else now) - INTERVAL_S + STARTUP_S
         self.held: dict[str, tuple[int | None, float]] = {}    # device -> (level, since)
 
     def due(self, now: float) -> bool:
         return now - self.last_run >= INTERVAL_S
 
-    def run(self, conn, now: float, registry: dict, house: S.House, current: dict) -> S.Plan | None:
-        """One shadow decision. `current` = {device_id: level now (0 = off)}. Never raises into the controller."""
+    def run(self, conn, now: float, registry: dict, house: S.House, current: dict,
+            study_arm: str | None = None) -> S.Plan | None:
+        """One shadow decision. `current` = {device_id: level now (0 = off)}; `study_arm` = the dehumidifier study's
+        running arm, if any (then "now" is the experiment, not the rules). Never raises into the controller."""
         self.last_run = now
         try:
-            return self._run(conn, now, registry, house, current)
+            return self._run(conn, now, registry, house, current, study_arm)
         except Exception:
             log.exception("law shadow tick failed")
             return None
 
-    def _run(self, conn, now, registry, house, current):
+    def _run(self, conn, now, registry, house, current, study_arm=None):
         conn.executescript(SCHEMA)
         st = B.get(conn, self.store)
         prm = M.params(self.store.get_setting(conn, "law:params"))
@@ -66,14 +71,15 @@ class Shadow:
                      "VALUES(?,?,?,?,?,?,?,?)",
                      (now, json.dumps(shadowed), json.dumps(actual), json.dumps(plan.errors), plan.need_gph,
                       json.dumps(plan.totals), json.dumps(plan.reasons),
-                      json.dumps({k: getattr(house, k) for k in ("t_in_c", "rh", "t_rh_c", "w_out", "t_out_c", "aq",
-                                                                 "heating", "cooling")})))
+                      json.dumps({**{k: getattr(house, k) for k in ("t_in_c", "rh", "t_rh_c", "w_out", "t_out_c",
+                                                                    "aq", "heating", "cooling")},
+                                  "study_arm": study_arm})))
         conn.execute("DELETE FROM law_shadow WHERE ts < ?", (now - KEEP_DAYS * 86400,))
         conn.commit()
         self.store.set_setting(conn, "law:last", {"ts": now, "choice": choice, "actual": actual,
                                                   "errors": plan.errors, "need_gph": plan.need_gph,
                                                   "totals": plan.totals, "reasons": plan.reasons,
-                                                  "alternatives": plan.alternatives,
+                                                  "alternatives": plan.alternatives, "study_arm": study_arm,
                                                   "models": M.inventory(models)})
         log.info("law shadow: %s", "; ".join(plan.reasons))
         return plan
@@ -88,8 +94,12 @@ def view(conn, store, now: float) -> dict:
         pass
     st = B.get(conn, store)
     last = store.get_setting(conn, "law:last")
-    agree = {}
-    for plan, actual in conn.execute("SELECT plan, actual FROM law_shadow WHERE ts > ?", (now - 86400,)):
+    agree, study_ticks = {}, 0
+    for plan, actual, house in conn.execute("SELECT plan, actual, house FROM law_shadow WHERE ts > ?",
+                                            (now - 86400,)):
+        if (json.loads(house or "{}") or {}).get("study_arm"):
+            study_ticks += 1                     # "now" was the study's experiment, not the rules: not compared
+            continue
         p, a = json.loads(plan or "{}"), json.loads(actual or "{}")
         for d, v in p.items():
             if v.get("level") is None:
@@ -98,4 +108,5 @@ def view(conn, store, now: float) -> dict:
             agree[d] = (n + 1, same + (1 if a.get(d) == v["level"] else 0))
     return {**st, "enrol_modes": list(B.ENROL_MODES), "params": M.params(store.get_setting(conn, "law:params")),
             "last": last, "agreement_24h": {d: {"ticks": n, "same": s} for d, (n, s) in agree.items()},
+            "study_ticks_24h": study_ticks,
             "stale": last is None or now - last["ts"] > 3 * INTERVAL_S}
