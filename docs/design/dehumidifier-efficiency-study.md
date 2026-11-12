@@ -594,6 +594,19 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   (11-07 14:00) scores 1.24 L/kWh, an Aprilaire window (11-11 00:00) 0.94.
 - **2026-11-12 ~08:15 PST — the ERV didn't stop again** in LOW 07:41 → 08:13 (no 40-min-per-hour pattern), so
   Broan's intermittent schedule isn't confirmed; one event so far.
+- **2026-11-12 ~09:00 PST — L3 fits; method-B dips partly explained; correction to the 11-12 morning entry.**
+  [unified-control-law-l3-fits.md](unified-control-law-l3-fits.md) §6: L/kWh does fall with ERV flow when binned by
+  cfm (0.80 at 0, 0.72 at 55–80, 0.60 at 80–110, 0.42 at 110–130), so "not ERV flow" above was too strong. It acts
+  through the ERV term together with the outdoor reference: in 12 of 13 dip hours the outdoor sensor read ≥ 95 %
+  RH and disagreed with Open-Meteo by 2.7 °C of dew point (1.1 normally), so the cross-check swapped in Open-Meteo's
+  drier air and shrank the ERV correction; the sensor instead lifts those hours by 0.05–0.38. Second cause: the
+  study meters report whole-percent RH (one step ≈ 0.4 L/kWh). The smaller ΔT in dips is mostly the ERV's cool air.
+  Still unexplained: 11-09 15–16, 11-11 10. **Next:** score block hours under both outdoor references; a
+  0.1 %-resolution RH pair at return/supply would remove the quantisation (hardware: Hugh's call).
+  Also from L3: ERV `supply_temp_c` is the INTAKE (outdoor) air, not post-core; ERV sensible recovery ≈ 0.65 from
+  the air-handler ΔT; no ERV cold schedule (the 07:01 stop is the only one in the archive). Hourly rungs for
+  `thermostat_hall` / `hvac_blower` before 11-05 08:00 PST average only 2–10 samples (~120 since), so use minute
+  data (parquet) for heat state before then — verified on ha-2.
 - **2026-11-12 — unified control law (Hugh).** One law for temperature, humidity and AQ across every actuator,
   driven by user-set bands (AQ soft and fungible), with a rough AQ rule meanwhile (worse air → ERV and purifiers up),
   into the PWA eventually: [unified-control-law.md](unified-control-law.md). The mech-closet furnace data

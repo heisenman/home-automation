@@ -7,6 +7,18 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 🟡 2026-11-12 — study rotation + unified law (shadow) running; open items (Hugh)
+
+- **Running:** study Phase 3 rotation (runbook 4b) and the unified law in shadow (runbook 4c), both on ha-2 since
+  ~08:17 PST. Design: `docs/design/unified-control-law.md`; fits: `unified-control-law-l3-fits.md`.
+- **Hugh to check:** furnace rating plate (low-fire input; the law assumes ~11 kW delivered from the model number).
+- **Decide:** how to compare the law with the rules while the rotation drives the units (rule-only windows, or
+  wait for the study to end). The dew-point law stays idle while the rotation holds the ERV.
+- **Hardware (Hugh's call):** 0.1 %-resolution RH pair at the HVAC return/supply (study meters quantise to 1 %,
+  ≈ 0.4 L/kWh per step); outdoor sensor shield; NDIR CO₂ (the VOC index can't see ventilation).
+- **Faults:** `purifier_living_room` PM2.5 stuck at 983 since 10-19 (mark invalid / check the sensor).
+- **Next code:** AC model for the law (single-stage AC, ADR-0043); score study blocks under both outdoor references.
+
 ## 🟡 2026-11-09 — E070 to the crawlspace, controlled on dew point (Hugh; after the dehumidifier study)
 
 - **Why:** the E070 manages ~0.6 L/kWh in the house (inlet dew point ≈ 8 °C, ~1/3 of its rating). The crawlspace

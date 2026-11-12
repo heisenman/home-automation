@@ -1,7 +1,8 @@
 # Unified control law — temperature, humidity, air quality across every actuator
 
 **Status (2026-11-12): L1–L2 built and running in shadow on ha-2** (Hugh: "implement L1-L3 and let's run them a
-few days collecting data"). L3 fits in progress. Nothing commands a device; the law logs what it would do in
+few days collecting data"). L3 fits done ([unified-control-law-l3-fits.md](unified-control-law-l3-fits.md)),
+loaded into `server/control/law/models.py`. Nothing commands a device; the law logs what it would do in
 control.db `law_shadow` every 5 min, next to what the rules did. Switch-over (L4) is per device, with Hugh's
 approval. Code: `server/control/law/` (`bands`, `models`, `solve`, `shadow`); API `GET /api/v1/law`, `PUT
 /api/v1/control/house/law`; PWA "⚖ Comfort" (top bar). Runbook Entry 4c.
@@ -145,6 +146,12 @@ The study's Phase 3 rotation still runs underneath: it's what turns the dehumidi
 
 ## 7. Open questions
 
+- **L3 results (2026-11-12, mostly rough):** house UA ≈ 175 W/K, C ≈ 5.5 kWh/K (τ ≈ 32 h), gains ≈ 1 kW, balance
+  point ≈ 17.5 °C; furnace low stage ≈ 11 kW delivered (from the model number — **verify on the rating plate**);
+  ERV sensible recovery ≈ 0.65, no detectable effect on the AQ index (so the AQ term stays a soft, user-weighted
+  preference, not a modelled effect); the furnace's VOC reaches C office only, ~1–2 AQ points for ~20 min — **no
+  pre-emptive ERV/purifier push on heat calls** (§4's option stays off); purifiers: no PM signal to model
+  (living-room PM2.5 stuck at 983 = fault).
 - Cooling: **the house has a single-stage AC** (ADR-0043). The model inventory has no AC model yet; summer needs one.
 - Per-room bands vs one house band: rooms differ by ~2–3 °F on cold nights with one thermostat. The law can
   only steer what its actuators reach (the furnace is whole-house; the Midea is one room).

@@ -25,15 +25,20 @@ PARAMS = {
     "aprilaire": {"elec_w": 580, "l_per_kwh": 0.75, "source": "method B across the air handler, 17 runs at "
                   "dew point 7.5–9.5 °C (evening dips unexplained)", "confidence": {"water": "rough", "heat": "rough"}},
     "blower": {"elec_w": 150, "source": "estimate for tap 1 (not metered)", "confidence": {"elec": "rough"}},
-    "erv": {"cfm": [0, 66, 92, 125], "fan_w": [8, 31, 60, 130], "latent_pass": 0.3, "sensible_eff": None,
-            "source": "cfm/power from the ERV's own telemetry; latent pass-through (1 − ε_L) from the HVAC-pair zero "
-                      "model's ERV term (0.035–0.055 per 100 cfm ≈ 0.15·(1 − ε_L))",
-            "confidence": {"water": "rough", "heat": "none", "aq": "rough"}},
-    "furnace": {"input_kw": 17.6, "efficiency": 0.96, "source": "Carrier 59TP5A060 (60 kBtu/h input), condensing "
-                "two-pipe (efficiency to confirm from the manual)", "confidence": {"heat": "none"}},
-    "house": {"air_m3": 520, "buffer_x": 26, "load_gph": 0.0, "ua_w_per_k": None, "c_kwh_per_k": None,
-              "source": "study Phase 1 (house buffers ~26× its air volume); heat-loss fit pending (L3)",
-              "confidence": {"water": "rough", "heat": "none"}},
+    "erv": {"cfm": [0, 66, 92, 125], "fan_w": [7.7, 31, 58, 130], "latent_pass": 0.3, "sensible_eff": 0.65,
+            "source": "L3 (unified-control-law-l3-fits.md §3): cfm/fan power from the ERV's telemetry; sensible "
+                      "recovery 0.65 (0.58–0.72, rated 0.75) from the air-handler ΔT; latent pass-through (1 − ε_L) "
+                      "from the HVAC-pair zero model's ERV term. AQ effect: none detectable on the index (§2)",
+            "confidence": {"water": "rough", "heat": "rough", "aq": "none"}},
+    "furnace": {"input_kw": 11.6, "efficiency": 0.95, "delivered_kw": 11.0,
+                "source": "L3 §1b: 59TP5A060 low fire ~40 kBtu/h input at ~95 % (model-number reading — verify on "
+                          "the rating plate); bounds 6.5 kW (supply register) and 9–24 (dehumidifier heat)",
+                "confidence": {"heat": "rough"}},
+    "house": {"air_m3": 520, "buffer_x": 26, "load_gph": 0.0, "ua_w_per_k": 175, "c_kwh_per_k": 5.5,
+              "internal_gain_w": 1000, "balance_point_c": 17.5,
+              "source": "water: study Phase 1 (buffers ~26× its air volume). Heat: L3 §1, 10-31→11-12, UA 175 W/K "
+                        "(145 Open-Meteo / 208 sensor), C 5.5 kWh/K, τ ≈ 32 h, mild weather only",
+              "confidence": {"water": "rough", "heat": "rough"}},
 }
 
 
@@ -107,7 +112,8 @@ def build(registry: dict, prm: dict, cond: dict) -> list[Model]:
             out.append(_erv(did, prm["erv"], cond))
         elif fn == "purify_air":
             out.append(Model(did, fn, "purifier", tuple(Option(str(i), i) for i in range(1, 5)),
-                             {"aq": "none"}, "no model: the AQ index is VOC-based, filters barely move it"))
+                             {"aq": "none"}, "no model: the AQ index is VOC-based, filters barely move it; PM2.5 "
+                             "sits at the 1 µg/m³ floor (purifier_living_room's PM reads a stuck 983, invalid) — L3 §5"))
         elif fn == "condition_temperature":
             out.append(Model(did, fn, "thermostat", (), dict(prm["furnace"].get("confidence", {})),
                              prm["furnace"].get("source", "")))
