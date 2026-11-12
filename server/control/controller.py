@@ -20,7 +20,7 @@ from pathlib import Path
 
 from server.comms import events as ev
 from server.control import (actuator_state, bootstrap, control_store as store, dewpoint_law, dry_boost, follow,
-                            wet_trim)
+                            study_rotation, wet_trim)
 from server.control.midea_driver import GarbledStatus
 from server.control.registry import load_control_registry
 from server.util.psychro import dewpoint_c
@@ -162,6 +162,8 @@ class Controller:
         self.telemetry: dict[str, dict] = {}    # device_id -> {running, fan, ts} for driverless MQTT devices
         self._night_active = False               # night-mode edge state (dusk->LEDs off, dawn->on)
         self._lock = threading.Lock()
+        self._study = study_rotation.StudyRotation(store)   # dehumidifier study Phase 3 (off unless enabled)
+        self._last_status: dict[str, dict] = {}  # device_id -> last local-driver status (study: Midea bucket)
 
     def _conn(self):
         c = sqlite3.connect(self.db)
@@ -337,6 +339,8 @@ class Controller:
             tod = house_tod(now, store.get_setting(conn, "timezone"))   # house wall-clock, NOT the box's (UTC)
             scene = store.get_scene(conn, DEFAULT_SCENE)        # whole-house Home/Away/Sleep
             pols = store.all_policies(conn)
+            if not dry_run:                                     # the study writes overrides BEFORE devices tick
+                self._study.tick(conn, now, lambda cfg: self._study_readings(pols, now, cfg))
             # devices that set a ventilation FLOOR (the dehumidifier) tick before the device they floor (the
             # ERV), so the ERV sees this tick's demand rather than the last one
             for device_id, pol in sorted(pols.items(), key=lambda kv: not (kv[1] or {}).get("ventilation")):
@@ -525,6 +529,48 @@ class Controller:
             return Resolution(True, (not dev_state.running) or dev_state.level != lvl, "rule",
                               f"sensor {sensor.value:.0f} -> speed {lvl}; {note}", level=lvl)
         return Resolution(res.running, res.act, res.source, f"{res.reason}; {note}", level=res.level)
+
+    def _apply_study_hold(self, device_id, policy, sensor, res, dev_state, override, now):
+        """The dehumidifier study's rotation owns a ventilator's level (server/control/study_rotation.py): outside
+        its arm E the ERV runs its air-quality band level, with the dry boost, wet trim and dew-point law held —
+        they would confound the arms. Their state is dropped, and the band level is re-applied directly (the
+        band deadband would otherwise "hold" a boosted level)."""
+        for k in ("_dry_boost", "_wet_trim", "_dewpoint_law"):
+            self.__dict__.get(k, {}).pop(device_id, None)
+        note = f"study arm {self._study.arm}: dry boost/trim/law held"
+        if (override is None or not override.active(now)) and res.running and res.source in ("rule", "default") \
+                and policy.strategy == "threshold_ranged" and sensor is not None \
+                and (now - sensor.ts) <= policy.sensor_stale_s:
+            lvl = _level_for(sensor.value, policy.bands)
+            return Resolution(True, (not dev_state.running) or dev_state.level != lvl, "rule",
+                              f"sensor {sensor.value:.0f} -> speed {lvl}; {note}", level=lvl)
+        return Resolution(res.running, res.act, res.source, f"{res.reason}; {note}", level=res.level)
+
+    def _study_readings(self, pols: dict, now: float, cfg: dict) -> dict:
+        """What the study rotation needs each tick: living-room RH and dew point, the ERV arm's eligibility
+        (indoor − outdoor dew point, the dry boost's sensors and Open-Meteo cross-check, outdoor resolved WETTER
+        on doubt), and whether the Midea's bucket is full."""
+        with self._lock:
+            rd = dict(self.readings)
+        out = {"rh": None, "dp_in": None, "dp_out": None, "t_out": None, "e_ok": False, "bucket_full": False}
+        rec = rd.get(cfg["rh_sensor"])
+        if rec is not None and now - rec["ts"] <= 600:
+            t, h = rec["m"].get("temperature_c"), rec["m"].get("humidity_pct")
+            out["rh"] = h
+            if t is not None and h is not None:
+                out["dp_in"] = dewpoint_c(t, h)
+        erv_pol = pols.get(cfg["devices"].get("erv")) or {}
+        raw = erv_pol.get("dry_boost") or {}
+        if raw.get("outdoor_sensor"):
+            dcfg = dry_boost.config(raw)
+            cond, _ = dry_boost.conditions(rd, dcfg, now, self._weather_reference()
+                                           if dcfg.get("reference") == "openmeteo" else None, doubt="wetter")
+            if cond is not None:
+                out["dp_out"], out["t_out"] = cond.dp_out, cond.t_out
+                out["e_ok"] = cond.delta >= float(cfg["e_min_gap_c"])
+        mst = self._last_status.get(cfg["devices"].get("midea")) or {}
+        out["bucket_full"] = bool(mst.get("tank_full"))
+        return out
 
     def _apply_wet_trim(self, device_id, pol, policy, sensor, res, dev_state, override, now):
         """Lower a level-mode ventilator (the ERV) one level per `wet_trim.step_c` of outdoor-over-indoor dew point,
@@ -780,6 +826,7 @@ class Controller:
         if drv is not None:
             try:
                 st = drv.status()                              # live interlocks + state (local driver)
+                self._last_status[device_id] = st
             except GarbledStatus as e:                         # it answered, with garbage: skip this tick.
                 # Not UNREACHABLE, and no control_log row: the PWA's "running" is the newest row's desired,
                 # so a desired=False row would flash the card OFF. The next tick is 45s away.
@@ -856,7 +903,9 @@ class Controller:
         res = self._apply_airflow_interlock(conn, device_id, pol, res, dev_state, now)
         res = self._apply_outdoor_gate(pol, res, dev_state, now)
         lm = self._level_modes(device_id) if drv is None else None
-        if lm is not None and dewpoint_law.enabled(dewpoint_law.config(pol.get("dewpoint_law"), pol.get("dry_boost"))):
+        if lm is not None and self._study.holds_ventilation(device_id):
+            res = self._apply_study_hold(device_id, policy, sensor, res, dev_state, override, now)
+        elif lm is not None and dewpoint_law.enabled(dewpoint_law.config(pol.get("dewpoint_law"), pol.get("dry_boost"))):
             res = self._apply_dewpoint_law(conn, device_id, pol, policy, sensor, res, dev_state, override, now,
                                            scene, lm)            # supersedes the one-way boost and trim below
         elif lm is not None:

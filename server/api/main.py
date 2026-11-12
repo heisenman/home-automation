@@ -1135,9 +1135,14 @@ def house_state():
         tz = store.get_setting(cc, "timezone")
         tz = tz if valid_tz(tz) else HOUSE_TZ_DEFAULT
         tod = house_tod(_time.time(), tz)                 # what the controller thinks the time is — a sanity check
+        from server.control import study_rotation
+        try:
+            study = study_rotation.view(cc, store, _time.time())
+        except Exception:
+            study = None
         return {**store.get_scene_full(cc), "scenes": list(HOUSE_SCENES),
                 "night_mode": store.get_setting(cc, "night_mode") or NIGHT_MODE_DEFAULT,
-                "timezone": tz, "house_time": f"{tod // 60:02d}:{tod % 60:02d}"}
+                "timezone": tz, "house_time": f"{tod // 60:02d}:{tod % 60:02d}", "study": study}
     finally:
         cc.close()
 

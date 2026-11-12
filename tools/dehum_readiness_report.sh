@@ -30,12 +30,20 @@ try:
 except Exception:
     pass
 print(repr(d))' "$OUT/status-history.jsonl" 2>/dev/null || echo '{}')"
-if { echo "_PREV_OK = $prev"; echo "_PREV_DONE = $done"; cat "$ROOT/tools/dehum_readiness.py"; } |
+# rotation blocks already scored (P3): ha-2 keeps minute data 7 days, so older scores live here (blocks.json)
+blocks="$(python3 -c 'import json,sys
+try:
+    print(repr(json.load(open(sys.argv[1]))))
+except Exception:
+    print("{}")' "$OUT/blocks.json" 2>/dev/null || echo '{}')"
+if { echo "_PREV_OK = $prev"; echo "_PREV_DONE = $done"; echo "_PREV_BLOCKS = $blocks"; cat "$ROOT/tools/dehum_readiness.py"; } |
    ssh -o BatchMode=yes -o ConnectTimeout=30 "$HA2" 'cd home_automation && nice -n 15 python3 -' \
      >"$f.tmp" 2>"$OUT/last-error.log"; then
   mv "$f.tmp" "$f"
   ln -sfn "$(basename "$f")" "$OUT/latest.md"
   sed -n '1s/^<!-- status: \(.*\) -->$/\1/p' "$f" >"$OUT/status.json"
+  python3 -c 'import json,sys; b=json.load(open(sys.argv[1])).get("blocks"); b is not None and json.dump(b, open(sys.argv[2], "w"))' \
+    "$OUT/status.json" "$OUT/blocks.json"
   python3 -c 'import json,sys; s=json.load(open(sys.argv[1])); print(json.dumps({"generated": s["generated"], "current": s["current"], "gates": {g["id"]: [g["met"], g["of"], g["complete"], g["behind"]] for g in s["gates"]}}))' \
     "$OUT/status.json" >>"$OUT/status-history.jsonl"
   echo "report: $f (current gate $(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["current"])' "$OUT/status.json"))"

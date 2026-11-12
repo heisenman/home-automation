@@ -29,6 +29,10 @@ MANUAL = {
     "fan_tap": 1,
     "furnace_venting": "two-pipe",   # Hugh 2026-11-03: both PVC pipes run outside (photo); combustion air is outdoor
     "static_in_wc": 0.3,        # assumed external static for the tap table (§2); refine if measured
+    # Midea airflow, calibrated in place 2026-11-12 from the one measured bucket (9.9 L, emptied 11-07 13:11 PST,
+    # parked 11-09 12:00): corrected pair ΔAH −1.56 g/m³ over 1,195 compressor-min, zero by blower state → 319 m³/h
+    # (≈ 188 cfm). Plug energy over the same span 9.65 kWh (meter 9.57). Re-calibrate on the next measured bucket.
+    "midea_m3h": 319,
 }
 # 59TP5A060 air delivery at 0.1 / 0.3 / 0.5 in. w.c. (59TP5A-02PD, §2)
 TAP_CFM = {1: (785, 655, 530), 2: (1160, 1080, 1000), 3: (1010, 925, 835), 4: (1325, 1255, 1185),
@@ -45,6 +49,7 @@ MID_IN, MID_OUT = "study_midea_inlet", "study_midea_outlet"
 HV_RET, HV_SUP, APR_DIS = "study_hvac_return", "study_hvac_supply", "study_apr_discharge"   # APR_DIS optional
 SETTLE_MIN = 60                                 # new meters read wrong while they settle (Hugh)
 APR_ON_W, APR_IDLE_W = 300, 30                  # dehum_pm: compressor ~570 W, its fan 87 W, standby ~3 W
+BLOCK_SETTLE_MIN = 30                           # study blocks: the first 30 min aren't scored (§3D)
 STATE_SETTLE_MIN = 10                           # minutes a state must hold before its minutes count
 
 # Schedule (§6c). Phase 3 checks repeat weekly from its first date until the gate passes.
@@ -319,6 +324,7 @@ def crit(name, ok, detail):
 # Empty when run by hand: then there is no hysteresis, only the target and the preponderance path.
 PREV_OK = globals().get("_PREV_OK") or {}
 HOLD_X = 1.3                 # a passed SE criterion stays passed until SE exceeds HOLD_X × target
+PREV_BLOCKS = globals().get("_PREV_BLOCKS") or {}   # {block id: scores}, from blocks.json (P3 scoring)
 PREV_DONE = globals().get("_PREV_DONE") or {}   # {gate id: date first filed complete}, from status-history.jsonl
 
 
@@ -554,33 +560,78 @@ def main():
     gates.append(("G2b", "Phase 2 done (method B live)", g2b))
 
     # ---- P3: rotation coverage (scheduler writes control.db study_block) ----------------------------------
+    # The controller can't score a block (method B needs minute data it doesn't keep), so this report does: each
+    # completed block's measured window (start + SETTLE, end) → L/kWh per unit. Minute rungs last 7 days, so scores
+    # ride along in status["blocks"] and come back as _PREV_BLOCKS (dehum_readiness_report.sh keeps blocks.json).
     p3 = []
     try:
         cc = sqlite3.connect(f"file:{CONTROL}?mode=ro", uri=True)
-        blocks = cc.execute("SELECT arm, inlet_dp_c, l_per_kwh FROM study_block WHERE end_reason='complete'").fetchall()
+        brows = cc.execute("SELECT id, arm, start_ts, end_ts, end_reason, inlet_dp_c FROM study_block").fetchall()
     except sqlite3.Error:
-        blocks = None
-    if blocks is None:
+        brows = None
+    scored = {}
+    if brows is not None:
+        def apr_block(ms, me):
+            kwh = sum(apr.get(k, 0) for k in range(ms, me, 60)) / 60000
+            if sum(1 for k in range(ms, me, 60) if apr.get(k, 0) >= APR_ON_W) < 0.5 * (me - ms) / 60:
+                return None                          # the unit didn't run (a release, a fault): no score
+            mins = [k for k in range(ms, me, 60) if blower.get(k, 0) >= 0.99 and held(no_heat, k, 25)]
+            dl = pair_delta(d, HV_RET, HV_SUP, mins, ms, me) if reg else None
+            if not dl or len(dl) < 20 or not zm or not q_fan or kwh <= 0:
+                return None
+            cs = [v - zm["beta"][0]
+                  - (zm["beta"][2] * erv_cfm.get(k, 0) * xdiff[k] / 100 if k in xdiff else 0.0)
+                  - (zm["beta"][6] * (t_ret[k] - T_REF) if k in t_ret else 0.0) for k, v in dl.items()]
+            share = len(cs) / ((me - ms) / 60)
+            return -sum(cs) * q_fan / 60 / 1000 / (kwh * share)
+
+        def midea_block(ms, me):
+            kwh = sum(mid_p.get(k, 0) for k in range(ms, me, 60)) / 60000
+            if sum(1 for k in range(ms, me, 60) if mid_p.get(k, 0) >= 300) < 0.5 * (me - ms) / 60:
+                return None
+            dl = pair_delta(d, MID_IN, MID_OUT, list(range(ms, me, 60)), ms, me)
+            if not dl or len(dl) < 20 or not mz or not mzb or kwh <= 0:
+                return None
+            cs = [v - (mzb["mean"] if blower.get(k, 0) >= 0.5 else mz["mean"]) for k, v in dl.items()]
+            share = len(cs) / ((me - ms) / 60)
+            return -sum(cs) * MANUAL["midea_m3h"] / 60 / 1000 / (kwh * share)
+
+        for bid, arm, s0, e0, reason, idp in brows:
+            if str(bid) in PREV_BLOCKS:
+                scored[str(bid)] = PREV_BLOCKS[str(bid)]
+                continue
+            if reason != "complete" or e0 is None:
+                continue
+            ms, me = int(s0) // 60 * 60 + BLOCK_SETTLE_MIN * 60, int(e0) // 60 * 60
+            if ms < now - 6.5 * 86400 or me - ms < 30 * 60:
+                continue
+            scored[str(bid)] = {"arm": arm, "inlet_dp_c": idp,
+                                "apr": apr_block(ms, me) if arm in ("A", "MA") else None,
+                                "midea": midea_block(ms, me) if arm in ("M", "MA") else None}
+    if brows is None:
         p3.append(crit("Rotation running", False, "not started: the scheduler (Phase 3) isn't built yet"))
     else:
-        by = {a: [b for b in blocks if b[0] == a] for a in P3_ARMS}
+        done_rows = [r for r in brows if r[4] == "complete"]
+        by = {a: [r for r in done_rows if r[1] == a] for a in P3_ARMS}
         p3.append(crit("Each arm ≥ 8 valid blocks; baseline ≥ 10",
                        all(len(by[a]) >= 8 for a in P3_ARMS) and len(by["0"]) >= 10,
-                       ", ".join(f"{a}:{len(by[a])}" for a in P3_ARMS)))
-        for unit, arms in (("Midea", ("M", "MA")), ("Aprilaire", ("A", "MA"))):
-            xs = [b for a in arms for b in by[a]]
-            bins = [sum(1 for b in xs if b[1] is not None and lo <= b[1] < hi) for lo, hi in DP_BINS]
+                       ", ".join(f"{a}:{len(by[a])}" for a in P3_ARMS)
+                       + f" (early ends: {sum(1 for r in brows if r[4] not in (None, 'complete'))})"))
+        for unit, key, arms in (("Midea", "midea", ("M", "MA")), ("Aprilaire", "apr", ("A", "MA"))):
+            xs = [r for a in arms for r in by[a]]
+            bins = [sum(1 for r in xs if r[5] is not None and lo <= r[5] < hi) for lo, hi in DP_BINS]
             p3.append(crit(f"{unit}: ≥ 2 dew-point bins with ≥ 4 blocks", sum(1 for n in bins if n >= 4) >= 2,
                            " / ".join(f"{lo if lo > -99 else ''}–{hi if hi < 99 else ''} °C: {n}"
                                       for (lo, hi), n in zip(DP_BINS, bins))))
-            v = [b[2] for b in xs if b[2] is not None]
+            v = [b[key] for b in scored.values() if b["arm"] in arms and b.get(key) is not None]
             ci = 1.96 * S.stdev(v) / math.sqrt(len(v)) / S.mean(v) if len(v) >= 3 and S.mean(v) > 0 else None
             p3.append(crit(f"{unit}: L/kWh 95 % CI within ±15 %", ci is not None and ci <= 0.15,
-                           f"{S.mean(v):.2f} L/kWh ± {ci:.0%}" if ci is not None else "need ≥ 3 measured blocks"))
+                           f"{S.mean(v):.2f} L/kWh ± {ci:.0%} over {len(v)} blocks" if ci is not None
+                           else f"need ≥ 3 scored blocks ({len(v)} so far)"))
     gates.append(("P3", "Rotation coverage → Phase 4", p3))
 
     # ---- status ----------------------------------------------------------------------------------------------
-    status = {"generated": pt(now).isoformat(), "gates": []}
+    status = {"generated": pt(now).isoformat(), "gates": [], "blocks": scored}
     for gid, title, cr in gates:
         due = DUE[gid]
         if gid == "P3":

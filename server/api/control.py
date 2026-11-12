@@ -1458,6 +1458,17 @@ def make_override_router(api_authz, control_db, device_ids=None):
             c.close()
         return JSONResponse(status_code=code, content=payload)
 
+    @router.put("/house/study", dependencies=[Depends(require_admin)])
+    async def put_study(body: dict = Body(...)):
+        # the dehumidifier study's rotation (server/control/study_rotation.py): {enabled?, paused?, guard numbers}
+        from server.control import study_rotation
+        c = _conn()
+        try:
+            code, payload = study_rotation.set_config(c, store, body)
+        finally:
+            c.close()
+        return JSONResponse(status_code=code, content=payload)
+
     @router.put("/house/timezone", dependencies=[Depends(require_admin)])
     async def put_timezone(body: dict = Body(...)):
         c = _conn()

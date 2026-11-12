@@ -2421,6 +2421,42 @@ function NightMode({ isAdmin, onNeedAdmin }) {
   </div>`;
 }
 
+const STUDY_ARMS = { "0": "neither unit", M: "Midea", A: "Aprilaire", MA: "both units", E: "ERV boost" };
+
+function StudyChip({ isAdmin, onNeedAdmin }) {
+  // The dehumidifier study's rotation (server/control/study_rotation.py): which arm is running, how long it has
+  // left, and a pause button that hands every device back to its normal rules. Reads /api/v1/house (open);
+  // changing it is admin-gated (PUT /control/house/study). Hidden when the study was never turned on.
+  const [st, setSt] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const load = useCallback(() => getJSON("/api/v1/house").then((h) => setSt(h.study || null)).catch(() => {}), []);
+  useEffect(() => { load(); const t = setInterval(load, 30000); return () => clearInterval(t); }, [load]);
+  if (!st || (!st.enabled && !isAdmin)) return null;
+  const save = async (patch) => {
+    if (!isAdmin) { onNeedAdmin && onNeedAdmin(); return; }
+    setBusy(true);
+    try { await adminSend("PUT", "/control/house/study", patch); await load(); }
+    catch (e) { alert("Study: " + e.message); }
+    setBusy(false);
+  };
+  const b = st.block;
+  const done = Object.entries(st.complete || {}).map(([a, n]) => `${a} ${n}`).join(" · ");
+  const title = `Dehumidifier study rotation — ${st.block_min}-min blocks, arms in a random order each cycle. `
+    + `Completed blocks: ${done}. RH guard ${st.rh_low}–${st.rh_high} %.`;
+  if (!st.enabled) {
+    return html`<button class="btn sm ghost" disabled=${busy} title=${title}
+        onClick=${() => save({ enabled: true, paused: false })}>🔬 Study off</button>`;
+  }
+  const label = st.paused ? "paused"
+    : b ? `${STUDY_ARMS[b.arm] || b.arm} · ${Math.round(b.left_s / 60)}m left${b.released && b.released.length ? " · " + b.released.length + " released" : ""}`
+    : "starting";
+  return html`<span class="scene-sel" title=${title}>
+    <span class="note">🔬 Study: ${label}</span>
+    <button class="btn sm ${st.paused ? "scene-on" : "ghost"}" disabled=${busy}
+        onClick=${() => save({ paused: !st.paused })}>${st.paused ? "Resume" : "Pause study"}</button>
+  </span>`;
+}
+
 function HouseTimezone({ isAdmin, onNeedAdmin }) {
   // The house timezone: every schedule window (LED night mode, policy schedules) is read in this zone — the
   // dictator's clock is UTC. The controller's idea of "now" appears (red) ONLY when it disagrees with this device.
@@ -2853,6 +2889,7 @@ function App() {
           <button class="btn sm ghost" onClick=${toggleUnit} title="temperature unit">°${tempUnit}</button>
           <${NotifyToggle} />
           <${HouseTimezone} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} />
+          <${StudyChip} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} />
           ${isAdmin
             ? html`<span class="admin-on" title="Admin unlocked">🔓 Admin</span>
                    <button class="btn sm ghost" onClick=${() => setShowAdd(true)}>+ Device</button>

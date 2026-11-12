@@ -188,6 +188,36 @@ for r in c.execute('select ts, reason, act, status from control_log where device
   and `dehum_attic` in ha-2's `instance/control.yaml` — re-check with
   `venv/bin/python -c "import yaml;print({k:v.get('function') for k,v in yaml.safe_load(open('instance/control.yaml'))['devices'].items()})"`.
 
+## Entry 4b — Dehumidifier study rotation (Phase 3) is running
+
+**Asserted state:** the controller on ha-2 runs the study rotation (`server/control/study_rotation.py`): 90-min
+blocks, arms 0/M/A/MA/E in a random order each cycle, written as ordinary overrides on `dehumidifier_living_room`,
+`dehum_attic` and `erv_attic` (expiry = block end + 10 min), one `study_block` row per block. Outside arm E the
+ERV runs its air-quality bands with the dry boost/trim/law held. Design: study doc §3D; P3 gate §6c.
+
+**Re-check (on ha-2):**
+```sh
+cd ~/home_automation && python3 -c "
+import sqlite3, json
+c = sqlite3.connect('file:instance/db/control.db?mode=ro', uri=True)
+print(c.execute('select json from house_setting where key=\"study:rotation\"').fetchone())
+print(json.loads(c.execute('select json from house_setting where key=\"study:rotation:state\"').fetchone()[0])['block'])
+for r in c.execute('select * from override'): print(r)
+for r in c.execute('select id, arm, start_ts, end_ts, end_reason, rh_start from study_block order by id desc limit 4'): print(r)"
+```
+
+**Expected:** (1) `enabled: true, paused: false`. (2) A `block` with an arm and an end ~90 min after its start. (3)
+Overrides match the arm (M/MA: Midea `boost_on`; A/MA: Aprilaire `boost_on`; E: ERV `boost_on`; the rest `off`, no
+ERV row outside E), expiry = block end + 600 s. (4) Recent blocks ended `complete`, or early with `rh_high` /
+`rh_low` / `bucket_full`. The PWA top bar shows "🔬 Study: <arm> · Nm left" with a Pause button.
+
+**Gotchas:**
+- A block in the `released` list = an operator override on that device (a PWA press). The study stays out of its
+  way until the press ends; that's by design, not a fault.
+- `gap` end = the controller was down longer than the 10-min grace; the overrides lapsed and the rules ran.
+- The ERV's control_log reasons read `… study arm X: dry boost/trim/law held` outside arm E.
+- Pause (PWA, or `PUT /api/v1/control/house/study {"paused": true}`) clears the study's overrides at the next tick.
+
 ## Entry 5 — Smart plugs are switchable from HA
 
 **Asserted state:** six plugs are manual-only switches in ha-2's `instance/control.yaml` (commit 0b909f0):

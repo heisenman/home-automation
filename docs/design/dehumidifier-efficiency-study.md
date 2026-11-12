@@ -173,6 +173,14 @@ furnace heat runs (kept, but as a regressor: the firing fraction; see the furnac
 - It runs with no Claude session involved ("long tests must be code-driven"), and the PWA shows that a study
   is running and which block.
 
+*Built 2026-11-12 (Hugh: "go ahead and rotate"):* `server/control/study_rotation.py`, ticked by ha-controller
+before the devices. Arms 0, M, A, MA, E (M+ deferred: the Midea's fan isn't switched yet). Guard: RH ≥ 48 % ends a
+block that isn't MA and forces M next (MA after M); ≤ 35 % forces 0; a full bucket ends M/MA and skips Midea arms.
+Operator overrides release a device (the study stays out of the press's way). Settings/state in control.db
+`house_setting` `study:rotation` / `study:rotation:state`; PWA top bar chip with Pause. The daily readiness report
+scores each completed block (first 30 min dropped): Aprilaire by method B, the Midea by its pair × a calibrated
+airflow (below); scores persist on .210 in `reports/blocks.json` because minute rungs last 7 days. Runbook Entry 4b.
+
 *Duration:* several weeks, covering cold-dry and mild-damp spells. Summer is covered by the Midea's history
 (the bucket data in method C) until next year.
 
@@ -579,6 +587,13 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   sent; watched. **Restarted on its own at 07:41 PST** (LOW, 66 cfm, 31 W): 40 min off. While stopped, its
   `supply_temp_c` climbed 10.8 → 21.2 °C, toward house temperature, so it isn't reading outdoor air at rest.
   If this is the schedule, the next stop starts near 08:01 (an hour after the first).
+- **2026-11-12 — Midea airflow calibrated from the measured bucket: 319 m³/h (≈ 188 cfm).** Corrected pair ΔAH
+  −1.56 g/m³ (zero by blower state: on −0.133, off −0.167) over 1,195 compressor-min from 11-07 13:11 to the 11-09
+  12:00 park → 9.9 L. Per day −1.87 / −1.64 / −1.39 g/m³ (raw), so the in-place figure carries the day spread.
+  `MANUAL["midea_m3h"]` in `tools/dehum_readiness.py`; re-calibrate on the next measured bucket. A 90-min test window
+  (11-07 14:00) scores 1.24 L/kWh, an Aprilaire window (11-11 00:00) 0.94.
+- **2026-11-12 ~08:15 PST — the ERV didn't stop again** in LOW 07:41 → 08:13 (no 40-min-per-hour pattern), so
+  Broan's intermittent schedule isn't confirmed; one event so far.
 - **2026-11-12 — unified control law (Hugh).** One law for temperature, humidity and AQ across every actuator,
   driven by user-set bands (AQ soft and fungible), with a rough AQ rule meanwhile (worse air → ERV and purifiers up),
   into the PWA eventually: [unified-control-law.md](unified-control-law.md). The mech-closet furnace data
