@@ -842,6 +842,60 @@ def _wet_trim_view(hot_conn, policy: dict, level_labels) -> dict | None:
     return out
 
 
+def _dewpoint_law_view(hot_conn, policy: dict, level_labels, registry, now: float) -> dict | None:
+    """A level-mode ventilator's (the ERV's) dew-point law (server/control/dewpoint_law.py) for the PWA editor: the
+    effective settings, whether it's live, and every input with its age — the outdoor meter, Open-Meteo, the indoor
+    rooms, the house's dehumidifiers — so the operator can see what the law is fed. What it DECIDED is the
+    controller's own reason (last_decision), never recomputed here: a recomputation that skipped a guard is how the
+    wet trim looked broken on 2026-11-11."""
+    if not level_labels:
+        return None
+    from server.control import dewpoint_law
+    cfg = dewpoint_law.config(policy.get("dewpoint_law"), policy.get("dry_boost"))
+    keys = ("enabled", "step_c", "hysteresis_c", "min_hold_min", "cold_start_c", "cold_step_c", "aq_start", "aq_step",
+            "min_room_c", "boost_rh_floor", "trim_rh_floor", "outdoor_sensor", "reference")
+    out = {k: cfg.get(k) for k in keys}
+    out["active"] = dewpoint_law.enabled(cfg)
+    out["dehumidifiers"] = sorted(d for d, c in (registry or {}).items() if getattr(c, "function", None) == "dehumidify")
+    inputs = []
+    if hot_conn is not None:
+        def th(sid):
+            t = _latest(hot_conn, sid, "temperature_c", 1) or _latest(hot_conn, sid, "temperature_c", 0)
+            h = _latest(hot_conn, sid, "humidity_pct", 1) or _latest(hot_conn, sid, "humidity_pct", 0)
+            if not t or not h:
+                return None
+            return {"sensor": sid, "t_c": t[0], "rh": h[0], "dp_c": dewpoint_c(t[0], h[0]),
+                    "age_s": _age_s(min(t[1], h[1]), now)}
+        if cfg.get("outdoor_sensor"):
+            o = th(cfg["outdoor_sensor"])
+            inputs.append({"role": "outdoor", **(o or {"sensor": cfg["outdoor_sensor"], "age_s": None})})
+        rooms = [th(sid) or {"sensor": sid, "age_s": None} for sid in cfg.get("indoor_sensors") or []]
+        inputs += [{"role": "indoor", **r} for r in rooms]
+    if cfg.get("reference") == "openmeteo":
+        import os
+        import sqlite3
+        ref = {"role": "reference", "sensor": "Open-Meteo", "age_s": None}
+        try:
+            c = sqlite3.connect(f"file:{os.environ.get('HA_WEATHER_DB', 'instance/db/weather.db')}?mode=ro",
+                                uri=True, timeout=2)
+            try:
+                rows = dict((m, (v, ts)) for m, v, ts in c.execute(
+                    "SELECT metric, value, ts FROM weather WHERE source='openmeteo' AND metric IN "
+                    "('temperature_c','humidity_pct') AND ts >= strftime('%Y-%m-%dT%H:%M:%SZ','now','-6 hours') "
+                    "ORDER BY ts"))
+            finally:
+                c.close()
+            (t, tst), (h, tsh) = rows["temperature_c"], rows["humidity_pct"]
+            ref.update({"t_c": t, "rh": h, "dp_c": dewpoint_c(t, h), "age_s": _age_s(min(tst, tsh), now)})
+        except Exception:
+            pass
+        inputs.append(ref)
+    out["inputs"] = inputs
+    out["stale_s"] = float(cfg.get("stale_min", 15)) * 60
+    out["reference_stale_s"] = float(cfg.get("reference_stale_min", 45)) * 60
+    return out
+
+
 def verify_power_alert(hot_conn, device_id: str, traits_cfg: dict | None, now: float) -> dict | None:
     """'Called but not running': a leased call (the Aprilaire's DH) has been closed longer than `grace_min`
     while the plug feeding the unit reads under `min_w`. The E070 has no status output and its lockouts
@@ -1262,6 +1316,7 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
             # level-mode devices (ERV): band level N is this mode — the editor labels levels with these
             "level_labels": _level_labels(traits),
             "wet_trim": _wet_trim_view(hot_conn, policy, _level_labels(traits)),   # ERV only (None otherwise)
+            "dewpoint_law": _dewpoint_law_view(hot_conn, policy, _level_labels(traits), registry, now),   # ERV only
         },
         "sensor": sensor,
         "onboard": onboard,

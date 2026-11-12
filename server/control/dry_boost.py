@@ -64,6 +64,7 @@ class Conditions:
     t_min: float
     n_in: int
     out_src: str = "sensor"
+    t_out: float | None = None      # the outdoor meter's temperature (the dew-point law's cold force)
 
     @property
     def delta(self) -> float:
@@ -112,7 +113,7 @@ def conditions(readings: dict, cfg: dict, now: float, reference: tuple | None = 
     dp_out, src = outdoor_dewpoint(out, reference, cfg, now, doubt)
     return Conditions(dp_in=sum(dewpoint_c(*r) for r in rooms) / len(rooms), dp_out=dp_out,
                       rh_in=sum(h for _, h in rooms) / len(rooms), t_min=min(t for t, _ in rooms),
-                      n_in=len(rooms), out_src=src), ""
+                      n_in=len(rooms), out_src=src, t_out=out[0]), ""
 
 
 def decide(cfg: dict, cond: Conditions | None, active: bool, since: float | None, now: float,

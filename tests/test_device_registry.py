@@ -25,7 +25,7 @@ def _seed_control(tmp_path: Path) -> Path:
 def test_actuator_append_preserves_version_and_header(tmp_path):
     f = _seed_control(tmp_path)
     code, p = handle_add_actuator(f, {"device_id": "lock_back", "node": "c6-bench", "area": "entry",
-                                      "traits": {"lockable": {}}})
+                                      "function": "lock", "traits": {"lockable": {}}})
     assert code == 201 and p["reload_required"]
     txt = f.read_text()
     assert txt.startswith("# Actuator control registry") and "version: 1" in txt and "lamp_office" in txt
@@ -65,8 +65,15 @@ def test_actuator_rejects_bad_trait_dup_and_missing(tmp_path):
     assert handle_add_actuator(f, {"device_id": "lamp_office", "node": "n", "area": "a", "traits": {"switchable": {}}})[0] == 400
     assert handle_add_actuator(f, {"device_id": "y", "node": "n", "area": "a", "traits": {}})[0] == 400
     assert handle_add_actuator(f, {"device_id": "z", "node": "", "area": "a", "traits": {"switchable": {}}})[0] == 400
-    code, p = handle_add_actuator(f, {"device_id": "good_lamp", "node": "c6-bench", "area": "den", "traits": {"switchable": {}, "ranged": {"min": 0, "max": 100}}})
-    assert code == 201
+    sw = {"switchable": {}, "ranged": {"min": 0, "max": 100}}
+    assert handle_add_actuator(f, {"device_id": "good_lamp", "node": "c6-bench", "area": "den", "traits": sw})[0] == 400
+    assert handle_add_actuator(f, {"device_id": "good_lamp", "node": "c6-bench", "area": "den", "function": "dehumidifier",
+                                   "traits": sw})[0] == 400              # not in the vocabulary
+    assert handle_add_actuator(f, {"device_id": "good_lamp", "node": "c6-bench", "area": "den", "function": "indicate",
+                                   "traits": sw})[0] == 400              # no indicator trait: can't do it
+    code, p = handle_add_actuator(f, {"device_id": "good_lamp", "node": "c6-bench", "area": "den",
+                                      "function": "switch_power", "traits": sw})
+    assert code == 201 and load_control_devices(f)["good_lamp"]["function"] == "switch_power"
 
 
 def _seed(tmp_path: Path) -> Path:

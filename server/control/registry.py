@@ -14,7 +14,7 @@ from typing import Any
 
 import yaml
 
-from . import traits
+from . import functions, traits
 from .issuer import DeviceCtl
 
 
@@ -30,9 +30,13 @@ def parse_control_registry(data: dict[str, Any]) -> dict[str, DeviceCtl]:
                              f"quote them (e.g. \"off\": 1)")
         if not spec.get("node") or not spec.get("area"):
             raise ValueError(f"control device '{dev_id}' missing node/area")
+        err = functions.validate(dev_id, spec.get("function"), list(tcfg))
+        if err:
+            raise ValueError(err)
         out[dev_id] = DeviceCtl(device_id=dev_id, node=spec["node"], area=spec["area"],
                                 traits_cfg={t: (c or {}) for t, c in tcfg.items()},
-                                device_type=spec.get("device_type"), manual=bool(spec.get("manual", False)))
+                                device_type=spec.get("device_type"), manual=bool(spec.get("manual", False)),
+                                function=spec.get("function"))
     return out
 
 

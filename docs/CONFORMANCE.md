@@ -70,6 +70,12 @@ the abilities below.
 - **SHALL** admin-gate all actuation/override/policy edits and **verify the credential at unlock** — never
   store a credential that fails silently later (R5). Safety interlocks + cycle-protection have fixed
   precedence (R6). Acting on a command additionally requires the signed-directive path (ability C).
+- **SHALL** declare its **function** — what it does to the house — from the closed vocabulary in
+  [`server/control/functions.py`](../server/control/functions.py) (`dehumidify`, `purify_air`, `ventilate`, …),
+  as `function:` in `control.yaml`; **intake assigns it** (the actuator API and the ESPHome adopt refuse or set
+  it). Name what the device *changes*, not what it reacts to (a fan on an RH rule ventilates, it doesn't
+  dehumidify). Category lives on the ability, never the node (ADR-0034). Consumers find devices by it (e.g. the
+  ERV dew-point law tracks every `dehumidify` device's shut-off). *(Hugh 2026-11-11.)*
 
 ### C. Acts on signed directives (authority-bearing / enrolled signing node)
 **Binds:** ADR-0010, ADR-0005. **Also requires:** ability **G** (time-synced) for the freshness check.

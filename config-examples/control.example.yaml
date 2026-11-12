@@ -7,6 +7,9 @@
 #   device_type: dehumidifier   -> Midea LAN driver + default RH policy   (instance/midea-device.env)
 #   device_type: air_purifier   -> Levoit driver + PM2.5 policy           (instance/levoit-devices.yaml)
 #   device_type: panel          -> reTerminal wall-panel scene follower   (instance/panel-devices.yaml)
+# `function:` is what the device DOES to the house (server/control/functions.py, closed vocabulary; ADR-0034:
+# category lives on the ability). device_type picks a driver; function is the category consumers find it by
+# (e.g. the ERV dew-point law's "track the dehumidifiers" floor). Required at intake.
 version: 1
 devices:
   # a dimmable lamp = switchable + ranged, driven through edge node c6-bench
@@ -39,6 +42,7 @@ devices:
     node: hvac_c6
     area: attic
     device_type: erv
+    function: ventilate
     manual: true
     traits:
       mode:
@@ -80,6 +84,7 @@ devices:
     node: dehum_c6
     area: attic
     device_type: dehum
+    function: dehumidify
     traits:
       switchable:
         safe_on: false
@@ -99,6 +104,7 @@ devices:
     node: venstar
     area: hall
     device_type: thermostat
+    function: condition_temperature
     manual: true
     traits:
       mode:
@@ -120,6 +126,7 @@ devices:
     node: venstar
     area: mech_closet
     device_type: hvac_fan
+    function: circulate_air
     manual: true
     traits:
       switchable:
@@ -141,6 +148,7 @@ devices:
     node: plug_01
     area: hall
     device_type: plug
+    function: switch_power
     manual: true
     traits:
       switchable: {label: Power, now_metric: relay_on, power_mode: on_off, cycle: {max_s: 120}}
@@ -148,6 +156,7 @@ devices:
     node: server
     area: h_office
     device_type: tasmota_plug
+    function: switch_power
     manual: true
     traits:
       switchable: {label: Power, now_metric: relay_on, power_mode: cycle_only, cycle: {max_s: 120}}

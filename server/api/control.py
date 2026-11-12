@@ -13,7 +13,7 @@ import re
 from typing import Any
 
 from server.control.issuer import CommandIssuer, Result
-from server.control import dry_boost, plug_power, wet_trim
+from server.control import dewpoint_law, dry_boost, plug_power, wet_trim
 
 # Result.status -> HTTP status code
 _STATUS_HTTP = {
@@ -399,6 +399,58 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
         if eff["step_c"] and not (eff["outdoor_sensor"] and eff["indoor_sensors"]):
             return bad("wet_trim needs an outdoor sensor and indoor sensors (its own or the dry boost's)")
         pol["wet_trim"] = cur
+    if "dewpoint_law" in patch:
+        # level-mode ventilator (the ERV): one level up or down per step_c of indoor/outdoor dew-point gap, against
+        # the cold and air-quality forces (Hugh 2026-11-11; server/control/dewpoint_law.py). Supersedes dry_boost
+        # and wet_trim while enabled; sensors default to dry_boost's.
+        g = patch["dewpoint_law"]
+        if not isinstance(g, dict):
+            return bad("dewpoint_law must be an object")
+        cur = dict(pol.get("dewpoint_law") or {})
+        if "enabled" in g:
+            if not isinstance(g["enabled"], bool):
+                return bad("dewpoint_law.enabled must be true or false")
+            cur["enabled"] = g["enabled"]
+        if "step_c" in g:
+            if g["step_c"] is not None and (not _is_num(g["step_c"]) or not 0.5 <= g["step_c"] <= 15):
+                return bad("dewpoint_law.step_c must be a number in 0.5..15 °C per level, or null (disabled)")
+            cur["step_c"] = g["step_c"]
+        for k in ("boost_rh_floor", "trim_rh_floor"):
+            if k in g:
+                v = g[k]
+                ok = v is None or (_is_num(v) and 20 <= v <= 80) or (k == "trim_rh_floor" and v == "dehumidifiers")
+                if not ok:
+                    return bad(f"dewpoint_law.{k} must be an RH in 20..80, null (none)"
+                               + (', or "dehumidifiers" (track them)' if k == "trim_rh_floor" else ""))
+                cur[k] = v
+        for k in ("outdoor_sensor",):
+            if k in g:
+                if g[k] is not None and (not isinstance(g[k], str) or not g[k]):
+                    return bad(f"dewpoint_law.{k} must be a sensor id or null (null = the dry boost's)")
+                cur[k] = g[k]
+        if "indoor_sensors" in g:
+            ss = g["indoor_sensors"]
+            if not isinstance(ss, list) or any(not isinstance(x, str) or not x for x in ss):
+                return bad("dewpoint_law.indoor_sensors must be a list of sensor ids (empty = the dry boost's)")
+            cur["indoor_sensors"] = list(dict.fromkeys(ss))
+        ranges = {"hysteresis_c": (0, 5), "min_hold_min": (0, 240), "cold_start_c": (-30, 30),
+                  "cold_step_c": (1, 30), "hysteresis_t_c": (0, 5), "agree_t_c": (0.5, 10), "aq_start": (0, 100),
+                  "aq_step": (1, 50), "hysteresis_aq": (0, 20), "min_room_c": (10, 25)}
+        for k, (lo, hi) in ranges.items():
+            if k in g:
+                if not _is_num(g[k]) or not lo <= g[k] <= hi:
+                    return bad(f"dewpoint_law.{k} must be a number in {lo}..{hi}")
+                cur[k] = g[k]
+        eff = dewpoint_law.config(cur, pol.get("dry_boost"))
+        if eff["step_c"] and eff["hysteresis_c"] >= eff["step_c"]:
+            return bad("dewpoint_law needs hysteresis_c < step_c")
+        if eff["hysteresis_t_c"] >= eff["cold_step_c"] or eff["hysteresis_aq"] >= eff["aq_step"]:
+            return bad("dewpoint_law needs hysteresis_t_c < cold_step_c and hysteresis_aq < aq_step")
+        if eff["enabled"] and not eff["step_c"]:
+            return bad("dewpoint_law needs step_c to be enabled")
+        if eff["step_c"] and not (eff["outdoor_sensor"] and eff["indoor_sensors"]):
+            return bad("dewpoint_law needs an outdoor sensor and indoor sensors (its own or the dry boost's)")
+        pol["dewpoint_law"] = cur
     if "force_run" in patch:
         # leased-call devices (the Aprilaire): every automation call is a FORCE-RUN (RS-485 on=0x02 — run
         # regardless of the unit's own dew-point logic). Hugh, 2026-10-06: the house-RH decision is ours.

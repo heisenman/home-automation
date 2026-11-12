@@ -101,6 +101,7 @@ def test_adopt_writes_all_three_and_keeps_comments(tmp_path):
     assert code == 201 and p["device_id"] == "purifier_c_office"
     ctl = yaml.safe_load((inst / "control.yaml").read_text())["devices"]
     assert ctl["purifier_c_office"] == {"node": "server", "area": "c_office", "device_type": "air_purifier",
+                                        "function": "purify_air",
                                         "traits": EI.PURIFIER_TRAITS}
     assert "purifier_living_room" in ctl
     assert "inline design note that must survive" in (inst / "control.yaml").read_text()

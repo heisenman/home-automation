@@ -136,7 +136,15 @@ def validate_new_actuator(body: dict[str, Any], existing: dict[str, dict]) -> tu
         return None, f"invalid traits: {e}"
     if not all(isinstance(c, dict) or c is None for c in traits.values()):
         return None, "each trait's config must be an object or null"
-    return {"device_id": device_id, "node": node, "area": area,
+    # intake assigns the category (Hugh 2026-11-11, ADR-0034): what the device does, from a closed vocabulary
+    from server.control import functions as functions_mod
+    function = b.get("function")
+    if not function:
+        return None, f"function required: what the device does to the house, one of {sorted(functions_mod.FUNCTIONS)}"
+    err = functions_mod.validate(device_id, function, list(traits))
+    if err:
+        return None, err
+    return {"device_id": device_id, "node": node, "area": area, "function": function,
             "traits": {t: (c or {}) for t, c in traits.items()}}, None
 
 

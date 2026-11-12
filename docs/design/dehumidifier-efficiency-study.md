@@ -540,6 +540,19 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   −0.415 corrected: the zero model supplies ~half the signal (fan-only offset +0.071 plus k_t·0.9 °C, return 22.4 °C;
   no ERV term). So the L/kWh carry about ±12 % systematic from the zero's SE alone, and a raw-only reading is ~0.40.
   The drift report has no Aprilaire runs since 11-04: the block is one continuous call, which it doesn't segment.
+- **2026-11-11 ~14:00 PST — the wet trim never acted; replaced by a two-way dew-point law (Hugh).** Hugh set the
+  step to 1.67 °C (3 °F) with outdoor dp 3.9 °C over indoor: no change, because its RH minimum (45 %, my addition,
+  not in his spec) is read on the five-room mean (42 %), which sits ~3 points under the living-room meter both
+  dehumidifiers switch on. What Hugh meant all along: every dew-point step moves the ERV a level, UP when outdoor air
+  is drier and DOWN when wetter, high..off — with the stop reasons as opposing forces, not cutoffs: cold outdoor air
+  fights the boost (house + ERV core), poor indoor air fights the trim. Built `server/control/dewpoint_law.py`
+  (opt-in, supersedes dry_boost + wet_trim while on; cold defaults from Broan's own outdoor-temperature schedule:
+  start 50 °F, a notch per ~15 °F; air quality start 75, a notch per 10; Open-Meteo cross-checks outdoor temperature
+  too, colder wins on doubt), plus an actuator `function` category (`server/control/functions.py`, closed and
+  narrow; intake must assign it) so the optional "track the dehumidifiers" RH floor finds them. Deploy after the
+  block (Thu 11-12). Feedback gaps named for the law: outdoor meter unshielded (wet bias most days, sun bias on
+  temperature; shield pending), no NDIR CO₂ (VOC index re-baselines), gas_c_bed (C away) reads 46 and pulls the AQ
+  mean ~10 points. Phase 3's rotation must own the law the way it was to own the boost.
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.

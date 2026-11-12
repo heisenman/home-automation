@@ -175,6 +175,18 @@ for r in c.execute('select ts, reason, act, status from control_log where device
   Disabled = no `wet trim` text at all. Re-check: print `.get('wet_trim')` with the script above.
   **Set 2026-11-10 ~11:40 PST:** `{"enabled": false}` (Hugh: off until the step is chosen). PWA: the ERV's ⚙ Automation
   panel → "Wet trim" (switch, step in °F of dew-point gap, air-quality release, RH minimum, live dew points).
+  **Superseded by the dew-point law (below) — its PWA section was replaced by the law's.**
+- **Dew-point law (Hugh 2026-11-11, opt-in via `dewpoint_law.enabled`; supersedes the boost and trim while on):**
+  one level up per `step_c` of drier outdoor air, one down per step of wetter, clamped off..high; cold outdoor air
+  (below `cold_start_c`, one notch per `cold_step_c`) fights the boost, poor indoor air (below `aq_start`, one per
+  `aq_step`) fights the trim. Optional `boost_rh_floor`, `trim_rh_floor` (an RH, or `"dehumidifiers"`: trim only
+  while RH is above a running `function: dehumidify` device's `off_below`, on its own sensor). Code
+  `server/control/dewpoint_law.py`. Enabled, reasons gain `dew-point law ±N: dew-point gap … dry D wet W, cold C (…),
+  air A (AQ …)` plus any `no boost:`/`no trim:` guard. Off = no `dew-point law` text and the old boost runs.
+  Re-check: print `.get('dewpoint_law')` with the script above; PWA ⚙ Automation → "Dew-point law" shows the last
+  decision and every input's age. The "dehumidifiers" floor needs `function: dehumidify` on `dehumidifier_living_room`
+  and `dehum_attic` in ha-2's `instance/control.yaml` — re-check with
+  `venv/bin/python -c "import yaml;print({k:v.get('function') for k,v in yaml.safe_load(open('instance/control.yaml'))['devices'].items()})"`.
 
 ## Entry 5 — Smart plugs are switchable from HA
 

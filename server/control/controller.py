@@ -19,7 +19,8 @@ import time
 from pathlib import Path
 
 from server.comms import events as ev
-from server.control import actuator_state, bootstrap, control_store as store, dry_boost, follow, wet_trim
+from server.control import (actuator_state, bootstrap, control_store as store, dewpoint_law, dry_boost, follow,
+                            wet_trim)
 from server.control.midea_driver import GarbledStatus
 from server.control.registry import load_control_registry
 from server.util.psychro import dewpoint_c
@@ -568,6 +569,81 @@ class Controller:
                           f"sensor {sensor.value:.0f} -> speed {lvl}; {note}"
                           + (f" -> level {target}" if want else ""), level=target)
 
+    def _dehumidifiers_want(self, conn, now, scene):
+        """The "dehumidifiers" RH floor of the dew-point law: True while RH is above at least one RUNNING
+        dehumidifier automation's shut-off point (off_below), each read on that unit's own sensor; False when
+        below all of them; None when no dehumidifier automation is running. A dehumidifier = a control.yaml device
+        with `function: dehumidify` (server/control/functions.py); running = policy enabled, no active override
+        (a parked unit isn't drying), a hysteresis policy and a fresh sensor."""
+        found = False
+        for did, ctl in self.registry.items():
+            if getattr(ctl, "function", None) != "dehumidify":
+                continue
+            pol = store.get_policy(conn, did) or {}
+            if not pol.get("enabled", True) or store.get_override(conn, did, now):
+                continue
+            policy = Policy.from_dict(apply_scene(pol, scene)[0])
+            if policy.strategy != "hysteresis":
+                continue
+            sensor, _, _ = self._pick_source(pol, policy.sensor_stale_s, now)
+            if sensor is None or now - sensor.ts > policy.sensor_stale_s:
+                continue
+            found = True
+            if sensor.value > policy.off_below:
+                return True
+        return False if found else None
+
+    def _apply_dewpoint_law(self, conn, device_id, pol, policy, sensor, res, dev_state, override, now, scene, lm):
+        """Move a level-mode ventilator (the ERV) one level per `step_c` of indoor/outdoor dew-point gap, up and
+        down, against the cold and air-quality forces (server/control/dewpoint_law.py). Applies only to a running
+        threshold_ranged rule resolution with a fresh sensor: safety, an operator override, a scene or a schedule
+        beat it. The change is from the air-quality BAND level, with the band-edge hold applied against a
+        remembered base — never the device's level, which would compound the change every tick."""
+        cfg = dewpoint_law.config(pol.get("dewpoint_law"), pol.get("dry_boost"))
+        states = self.__dict__.setdefault("_dewpoint_law", {})
+        cur, since, base = states.get(device_id, (0, None, None))
+        if ((override is not None and override.active(now)) or not res.running or res.source != "rule"
+                or policy.strategy != "threshold_ranged" or sensor is None
+                or (now - sensor.ts) > policy.sensor_stale_s):
+            if cur:
+                states[device_id] = (0, now, None)
+            return res
+        lvl = _level_for(sensor.value, policy.bands)
+        db = policy.deadband
+        if cur and base is not None and base != lvl and db > 0 and base in (
+                _level_for(sensor.value - db, policy.bands), _level_for(sensor.value + db, policy.bands)):
+            lvl = base
+        elif not cur and res.level is not None:
+            lvl = res.level
+        with self._lock:
+            readings = dict(self.readings)
+        ref = self._weather_reference() if cfg.get("reference") == "openmeteo" else None
+        wet, why = dry_boost.conditions(readings, cfg, now, ref, doubt="wetter")
+        dry, _ = dry_boost.conditions(readings, cfg, now, ref, doubt="drier")
+        x, t_src = None, ""
+        if wet is not None and dry is not None:
+            t_out, t_src = (dewpoint_law.outdoor_temperature(wet.t_out, ref, cfg, now) if wet.t_out is not None
+                            else (None, ""))
+            x = dewpoint_law.Inputs(gap_boost=wet.delta, gap_trim=dry.delta, t_out=t_out, aq=sensor.value,
+                                    rh_in=wet.rh_in, t_room_min=wet.t_min,
+                                    dehum_ok=(self._dehumidifiers_want(conn, now, scene)
+                                              if cfg.get("trim_rh_floor") == "dehumidifiers" else None))
+        want, note, _ = dewpoint_law.decide(cfg, x, cur, since, now, why)
+        if wet is not None and wet.out_src != "sensor":
+            note += f"; outdoor dp from {wet.out_src}"
+        if t_src and t_src != "sensor":
+            note += f"; outdoor temp from {t_src}"
+        states[device_id] = (want, now if want != cur else since, lvl)
+        top = len(lm["labels"]) if lm.get("labels") else lvl + max(0, want)
+        target = max(0, min(top, lvl + want))
+        head = f"sensor {sensor.value:.0f} -> speed {lvl}; {note}"
+        if not want and not cur:
+            return Resolution(res.running, res.act, res.source, f"{res.reason}; {note}", level=res.level)
+        if target == 0:
+            return Resolution(False, dev_state.running, "rule", f"{head} -> off")
+        return Resolution(True, (not dev_state.running) or dev_state.level != target, "rule",
+                          head + (f" -> level {target}" if want else ""), level=target)
+
     def _apply_airflow_interlock(self, conn, device_id, pol, res, dev_state, now):
         """A dehumidifier in series with an ERV must not run on stagnant air. Allowed while the ERV is moving
         air, or when the ERV's own automation will be raised by the floor. Blocked when the ERV is in an
@@ -780,7 +856,10 @@ class Controller:
         res = self._apply_airflow_interlock(conn, device_id, pol, res, dev_state, now)
         res = self._apply_outdoor_gate(pol, res, dev_state, now)
         lm = self._level_modes(device_id) if drv is None else None
-        if lm is not None:
+        if lm is not None and dewpoint_law.enabled(dewpoint_law.config(pol.get("dewpoint_law"), pol.get("dry_boost"))):
+            res = self._apply_dewpoint_law(conn, device_id, pol, policy, sensor, res, dev_state, override, now,
+                                           scene, lm)            # supersedes the one-way boost and trim below
+        elif lm is not None:
             res = self._apply_dry_boost(device_id, pol, policy, sensor, res, dev_state, override, now)
             res = self._apply_wet_trim(device_id, pol, policy, sensor, res, dev_state, override, now)
         if lm is not None and res.level is not None and lm["labels"] and res.level > len(lm["labels"]):

@@ -754,13 +754,21 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
   const levelName = (lvl) => (c.level_labels && c.level_labels[lvl - 1]) || `Speed ${lvl}`;
   const [cuts, setCuts] = useState(bands.filter((b) => b.max != null).map((b) => b.max));
   const [speeds, setSpeeds] = useState(bands.map((b) => b.level));
-  // wet trim (level-mode ventilator only, server/control/wet_trim.py): one level lower per step of outdoor-over-
-  // indoor dew point, down to off. Stored in °C; edited in °F like the outdoor gate (a dew-point GAP: × 1.8 only).
-  const wt = c.wet_trim || null;
-  const [wtOn, setWtOn] = useState(!!(wt && wt.enabled !== false && wt.step_c));
-  const [wtStepF, setWtStepF] = useState(wt && wt.step_c ? Math.round(wt.step_c * 18) / 10 : 3.6);
-  const [wtRelease, setWtRelease] = useState(wt && wt.release_below != null ? wt.release_below : "");
-  const [wtRh, setWtRh] = useState(wt && wt.rh_min != null ? wt.rh_min : 45);
+  // dew-point law (level-mode ventilator only, server/control/dewpoint_law.py): one level up per step of drier
+  // outdoor air, one down per step of wetter, against the cold and air-quality forces. Stored in °C; edited in °F
+  // (a GAP or step converts × 1.8 only; a start temperature converts absolutely).
+  const dl = c.dewpoint_law || null;
+  const fGap = (x) => Math.round(x * 18) / 10, fAbs = (x) => Math.round((x * 1.8 + 32) * 10) / 10;
+  const [dlOn, setDlOn] = useState(!!(dl && dl.enabled && dl.step_c));
+  const [dlStepF, setDlStepF] = useState(dl && dl.step_c ? fGap(dl.step_c) : 3.0);
+  const [dlColdF, setDlColdF] = useState(dl && dl.cold_start_c != null ? fAbs(dl.cold_start_c) : 50);
+  const [dlColdStepF, setDlColdStepF] = useState(dl && dl.cold_step_c ? fGap(dl.cold_step_c) : 15.3);
+  const [dlAq, setDlAq] = useState(dl && dl.aq_start != null ? dl.aq_start : 75);
+  const [dlAqStep, setDlAqStep] = useState(dl && dl.aq_step ? dl.aq_step : 10);
+  const [dlBoostRh, setDlBoostRh] = useState(dl && dl.boost_rh_floor != null ? dl.boost_rh_floor : "");
+  const [dlTrimMode, setDlTrimMode] = useState(!dl || dl.trim_rh_floor == null ? "none"
+    : (dl.trim_rh_floor === "dehumidifiers" ? "dehumidifiers" : "fixed"));
+  const [dlTrimRh, setDlTrimRh] = useState(dl && typeof dl.trim_rh_floor === "number" ? dl.trim_rh_floor : 45);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
   const [flash, setFlash] = useState("");
@@ -817,12 +825,16 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
       if (cuts[i] === "" || !Number.isFinite(Number(cuts[i]))) return "enter all thresholds";
       if (i && Number(cuts[i]) <= Number(cuts[i - 1])) return "thresholds must increase";
     }
-    if (wt) {
-      const st = Number(wtStepF);
-      if (wtStepF === "" || !Number.isFinite(st) || st < 0.9 || st > 27) return "wet trim step: 0.9–27 °F";
-      if (wtRelease !== "" && !(Number(wtRelease) >= 0 && Number(wtRelease) <= 100)) return "wet trim air quality: 0–100 or blank";
-      if (!(Number(wtRh) >= 20 && Number(wtRh) <= 80)) return "wet trim RH: 20–80 %";
-      if (wtOn && !wt.outdoor_sensor) return "wet trim needs the dry boost's outdoor sensor";
+    if (dl) {
+      const n = (v) => v !== "" && Number.isFinite(Number(v));
+      if (!n(dlStepF) || Number(dlStepF) < 0.9 || Number(dlStepF) > 27) return "dew-point step: 0.9–27 °F";
+      if (!n(dlColdF) || Number(dlColdF) < -22 || Number(dlColdF) > 86) return "cold start: −22–86 °F";
+      if (!n(dlColdStepF) || Number(dlColdStepF) < 1.8 || Number(dlColdStepF) > 54) return "cold step: 1.8–54 °F";
+      if (!n(dlAq) || Number(dlAq) < 0 || Number(dlAq) > 100) return "air-quality start: 0–100";
+      if (!n(dlAqStep) || Number(dlAqStep) < 1 || Number(dlAqStep) > 50) return "air-quality step: 1–50";
+      if (dlBoostRh !== "" && !(Number(dlBoostRh) >= 20 && Number(dlBoostRh) <= 80)) return "boost RH floor: 20–80 % or blank";
+      if (dlTrimMode === "fixed" && !(Number(dlTrimRh) >= 20 && Number(dlTrimRh) <= 80)) return "trim RH floor: 20–80 %";
+      if (dlOn && !dl.outdoor_sensor) return "the dew-point law needs the dry boost's outdoor sensor";
     }
     return "";
   };
@@ -835,8 +847,13 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
     const patch = { enabled, source_sensor: source, source_sensors: picked,
                     aggregate: picked.length > 1 ? how : "first",
                     control: { strategy: "threshold_ranged", metric, bands: newBands } };
-    if (wt) patch.wet_trim = { enabled: wtOn, step_c: Math.round((Number(wtStepF) / 1.8) * 100) / 100,
-                               release_below: wtRelease === "" ? null : Number(wtRelease), rh_min: Number(wtRh) };
+    if (dl) patch.dewpoint_law = {
+      enabled: dlOn, step_c: Math.round((Number(dlStepF) / 1.8) * 100) / 100,
+      cold_start_c: Math.round(((Number(dlColdF) - 32) / 1.8) * 10) / 10,
+      cold_step_c: Math.round((Number(dlColdStepF) / 1.8) * 10) / 10,
+      aq_start: Number(dlAq), aq_step: Number(dlAqStep),
+      boost_rh_floor: dlBoostRh === "" ? null : Number(dlBoostRh),
+      trim_rh_floor: dlTrimMode === "none" ? null : (dlTrimMode === "dehumidifiers" ? "dehumidifiers" : Number(dlTrimRh)) };
     try {
       await adminSend("PUT", `/control/${vm.device_id}/policy`, patch);
       setFlash("saved"); await onChange();
@@ -905,38 +922,65 @@ function RangedSettings({ vm, sensors, isAdmin, onChange, onNeedAdmin }) {
           </div>`)}
         <p class="note">${levelName(speeds[speeds.length - 1])} when above ${cuts.length ? cuts[cuts.length - 1] : "—"} ${sel.unit}.</p>
       </div>
-      ${wt && html`<div class="field"><label>Wet trim</label>
+      ${dl && html`<div class="field"><label>Dew-point law</label>
         <label class="switch">
-          <input type="checkbox" checked=${wtOn} onChange=${(e) => setWtOn(e.target.checked)} />
-          Lower ventilation when outdoor air is wetter than the house
+          <input type="checkbox" checked=${dlOn} onChange=${(e) => setDlOn(e.target.checked)} />
+          Ventilate more when outdoor air is drier than the house, less when it's wetter
         </label>
         <div class="controls">
-          <span class="note">One level lower per</span>
-          <input type="number" step="0.1" value=${wtStepF} onInput=${(e) => setWtStepF(e.target.value)} />
-          <span class="note">°F of dew point outdoors above indoors (down to Off)</span>
+          <span class="note">One level per</span>
+          <input type="number" step="0.1" value=${dlStepF} onInput=${(e) => setDlStepF(e.target.value)} />
+          <span class="note">°F of dew-point difference (up to the top level, down to Off)</span>
+        </div>
+        <p class="note">Cold outdoor air works against ventilating more:</p>
+        <div class="controls">
+          <span class="note">one level less boost per</span>
+          <input type="number" step="0.1" value=${dlColdStepF} onInput=${(e) => setDlColdStepF(e.target.value)} />
+          <span class="note">°F below</span>
+          <input type="number" step="0.1" value=${dlColdF} onInput=${(e) => setDlColdF(e.target.value)} />
+          <span class="note">°F outdoors</span>
+        </div>
+        <p class="note">Poor indoor air works against ventilating less:</p>
+        <div class="controls">
+          <span class="note">one level less trim per</span>
+          <input type="number" value=${dlAqStep} onInput=${(e) => setDlAqStep(e.target.value)} />
+          <span class="note">air-quality points below</span>
+          <input type="number" value=${dlAq} onInput=${(e) => setDlAq(e.target.value)} />
         </div>
         <div class="controls">
-          <span class="note">Keep the air-quality level when air quality is at or below</span>
-          <input type="number" value=${wtRelease} placeholder="never"
-                 onInput=${(e) => setWtRelease(e.target.value)} />
-        </div>
-        <div class="controls">
-          <span class="note">Only when indoor RH is at least</span>
-          <input type="number" value=${wtRh} onInput=${(e) => setWtRh(e.target.value)} />
+          <span class="note">No boost below house RH</span>
+          <input type="number" value=${dlBoostRh} placeholder="none" onInput=${(e) => setDlBoostRh(e.target.value)} />
           <span class="note">%</span>
         </div>
-        ${wt.dp_out_now_c != null && wt.dp_in_now_c != null && (() => {
-          const toF = (x) => Math.round(((x * 9) / 5 + 32) * 10) / 10;
-          const gapF = Math.round((wt.dp_out_now_c - wt.dp_in_now_c) * 18) / 10;
-          const n = gapF > 0 && Number(wtStepF) > 0 ? Math.floor(gapF / Number(wtStepF)) : 0;
-          return html`<p class="note">Now: dew point outdoors ${toF(wt.dp_out_now_c)} °F, indoors
-            ${toF(wt.dp_in_now_c)} °F (${gapF > 0 ? "+" : ""}${gapF} °F) → ${n
-              ? `${n} level${n > 1 ? "s" : ""} below what air quality asks`
-              : "no trim"}${wtOn ? "" : " if enabled"}. Outdoor meter reading, before the Open-Meteo cross-check.</p>`;
+        <div class="controls">
+          <span class="note">No trim when the house is dry:</span>
+          <select value=${dlTrimMode} onChange=${(e) => setDlTrimMode(e.target.value)}>
+            <option value="none">never stop</option>
+            <option value="fixed">below a fixed RH</option>
+            <option value="dehumidifiers">below every dehumidifier's shut-off</option>
+          </select>
+          ${dlTrimMode === "fixed" && html`<input type="number" value=${dlTrimRh}
+            onInput=${(e) => setDlTrimRh(e.target.value)} /><span class="note">%</span>`}
+        </div>
+        ${dlTrimMode === "dehumidifiers" && html`<p class="note">${(dl.dehumidifiers || []).length
+          ? `Tracking ${dl.dehumidifiers.join(", ")} — each on its own sensor; a parked or disabled one doesn't count.`
+          : "No device is tagged as a dehumidifier (control.yaml function: dehumidify) — the trim won't run."}</p>`}
+        ${(() => {
+          const r = (vm.last_decision && vm.last_decision.reason) || "";
+          const seg = r.split("; ").filter((x) => /dew-point law|no trim|no boost|outdoor (dp|temp) from/.test(x));
+          return seg.length ? html`<p class="note">Last decision: ${seg.join("; ")}</p>`
+            : html`<p class="note">${dl.active ? "No decision from the law yet." : "Off — the dry boost runs as before."}</p>`;
         })()}
-        ${!wt.outdoor_sensor && html`<p class="note">Uses the dry boost's outdoor and room sensors; none is set.</p>`}
-        <p class="note">Takes a level back only once the gap is ${Math.round((wt.hysteresis_c ?? 0.5) * 18) / 10} °F
-          below the step, and holds each change at least ${wt.min_hold_min ?? 15} min.</p>
+        ${(dl.inputs || []).length > 0 && html`<p class="note">Inputs: ${dl.inputs.map((i) => {
+          const lim = i.role === "reference" ? dl.reference_stale_s : dl.stale_s;
+          const stale = i.age_s == null || i.age_s > lim;
+          const what = i.dp_c != null ? `${fAbs(i.t_c)} °F / ${Math.round(i.rh)} % (dp ${fAbs(i.dp_c)} °F)` : "no reading";
+          return `${i.role} ${i.sensor}: ${what}, ${i.age_s == null ? "—" : Math.round(i.age_s / 60) + " min old"}${stale ? " ⚠ stale" : ""}`;
+        }).join(" · ")}</p>`}
+        ${!dl.outdoor_sensor && html`<p class="note">Uses the dry boost's outdoor and room sensors; none is set.</p>`}
+        <p class="note">Each change holds at least ${dl.min_hold_min ?? 15} min; a level comes back only past
+          ${fGap(dl.hysteresis_c ?? 0.5)} °F of hysteresis. Outdoor readings are cross-checked against Open-Meteo:
+          on a disagreement it boosts and trims less, never more.</p>
       </div>`}
       ${issue() && html`<span class="err sm">⚠ ${issue()}</span>`}
       <div class="controls">
@@ -1843,6 +1887,11 @@ function DeviceMetaModal({ device, areas, onClose, onSaved }) {
 }
 
 const KNOWN_TRAITS = ["switchable", "ranged", "setpoint", "lockable", "positionable"];
+// what an actuator does to the house — the closed vocabulary of server/control/functions.py (intake must pick one)
+const ACTUATOR_FUNCTIONS = [["dehumidify", "Dehumidifier"], ["purify_air", "Air purifier"], ["ventilate", "Ventilator (ERV/HRV)"],
+  ["condition_temperature", "Heating/cooling (thermostat)"], ["circulate_air", "Air circulation (blower, fan)"],
+  ["switch_power", "Power switch (plug)"], ["indicate", "Indicator (LED, display)"], ["lock", "Lock"],
+  ["shade", "Window shade"]];
 // Sensor device_types offered in the Add-sensor dropdown (BLE-heard first, then edge/I2C). "Other…"
 // reveals a free-text box so a brand-new model is still addable. Keep in step with the registry.
 const SENSOR_TYPES = [
@@ -1909,6 +1958,7 @@ function AddDeviceModal({ onClose, onSaved }) {
   const [node, setNode] = useState("");
   const [area, setArea] = useState("");
   const [traits, setTraits] = useState([]);
+  const [fn, setFn] = useState("");                  // actuator function (category) — required at intake
   const [notes, setNotes] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -1997,7 +2047,7 @@ function AddDeviceModal({ onClose, onSaved }) {
       } else {
         const tr = {}; traits.forEach((t) => (tr[t] = {}));
         r = await adminSend("POST", "/api/v1/control-devices",
-          { device_id: deviceId.trim(), node: node.trim(), area: area.trim(), traits: tr });
+          { device_id: deviceId.trim(), node: node.trim(), area: area.trim(), function: fn, traits: tr });
       }
       setDone(r);
     } catch (e) { setErr(String(e.message)); setBusy(false); }
@@ -2222,6 +2272,10 @@ function AddDeviceModal({ onClose, onSaved }) {
   const actuatorFields = html`
     <input value=${node} placeholder="node — the enrolled edge node, e.g. c6-bench"
       onInput=${(e) => setNode(e.target.value)} />
+    <select value=${fn} onChange=${(e) => setFn(e.target.value)}>
+      <option value="">What does it do? (required)</option>
+      ${ACTUATOR_FUNCTIONS.map(([v, l]) => html`<option value=${v}>${l}</option>`)}
+    </select>
     <p class="note">Traits (ADR-0002):</p>
     <div class="traits">${KNOWN_TRAITS.map((t) => html`
       <label class="switch"><input type="checkbox" checked=${traits.includes(t)}

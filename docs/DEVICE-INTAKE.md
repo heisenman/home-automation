@@ -80,7 +80,9 @@ config. Honor every standing contract (secrets never in git; dumb-relay; gated p
 
 ### Stage 7 — Registration & maps  → *`instance/devices.yaml` + generators*
 Register the device (`device_id`, `area`, `device_type`, `roles`, `capabilities`) — the **dictator owns the
-registry** (ADR-0001). Regenerate the code-backed docs so nothing rots: `tools/gen_module_matrix.py --write`
+registry** (ADR-0001). An actuator also gets its **`function`** in `control.yaml` (what it does to the house, from
+[`server/control/functions.py`](../server/control/functions.py); [CONFORMANCE.md](CONFORMANCE.md) §B) — intake
+requires it. Regenerate the code-backed docs so nothing rots: `tools/gen_module_matrix.py --write`
 ([MATRIX.md](../edge/MATRIX.md)), `tools/gen_reuse.py --write` if you added a shared module ([REUSE.md](REUSE.md)).
 Update the coord board / FOLLOWUPS. *(Enforcement-next: a generated per-device conformance matrix from declared
 abilities × [CONFORMANCE.md](CONFORMANCE.md) — see that doc's Enforcement section.)*
@@ -114,7 +116,7 @@ roadmap — see [d1001-capability-roadmap.md](design/d1001-capability-roadmap.md
 4. DECOMPOSE     name shared modules vs thin glue BEFORE code (ADR-0020). No decomposition, no dev.
 5. IMPLEMENT     build+prove shared module in isolation; thin glue; gated/additive
 6. TEST          host test pure modules; on-device readback; verify every SHALL (record gaps)
-7. REGISTER      devices.yaml (id/area/type/roles/caps); regen MATRIX.md + REUSE.md; update board
+7. REGISTER      devices.yaml (id/area/type/roles/caps); actuator → control.yaml function; regen MATRIX.md + REUSE.md; update board
 ```
 
 *See also:* [AGENTS.md](AGENTS.md) (the four principles) · [CONFORMANCE.md](CONFORMANCE.md) ·

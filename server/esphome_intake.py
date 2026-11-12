@@ -151,7 +151,7 @@ def handle_adopt_purifier(name: str, body: dict[str, Any], *, control_path: Path
         return e.code, {"status": "bad-request" if e.code == 400 else "conflict", "node": name,
                         "reason": str(e)}
 
-    ctl_entry = {"node": "server", "area": area, "device_type": "air_purifier",
+    ctl_entry = {"node": "server", "area": area, "device_type": "air_purifier", "function": "purify_air",
                  "traits": {k: dict(v) for k, v in PURIFIER_TRAITS.items()}}
     lev_entry = {"device_id": device_id, "device_type": "air_purifier"}
     plan = {"node": name, "device_id": device_id, "area": area,
