@@ -213,6 +213,10 @@ furnace heat runs (kept, but as a regressor: the firing fraction; see the furnac
 
 ## 5. Control law (target shape, Phase 4)
 
+**Superseded in scope (Hugh, 2026-11-12):** the Phase 4 law becomes the water part of one law for temperature,
+humidity and air quality across every actuator, driven by user-set bands: [unified-control-law.md](unified-control-law.md).
+The points below still hold for its water term.
+
 - **Control on indoor dew point**, or RH at the coldest surface, rather than living-room RH.
   - RH swings with temperature even when the water content doesn't move, as on the 10-30 cold night.
   - In winter the ceiling comes from window condensation: at 68 °F and 44 %, the dew point is ≈45 °F.
@@ -553,6 +557,31 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   block (Thu 11-12). Feedback gaps named for the law: outdoor meter unshielded (wet bias most days, sun bias on
   temperature; shield pending), no NDIR CO₂ (VOC index re-baselines), gas_c_bed (C away) reads 46 and pulls the AQ
   mean ~10 points. Phase 3's rotation must own the law the way it was to own the boost.
+- **2026-11-12 — block ended; ERV-high night; ERV-flow hypothesis not supported.** Block stop 07:00 PST
+  (Aprilaire back to 48/45, Midea override cleared, both read back). ERV `boost_on` 22:00 → 07:00 (~125 cfm), the
+  controller set LOW at 07:00:34. High-night segments 0.39 / 0.35 / 0.65 L/kWh at dp 8.5 / 8.2 / 8.1 °C, about half
+  the low-flow nights. Hour by hour over the whole block (Aprilaire on, blower on, no heat): most hours 0.75–0.95
+  at any ERV flow, **including 05:00–06:00 today at 124 cfm (0.84 / 0.92)**. The dips (0.17–0.49) come in multi-hour
+  episodes at any flow (11-09 15:00 at 91 cfm, 11-10 18–19 at 66, 11-11 17–21 and 11-12 00–03 at 92–125), mostly
+  evenings, far from heat calls. A fit of the ERV term on the run hours alone gives g = 0.035 ± 0.010 (zero model
+  0.055 ± 0.009): not under-crediting high flow. What does track the dips: the temperature rise across the air
+  handler falls to ≈ 1.0 °C (1.3–1.7 normally), pointing at supply-meter mixing or real airflow differing from the
+  assumed 655 cfm. Unconfirmed. Scale: the whole ΔAH signal (~0.4 g/m³) is ≈ 2 % RH at 23 °C. G2b filed 3/3
+  this morning (agreement 21 % over 17 runs ≤ 30 %), dips included; rotation still waits on Hugh, and I'd explain
+  the dips first since the rotation compares units on these numbers.
+- **2026-11-12 07:20 PST — dew-point law + function tags deployed (Hugh: OK).** `tools/ha2_deploy.sh 70f99b4
+  ha-controller ha-api ha-api-tls`, all active; ha-2's control.yaml backed up (`control.yaml.bak.20261112T151955Z`)
+  and all 15 devices tagged (both dehumidifiers `dehumidify`), every tag passing the trait check, loaded by the
+  registry. Law stays off until Hugh enables it; the ERV still runs the dry boost.
+- **2026-11-12 07:01 PST — ERV in LOW with both fans stopped** (fan_mode 9, 0 cfm, 0 rpm, 7.7 W) right after the
+  boost ended, its own temperature 10.8 °C (51.4 °F) at the switch. First time in 14 days of LOW (2,767 min, ~1,170
+  of them at outdoor < 10 °C, always running). Candidate: Broan's intermittent schedule below 50 °F. No command
+  sent; watched.
+- **2026-11-12 — unified control law (Hugh).** One law for temperature, humidity and AQ across every actuator,
+  driven by user-set bands (AQ soft and fungible), with a rough AQ rule meanwhile (worse air → ERV and purifiers up),
+  into the PWA eventually: [unified-control-law.md](unified-control-law.md). The mech-closet furnace data
+  (`instance/furnace-aq/reports`) fills the furnace's AQ term: closet VOC index +119 ± 12 at 10 min when the blower
+  starts with the call (16 calls), +53 ± 4 when already running (28).
 - **Aprilaire-only block, Mon 11-09 12:00 PST → Wed 11-11 18:00 PST (Hugh, 2026-11-07).** Chosen from the
   Open-Meteo forecast: the one humid stretch in 10 days (Tue 11-10 outdoor dew point 10.7 °C mean, above the house's
   ~9.5 °C for 21 h; from Thu 11-12 it's 4–6 °C, drier than the house). Guard-banded for data, not economy.
