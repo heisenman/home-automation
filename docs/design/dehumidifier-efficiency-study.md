@@ -576,7 +576,9 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
 - **2026-11-12 07:01 PST — ERV in LOW with both fans stopped** (fan_mode 9, 0 cfm, 0 rpm, 7.7 W) right after the
   boost ended, its own temperature 10.8 °C (51.4 °F) at the switch. First time in 14 days of LOW (2,767 min, ~1,170
   of them at outdoor < 10 °C, always running). Candidate: Broan's intermittent schedule below 50 °F. No command
-  sent; watched.
+  sent; watched. **Restarted on its own at 07:41 PST** (LOW, 66 cfm, 31 W): 40 min off. While stopped, its
+  `supply_temp_c` climbed 10.8 → 21.2 °C, toward house temperature, so it isn't reading outdoor air at rest.
+  If this is the schedule, the next stop starts near 08:01 (an hour after the first).
 - **2026-11-12 — unified control law (Hugh).** One law for temperature, humidity and AQ across every actuator,
   driven by user-set bands (AQ soft and fungible), with a rough AQ rule meanwhile (worse air → ERV and purifiers up),
   into the PWA eventually: [unified-control-law.md](unified-control-law.md). The mech-closet furnace data
