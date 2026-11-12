@@ -183,7 +183,7 @@ async function fetchReadingsRange(deviceId, metric, startISO, endISO, limit = 50
 const PALETTE = ["#4aa3ff", "#34d399", "#fbbf24", "#f87171", "#a78bfa", "#22d3ee", "#fb923c", "#f472b6"];
 
 // bump on each UI change — shown in the header so we can confirm at a glance which build a client loaded.
-const BUILD = "v57 Sensor pickers — full-width rows, current reading + device id (no more misaligned checkboxes)";
+const BUILD = "v58 House comfort panel (unified law, shadow) + study rotation chip";
 
 // fetch one trace's series (a sensor metric OR a weather metric) over an ISO window → [{t,v}].
 async function fetchTrace(tr, startISO, endISO) {
@@ -2421,6 +2421,106 @@ function NightMode({ isAdmin, onNeedAdmin }) {
   </div>`;
 }
 
+function LawPanel({ isAdmin, onNeedAdmin, onClose }) {
+  // The unified control law (docs/design/unified-control-law.md), shadow only: the user's bands (the law's inputs),
+  // the cost basis, each actuator's enrolment (rule / shadow), the latest decision with its reasons next to what
+  // the rules did, 24 h of agreement, and every actuator's model confidence. GET /api/v1/law (open); saving is
+  // admin-gated (PUT /control/house/law).
+  const [v, setV] = useState(null);
+  const [form, setForm] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [err, setErr] = useState("");
+  const load = useCallback(() => getJSON("/api/v1/law").then((r) => {
+    setV(r);
+    setForm((f) => f || { bands: JSON.parse(JSON.stringify(r.bands)), cost: { ...r.cost }, enrol: { ...r.enrol } });
+  }).catch((e) => setErr(String(e))), []);
+  useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [load]);
+  const setB = (grp, k, val) => setForm({ ...form, bands: { ...form.bands, [grp]: { ...form.bands[grp], [k]: val } } });
+  const num = (x) => (x === "" || x === null || x === undefined ? null : Number(x));
+  const save = async () => {
+    if (!isAdmin) { onNeedAdmin && onNeedAdmin(); return; }
+    setBusy(true); setErr("");
+    const b = form.bands;
+    const body = {
+      bands: { temp_f: { min: num(b.temp_f.min), max: num(b.temp_f.max) }, rh: { min: num(b.rh.min), max: num(b.rh.max) },
+               aq: { floor: num(b.aq.floor), weight: num(b.aq.weight), step: num(b.aq.step) }, horizon_h: num(b.horizon_h) },
+      cost: { basis: form.cost.basis, electric_per_kwh: num(form.cost.electric_per_kwh), gas_per_therm: num(form.cost.gas_per_therm) },
+      enrol: form.enrol,
+    };
+    try { await adminSend("PUT", "/control/house/law", body); setForm(null); await load(); }
+    catch (e) { setErr(e.message); }
+    setBusy(false);
+  };
+  const last = v && v.last;
+  const when = last ? new Date(last.ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+  const lvl = (x) => (x === null || x === undefined ? "?" : x === 0 ? "off" : x);
+  const conf = (c) => Object.entries(c || {}).map(([k, x]) => `${k} ${x}`).join(", ") || "—";
+  return html`
+    <div class="modal-bg" onClick=${onClose}>
+      <div class="modal wide" onClick=${(e) => e.stopPropagation()}>
+        <h3>House comfort</h3>
+        <p class="note">One law for temperature, humidity and air quality across every actuator. <b>Shadow only</b>:
+          it logs what it would do next to what the rules do; it commands nothing yet.</p>
+        ${!v && !err && html`<p class="note">Loading…</p>`}
+        ${err && html`<div class="err">${err}</div>`}
+        ${v && form && html`
+          <h4 class="scope-hd">Bands <span class="scope-sub">· the law's inputs</span></h4>
+          <div class="field"><label>Temperature °F</label>
+            <input type="number" step="0.5" value=${form.bands.temp_f.min} onInput=${(e) => setB("temp_f", "min", e.target.value)} />
+            <span class="note">to</span>
+            <input type="number" step="0.5" value=${form.bands.temp_f.max} onInput=${(e) => setB("temp_f", "max", e.target.value)} /></div>
+          <div class="field"><label>RH %</label>
+            <input type="number" step="0.5" value=${form.bands.rh.min} onInput=${(e) => setB("rh", "min", e.target.value)} />
+            <span class="note">to</span>
+            <input type="number" step="0.5" value=${form.bands.rh.max} onInput=${(e) => setB("rh", "max", e.target.value)} /></div>
+          <div class="field"><label>Air quality floor</label>
+            <input type="number" step="1" value=${form.bands.aq.floor} onInput=${(e) => setB("aq", "floor", e.target.value)} />
+            <span class="note">soft · weight</span>
+            <input type="number" step="0.1" value=${form.bands.aq.weight} onInput=${(e) => setB("aq", "weight", e.target.value)} />
+            <span class="note">· a level per</span>
+            <input type="number" step="1" value=${form.bands.aq.step} onInput=${(e) => setB("aq", "step", e.target.value)} /></div>
+          <div class="field"><label>Horizon h</label>
+            <input type="number" step="0.5" value=${form.bands.horizon_h}
+              onInput=${(e) => setForm({ ...form, bands: { ...form.bands, horizon_h: e.target.value } })} />
+            <span class="note">how fast to clear a humidity error</span></div>
+          <h4 class="scope-hd">Cost <span class="scope-sub">· what the law minimises</span></h4>
+          <div class="field"><label>Basis</label>
+            <select value=${form.cost.basis} onChange=${(e) => setForm({ ...form, cost: { ...form.cost, basis: e.target.value } })}>
+              <option value="kwh">electric kWh</option><option value="money">money (counts heat vs gas)</option></select></div>
+          ${form.cost.basis === "money" && html`
+            <div class="field"><label>$ / kWh</label><input type="number" step="0.01" value=${form.cost.electric_per_kwh ?? ""}
+              onInput=${(e) => setForm({ ...form, cost: { ...form.cost, electric_per_kwh: e.target.value } })} />
+              <span class="note">$ / therm</span><input type="number" step="0.01" value=${form.cost.gas_per_therm ?? ""}
+              onInput=${(e) => setForm({ ...form, cost: { ...form.cost, gas_per_therm: e.target.value } })} /></div>`}
+          <h4 class="scope-hd">Actuators <span class="scope-sub">· rule = today's policy only · shadow = compared</span></h4>
+          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Device</th><th>Mode</th><th>Law</th><th>Now</th><th>Agree 24 h</th><th>Model</th></tr></thead><tbody>
+            ${((last && last.models) || []).map((m) => {
+              const c = last.choice[m.device_id] || {};
+              const ag = (v.agreement_24h || {})[m.device_id];
+              return html`<tr key=${m.device_id} title=${m.source}>
+                <td>${prettyName(m.device_id)}<div class="note">${m.function}${m.area_limited ? " · one room" : ""}</div></td>
+                <td><select value=${form.enrol[m.device_id] || "shadow"}
+                  onChange=${(e) => setForm({ ...form, enrol: { ...form.enrol, [m.device_id]: e.target.value } })}>
+                  ${v.enrol_modes.map((x) => html`<option value=${x}>${x}</option>`)}</select></td>
+                <td>${c.label || "—"}${c.held_s ? html`<div class="note">held ${Math.round(c.held_s / 60)}m</div>` : ""}</td>
+                <td>${m.device_id in (last.actual || {}) ? lvl(last.actual[m.device_id]) : "—"}</td>
+                <td>${ag ? `${Math.round(100 * ag.same / ag.ticks)} % of ${ag.ticks}` : "—"}</td>
+                <td class="note">${conf(m.confidence)}</td></tr>`;
+            })}
+          </tbody></table></div>
+          <h4 class="scope-hd">Last decision <span class="scope-sub">· ${when}${v.stale ? " · STALE" : ""}</span></h4>
+          ${last ? html`<ul class="note">${last.reasons.map((r) => html`<li>${r}</li>`)}</ul>
+            ${(last.alternatives || []).length > 0 && html`<p class="note">Next best: ${last.alternatives.map((a) =>
+              `${Object.entries(a.choice).map(([d, x]) => `${prettyName(d)} ${x}`).join(", ")} (${a.cost_h.toFixed(3)}/h, ${a.water_gph >= 0 ? "+" : ""}${a.water_gph} g/h)`).join(" · ")}</p>`}`
+            : html`<p class="note">No decision yet (the shadow runs every 5 min).</p>`}
+          <div class="modal-actions">
+            <button class="btn ghost" onClick=${onClose}>Close</button>
+            <button class="btn primary" disabled=${busy} onClick=${save}>${busy ? "Saving…" : "Save"}</button>
+          </div>`}
+      </div>
+    </div>`;
+}
+
 const STUDY_ARMS = { "0": "neither unit", M: "Midea", A: "Aprilaire", MA: "both units", E: "ERV boost" };
 
 function StudyChip({ isAdmin, onNeedAdmin }) {
@@ -2810,6 +2910,7 @@ function App() {
   const [tempUnit, setTempUnit] = useState(tempPref());
   const [editDevice, setEditDevice] = useState(null);   // R8 edit modal target
   const [showAdd, setShowAdd] = useState(false);        // add-device modal
+  const [showLaw, setShowLaw] = useState(false);        // unified control law panel (shadow)
   const onEdit = (d) => (isAdmin ? setEditDevice(d) : setShowAdmin(true));
 
   // weather lane catalog (locations + metrics) — fetched once for the graph builder
@@ -2890,6 +2991,7 @@ function App() {
           <${NotifyToggle} />
           <${HouseTimezone} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} />
           <${StudyChip} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} />
+          <button class="btn sm ghost" onClick=${() => setShowLaw(true)} title="Unified control law (shadow)">⚖ Comfort</button>
           ${isAdmin
             ? html`<span class="admin-on" title="Admin unlocked">🔓 Admin</span>
                    <button class="btn sm ghost" onClick=${() => setShowAdd(true)}>+ Device</button>
@@ -2932,6 +3034,7 @@ function App() {
         areas=${(rooms && Array.isArray(rooms.rooms) ? rooms.rooms.map((r) => r.id).sort() : [])}
         onClose=${() => setEditDevice(null)} onSaved=${refresh} />`}
       ${showAdd && html`<${AddDeviceModal} onClose=${() => setShowAdd(false)} onSaved=${refresh} />`}
+      ${showLaw && html`<${LawPanel} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} onClose=${() => setShowLaw(false)} />`}
     </div>
     </${UnitsCtx.Provider}>`;
 }

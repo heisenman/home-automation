@@ -158,6 +158,13 @@ body {
   border-radius: 8px; padding: 10px; font-size: 15px; margin: 10px 0;
 }
 .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+/* unified control law panel (LawPanel) */
+.modal.wide { max-width: 760px; }
+.tbl-wrap { overflow-x: auto; margin: 6px 0; }
+.tbl { width: 100%; border-collapse: collapse; font-size: 13px; }
+.tbl th, .tbl td { text-align: left; padding: 5px 6px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.tbl th { color: var(--muted); font-weight: 500; }
+.modal .tbl select { width: auto; margin: 0; padding: 4px 6px; font-size: 13px; }
 /* device-admin maintenance (relocate/rename) */
 .field-block { margin: 12px 0; }
 .field-block > label { display: block; color: var(--muted); font-size: 13px; margin-bottom: 6px; }

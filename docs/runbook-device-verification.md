@@ -218,6 +218,29 @@ ERV row outside E), expiry = block end + 600 s. (4) Recent blocks ended `complet
 - The ERV's control_log reasons read `… study arm X: dry boost/trim/law held` outside arm E.
 - Pause (PWA, or `PUT /api/v1/control/house/study {"paused": true}`) clears the study's overrides at the next tick.
 
+## Entry 4c — Unified control law runs in shadow (logs, never commands)
+
+**Asserted state:** ha-controller on ha-2 runs the law's shadow every 5 min (`server/control/law/shadow.py`),
+writing control.db `law_shadow` and `house_setting` `law:last`. No device is enrolled `law`; the law issues no
+commands. Design: `docs/design/unified-control-law.md`.
+
+**Re-check (on ha-2):**
+```sh
+cd ~/home_automation && python3 -c "
+import sqlite3, json, time
+c = sqlite3.connect('file:instance/db/control.db?mode=ro', uri=True)
+l = json.loads(c.execute('select json from house_setting where key=\"law:last\"').fetchone()[0])
+print(round(time.time() - l['ts']), 's ago'); print(l['reasons']); print(l['choice'], l['actual'])
+print(c.execute('select json from house_setting where key=\"law:enrol\"').fetchone())"
+```
+
+**Expected:** (1) the last decision is under ~10 min old. (2) Reasons name the RH, the water need, the AQ and the
+chosen combination with its W and cost. (3) `law:enrol` is absent or holds only `rule`/`shadow`. The PWA's
+"⚖ Comfort" panel shows the same, plus 24 h agreement per device.
+
+**Gotchas:** the controller logs `law shadow:` lines at INFO every 5 min; `law shadow tick failed` /
+`law context failed` with a traceback means the shadow stopped deciding (the rules are unaffected).
+
 ## Entry 5 — Smart plugs are switchable from HA
 
 **Asserted state:** six plugs are manual-only switches in ha-2's `instance/control.yaml` (commit 0b909f0):

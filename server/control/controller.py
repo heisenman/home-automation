@@ -21,6 +21,9 @@ from pathlib import Path
 from server.comms import events as ev
 from server.control import (actuator_state, bootstrap, control_store as store, dewpoint_law, dry_boost, follow,
                             study_rotation, wet_trim)
+from server.control.law import bands as law_bands
+from server.control.law import shadow as law_shadow
+from server.control.law import solve as law_solve
 from server.control.midea_driver import GarbledStatus
 from server.control.registry import load_control_registry
 from server.util.psychro import dewpoint_c
@@ -164,6 +167,7 @@ class Controller:
         self._lock = threading.Lock()
         self._study = study_rotation.StudyRotation(store)   # dehumidifier study Phase 3 (off unless enabled)
         self._last_status: dict[str, dict] = {}  # device_id -> last local-driver status (study: Midea bucket)
+        self._law = law_shadow.Shadow(store)   # unified control law, shadow only (docs/design/unified-control-law.md)
 
     def _conn(self):
         c = sqlite3.connect(self.db)
@@ -349,6 +353,12 @@ class Controller:
                 self._tick_device(conn, device_id, pol, now, tod, scene, dry_run)
             self._apply_night_mode(conn, tod, dry_run)          # LED night mode (all indicator devices)
             self._apply_follow(conn, now, dry_run)              # switches that follow another device (blower)
+            if not dry_run and self._law.due(now):              # the unified law, in shadow: logs, never acts
+                try:
+                    house, current = self._law_context(conn, pols, now)
+                    self._law.run(conn, now, self.registry, house, current)
+                except Exception:
+                    log.exception("law context failed")
         finally:
             conn.close()
 
@@ -545,6 +555,55 @@ class Controller:
             return Resolution(True, (not dev_state.running) or dev_state.level != lvl, "rule",
                               f"sensor {sensor.value:.0f} -> speed {lvl}; {note}", level=lvl)
         return Resolution(res.running, res.act, res.source, f"{res.reason}; {note}", level=res.level)
+
+    def _law_context(self, conn, pols: dict, now: float):
+        """(House, {device_id: level now}) for the unified law's shadow. Readings older than 15 min don't count;
+        outdoor air comes from the ERV's dry-boost sensors with the Open-Meteo cross-check (WETTER on doubt)."""
+        st = law_bands.get(conn, store)
+        bd = st["bands"]
+        with self._lock:
+            rd, tel = dict(self.readings), dict(self.telemetry)
+        fresh = lambda sid: rd.get(sid) if rd.get(sid) is not None and now - rd[sid]["ts"] <= 900 else None
+        temps = [r["m"]["temperature_c"] for r in map(fresh, bd["temp_sensors"]) if r and "temperature_c" in r["m"]]
+        rr = fresh(bd["rh_sensor"])
+        t_rh, rh = ((rr["m"].get("temperature_c"), rr["m"].get("humidity_pct")) if rr else (None, None))
+        by_fn = {fn: [d for d, c in self.registry.items() if getattr(c, "function", None) == fn]
+                 for fn in ("ventilate", "dehumidify", "purify_air", "condition_temperature")}
+        w_out = t_out = aq = None
+        for erv in by_fn["ventilate"]:
+            pol = pols.get(erv) or {}
+            raw = pol.get("dry_boost") or {}
+            if raw.get("outdoor_sensor"):
+                dcfg = dry_boost.config(raw)
+                cond, _ = dry_boost.conditions(rd, dcfg, now, self._weather_reference()
+                                               if dcfg.get("reference") == "openmeteo" else None)
+                if cond is not None and cond.t_out is not None:
+                    t_out = cond.t_out
+                    w_out = law_solve.ah_dp(cond.dp_out, t_out)
+            if pol and aq is None:
+                p = Policy.from_dict(pol)
+                r, _, _ = self._pick_source(pol, p.sensor_stale_s, now)
+                if r is not None and now - r.ts <= p.sensor_stale_s:
+                    aq = r.value
+        t_in = sum(temps) / len(temps) if temps else None
+        heating = cooling = False
+        for th in by_fn["condition_temperature"]:
+            m = (fresh(th) or {}).get("m", {})
+            mode = m.get("hvac_mode")
+            if t_in is not None and t_out is not None and mode is not None:
+                heating = heating or (int(mode) in (1, 3) and t_out < t_in - 3)
+                cooling = cooling or (int(mode) in (2, 3) and t_out > t_in)
+        house = law_solve.House(t_in, rh, t_rh, w_out, t_out, aq, heating, cooling)
+        current = {}
+        for d in by_fn["dehumidify"]:
+            r = conn.execute("SELECT desired FROM control_log WHERE device_id=? ORDER BY rowid DESC LIMIT 1",
+                             (d,)).fetchone()
+            current[d] = int(bool(r[0])) if r else None
+        for d in by_fn["ventilate"] + by_fn["purify_air"]:
+            t = tel.get(d) or {}
+            current[d] = (int(t["fan"]) if t.get("running") and t.get("fan") is not None
+                          else 0 if t.get("running") is False else None)
+        return house, current
 
     def _study_readings(self, pols: dict, now: float, cfg: dict) -> dict:
         """What the study rotation needs each tick: living-room RH and dew point, the ERV arm's eligibility

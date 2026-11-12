@@ -1147,6 +1147,23 @@ def house_state():
         cc.close()
 
 
+@app.get("/api/v1/law", include_in_schema=True)
+def law_state():
+    """The unified control law (docs/design/unified-control-law.md): the user's bands, cost basis and per-device
+    enrolment, the latest shadow decision with its reasons and the actuator model table, and 24 h of agreement
+    with the rules. Read-only/open like /house; changing it is admin-gated (PUT /control/house/law)."""
+    import time as _time
+    from server.control import control_store as store
+    from server.control.law import shadow as law_shadow
+    cc = _control_conn()
+    if cc is None:
+        return {"last": None, "stale": True}
+    try:
+        return law_shadow.view(cc, store, _time.time())
+    finally:
+        cc.close()
+
+
 @app.get("/api/v1/alerts", include_in_schema=True)
 def alerts():
     """Active alerts (low battery / unreachable / tank-full / override-expiring). Read-only; the single

@@ -1,8 +1,10 @@
 # Unified control law — temperature, humidity, air quality across every actuator
 
-**Status:** design only (2026-11-12). Nothing here changes live control. The first code stage changes nothing
-either: it adds the settings and the PWA panel. The law then runs in shadow until Hugh approves a switch-over,
-one device at a time.
+**Status (2026-11-12): L1–L2 built and running in shadow on ha-2** (Hugh: "implement L1-L3 and let's run them a
+few days collecting data"). L3 fits in progress. Nothing commands a device; the law logs what it would do in
+control.db `law_shadow` every 5 min, next to what the rules did. Switch-over (L4) is per device, with Hugh's
+approval. Code: `server/control/law/` (`bands`, `models`, `solve`, `shadow`); API `GET /api/v1/law`, `PUT
+/api/v1/control/house/law`; PWA "⚖ Comfort" (top bar). Runbook Entry 4c.
 
 **Origin (Hugh, 2026-11-12):** the house can be controlled for temperature and humidity, with the systems already
 installed, by one unified law. Air quality dials in later; until then a rough rule applies: worse air drives the ERV
@@ -125,9 +127,25 @@ checking.
 
 The study's Phase 3 rotation still runs underneath: it's what turns the dehumidifier models from rough to good.
 
+### As built (L1–L2, 2026-11-12)
+
+- **Bands** (`law:bands`): temperature °F on the five-room mean, RH on `meter_pro_living_room` (the meter both
+  dehumidifiers run on), AQ floor 75 / weight 1 kWh-per-missing-level / a level per 10 points, horizon 3 h.
+  Defaults: 68–76 °F, 40–46 % RH. House-wide only for now; per-room and day/night bands come later.
+- **Cost** (`law:cost`): `kwh` (electricity only, the default) or `money` (electric $/kWh + gas $/therm; heat
+  credited against the furnace's gas while heating, charged at AC COP 3 while cooling).
+- **Water need:** the excess over the band's top × the house's buffered volume (520 m³ × 26) ÷ horizon; once
+  drying, to the band's middle (today's on-high/off-part-way hysteresis). Below the band: no drying.
+- **Search:** every combination of the dehumidifiers (off/on) × the ERV's levels, ranked by (firm shortfall, cost
+  + AQ shortfall × weight, changes). Purifiers by the rough AQ rule. The thermostat gets the band as its setpoints.
+- **Shadow:** 15-min hold on the law's own answers; enrolment `rule` leaves a device out of the comparison.
+- **Models** (`server/control/law/models.py`): Midea 480 W at 1.04 L/kWh (good); Aprilaire 580 W + blower 150 W
+  at 0.75 (rough); ERV 0/66/92/125 cfm, latent pass-through 0.3 (rough), sensible recovery unknown; furnace and
+  house heat: none. L3's fits land in `house_setting` `law:params` with the same keys.
+
 ## 7. Open questions
 
-- Cooling: is there AC? (The algorithm doesn't need to know; the summer half of the model inventory does.)
+- Cooling: **the house has a single-stage AC** (ADR-0043). The model inventory has no AC model yet; summer needs one.
 - Per-room bands vs one house band: rooms differ by ~2–3 °F on cold nights with one thermostat. The law can
   only steer what its actuators reach (the furnace is whole-house; the Midea is one room).
 - The ERV's own cold behaviour: on 11-12 07:01 PST, in LOW at ~51 °F intake, it stopped both fans (0 cfm, 7.7 W)

@@ -1469,6 +1469,17 @@ def make_override_router(api_authz, control_db, device_ids=None):
             c.close()
         return JSONResponse(status_code=code, content=payload)
 
+    @router.put("/house/law", dependencies=[Depends(require_admin)])
+    async def put_law(body: dict = Body(...)):
+        # the unified control law's settings (server/control/law/bands.py): {bands?, cost?, enrol?}
+        from server.control.law import bands as law_bands
+        c = _conn()
+        try:
+            code, payload = law_bands.put(c, store, body)
+        finally:
+            c.close()
+        return JSONResponse(status_code=code, content=payload)
+
     @router.put("/house/timezone", dependencies=[Depends(require_admin)])
     async def put_timezone(body: dict = Body(...)):
         c = _conn()
