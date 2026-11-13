@@ -334,6 +334,24 @@ Not supported: room-meter RH drift, cooking, falling outdoor temperature, attic,
 
 ---
 
+## 7. Water buffer — short-term (2026-11-13) — confidence: **rough**
+
+`tools/law_buffer_fit.py` on 15 complete rotation blocks (11-12 08:17 → 11-13 06:54 PST: 0×3, M×2, A×2, MA×3, E×5),
+first 30 min of each dropped. Per block: the slope of the five-room mean AH, removal (block L/kWh × mean power;
+arm means 0.93 / 0.68 where unscored), and the ERV exchange (cfm × (outdoor − indoor AH), the cross-checked outdoor).
+
+| Fit on | g/m³/h per g/h removed | Buffer k | ERV pass a | Resid SD |
+|---|---|---|---|---|
+| House mean | −0.00052 ± 0.00009 | **3.7** | 0.56 | 0.094 g/m³/h |
+| Living room | −0.00046 ± 0.00013 | 4.1 | 0.47 | 0.127 |
+
+- The Phase 1 26× is the multi-day equilibrium; over an hour the house acts like ~4×. A two-time-scale model fits
+  both: the intercept (~360 g/h of "load") is inflated because every 0 block followed a drying block (rebound).
+- Loaded: `law:params` house.buffer_x = 3.7 on ha-2. Not loaded: the ERV pass (all E blocks were 23:00–07:00).
+- Refit when each arm has ~8 blocks, and with a block-before regressor for the rebound.
+
+---
+
 ## Caveats common to all
 
 - Q_f (11 kW) is a spec assumption. UA, C and the gains scale with it.
