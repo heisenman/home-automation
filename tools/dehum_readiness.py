@@ -613,9 +613,13 @@ def main():
     else:
         done_rows = [r for r in brows if r[4] == "complete"]
         by = {a: [r for r in done_rows if r[1] == a] for a in P3_ARMS}
-        p3.append(crit("Each arm ≥ 8 valid blocks; baseline ≥ 10",
-                       all(len(by[a]) >= 8 for a in P3_ARMS) and len(by["0"]) >= 10,
-                       ", ".join(f"{a}:{len(by[a])}" for a in P3_ARMS)
+        # arm E is opportunistic (Hugh 2026-11-12): it runs only while outdoor air is drier, so it doesn't hold the
+        # gate; its blocks (complete or ended by conditions) are counted for the later collation
+        e_rows = [r for r in brows if r[1] == "E" and r[4] in ("complete", "conditions")]
+        p3.append(crit("Each arm ≥ 8 valid blocks; baseline ≥ 10 (E opportunistic, not required)",
+                       all(len(by[a]) >= 8 for a in P3_ARMS if a != "E") and len(by["0"]) >= 10,
+                       ", ".join(f"{a}:{len(by[a])}" for a in P3_ARMS if a != "E")
+                       + f"; E: {len(by['E'])} complete, {len(e_rows) - len(by['E'])} ended by conditions"
                        + f" (early ends: {sum(1 for r in brows if r[4] not in (None, 'complete'))})"))
         for unit, key, arms in (("Midea", "midea", ("M", "MA")), ("Aprilaire", "apr", ("A", "MA"))):
             xs = [r for a in arms for r in by[a]]

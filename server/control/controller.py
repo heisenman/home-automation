@@ -620,7 +620,8 @@ class Controller:
         on doubt), and whether the Midea's bucket is full."""
         with self._lock:
             rd = dict(self.readings)
-        out = {"rh": None, "dp_in": None, "dp_out": None, "t_out": None, "e_ok": False, "bucket_full": False}
+        out = {"rh": None, "dp_in": None, "dp_out": None, "t_out": None, "dp_gap": None, "e_ok": False,
+               "bucket_full": False}
         rec = rd.get(cfg["rh_sensor"])
         if rec is not None and now - rec["ts"] <= 600:
             t, h = rec["m"].get("temperature_c"), rec["m"].get("humidity_pct")
@@ -635,6 +636,7 @@ class Controller:
                                            if dcfg.get("reference") == "openmeteo" else None, doubt="wetter")
             if cond is not None:
                 out["dp_out"], out["t_out"] = cond.dp_out, cond.t_out
+                out["dp_gap"] = cond.delta
                 out["e_ok"] = cond.delta >= float(cfg["e_min_gap_c"])
         mst = self._last_status.get(cfg["devices"].get("midea")) or {}
         out["bucket_full"] = bool(mst.get("tank_full"))

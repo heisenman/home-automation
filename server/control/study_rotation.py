@@ -16,6 +16,13 @@ the levers in fixed blocks around the clock. Hugh approved the rotation 2026-11-
 - It drives the EXISTING override path (control.db `override`, the same rows a PWA override writes), each with an
   expiry of block end + `grace_min`: if the controller stops, the study's overrides lapse on their own and the
   production rules take back over.
+- Arm E is opportunistic (Hugh 2026-11-12: outdoor air drier than indoor is rare in a wet season). A watcher
+  samples the indoor − outdoor dew-point gap every `e_check_min` (10); after `e_confirm` (2) passing checks in a
+  row, E goes next — ahead of the cycle's order — and a block still in its settle window is cut short
+  (`preempt_e`, little data lost) and re-run right after E. A supervisor ends a running E block (`conditions`)
+  once the gap has been below e_min_gap_c − `e_exit_hyst_c` for `e_confirm` checks. E never runs twice in a row,
+  so each E block has a non-E neighbour under similar weather. Its blocks are collated later; the P3 gate
+  doesn't wait for them.
 - Guardrails end a block early (the early end is logged, and is itself data): living-room RH ≥ rh_high in an arm
   that isn't drying with both units → the next block is the cheapest drying arm (M, then MA); RH ≤ rh_low → the
   next block is 0; the Midea's bucket full ends an M/MA block, and Midea arms are skipped until it's emptied.
@@ -56,6 +63,9 @@ DEFAULTS = {
     "rh_low": 35.0,             # safety backstop only (never reached in the history)
     "e_min_gap_c": 2.0,         # arm E only while indoor − outdoor dew point ≥ this
     "grace_min": 10,            # override expiry past the block's end
+    "e_check_min": 10,          # arm E watcher: sample the dew-point gap this often
+    "e_confirm": 2,             # consecutive checks to start (gap ≥ e_min_gap_c) or stop (below it − hysteresis)
+    "e_exit_hyst_c": 0.5,
     "rh_sensor": "meter_pro_living_room",
     "devices": {"midea": "dehumidifier_living_room", "aprilaire": "dehum_attic", "erv": "erv_attic"},
 }
@@ -121,6 +131,22 @@ def guard(arm: str, rh: float | None, bucket_full: bool, cfg: dict) -> tuple[str
     return None
 
 
+def watch_e(w: dict | None, now: float, gap: float | None, cfg: dict) -> dict:
+    """The arm-E watcher: every `e_check_min`, one sample of the dew-point gap. `ok` counts passing checks in a
+    row (gap ≥ e_min_gap_c), `bad` failing ones (no reading, or gap below e_min_gap_c − e_exit_hyst_c); between
+    the two thresholds neither counts, so a gap hovering at the line doesn't flap."""
+    w = dict(w or {"last": None, "ok": 0, "bad": 0})
+    if w.get("last") is not None and now - w["last"] < float(cfg["e_check_min"]) * 60:
+        return w
+    w["last"], w["gap"] = now, (round(gap, 2) if gap is not None else None)
+    hi = float(cfg["e_min_gap_c"])
+    if gap is not None and gap >= hi:
+        w["ok"], w["bad"] = w.get("ok", 0) + 1, 0
+    elif gap is None or gap < hi - float(cfg["e_exit_hyst_c"]):
+        w["ok"], w["bad"] = 0, w.get("bad", 0) + 1
+    return w
+
+
 class StudyRotation:
     """Runs the rotation against control.db. `readings(cfg)` is a callable returning the conditions the scheduler
     needs: {"rh": living-room RH or None, "dp_in": °C or None, "dp_out": °C or None, "t_out": °C or None,
@@ -183,6 +209,8 @@ class StudyRotation:
         r = readings(cfg) or {}
         devs = cfg["devices"]
         grace = float(cfg["grace_min"]) * 60
+        st["e_watch"] = w = watch_e(st.get("e_watch"), now, r.get("dp_gap"), cfg)
+        e_ready = w["ok"] >= int(cfg["e_confirm"])
         if blk:
             # a controller outage longer than the grace let the overrides lapse: that block isn't clean
             if now > blk["end"] + grace:
@@ -195,6 +223,12 @@ class StudyRotation:
                         del blk["written"][dev]
                         log.info("study: %s released (operator override) in block %s", dev, blk["id"])
                 g = guard(blk["arm"], r.get("rh"), bool(r.get("bucket_full")), cfg)
+                if g is None and blk["arm"] == "E" and w["bad"] >= int(cfg["e_confirm"]):
+                    g = ("conditions", None)                # the supervisor: outdoor air no longer drier
+                if (g is None and blk["arm"] != "E" and e_ready and st.get("prev_arm") != "E"
+                        and not blk.get("forced") and now - blk["start"] < float(cfg["settle_min"]) * 60):
+                    g = ("preempt_e", None)                 # still settling: little lost, re-run after E
+                    st["requeue"] = blk["arm"]
                 if g is not None:
                     reason, forced = g
                     self._clear_ours(conn, blk.get("written"))
@@ -212,7 +246,16 @@ class StudyRotation:
                     return self.arm
         # start the next block
         prev_written = (st.get("last_written") or {})
-        arm, st = next_arm(st, self.rng, bool(r.get("e_ok")), bool(r.get("bucket_full")))
+        bucket = bool(r.get("bucket_full"))
+        forced = bool(st.get("forced"))
+        e_now = e_ready and st.get("prev_arm") != "E"       # never E twice in a row
+        if not st.get("forced") and e_now:
+            arm = "E"                                       # opportunistic: ahead of the cycle's order
+        elif not st.get("forced") and st.get("requeue") and not (st["requeue"] in MIDEA_ARMS and bucket):
+            arm = st.pop("requeue")
+        else:
+            arm, st = next_arm(st, self.rng, e_now, bucket)
+        st["prev_arm"] = arm
         end = now + float(cfg["block_min"]) * 60
         cur = conn.execute(
             "INSERT INTO study_block(cycle, arm, planned_start, planned_end, start_ts, rh_start, inlet_dp_c, dp_out_c,"
@@ -238,7 +281,8 @@ class StudyRotation:
             exp = end + grace
             self.store.set_override(conn, dev, action, exp)
             written[dev] = (action, exp)
-        blk = {"id": cur.lastrowid, "arm": arm, "start": now, "end": end, "written": written, "released": released}
+        blk = {"id": cur.lastrowid, "arm": arm, "start": now, "end": end, "written": written, "released": released,
+               "forced": forced}
         st["block"], st["last_written"] = blk, written
         self._save(conn, st)
         log.info("study block %s: arm %s until %s (cycle %s)%s", blk["id"], arm,
@@ -271,6 +315,7 @@ def view(conn, store, now: float, limit: int = 12) -> dict:
         "block": ({"id": blk["id"], "arm": blk["arm"], "start": blk["start"], "end": blk["end"],
                    "left_s": max(0, blk["end"] - now), "released": blk.get("released", [])} if blk else None),
         "cycle": st.get("cycle"), "complete": {a: counts.get(a, 0) for a in ARMS},
+        "e_watch": st.get("e_watch"),
         "recent": [{"id": r[0], "cycle": r[1], "arm": r[2], "start": r[3], "end": r[4], "end_reason": r[5],
                     "rh_start": r[6], "rh_end": r[7], "inlet_dp_c": r[8], "released": r[9]} for r in rows],
     }
@@ -283,7 +328,8 @@ def set_config(conn, store, body: dict) -> tuple[int, dict]:
     for k in ("enabled", "paused"):
         if k in b and not isinstance(b[k], bool):
             return 400, {"status": "bad-request", "reason": f"{k} must be a boolean"}
-    rng = {"block_min": (30, 360), "rh_high": (40, 60), "rh_low": (25, 45), "e_min_gap_c": (0.5, 6)}
+    rng = {"block_min": (30, 360), "rh_high": (40, 60), "rh_low": (25, 45), "e_min_gap_c": (0.5, 6),
+           "e_check_min": (1, 60), "e_confirm": (1, 6), "e_exit_hyst_c": (0, 2)}
     for k, (lo, hi) in rng.items():
         if k in b and (not isinstance(b[k], (int, float)) or isinstance(b[k], bool) or not lo <= b[k] <= hi):
             return 400, {"status": "bad-request", "reason": f"{k} must be a number in {lo}–{hi}"}

@@ -209,7 +209,9 @@ for r in c.execute('select id, arm, start_ts, end_ts, end_reason, rh_start from 
 **Expected:** (1) `enabled: true, paused: false`. (2) A `block` with an arm and an end ~90 min after its start. (3)
 Overrides match the arm (M/MA: Midea `boost_on`; A/MA: Aprilaire `boost_on`; E: ERV `boost_on`; the rest `off`, no
 ERV row outside E), expiry = block end + 600 s. (4) Recent blocks ended `complete`, or early with `rh_high` /
-`rh_low` / `bucket_full`. The PWA top bar shows "🔬 Study: <arm> · Nm left" with a Pause button.
+`rh_low` / `bucket_full`, or E-related: `preempt_e` (a settling block cut short for a dry spell, re-run next) and
+`conditions` (E ended when the dew-point gap closed). (5) `state.e_watch` has `last` within 10 min, the latest
+`gap`, and `ok`/`bad` streaks; E starts at `ok ≥ 2`. The PWA top bar shows "🔬 Study: <arm> · Nm left" with a Pause button.
 
 **Gotchas:**
 - A block in the `released` list = an operator override on that device (a PWA press). The study stays out of its

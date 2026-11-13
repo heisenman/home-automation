@@ -75,8 +75,10 @@ def _db(enabled=True, **cfg):
     return conn
 
 
-def _rd(rh=44.0, e_ok=True, bucket=False):
-    return lambda cfg: {"rh": rh, "dp_in": 9.0, "dp_out": 5.0, "t_out": 10.0, "e_ok": e_ok, "bucket_full": bucket}
+def _rd(rh=44.0, e_ok=False, bucket=False, gap=None):
+    gap = (4.0 if e_ok else 0.0) if gap is None else gap
+    return lambda cfg: {"rh": rh, "dp_in": 9.0, "dp_out": 9.0 - gap, "t_out": 10.0, "dp_gap": gap,
+                        "e_ok": gap >= cfg["e_min_gap_c"], "bucket_full": bucket}
 
 
 def _ov(conn, dev):
@@ -143,11 +145,68 @@ def test_outage_longer_than_grace_marks_the_block_gap():
 
 
 def test_erv_override_from_arm_e_is_cleared_in_the_next_arm():
-    conn = _db()
+    conn = _db(e_confirm=1)
     store.set_setting(conn, R.STATE, {"cycle": 1, "order": ["E", "0", "M", "A", "MA"], "idx": 0})
     rot = R.StudyRotation(store, random.Random(0))
-    assert rot.tick(conn, NOW, _rd()) == "E" and _ov(conn, ERV)[0] == "boost_on"
-    assert rot.tick(conn, NOW + 90 * 60, _rd()) == "0"
+    assert rot.tick(conn, NOW, _rd(e_ok=True)) == "E" and _ov(conn, ERV)[0] == "boost_on"
+    assert rot.tick(conn, NOW + 90 * 60, _rd(e_ok=True)) == "0"       # never E twice in a row
+    assert _ov(conn, ERV) is None
+
+
+# ── arm E: opportunistic, watched every 10 min, supervised ────────────────────────────────────────────────────────
+def test_watcher_samples_every_10_min_with_hysteresis():
+    cfg = R.config({})
+    w = R.watch_e(None, NOW, 2.5, cfg)
+    assert w["ok"] == 1
+    assert R.watch_e(w, NOW + 300, 0.0, cfg) == w                  # not due yet: no sample
+    w = R.watch_e(w, NOW + 600, 1.8, cfg)                          # between the thresholds: neither counts
+    assert w["ok"] == 1 and w["bad"] == 0
+    w = R.watch_e(w, NOW + 1200, 1.2, cfg)                         # below 2.0 − 0.5
+    assert w["ok"] == 0 and w["bad"] == 1
+    assert R.watch_e(w, NOW + 1800, None, cfg)["bad"] == 2         # no reading counts against
+
+
+def test_dry_spell_preempts_a_settling_block_and_reruns_it_after_e():
+    conn = _db()
+    store.set_setting(conn, R.STATE, {"cycle": 1, "order": ["M", "A", "0", "MA", "E"], "idx": 0})
+    rot = R.StudyRotation(store, random.Random(0))
+    assert rot.tick(conn, NOW, _rd(e_ok=True)) == "M"              # one passing check isn't enough
+    assert rot.tick(conn, NOW + 600, _rd(e_ok=True)) == "E"        # second check, M still settling: cut short
+    rows = conn.execute("SELECT arm, end_reason FROM study_block ORDER BY id").fetchall()
+    assert rows == [("M", "preempt_e"), ("E", None)]
+    assert _ov(conn, ERV)[0] == "boost_on" and _ov(conn, MIDEA)[0] == "off"
+    assert rot.tick(conn, NOW + 600 + 90 * 60, _rd(e_ok=True)) == "M"   # re-run, then the order goes on
+    assert rot.tick(conn, NOW + 600 + 180 * 60, _rd(e_ok=True)) == "E"  # still dry: E again after one other arm
+
+
+def test_dry_spell_waits_for_a_block_past_its_settle_window():
+    conn = _db()
+    store.set_setting(conn, R.STATE, {"cycle": 1, "order": ["A", "0", "M", "MA", "E"], "idx": 0})
+    rot = R.StudyRotation(store, random.Random(0))
+    assert rot.tick(conn, NOW, _rd()) == "A"
+    assert rot.tick(conn, NOW + 40 * 60, _rd(e_ok=True)) == "A"
+    assert rot.tick(conn, NOW + 50 * 60, _rd(e_ok=True)) == "A"     # confirmed, but A is past settling
+    assert rot.tick(conn, NOW + 90 * 60, _rd(e_ok=True)) == "E"     # E at the boundary, ahead of the order
+    assert rot.tick(conn, NOW + 180 * 60, _rd(e_ok=True)) == "0"    # the order resumes where it was
+
+
+def test_dry_spell_doesnt_cut_short_a_guard_forced_drying_block():
+    conn = _db(e_confirm=1)
+    store.set_setting(conn, R.STATE, {"cycle": 1, "order": ["0", "A", "M", "MA", "E"], "idx": 0})
+    rot = R.StudyRotation(store, random.Random(0))
+    assert rot.tick(conn, NOW, _rd(rh=48.5)) == "0"
+    assert rot.tick(conn, NOW + 60, _rd(rh=48.5, e_ok=True)) == "M"     # RH guard forces M
+    assert rot.tick(conn, NOW + 700, _rd(rh=47.0, e_ok=True)) == "M"    # E confirmed, but M stays
+
+
+def test_supervisor_ends_e_when_outdoor_air_stops_being_drier():
+    conn = _db(e_confirm=1)
+    store.set_setting(conn, R.STATE, {"cycle": 1, "order": ["0", "M", "A", "MA", "E"], "idx": 0})
+    rot = R.StudyRotation(store, random.Random(0))
+    assert rot.tick(conn, NOW, _rd(e_ok=True)) == "E"
+    assert rot.tick(conn, NOW + 600, _rd(gap=1.7)) == "E"           # inside the hysteresis: keep going
+    assert rot.tick(conn, NOW + 1200, _rd(gap=0.8)) == "0"          # below 1.5: stop, back to the order
+    assert conn.execute("SELECT end_reason FROM study_block WHERE arm='E'").fetchone()[0] == "conditions"
     assert _ov(conn, ERV) is None
 
 

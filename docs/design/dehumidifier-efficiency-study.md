@@ -181,6 +181,13 @@ Operator overrides release a device (the study stays out of the press's way). Se
 scores each completed block (first 30 min dropped): Aprilaire by method B, the Midea by its pair × a calibrated
 airflow (below); scores persist on .210 in `reports/blocks.json` because minute rungs last 7 days. Runbook Entry 4b.
 
+*Arm E made opportunistic (2026-11-12 evening, Hugh):* the first day had no hour with outdoor air ≥ 2 °C dew point
+drier than indoor, so E could never get its 8 blocks. Now a watcher in the rotation samples the gap every 10 min;
+two passing checks in a row put E next, ahead of the cycle's order (a block still in its 30-min settle window is cut
+short as `preempt_e` and re-run after E; a block the RH guard forced is never cut). A supervisor ends a running E
+(`conditions`) after two checks below 1.5 °C (2.0 − 0.5 hysteresis). E never runs twice in a row. P3 no longer
+waits for E; its blocks are collated later and the model is built without them if they don't come.
+
 *Duration:* several weeks, covering cold-dry and mild-damp spells. Summer is covered by the Midea's history
 (the bucket data in method C) until next year.
 
@@ -607,6 +614,12 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   the air-handler ΔT; no ERV cold schedule (the 07:01 stop is the only one in the archive). Hourly rungs for
   `thermostat_hall` / `hvac_blower` before 11-05 08:00 PST average only 2–10 samples (~120 since), so use minute
   data (parquet) for heat state before then — verified on ha-2.
+- **2026-11-12 19:05 PST — first rotation day.** Blocks 1–7 complete (MA, 0, M, A, MA, A, M), no guard fired, no
+  release, no gap. Scores: Midea 0.97/0.88/0.84/0.81 L/kWh (0.88 ± 8 %), Aprilaire 0.80/0.67/0.63/0.55 (0.66 ±
+  15 %). E never eligible (outdoor dew point 8–12 °C vs indoor 8–10): made opportunistic (§3D). Living-room RH
+  falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
+  per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
+  short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
 - **2026-11-12 — unified control law (Hugh).** One law for temperature, humidity and AQ across every actuator,
   driven by user-set bands (AQ soft and fungible), with a rough AQ rule meanwhile (worse air → ERV and purifiers up),
   into the PWA eventually: [unified-control-law.md](unified-control-law.md). The mech-closet furnace data
