@@ -225,7 +225,7 @@ class StudyRotation:
                 g = guard(blk["arm"], r.get("rh"), bool(r.get("bucket_full")), cfg)
                 if g is None and blk["arm"] == "E" and w["bad"] >= int(cfg["e_confirm"]):
                     g = ("conditions", None)                # the supervisor: outdoor air no longer drier
-                if (g is None and blk["arm"] != "E" and e_ready and st.get("prev_arm") != "E"
+                if (g is None and blk["arm"] != "E" and e_ready and blk.get("after") != "E"
                         and not blk.get("forced") and now - blk["start"] < float(cfg["settle_min"]) * 60):
                     g = ("preempt_e", None)                 # still settling: little lost, re-run after E
                     st["requeue"] = blk["arm"]
@@ -255,7 +255,7 @@ class StudyRotation:
             arm = st.pop("requeue")
         else:
             arm, st = next_arm(st, self.rng, e_now, bucket)
-        st["prev_arm"] = arm
+        after, st["prev_arm"] = st.get("prev_arm"), arm      # `after`: the arm before this block (never cut after E)
         end = now + float(cfg["block_min"]) * 60
         cur = conn.execute(
             "INSERT INTO study_block(cycle, arm, planned_start, planned_end, start_ts, rh_start, inlet_dp_c, dp_out_c,"
@@ -282,7 +282,7 @@ class StudyRotation:
             self.store.set_override(conn, dev, action, exp)
             written[dev] = (action, exp)
         blk = {"id": cur.lastrowid, "arm": arm, "start": now, "end": end, "written": written, "released": released,
-               "forced": forced}
+               "forced": forced, "after": after}
         st["block"], st["last_written"] = blk, written
         self._save(conn, st)
         log.info("study block %s: arm %s until %s (cycle %s)%s", blk["id"], arm,

@@ -179,6 +179,20 @@ def test_dry_spell_preempts_a_settling_block_and_reruns_it_after_e():
     assert rot.tick(conn, NOW + 600 + 180 * 60, _rd(e_ok=True)) == "E"  # still dry: E again after one other arm
 
 
+def test_the_block_after_e_is_never_cut_short_with_real_tick_spacing():
+    # 2026-11-13 overnight: the controller ticks every ~46 s, so the watcher sampled inside the block after E and
+    # cut it short — E ran back to back for 7 h. Tick like the controller does.
+    conn = _db()
+    store.set_setting(conn, R.STATE, {"cycle": 1, "order": ["M", "A", "0", "MA", "E"], "idx": 0})
+    rot = R.StudyRotation(store, random.Random(0))
+    arms = [rot.tick(conn, NOW + t, _rd(e_ok=True)) for t in range(0, 6 * 3600, 46)]
+    runs = [a for i, a in enumerate(arms) if i == 0 or a != arms[i - 1]]
+    assert all(not (x == "E" and y == "E") for x, y in zip(runs, runs[1:]))
+    blocks = conn.execute("SELECT arm, end_reason FROM study_block ORDER BY id").fetchall()
+    assert [r for r in blocks if r[1] == "preempt_e"] == [("M", "preempt_e")]      # only the first, not after E
+    assert [a for a, _ in blocks][:4] == ["M", "E", "M", "E"]                       # E, then a full other block
+
+
 def test_dry_spell_waits_for_a_block_past_its_settle_window():
     conn = _db()
     store.set_setting(conn, R.STATE, {"cycle": 1, "order": ["A", "0", "M", "MA", "E"], "idx": 0})

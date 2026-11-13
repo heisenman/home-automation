@@ -620,6 +620,12 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
   per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
   short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
+- **2026-11-12 23:21 → 11-13 ~07:10 PST — arm E ran back to back (bug, fixed 11-13).** The dry spell came (gap
+  2–7 °C, outdoor dew point down to 2.4 °C): E blocks 11, 13, 15, 17, 19, 21 complete. But the block after each E
+  (M, every time: the requeue) was cut short within a minute as `preempt_e`, because the "not right after E" test
+  compared against the block's own arm. So no M/0/A/MA block ran overnight. The E blocks themselves are valid
+  (RH held 44–45 % with the ERV on high and both dehumidifiers off); the comparison 0 block nearest is block 10.
+  Fixed: each block records the arm before it, and only a block not following E can be cut short.
 - **2026-11-12 — unified control law (Hugh).** One law for temperature, humidity and AQ across every actuator,
   driven by user-set bands (AQ soft and fungible), with a rough AQ rule meanwhile (worse air → ERV and purifiers up),
   into the PWA eventually: [unified-control-law.md](unified-control-law.md). The mech-closet furnace data
