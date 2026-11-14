@@ -620,6 +620,12 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
   per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
   short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
+- **2026-11-14 07:30 PST — HVAC zero model now held across runs.** The fan-only zero is refitted on ha-2's 7-day
+  minute rungs, and the rotation adds almost no fan-only minutes, so its data (mostly the 11-07/08 hold) was ageing
+  out: SE 0.046 → 0.072 on 11-14 (G2a 4/5 → 3/5, still latched complete), and by 11-15 the fit would fail and
+  Aprilaire blocks would go unscored. The report now keeps the fit it used in `reports/zero.json` (seeded 11-14:
+  +0.156 ± 0.072 g/m³, 28.9 h fan-only, 39 chunks) and holds it unless a new fit rests on as many fan-only hours.
+  Offset +0.133 → +0.156 is within SE; on the ~0.6 g/m³ Aprilaire signal that's ~4 % in L/kWh.
 - **2026-11-12 23:21 → 11-13 ~07:10 PST — arm E ran back to back (bug, fixed 11-13).** The dry spell came (gap
   2–7 °C, outdoor dew point down to 2.4 °C): E blocks 11, 13, 15, 17, 19, 21 complete. But the block after each E
   (M, every time: the requeue) was cut short within a minute as `preempt_e`, because the "not right after E" test

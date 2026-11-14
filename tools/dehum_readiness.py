@@ -325,6 +325,11 @@ def crit(name, ok, detail):
 PREV_OK = globals().get("_PREV_OK") or {}
 HOLD_X = 1.3                 # a passed SE criterion stays passed until SE exceeds HOLD_X × target
 PREV_BLOCKS = globals().get("_PREV_BLOCKS") or {}   # {block id: scores}, from blocks.json (P3 scoring)
+# The HVAC zero model last used, from zero.json. Minute rungs last 7 days and the rotation adds almost no fan-only
+# minutes (the blower runs with the Aprilaire or for heat), so the fit's fan-only data — mostly the 11-07/08 hold —
+# ages out; the held fit keeps the Aprilaire's blocks scorable. A new fit replaces it when it rests on at least as
+# many fan-only hours.
+PREV_ZERO = globals().get("_PREV_ZERO") or None
 PREV_DONE = globals().get("_PREV_DONE") or {}   # {gate id: date first filed complete}, from status-history.jsonl
 
 
@@ -422,6 +427,10 @@ def main():
                 xdiff[k] = w_out[okeys[j]] - w_ret[k]
         t_ret = d.series(HV_RET, "temperature_c", study_a, now)
         zm = zero_model({k: v for k, v in hv_delta.items() if k in state}, state, xdiff, erv_cfm, t_ret)
+    if zm:
+        zm["fitted"] = pt(now).date().isoformat()
+    if PREV_ZERO and (zm is None or zm["hours"]["S1f"] < PREV_ZERO["hours"]["S1f"]):
+        zm = {**PREV_ZERO, "s1f": [tuple(r) for r in PREV_ZERO.get("s1f", [])], "held": True}
     hz = {"mean": zm["beta"][0], "se": zm["se"][0]} if zm else None
     mid_idle = {k: mid_p.get(k, 999) < 5 for k in mid_p}
     # blower-off only: with the blower on, supply air reaches the pair unevenly (outlet − inlet +1.2-1.7 g/m3 on
@@ -468,7 +477,9 @@ def main():
               f"{zm['beta'][4]:+.3f} ± {zm['se'][4] or 0:.3f}, b0 {zm['beta'][1]:+.2f}; hours blower-off/fan-only "
               f"{zm['hours']['S0']:.1f}/{zm['hours']['S1f']:.1f} over {zm['days']} d"
               + (f"; fan-only day drift χ² {hv_dr[0]:.1f}, p {hv_dr[1]:.2f} over {hv_dr[2]} d" if hv_dr else "")
-              + hv_how)
+              + hv_how
+              + (f" — held fit from {zm.get('fitted')}: its fan-only minutes have aged out of the 7-day rungs"
+                 if zm.get("held") else ""))
              if zm else (f"{sum(1 for v in state.values() if v != 'S0')} blower-on and "
                          f"{sum(1 for v in state.values() if v == 'S0')} blower-off Aprilaire-idle minutes; "
                          + ("not enough paired stretches to fit yet" if reg else "no paired meter data"))),
@@ -635,7 +646,8 @@ def main():
     gates.append(("P3", "Rotation coverage → Phase 4", p3))
 
     # ---- status ----------------------------------------------------------------------------------------------
-    status = {"generated": pt(now).isoformat(), "gates": [], "blocks": scored}
+    status = {"generated": pt(now).isoformat(), "gates": [], "blocks": scored,
+              "zero": {k: v for k, v in zm.items() if k != "held"} if zm else None}
     for gid, title, cr in gates:
         due = DUE[gid]
         if gid == "P3":
