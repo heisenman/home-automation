@@ -7,7 +7,8 @@ Given the house's state, the user's bands, the cost basis and the actuator model
      ~`buffer_x`× its air volume, so it's the buffered mass that has to go); once drying, keep going to the band's
      middle (the hysteresis the dehumidifier rules have today: on at the top, off part-way down); below the band,
      no drying at all.
-  3. Try every combination of the dehumidifiers (off/on) and the ventilator's levels. Rank by (firm violation, cost
+  3. Try every combination of the dehumidifiers (off/on) and the ventilator's levels (both dehumidifiers together
+     remove less than the sum: the house sees `midea.with_aprilaire` of the Midea's water then, Phase 4 §8). Rank by (firm violation, cost
      + the soft AQ shortfall × its weight, changes from now) and take the first. The actuators are few, so a full
      search beats a general optimiser, and every choice can be explained.
   4. Purifiers follow the rough AQ rule (Hugh 2026-11-12): one level up per `aq.step` below the floor.
@@ -132,8 +133,12 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
 
     choices = [m.options for m in dehums] + [m.options for m in vents]
     ranked = []
+    both_f = float(prm["midea"].get("with_aprilaire", 1.0))
     for combo in itertools.product(*choices) if choices else [()]:
         water = sum(o.water_gph for o in combo)
+        on = {m.kind: o for m, o in zip(dehums, combo) if o.level}
+        if "midea" in on and "aprilaire" in on:          # they dry the same air: the house sees less of the Midea
+            water += on["midea"].water_gph * (both_f - 1)
         heat = sum(o.heat_w for o in combo)
         elec = sum(o.elec_w for o in combo)
         vent = max([o.vent_level for o in combo[len(dehums):]] or [0])

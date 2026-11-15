@@ -20,23 +20,31 @@ CFM_M3H = 1.699
 LATENT_WH_PER_G = 2450 / 3600       # Wh released per g of water condensed
 
 PARAMS = {
-    "midea": {"elec_w": 480, "l_per_kwh": 1.04, "source": "bucket 11-07→09 (9.9 L, 9.57 kWh) + 11-07 P2",
-              "confidence": {"water": "good", "heat": "good"}},
-    "aprilaire": {"elec_w": 580, "l_per_kwh": 0.75, "source": "method B across the air handler, 17 runs at "
-                  "dew point 7.5–9.5 °C (evening dips unexplained)", "confidence": {"water": "rough", "heat": "rough"}},
+    "midea": {"elec_w": 480, "l_per_kwh": 1.00, "with_aprilaire": 0.26,
+              "source": "Phase 4 (unified-control-law-l3-fits.md §8): 1.00 ± 0.014 L/kWh running alone (9 rotation "
+                        "blocks, inlet dew point 8.2–10.1 °C, no slope resolved: +0.05 ± 0.03/°C); with the Aprilaire "
+                        "running, the house sees 0.26 ± 0.17 of its removal (it and the Aprilaire dry the same air: "
+                        "its outlet reaches the return grille)", "confidence": {"water": "good", "heat": "good"}},
+    "aprilaire": {"elec_w": 580, "l_per_kwh": 0.77, "house_seen": 0.87,
+                  "source": "method B across the air handler, 16 rotation blocks (0.77 ± 10 %, provisional until the "
+                            "fan-only zero is re-measured, ~11-17); the house sees 0.87 ± 0.15 of it per g/h vs the "
+                            "Midea (§8). Backup unit (Hugh 2026-11-15)", "confidence": {"water": "rough", "heat": "rough"}},
     "blower": {"elec_w": 150, "source": "estimate for tap 1 (not metered)", "confidence": {"elec": "rough"}},
-    "erv": {"cfm": [0, 66, 92, 125], "fan_w": [7.7, 31, 58, 130], "latent_pass": 0.3, "sensible_eff": 0.65,
+    "erv": {"cfm": [0, 66, 92, 125], "fan_w": [7.7, 31, 58, 130], "latent_pass": 0.38, "sensible_eff": 0.65,
             "source": "L3 (unified-control-law-l3-fits.md §3): cfm/fan power from the ERV's telemetry; sensible "
                       "recovery 0.65 (0.58–0.72, rated 0.75) from the air-handler ΔT; latent pass-through (1 − ε_L) "
-                      "from the HVAC-pair zero model's ERV term. AQ effect: none detectable on the index (§2)",
+                      "0.38 ± 0.1 from the house-mean AH slope over 44 rotation blocks (§8; the HVAC-pair zero model's ERV "
+                      "term gave 0.3). AQ effect: none detectable on the index (§2)",
             "confidence": {"water": "rough", "heat": "rough", "aq": "none"}},
     "furnace": {"input_kw": 11.6, "efficiency": 0.95, "delivered_kw": 11.0,
                 "source": "L3 §1b: 59TP5A060 low fire ~40 kBtu/h input at ~95 % (model-number reading — verify on "
                           "the rating plate); bounds 6.5 kW (supply register) and 9–24 (dehumidifier heat)",
                 "confidence": {"heat": "rough"}},
-    "house": {"air_m3": 520, "buffer_x": 26, "load_gph": 0.0, "ua_w_per_k": 175, "c_kwh_per_k": 5.5,
+    "house": {"air_m3": 520, "buffer_x": 2.2, "load_gph": 0.0, "ua_w_per_k": 175, "c_kwh_per_k": 5.5,
               "internal_gain_w": 1000, "balance_point_c": 17.5,
-              "source": "water: study Phase 1 (buffers ~26× its air volume). Heat: L3 §1, 10-31→11-12, UA 175 W/K "
+              "source": "water: short-term buffer 2.2× its air volume (house-mean AH slope per g/h the Midea removes, "
+                        "44 rotation blocks, 1-h windows, §8; Phase 1's 26× is the multi-day figure). Heat: L3 §1, "
+                        "10-31→11-12, UA 175 W/K "
                         "(145 Open-Meteo / 208 sensor), C 5.5 kWh/K, τ ≈ 32 h, mild weather only",
               "confidence": {"water": "rough", "heat": "rough"}},
 }
@@ -74,9 +82,10 @@ class Model:
 
 def _dehum(device_id, kind, p, blower):
     elec = float(p["elec_w"])
-    water = -float(p["l_per_kwh"]) * elec            # g/h (L/kWh × kW × 1000)
-    heat = elec + (-water) * LATENT_WH_PER_G          # compressor + fan heat, plus the latent heat released
-    on = Option("on", 1, water, heat, elec + (blower or 0.0))
+    condensed = float(p["l_per_kwh"]) * elec          # g/h (L/kWh × kW × 1000)
+    heat = elec + condensed * LATENT_WH_PER_G         # compressor + fan heat, plus the latent heat released
+    # water = what the house sees of it (the Aprilaire's, per g/h, relative to the Midea's: Phase 4 §8)
+    on = Option("on", 1, -condensed * float(p.get("house_seen", 1.0)), heat, elec + (blower or 0.0))
     return Model(device_id, "dehumidify", kind, (Option("off", 0), on), dict(p.get("confidence", {})),
                  p.get("source", ""), needs=("hvac_blower",) if kind == "aprilaire" else (),
                  area_limited=(kind == "midea"))

@@ -631,6 +631,12 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
   per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
   short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
+- **2026-11-15 ~08:30 PST — Phase 4 formalization started (Hugh: "build the Midea's efficiency, and use the
+  aprilaire as backup"; fit now, compare against the next days).** E's trigger now needs the sensor AND Open-Meteo
+  to say drier (d5c06bc). Fits on 44 blocks (unified-control-law-l3-fits.md §8): Midea 1.00 L/kWh alone, 0.91 with
+  the Aprilaire; the Midea's outlet reaches the return (return 0.29 g/m³ drier vs the house with it on), and the
+  house sees only 0.26 ± 0.17 of the Midea's removal while both run; buffer 2.2×, ERV pass 0.38. Loaded into the law
+  (shadow). Forward check from block 55: `tools/law_model_fit.py` with `FIT_THROUGH = 54`, in the daily review.
 - **2026-11-15 07:40 PST — zero windows live; E's trigger and MA's additivity in doubt.** Fan-only windows ran in
   all 8 eligible blocks (46 → 55, ON ~5.6 min, back to Auto ~30 min, all ok); the report's re-measured offset is
   +0.088 ± 0.126 g/m³ from 6 stretches (80 min), too few to use yet. E ran in 4 of the 11 blocks since 11-14 07:00

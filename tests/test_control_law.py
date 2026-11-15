@@ -63,8 +63,15 @@ def test_a_little_too_humid_picks_the_cheaper_dehumidifier():
 
 
 def test_very_humid_runs_both():
-    p = _solve(_house(rh=52.0))
+    p = _solve(_house(rh=60.0))
     assert p.choice["midea"]["level"] == 1 and p.choice["apr"]["level"] == 1
+
+
+def test_both_dehumidifiers_remove_less_than_the_sum():
+    # Phase 4 §8: run together they dry the same air; the house sees only `with_aprilaire` of the Midea's water
+    p = _solve(_house(rh=60.0))                             # outdoor = indoor AH: the ERV moves no water
+    mid, apr = (next(m for m in M.build(REG, PRM, {}) if m.kind == k).options[1].water_gph for k in ("midea", "aprilaire"))
+    assert p.totals["water_gph"] == pytest.approx(apr + mid * PRM["midea"]["with_aprilaire"], abs=0.2)
 
 
 def test_drying_continues_to_the_bands_middle():
@@ -83,7 +90,7 @@ def test_drier_outdoor_air_is_the_cheapest_drying():
     p = _solve(_house(rh=46.1, w_out=3.0))                  # a small excess, very dry outdoor air
     assert p.need_gph > 0 and p.totals["firm"] == 0
     assert p.choice["midea"]["level"] == 0 and p.choice["apr"]["level"] == 0   # the ERV does it
-    big = _solve(_house(rh=46.5, w_out=5.0))                # 436 g/h: more than the ERV at high (~290)
+    big = _solve(_house(rh=50.0, w_out=7.5))                # ~300 g/h: more than the ERV at high (~180)
     assert big.choice["midea"]["level"] == 1
 
 

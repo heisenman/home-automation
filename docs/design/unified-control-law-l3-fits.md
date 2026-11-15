@@ -350,6 +350,39 @@ arm means 0.93 / 0.68 where unscored), and the ERV exchange (cfm × (outdoor −
 - Loaded: `law:params` house.buffer_x = 3.7 on ha-2. Not loaded: the ERV pass (all E blocks were 23:00–07:00).
 - Refit when each arm has ~8 blocks, and with a block-before regressor for the rebound.
 
+## 8. Phase 4 formalization — dehumidifiers and the house's water response (2026-11-15) — confidence: **rough**
+
+`tools/law_model_fit.py` (run command in its header) on the 44 complete rotation blocks through block 54
+(11-12 → 11-15 06:28 PST: 0×9, M×9, A×8, MA×8, E×10), first 30 min dropped, the house-mean AH slope per block.
+
+| Quantity | Value | Basis |
+|---|---|---|
+| Midea L/kWh, running alone | **1.00 ± 0.014** | 9 M blocks |
+| Midea L/kWh, with the Aprilaire running | 0.91 ± 0.024 | 8 MA blocks |
+| Midea dew-point slope | +0.05 ± 0.03 /°C | not resolved over inlet 8.2–10.1 °C: held flat |
+| Aprilaire L/kWh, alone / with the Midea | 0.79 ± 0.06 / 0.75 ± 0.06 | provisional: the fan-only zero is being re-measured |
+| Return − house-mean AH, by arm | 0: −0.32, M: −0.61, A: −0.40, MA: −0.52, E: −0.37 g/m³ | ± 0.013–0.021 |
+| House buffer (per g/h the Midea removes) | **2.2×** its air volume | was 3.7× (§7, removal lumped) |
+| Aprilaire, as the house sees it per g/h | 0.87 ± 0.15 of the Midea's | |
+| The Midea, as the house sees it while the Aprilaire runs | **0.26 ± 0.17** of its alone | |
+| ERV latent pass-through | 0.38 ± 0.1 | E blocks all at night (see the trigger caveat) |
+| Residual SD of the block slope | 0.104 g/m³/h | |
+
+- **The two units dry the same air (Hugh's hypothesis, confirmed in direction).** The Midea's outlet reaches the
+  return grille: with the Midea on, the return reads 0.29 g/m³ drier relative to the house than in 0 blocks. The
+  measured cost falls on the Midea (its own L/kWh drops 9 % when the blower spreads the Aprilaire's dry air into the
+  living room), and at the house level running both adds only ~5–25 % over the Midea alone. Running both is rarely
+  worth its power; the law now knows that. A better whole-house unit is the real fix (Hugh 2026-11-15: the Aprilaire
+  is the backup until then).
+- Loaded (code `PARAMS` and `law:params` on ha-2): midea l_per_kwh 1.00, with_aprilaire 0.26; aprilaire l_per_kwh
+  0.77, house_seen 0.87; erv latent_pass 0.38; house buffer_x 2.2. Shadow only.
+- **Forward check (Hugh: fit now, test on the next days).** `FIT_THROUGH = 54` freezes the fit; section D predicts each
+  later block. A trial holding out blocks 47–54 (fit through 44): RMS 0.144 vs the fit's 0.095 g/m³/h, mean −0.04;
+  the worst, A block 52 at −3 SD, dried more than its low Aprilaire score (0.62) implied — the zero-drift question.
+- Caveats: n is small for the interaction (8 MA blocks) and the ERV term rests on night E blocks whose outdoor dew
+  point came from Open-Meteo while the sensor read RH 94–97 % (the E trigger now needs both, study doc §3D). The
+  block before isn't a regressor yet (rebound after drying shows in the 0 blocks' high load term, ~280 g/h).
+
 ---
 
 ## Caveats common to all

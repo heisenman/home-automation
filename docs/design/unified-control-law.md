@@ -136,8 +136,9 @@ The study's Phase 3 rotation still runs underneath: it's what turns the dehumidi
 - **Cost** (`law:cost`): `kwh` (electricity only, the default) or `money` (electric $/kWh + gas $/therm; heat
   credited against the furnace's gas while heating, charged at AC COP 3 while cooling).
 - **Water need:** the excess over the band's top × the house's buffered volume (520 m³ × `buffer_x`) ÷ horizon;
-  `buffer_x` = 3.7 since 2026-11-13 (short-term fit from rotation blocks, l3-fits §7; the Phase 1 26× is the
-  multi-day figure and made 1 % RH ≈ 880 g/h, so the law ran both units or neither); once
+  `buffer_x` = 2.2 since 2026-11-15 (Phase 4, l3-fits §8; 3.7 from 11-13, §7; the Phase 1 26× is the
+  multi-day figure and made 1 % RH ≈ 880 g/h, so the law ran both units or neither). Both dehumidifiers together
+  count the Midea at `midea.with_aprilaire` (0.26): they dry the same air (§8). Once
   drying, to the band's middle (today's on-high/off-part-way hysteresis). Below the band: no drying.
 - **Search:** every combination of the dehumidifiers (off/on) × the ERV's levels, ranked by (firm shortfall, cost
   + AQ shortfall × weight, changes). Purifiers by the rough AQ rule. The thermostat gets the band as its setpoints.
@@ -155,6 +156,8 @@ The study's Phase 3 rotation still runs underneath: it's what turns the dehumidi
   pre-emptive ERV/purifier push on heat calls** (§4's option stays off); purifiers: no PM signal to model
   (living-room PM2.5 stuck at 983 = fault).
 - **Water buffer (2026-11-13):** 3.7× (±0.6) over 1-h windows, loaded into `law:params` on ha-2 (shadow only).
+  Refit 2026-11-15 (Phase 4, l3-fits §8): 2.2× per g/h the Midea removes, with a both-running term; forward check
+  against the next days' blocks (`FIT_THROUGH = 54`).
   With it the law runs the Midea alone up to ~50 % RH and adds the Aprilaire above. Two time scales: the "load"
   term (~360 g/h) includes the slow buffer releasing after drying blocks. ERV latent pass-through ≈ 0.5 (model
   says 0.3) but every E block was at night; not loaded until daytime E blocks exist.
