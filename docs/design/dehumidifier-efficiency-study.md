@@ -195,6 +195,9 @@ two passing checks in a row put E next, ahead of the cycle's order (a block stil
 short as `preempt_e` and re-run after E; a block the RH guard forced is never cut). A supervisor ends a running E
 (`conditions`) after two checks below 1.5 °C (2.0 − 0.5 hysteresis). E never runs twice in a row. P3 no longer
 waits for E; its blocks are collated later and the model is built without them if they don't come.
+From 2026-11-15 (Hugh) the gap uses the WETTER of the outdoor sensor and Open-Meteo, with no wet-bias swap: E
+counts outdoor air as drier only when both say so. Before, a sensor at RH ≥ `wet_rh` (every night) was replaced by
+Open-Meteo, 1.5–3.4 g/m³ drier, and E ran on gaps the house's own AH slope didn't show (§6b 11-15).
 
 *Duration:* several weeks, covering cold-dry and mild-damp spells. Summer is covered by the Midea's history
 (the bucket data in method C) until next year.

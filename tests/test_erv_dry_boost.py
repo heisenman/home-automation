@@ -248,3 +248,12 @@ def test_policy_accepts_reference(tmp_path):
     code, _ = handle_policy_update(c, "erv", {"dry_boost": {"reference": "openmeteo", "wet_rh": 80}})
     assert code == 200 and store.get_policy(c, "erv")["dry_boost"]["reference"] == "openmeteo"
     assert handle_policy_update(c, "erv", {"dry_boost": {"reference": "nws"}})[0] == 400
+
+
+def test_crosscheck_both_takes_wetter_without_wet_bias_swap():
+    from server.control import dry_boost as db
+    # arm E (Hugh 2026-11-15): a night sensor at RH 96 % is NOT swapped for Open-Meteo; drier only if both say so
+    dp, src = db.outdoor_dewpoint((10.6, 96.0), (10.6, 65.0, 1000.0), _xc(), 1000.0, doubt="both")
+    assert dp == db.dewpoint_c(10.6, 96.0) and "wetter of" in src
+    dp, _ = db.outdoor_dewpoint((10.6, 60.0), (10.6, 70.0, 1000.0), _xc(), 1000.0, doubt="both")
+    assert dp == db.dewpoint_c(10.6, 70.0)

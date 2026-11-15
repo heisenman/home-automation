@@ -645,8 +645,8 @@ class Controller:
 
     def _study_readings(self, pols: dict, now: float, cfg: dict) -> dict:
         """What the study rotation needs each tick: living-room RH and dew point, the ERV arm's eligibility
-        (indoor − outdoor dew point, the dry boost's sensors and Open-Meteo cross-check, outdoor resolved WETTER
-        on doubt), and whether the Midea's bucket is full."""
+        (indoor − outdoor dew point, the dry boost's sensors; outdoor = the WETTER of the sensor and Open-Meteo, no
+        wet-bias swap, so E needs both to say drier), and whether the Midea's bucket is full."""
         with self._lock:
             rd = dict(self.readings)
         out = {"rh": None, "dp_in": None, "dp_out": None, "t_out": None, "dp_gap": None, "e_ok": False,
@@ -662,7 +662,7 @@ class Controller:
         if raw.get("outdoor_sensor"):
             dcfg = dry_boost.config(raw)
             cond, _ = dry_boost.conditions(rd, dcfg, now, self._weather_reference()
-                                           if dcfg.get("reference") == "openmeteo" else None, doubt="wetter")
+                                           if dcfg.get("reference") == "openmeteo" else None, doubt="both")
             if cond is not None:
                 out["dp_out"], out["t_out"] = cond.dp_out, cond.t_out
                 out["dp_gap"] = cond.delta

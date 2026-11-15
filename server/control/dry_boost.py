@@ -75,13 +75,17 @@ def outdoor_dewpoint(sensor: tuple, reference: tuple | None, cfg: dict, now: flo
                      doubt: str = "wetter") -> tuple[float, str]:
     """(outdoor dew point, which source) from the sensor's (t, rh) and the reference's (t, rh, ts) or None.
     `doubt` picks the side an unexplained disagreement resolves to: "wetter" (the boost: no boost on doubt) or
-    "drier" (the wet trim, server/control/wet_trim.py: no trim on doubt)."""
+    "drier" (the wet trim, server/control/wet_trim.py: no trim on doubt), or "both" (the study's arm E: the wetter of
+    the two, with no wet-bias swap, so it counts as drier outdoors only when the sensor AND Open-Meteo say so —
+    Hugh 2026-11-15, after night E blocks ran on Open-Meteo gaps the house didn't show)."""
     dp_s = dewpoint_c(*sensor)
     if not cfg.get("reference") or reference is None or now - reference[2] > float(cfg["reference_stale_min"]) * 60:
         return dp_s, "sensor"
     dp_r = dewpoint_c(reference[0], reference[1])
     if dp_r is None:
         return dp_s, "sensor"
+    if doubt == "both":
+        return max(dp_s, dp_r), f"the wetter of sensor {dp_s:.1f} / Open-Meteo {dp_r:.1f} °C"
     if abs(dp_s - dp_r) <= float(cfg["agree_c"]):
         return dp_s, "sensor (Open-Meteo agrees)"
     if dp_s > dp_r and sensor[1] >= float(cfg["wet_rh"]):
