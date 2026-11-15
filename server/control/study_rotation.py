@@ -23,6 +23,12 @@ the levers in fixed blocks around the clock. Hugh approved the rotation 2026-11-
   once the gap has been below e_min_gap_c − `e_exit_hyst_c` for `e_confirm` checks. E never runs twice in a row,
   so each E block has a non-E neighbour under similar weather. Its blocks are collated later; the P3 gate
   doesn't wait for them.
+- Fan-only zero windows (Hugh 2026-11-14): the HVAC meter pair's fan-only zero can't be re-measured during the
+  rotation (the blower runs only with the Aprilaire or for heat), and its minutes age out of the 7-day rungs. In
+  the arms without the Aprilaire (`zero_arms`: 0, M, E) the furnace blower's fan goes ON from `zero_start_min` (5,
+  after the follow coupling has switched it off behind an Aprilaire block) to `settle_min` (30) — the unscored
+  part of the block — then back to Auto. A fan already ON at the window's start is a person's, left alone; a fan
+  switched off during the window isn't re-asserted. `zero_decide` is the pure decision; the controller issues it.
 - Guardrails end a block early (the early end is logged, and is itself data): living-room RH ≥ rh_high in an arm
   that isn't drying with both units → the next block is the cheapest drying arm (M, then MA); RH ≤ rh_low → the
   next block is 0; the Midea's bucket full ends an M/MA block, and Midea arms are skipped until it's emptied.
@@ -66,6 +72,10 @@ DEFAULTS = {
     "e_check_min": 10,          # arm E watcher: sample the dew-point gap this often
     "e_confirm": 2,             # consecutive checks to start (gap ≥ e_min_gap_c) or stop (below it − hysteresis)
     "e_exit_hyst_c": 0.5,
+    "zero_fan": True,           # fan-only zero windows in the unscored start of the non-Aprilaire arms
+    "zero_arms": ["0", "M", "E"],
+    "zero_start_min": 5,
+    "blower": "hvac_blower",
     "rh_sensor": "meter_pro_living_room",
     "devices": {"midea": "dehumidifier_living_room", "aprilaire": "dehum_attic", "erv": "erv_attic"},
 }
@@ -147,6 +157,32 @@ def watch_e(w: dict | None, now: float, gap: float | None, cfg: dict) -> dict:
     return w
 
 
+def zero_window(arm: str | None, start: float | None, now: float, cfg: dict) -> bool:
+    """True while this block wants the blower's fan ON for the HVAC pair's fan-only zero."""
+    if not cfg.get("zero_fan") or arm is None or start is None or arm not in cfg["zero_arms"]:
+        return False
+    return start + float(cfg["zero_start_min"]) * 60 <= now < start + float(cfg["settle_min"]) * 60
+
+
+def zero_decide(want: bool, block_id, fan_on: bool | None, st: dict | None, now: float):
+    """-> (command: True ON | False Auto | None nothing, state to save, why). Pure. `st` = {"block", "on", "at"}:
+    which block's window we acted in and whether the fan is ON because of us. One attempt per block."""
+    st = dict(st or {})
+    if fan_on is None:
+        return None, st, "blower fan setting unknown"
+    if want:
+        if st.get("block") == block_id:
+            return None, st, "window running" if st.get("on") else "window: not ours this block"
+        if fan_on:
+            return None, {"block": block_id, "on": False}, "fan already ON at the window's start: a person's, left alone"
+        return True, {"block": block_id, "on": True, "at": now}, "fan-only zero window: fan ON"
+    if st.get("on"):
+        if fan_on:
+            return False, {**st, "on": False}, "fan-only zero window over: fan back to Auto"
+        return None, {**st, "on": False}, "fan-only zero window over: fan already back to Auto"
+    return None, st, ""
+
+
 class StudyRotation:
     """Runs the rotation against control.db. `readings(cfg)` is a callable returning the conditions the scheduler
     needs: {"rh": living-room RH or None, "dp_in": °C or None, "dp_out": °C or None, "t_out": °C or None,
@@ -158,6 +194,8 @@ class StudyRotation:
         self.arm: str | None = None             # the running arm, None = study inactive
         self.released: set[str] = set()
         self.devices: dict = dict(DEFAULTS["devices"])
+        self.cfg: dict = config(None)
+        self.block: dict | None = None          # the running block ({"id", "arm", "start", ...}), for the zero window
 
     # ── helpers ────────────────────────────────────────────────────────────────
     def _save(self, conn, st: dict) -> None:
@@ -196,7 +234,7 @@ class StudyRotation:
     def _tick(self, conn, now: float, readings) -> str | None:
         conn.executescript(SCHEMA)
         cfg = config(self.store.get_setting(conn, SETTING))
-        self.devices = cfg["devices"]
+        self.devices, self.cfg, self.block = cfg["devices"], cfg, None
         st = self.store.get_setting(conn, STATE) or {}
         blk = st.get("block")
         active = cfg["enabled"] and not cfg["paused"]
@@ -242,7 +280,7 @@ class StudyRotation:
                 else:
                     st["block"] = blk
                     self._save(conn, st)
-                    self.arm, self.released = blk["arm"], set(blk.get("released", []))
+                    self.arm, self.released, self.block = blk["arm"], set(blk.get("released", [])), blk
                     return self.arm
         # start the next block
         prev_written = (st.get("last_written") or {})
@@ -288,8 +326,12 @@ class StudyRotation:
         log.info("study block %s: arm %s until %s (cycle %s)%s", blk["id"], arm,
                  time.strftime("%H:%M:%SZ", time.gmtime(end)), st.get("cycle"),
                  f"; released {released}" if released else "")
-        self.arm, self.released = arm, set(released)
+        self.arm, self.released, self.block = arm, set(released), blk
         return arm
+
+    def wants_zero_fan(self, now: float) -> bool:
+        b = self.block
+        return bool(b) and zero_window(b["arm"], b["start"], now, self.cfg)
 
     def holds_ventilation(self, device_id: str) -> bool:
         """True while the study owns the ERV's level: every arm but E runs it at its air-quality base, so the
@@ -325,17 +367,17 @@ def set_config(conn, store, body: dict) -> tuple[int, dict]:
     """PUT /control/house/study: {enabled?, paused?} (+ the guard numbers). Pure apart from the setting write."""
     b = body or {}
     cur = config(store.get_setting(conn, SETTING))
-    for k in ("enabled", "paused"):
+    for k in ("enabled", "paused", "zero_fan"):
         if k in b and not isinstance(b[k], bool):
             return 400, {"status": "bad-request", "reason": f"{k} must be a boolean"}
     rng = {"block_min": (30, 360), "rh_high": (40, 60), "rh_low": (25, 45), "e_min_gap_c": (0.5, 6),
-           "e_check_min": (1, 60), "e_confirm": (1, 6), "e_exit_hyst_c": (0, 2)}
+           "e_check_min": (1, 60), "e_confirm": (1, 6), "e_exit_hyst_c": (0, 2), "zero_start_min": (0, 25)}
     for k, (lo, hi) in rng.items():
         if k in b and (not isinstance(b[k], (int, float)) or isinstance(b[k], bool) or not lo <= b[k] <= hi):
             return 400, {"status": "bad-request", "reason": f"{k} must be a number in {lo}–{hi}"}
-    new = {**cur, **{k: b[k] for k in ("enabled", "paused", *rng) if k in b}}
+    new = {**cur, **{k: b[k] for k in ("enabled", "paused", "zero_fan", *rng) if k in b}}
     if new["rh_low"] >= new["rh_high"]:
         return 400, {"status": "bad-request", "reason": "rh_low must be below rh_high"}
     store.set_setting(conn, SETTING, {k: new[k] for k in DEFAULTS if k != "devices"} | {"devices": cur["devices"]})
-    return 200, {"status": "ok", "study": {k: new[k] for k in ("enabled", "paused", *rng)}}
+    return 200, {"status": "ok", "study": {k: new[k] for k in ("enabled", "paused", "zero_fan", *rng)}}
 

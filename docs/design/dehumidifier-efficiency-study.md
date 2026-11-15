@@ -181,6 +181,14 @@ Operator overrides release a device (the study stays out of the press's way). Se
 scores each completed block (first 30 min dropped): Aprilaire by method B, the Midea by its pair × a calibrated
 airflow (below); scores persist on .210 in `reports/blocks.json` because minute rungs last 7 days. Runbook Entry 4b.
 
+*Fan-only zero windows (2026-11-14, Hugh: "yes, please perform the fan-only checks"):* in arms 0, M and E the
+furnace blower's fan is ON from 5 to 30 min into the block — the unscored part — then back to Auto, so the HVAC
+pair's fan-only zero is re-measured ~1–2 h a day (the rotation otherwise never runs the blower without the
+Aprilaire or heat). A fan already ON at the window's start is a person's and left alone; a fan switched off during
+the window isn't re-asserted. The readiness report keeps the held fit's ERV and temperature terms and re-measures its
+offset from the last 3 days' fan-only stretches (≥ 3 stretches, ≥ 45 min), showing the drift from the held fit.
+PWA/API: `zero_fan` in `PUT /control/house/study`. Runbook Entry 4b.
+
 *Arm E made opportunistic (2026-11-12 evening, Hugh):* the first day had no hour with outdoor air ≥ 2 °C dew point
 drier than indoor, so E could never get its 8 blocks. Now a watcher in the rotation samples the gap every 10 min;
 two passing checks in a row put E next, ahead of the cycle's order (a block still in its 30-min settle window is cut
@@ -620,6 +628,14 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
   per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
   short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
+- **2026-11-14 ~17:00 PST — Aprilaire scores rising; fan-only zero windows added.** Aprilaire block scores went
+  0.55–0.80 (11-12) → 0.97 / 1.13 / 1.24 (11-14) at the same inlet dew point and power; the raw supply − return
+  during its blocks went ~−0.05 → −0.30 g/m³. A room-side estimate (house-mean AH slope in A blocks vs a fit on the
+  non-Aprilaire blocks) matched the early scores (306 vs 313, 389 vs 338 g/h) but sits 25–40 % under the recent ones
+  (505 vs 645, 390 vs 553): probably meter drift that the held zero can't follow. Hugh's idle-time check (blower
+  off): return − meter_kitchen −0.08…−0.18 g/m³ every day 11-08 → 11-14, no trend, so the return meter is steady;
+  the supply can't be pinned blower-off (its register carries ERV air), and gas_h_office wanders 0.35 itself. Fix:
+  fan-only zero windows in the rotation (§3D); re-score the recent Aprilaire blocks once the offset is re-measured.
 - **2026-11-14 07:30 PST — HVAC zero model now held across runs.** The fan-only zero is refitted on ha-2's 7-day
   minute rungs, and the rotation adds almost no fan-only minutes, so its data (mostly the 11-07/08 hold) was ageing
   out: SE 0.046 → 0.072 on 11-14 (G2a 4/5 → 3/5, still latched complete), and by 11-15 the fit would fail and

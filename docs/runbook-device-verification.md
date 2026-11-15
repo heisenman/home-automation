@@ -211,7 +211,10 @@ Overrides match the arm (M/MA: Midea `boost_on`; A/MA: Aprilaire `boost_on`; E: 
 ERV row outside E), expiry = block end + 600 s. (4) Recent blocks ended `complete`, or early with `rh_high` /
 `rh_low` / `bucket_full`, or E-related: `preempt_e` (a settling block cut short for a dry spell, re-run next) and
 `conditions` (E ended when the dew-point gap closed). (5) `state.e_watch` has `last` within 10 min, the latest
-`gap`, and `ok`/`bad` streaks; E starts at `ok ≥ 2`. The PWA top bar shows "🔬 Study: <arm> · Nm left" with a Pause button.
+`gap`, and `ok`/`bad` streaks; E starts at `ok ≥ 2`. (6) Fan-only zero windows: in a 0/M/E block, 5–30 min in,
+`select ts, desired, reason, status from control_log where device_id='hvac_blower' and source='study' order by ts
+desc limit 4` shows ON then OFF ("fan-only zero window"), and house_setting `study:zero_fan` = {"block": <id>,
+"on": false} after 30 min. The PWA top bar shows "🔬 Study: <arm> · Nm left" with a Pause button.
 
 **Gotchas:**
 - A block in the `released` list = an operator override on that device (a PWA press). The study stays out of its

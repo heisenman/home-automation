@@ -353,6 +353,8 @@ class Controller:
                 self._tick_device(conn, device_id, pol, now, tod, scene, dry_run)
             self._apply_night_mode(conn, tod, dry_run)          # LED night mode (all indicator devices)
             self._apply_follow(conn, now, dry_run)              # switches that follow another device (blower)
+            if not dry_run:
+                self._apply_study_zero_fan(conn, now)           # the study's fan-only zero windows (blower)
             if not dry_run and self._law.due(now):              # the unified law, in shadow: logs, never acts
                 try:
                     house, current = self._law_context(conn, pols, now)
@@ -613,6 +615,33 @@ class Controller:
             current[d] = (int(t["fan"]) if t.get("running") and t.get("fan") is not None
                           else 0 if t.get("running") is False else None)
         return house, current
+
+    def _apply_study_zero_fan(self, conn, now):
+        """The study's fan-only zero window (study_rotation.zero_decide): blower fan ON in the unscored start of the
+        non-Aprilaire arms, back to Auto after. Runs after the follow coupling, so a follow OFF at the end of an
+        Aprilaire block has already happened (the window starts 5 min in). Paused/disabled: want=False → Auto."""
+        fid = self._study.cfg.get("blower")
+        key = "study:zero_fan"
+        st = store.get_setting(conn, key) or {}
+        want = self._study.wants_zero_fan(now)
+        if not fid or (not want and not st.get("on")):
+            return
+        sc = (getattr(self.registry.get(fid), "traits_cfg", {}) or {}).get("switchable") or {}
+        m = sc.get("now_metric")
+        with self._lock:
+            rec = self.readings.get(fid)
+        fan_on = (bool(rec["m"][m]) if rec and m and m in rec["m"] and now - rec["ts"] <= follow.FRESH_S else None)
+        blk = self._study.block or {}
+        cmd, new, why = study_rotation.zero_decide(want, blk.get("id"), fan_on, st, now)
+        if cmd is None:
+            if new != st:
+                store.set_setting(conn, key, new)
+            return
+        r = self.issuer.issue(device_id=fid, trait="switchable", action="set", args={"on": cmd})
+        if r.status == "ok":
+            store.set_setting(conn, key, new)
+        store.append_log(conn, fid, cmd, "study", f"block {blk.get('id')} ({blk.get('arm')}): {why}", True, r.status)
+        log.info("study zero fan: %s -> %s (%s) %s", fid, "ON" if cmd else "Auto", why, r.status)
 
     def _study_readings(self, pols: dict, now: float, cfg: dict) -> dict:
         """What the study rotation needs each tick: living-room RH and dew point, the ERV arm's eligibility

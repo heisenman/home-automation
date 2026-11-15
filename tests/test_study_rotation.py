@@ -271,3 +271,59 @@ def test_study_holds_the_dry_boost_outside_arm_e(tmp_path):
     ctrl.tick(now=t2)                                                 # arm E: the study's own boost override
     assert ctrl._study.arm == "E"
     assert [a for d, t, a in iss.calls if d == ERV][-1] == {"mode": "high"}
+
+
+# ── fan-only zero windows (Hugh 2026-11-14) ──────────────────────────────────────────────────────────────────────
+def test_zero_window_is_the_unscored_start_of_non_aprilaire_arms():
+    cfg = R.config({})
+    assert not R.zero_window("0", NOW, NOW + 4 * 60, cfg)
+    assert R.zero_window("0", NOW, NOW + 5 * 60, cfg) and R.zero_window("M", NOW, NOW + 29 * 60, cfg)
+    assert R.zero_window("E", NOW, NOW + 10 * 60, cfg)
+    assert not R.zero_window("0", NOW, NOW + 30 * 60, cfg)                # scoring starts: fan back to Auto
+    assert not R.zero_window("A", NOW, NOW + 10 * 60, cfg) and not R.zero_window("MA", NOW, NOW + 10 * 60, cfg)
+    assert not R.zero_window("0", NOW, NOW + 10 * 60, R.config({"zero_fan": False}))
+
+
+def test_zero_decide_leaves_a_persons_fan_alone_and_never_reasserts():
+    cmd, st, _ = R.zero_decide(True, 7, False, {}, NOW)
+    assert cmd is True and st["on"]
+    assert R.zero_decide(True, 7, True, st, NOW + 60)[0] is None            # running
+    assert R.zero_decide(True, 7, False, st, NOW + 120)[0] is None          # someone set Auto: not re-asserted
+    cmd, st2, _ = R.zero_decide(False, 7, True, st, NOW + 1500)
+    assert cmd is False and not st2["on"]
+    cmd, st3, why = R.zero_decide(True, 8, True, st2, NOW + 5400)           # fan already ON: a person's
+    assert cmd is None and not st3["on"] and "person" in why
+    assert R.zero_decide(False, 8, True, st3, NOW + 7000)[0] is None        # ...and not switched off by us
+    assert R.zero_decide(True, 9, None, st3, NOW)[0] is None                # unknown fan state: nothing
+
+
+def test_controller_runs_the_fan_only_window_in_a_baseline_block(tmp_path):
+    db = str(tmp_path / "control.db")
+    conn = sqlite3.connect(db)
+    store.ensure_schema(conn)
+    store.set_setting(conn, R.SETTING, {"enabled": True, "devices": {"midea": "nope_m", "aprilaire": "nope_a",
+                                                                     "erv": "nope_e"}})
+    store.set_setting(conn, R.STATE, {"cycle": 1, "order": ["0", "M", "A", "MA", "E"], "idx": 0})
+    conn.close()
+    iss = Iss()
+    ctrl = C.Controller(iss, {}, parse_control_registry(yaml.safe_load(open("config-examples/control.example.yaml"))),
+                        db)
+    ctrl._law.last_run = NOW                                          # keep the law out of it
+
+    def fan(on, t):
+        ctrl.readings["hvac_blower"] = {"m": {"fan_on_setting": 1 if on else 0}, "ts": t - 10}
+
+    fan(False, NOW)
+    ctrl.tick(now=NOW)
+    assert ctrl._study.arm == "0" and not [c for c in iss.calls if c[0] == "hvac_blower"]
+    fan(False, NOW + 6 * 60)
+    ctrl.tick(now=NOW + 6 * 60)
+    assert [a for d, t, a in iss.calls if d == "hvac_blower"] == [{"on": True}]
+    fan(True, NOW + 20 * 60)
+    ctrl.tick(now=NOW + 20 * 60)
+    fan(True, NOW + 31 * 60)
+    ctrl.tick(now=NOW + 31 * 60)
+    assert [a for d, t, a in iss.calls if d == "hvac_blower"] == [{"on": True}, {"on": False}]
+    conn = sqlite3.connect(db)
+    assert conn.execute("SELECT source FROM control_log WHERE device_id='hvac_blower' AND acted=1").fetchall() == \
+        [("study",), ("study",)]

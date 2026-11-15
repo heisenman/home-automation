@@ -48,3 +48,23 @@ def test_completed_gate_stays_complete(monkeypatch):
     assert R.gate_done("G2a", [ok, bad]) == (True, "2026-11-05")
     assert R.gate_done("G2a", [ok, ok]) == (True, None)           # met again today: nothing held
     assert R.gate_done("G2b", [ok, bad]) == (False, None)
+
+
+def test_held_zero_offset_is_remeasured_from_recent_fan_only_windows():
+    # 4 recent fan-only windows of 20 min (the rotation's zero windows), true offset +0.25; the held fit said +0.15
+    zm = {"beta": [0.15, 0, 0.05, 0, 0.3, 0, 0.0], "se": [0.07, None, 0.01, None, 0.04, None, None],
+          "hours": {"S1f": 28.9}}
+    delta, state, x, cfm, tret = {}, {}, {}, {}, {}
+    for w in range(4):
+        for i in range(20):
+            k = 1_000_000 + w * 5400 + i * 60
+            x[k], cfm[k], tret[k] = 1.0, 66.0, R.T_REF
+            delta[k] = 0.25 + 0.05 * 66 * 1.0 / 100 + (0.01 if i % 2 else -0.01)
+            state[k] = "S1f"
+    rec = R.zero_recent(delta, state, x, cfm, tret, zm, 0)
+    assert rec["n"] == 4 and rec["minutes"] == 80 and abs(rec["offset"] - 0.25) < 1e-9
+    assert R.zero_recent(delta, state, x, cfm, tret, zm, 1_000_000 + 2 * 5400) is None    # 2 windows: too few
+    zr = {**zm, "beta": [0.25] + zm["beta"][1:], "se": [rec["se"]] + zm["se"][1:], "held": True,
+          "remeasured": {**rec, "held_offset": 0.15, "held_se": 0.07}}
+    st = R.stored_zero(zr)
+    assert st["beta"][0] == 0.15 and st["se"][0] == 0.07 and "remeasured" not in st and "held" not in st

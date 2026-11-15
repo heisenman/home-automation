@@ -283,6 +283,43 @@ def zero_model(delta, state, x, cfm, tret=None):
     return {"beta": beta, "se": se, "n": len(rows), "hours": hours, "days": len(days), "s1f": s1f}
 
 
+def stored_zero(zm):
+    """What zero.json keeps: the fit itself — a re-measured offset is today's reading, not the fit's (so each day
+    re-measures against the same held fit, and the report shows the drift from it)."""
+    if not zm:
+        return None
+    z = {k: v for k, v in zm.items() if k not in ("held", "remeasured")}
+    if zm.get("remeasured"):
+        z["beta"], z["se"] = list(z["beta"]), list(z["se"])
+        z["beta"][0], z["se"][0] = zm["remeasured"]["held_offset"], zm["remeasured"].get("held_se", z["se"][0])
+    return z
+
+
+ZERO_RECENT_D = 3                               # fan-only windows newer than this re-measure a held zero's offset
+
+
+def zero_recent(delta, state, x, cfm, tret, zm, since):
+    """The fan-only offset from recent stretches with the held fit's ERV term (beta[2]) and temperature slope
+    (beta[6]): {"offset", "se", "n", "minutes"}, or None with fewer than 3 stretches / 45 min."""
+    ks = sorted(k for k, v in delta.items() if k >= since and state.get(k) == "S1f" and k in x and k in cfm)
+    runs, cur = [], []
+    for k in ks:
+        if cur and (k - cur[-1] > 60 or len(cur) >= 60):
+            runs.append(cur)
+            cur = []
+        cur.append(k)
+    if cur:
+        runs.append(cur)
+    runs = [r for r in runs if len(r) >= 5]
+    if len(runs) < 3 or sum(len(r) for r in runs) < 45:
+        return None
+    g, kt = zm["beta"][2], zm["beta"][6] if zm["se"][6] is not None else 0.0
+    ys = [S.mean(delta[k] - g * cfm[k] * x[k] / 100 - (kt * (tret[k] - T_REF) if k in tret else 0.0) for k in r)
+          for r in runs]
+    return {"offset": S.mean(ys), "se": S.stdev(ys) / math.sqrt(len(ys)), "n": len(ys),
+            "minutes": sum(len(r) for r in runs)}
+
+
 SEG_MIN, SEG_TAIL_MIN = 240, 60                 # G2b scores long calls in 4-h segments (Hugh 2026-11-09)
 
 
@@ -431,6 +468,14 @@ def main():
         zm["fitted"] = pt(now).date().isoformat()
     if PREV_ZERO and (zm is None or zm["hours"]["S1f"] < PREV_ZERO["hours"]["S1f"]):
         zm = {**PREV_ZERO, "s1f": [tuple(r) for r in PREV_ZERO.get("s1f", [])], "held": True}
+        # the rotation's fan-only windows (study_rotation zero_*, Hugh 2026-11-14) re-measure the offset: the held
+        # fit's ERV and temperature terms, the offset from the last ZERO_RECENT_D days' fan-only stretches
+        if reg:
+            rec = zero_recent(hv_delta, state, xdiff, erv_cfm, t_ret, zm, now - ZERO_RECENT_D * 86400)
+            if rec:
+                zm["beta"], zm["se"] = list(zm["beta"]), list(zm["se"])
+                zm["remeasured"] = {**rec, "held_offset": zm["beta"][0], "held_se": zm["se"][0]}
+                zm["beta"][0], zm["se"][0] = rec["offset"], rec["se"]
     hz = {"mean": zm["beta"][0], "se": zm["se"][0]} if zm else None
     mid_idle = {k: mid_p.get(k, 999) < 5 for k in mid_p}
     # blower-off only: with the blower on, supply air reaches the pair unevenly (outlet − inlet +1.2-1.7 g/m3 on
@@ -479,7 +524,10 @@ def main():
               + (f"; fan-only day drift χ² {hv_dr[0]:.1f}, p {hv_dr[1]:.2f} over {hv_dr[2]} d" if hv_dr else "")
               + hv_how
               + (f" — held fit from {zm.get('fitted')}: its fan-only minutes have aged out of the 7-day rungs"
-                 if zm.get("held") else ""))
+                 if zm.get("held") else "")
+              + (f"; offset re-measured from {zm['remeasured']['n']} fan-only stretches "
+                 f"({zm['remeasured']['minutes']} min, last {ZERO_RECENT_D} d; held fit "
+                 f"{zm['remeasured']['held_offset']:+.3f})" if zm.get("remeasured") else ""))
              if zm else (f"{sum(1 for v in state.values() if v != 'S0')} blower-on and "
                          f"{sum(1 for v in state.values() if v == 'S0')} blower-off Aprilaire-idle minutes; "
                          + ("not enough paired stretches to fit yet" if reg else "no paired meter data"))),
@@ -647,7 +695,7 @@ def main():
 
     # ---- status ----------------------------------------------------------------------------------------------
     status = {"generated": pt(now).isoformat(), "gates": [], "blocks": scored,
-              "zero": {k: v for k, v in zm.items() if k != "held"} if zm else None}
+              "zero": stored_zero(zm)}
     for gid, title, cr in gates:
         due = DUE[gid]
         if gid == "P3":
