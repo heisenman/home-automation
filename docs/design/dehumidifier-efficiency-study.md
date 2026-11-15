@@ -628,6 +628,15 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
   per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
   short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
+- **2026-11-15 07:40 PST — zero windows live; E's trigger and MA's additivity in doubt.** Fan-only windows ran in
+  all 8 eligible blocks (46 → 55, ON ~5.6 min, back to Auto ~30 min, all ok); the report's re-measured offset is
+  +0.088 ± 0.126 g/m³ from 6 stretches (80 min), too few to use yet. E ran in 4 of the 11 blocks since 11-14 07:00
+  (never twice in a row) on dew-point gaps that come from Open-Meteo: the outdoor sensor reads RH 94–97 % at night, so
+  the wet-bias rule swaps in Open-Meteo, which is 1.5–3.4 g/m³ drier than the sensor (sensor ~9.3, house ~8.1,
+  Open-Meteo 6–7.8). The house says otherwise: its mean-AH slope in E blocks is +0.17 g/m³/h against +0.21 in 0
+  blocks (7 and 6 blocks), i.e. the ERV on high barely dries it, so the "drier outdoors" may not be real. Also, MA
+  blocks dry the house no faster than M or A alone (−0.16 vs −0.21 / −0.19 g/m³/h; additive would be ~−0.6), though
+  both units' own scores are normal: a rebound/buffer effect the law's additive model misses (Phase 4 buffer refit).
 - **2026-11-14 ~17:00 PST — Aprilaire scores rising; fan-only zero windows added.** Aprilaire block scores went
   0.55–0.80 (11-12) → 0.97 / 1.13 / 1.24 (11-14) at the same inlet dew point and power; the raw supply − return
   during its blocks went ~−0.05 → −0.30 g/m³. A room-side estimate (house-mean AH slope in A blocks vs a fit on the
