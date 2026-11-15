@@ -631,6 +631,12 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
   per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
   short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
+- **2026-11-15 ~09:30 PST — dry boost keeps Open-Meteo above the sensor's wet threshold; E stays on "both" (Hugh).**
+  A bias-corrected sensor (−11/−14 % RH) was proposed for the dry boost and dropped before it was built: it fails the
+  one ground-truth case (11-08 13:00, sensor 90 % vs Open-Meteo 67 %, kitchen dew point fell to 7.1 °C with windows
+  open: the sensor was ~23 points high, not 11), and last night's house slopes can't separate the sources (Open-Meteo
+  vs house was only 0.3–2 g/m³, ~0.04 g/m³/h of ERV drying, under the ~0.1 block noise). The 07:40 entry overstated
+  that evidence. E keeps the wetter of the two: fewer E blocks, but only on a clear gap either source agrees on.
 - **2026-11-15 ~08:30 PST — Phase 4 formalization started (Hugh: "build the Midea's efficiency, and use the
   aprilaire as backup"; fit now, compare against the next days).** E's trigger now needs the sensor AND Open-Meteo
   to say drier (d5c06bc). Fits on 44 blocks (unified-control-law-l3-fits.md §8): Midea 1.00 L/kWh alone, 0.91 with
