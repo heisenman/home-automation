@@ -190,6 +190,14 @@ for r in c.execute('select ts, reason, act, status from control_log where device
 
 ## Entry 4b — Dehumidifier study rotation (Phase 3) is running
 
+**Status 2026-11-16 07:20 PST: stopped** (P3 passed; Hugh: Midea back on its rules, law shadow vs the rules).
+`study:rotation` has `enabled: false, zero_fan: false`; the last block (72) ended `disabled` and the study's
+overrides were cleared. Check it stays stopped: `study:rotation` `enabled` false, no `study_block` row with a NULL
+`end_reason`, and control_log shows `dehumidifier_living_room` / `dehum_attic` decisions from `rule`, not `override`.
+To measure the Aprilaire again in isolation (kept available, Hugh 2026-11-16): set `enabled: true` (and `zero_fan:
+true` for fan-only zero windows) through `PUT /control/house/study`; see study doc §3D. The checks below apply while
+it runs.
+
 **Asserted state:** the controller on ha-2 runs the study rotation (`server/control/study_rotation.py`): 90-min
 blocks, arms 0/M/A/MA/E in a random order each cycle, written as ordinary overrides on `dehumidifier_living_room`,
 `dehum_attic` and `erv_attic` (expiry = block end + 10 min), one `study_block` row per block. Outside arm E the

@@ -199,6 +199,13 @@ From 2026-11-15 (Hugh) the gap uses the WETTER of the outdoor sensor and Open-Me
 counts outdoor air as drier only when both say so. Before, a sensor at RH ≥ `wet_rh` (every night) was replaced by
 Open-Meteo, 1.5–3.4 g/m³ drier, and E ran on gaps the house's own AH slope didn't show (§6b 11-15).
 
+*Stopped 2026-11-16 07:20 PST (Hugh), P3 passed:* the Midea is back on its rules (on above 46 %, off below 43 %),
+the Aprilaire on its backup rule (48/45), and the law's shadow is compared with the rules (unified-control-law.md).
+The rotation and its fan-only windows stay in the code, off (`enabled`/`zero_fan` false), so the Aprilaire can be
+measured again in isolation. It's the backup unit, so its score matters less to the model than the Midea's. A
+better zero for it than the 25-min windows in the rotation's settle: a fan-only hour with the Aprilaire idle for
+the 2 h before (the short windows mostly followed an Aprilaire block and read −0.16 g/m³ off the held fit).
+
 *Duration:* several weeks, covering cold-dry and mild-damp spells. Summer is covered by the Midea's history
 (the bucket data in method C) until next year.
 
@@ -631,6 +638,10 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
   per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
   short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
+- **2026-11-16 07:20 PST — rotation stopped; Midea back on its rules; shadow vs rules starts (Hugh).** The report
+  scores with the held HVAC zero again (+0.156); the fan-only re-measure (−0.006 ± 0.10) is shown, not used. Blocks
+  47–71 re-scored: Aprilaire 0.71/0.76/0.68/0.34/0.69/0.64/0.88/0.73, all blocks 0.75 ± 9 %, matching the zero-free
+  room-side 0.70 ± 0.11. 72 blocks in all (block 57 excluded as an event).
 - **2026-11-16 07:30 PST — P3 passed (5/5 at 06:41); block 57 excluded; the re-measured zero disagrees with the
   house.** Block 57 (A, 11-15 09:29–11:00) is a moisture event: a shower with a window open, left open (Hugh). It's
   marked `note = "event: …"` in study_block, which the report and law_model_fit.py now skip. The fan-only re-measure

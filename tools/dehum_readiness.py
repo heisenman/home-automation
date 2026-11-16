@@ -468,14 +468,15 @@ def main():
         zm["fitted"] = pt(now).date().isoformat()
     if PREV_ZERO and (zm is None or zm["hours"]["S1f"] < PREV_ZERO["hours"]["S1f"]):
         zm = {**PREV_ZERO, "s1f": [tuple(r) for r in PREV_ZERO.get("s1f", [])], "held": True}
-        # the rotation's fan-only windows (study_rotation zero_*, Hugh 2026-11-14) re-measure the offset: the held
-        # fit's ERV and temperature terms, the offset from the last ZERO_RECENT_D days' fan-only stretches
+        # fan-only windows (study_rotation zero_*, Hugh 2026-11-14) re-measure the offset: the held fit's ERV and
+        # temperature terms, the offset from the last ZERO_RECENT_D days' fan-only stretches. Shown, NOT used for
+        # scoring (2026-11-16, Hugh): it moved +0.156 → −0.005 and the Aprilaire's scores fell to 0.1–0.7, but the
+        # house dried ~2 SD faster than those scores predict (study doc §6b 11-16) — short windows right after an
+        # Aprilaire block are a poor zero. The Aprilaire's model figure comes from law_model_fit.py section E.
         if reg:
             rec = zero_recent(hv_delta, state, xdiff, erv_cfm, t_ret, zm, now - ZERO_RECENT_D * 86400)
             if rec:
-                zm["beta"], zm["se"] = list(zm["beta"]), list(zm["se"])
                 zm["remeasured"] = {**rec, "held_offset": zm["beta"][0], "held_se": zm["se"][0]}
-                zm["beta"][0], zm["se"][0] = rec["offset"], rec["se"]
     hz = {"mean": zm["beta"][0], "se": zm["se"][0]} if zm else None
     mid_idle = {k: mid_p.get(k, 999) < 5 for k in mid_p}
     # blower-off only: with the blower on, supply air reaches the pair unevenly (outlet − inlet +1.2-1.7 g/m3 on
@@ -525,9 +526,10 @@ def main():
               + hv_how
               + (f" — held fit from {zm.get('fitted')}: its fan-only minutes have aged out of the 7-day rungs"
                  if zm.get("held") else "")
-              + (f"; offset re-measured from {zm['remeasured']['n']} fan-only stretches "
-                 f"({zm['remeasured']['minutes']} min, last {ZERO_RECENT_D} d; held fit "
-                 f"{zm['remeasured']['held_offset']:+.3f})" if zm.get("remeasured") else ""))
+              + (f"; fan-only windows re-measure the offset at {zm['remeasured']['offset']:+.3f} ± "
+                 f"{zm['remeasured']['se']:.3f} from {zm['remeasured']['n']} stretches "
+                 f"({zm['remeasured']['minutes']} min, last {ZERO_RECENT_D} d) — shown only, scoring keeps the held "
+                 f"fit" if zm.get("remeasured") else ""))
              if zm else (f"{sum(1 for v in state.values() if v != 'S0')} blower-on and "
                          f"{sum(1 for v in state.values() if v == 'S0')} blower-off Aprilaire-idle minutes; "
                          + ("not enough paired stretches to fit yet" if reg else "no paired meter data"))),
