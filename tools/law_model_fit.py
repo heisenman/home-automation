@@ -20,7 +20,7 @@ import statistics as S2
 c = sqlite3.connect(f"file:{RUNGS}?mode=ro", uri=True); d = Data(c)
 cc = sqlite3.connect(f"file:{CONTROL}?mode=ro", uri=True)
 blocks = cc.execute("SELECT id, arm, start_ts, end_ts, inlet_dp_c FROM study_block WHERE end_reason='complete' "
-                    "ORDER BY id").fetchall()
+                    "AND coalesce(note, '') NOT LIKE 'event:%' ORDER BY id").fetchall()
 V, RET = 520.0, "study_hvac_return"
 
 
@@ -100,6 +100,20 @@ fit["house"] = {"buffer_x": round(buf_m, 2) if buf_m else None, "apr_seen": roun
                 "midea_seen_both": round(1 + seen(b[3]), 2), "erv_pass": round(-seen(b[4]), 2),
                 "load_gph": round(-b[0] / b[1], 0) if b[1] else None, "resid_sd": round(s2 ** 0.5, 3), "n": len(y),
                 "se": [round(x, 6) for x in se], "beta": [round(x, 6) for x in b]}
+
+# E. the Aprilaire's L/kWh without the HVAC pair (its zero has drifted, §6b 11-14/16): the house-mean slope per kW of
+# each unit, scaled by the Midea's L/kWh — the house sees the Aprilaire's kW at this rate, in Midea-equivalent water.
+# All blocks (the fit window and later)
+allr = rows + later
+Xe = [[1.0, r["km"], r["ka"], r["km"] if r["arm"] == "MA" else 0.0, r["erv"]] for r in allr]
+be, see, _, s2e = ols(Xe, [r["sl"] for r in allr])
+mid_alone = S2.mean(r["mid"] for r in allr if r["arm"] == "M" and r["mid"])
+ratio = be[2] / be[1]
+rse = abs(ratio) * ((see[2] / be[2]) ** 2 + (see[1] / be[1]) ** 2) ** 0.5
+print(f"E. per kW: Midea {be[1]:+.3f} ± {see[1]:.3f}, Aprilaire {be[2]:+.3f} ± {see[2]:.3f} g/m³/h; Aprilaire/Midea "
+      f"{ratio:.2f} ± {rse:.2f} → Aprilaire house-seen ≈ {ratio * mid_alone:.2f} ± {rse * mid_alone:.2f} L/kWh "
+      f"(Midea alone {mid_alone:.2f}); n {len(allr)}")
+fit["aprilaire_room_side"] = {"l_per_kwh_seen": round(ratio * mid_alone, 2), "se": round(rse * mid_alone, 2), "n": len(allr)}
 
 # D. forward check: the fit on blocks ≤ FIT_THROUGH, predicting each later block
 if later:

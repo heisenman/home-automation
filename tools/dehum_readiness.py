@@ -625,7 +625,10 @@ def main():
     p3 = []
     try:
         cc = sqlite3.connect(f"file:{CONTROL}?mode=ro", uri=True)
-        brows = cc.execute("SELECT id, arm, start_ts, end_ts, end_reason, inlet_dp_c FROM study_block").fetchall()
+        # a block whose note starts "event:" (a person's moisture event, e.g. a shower with the window open —
+        # study doc §6b) is neither scored nor counted
+        brows = [r[:6] for r in cc.execute("SELECT id, arm, start_ts, end_ts, end_reason, inlet_dp_c, note "
+                                           "FROM study_block").fetchall() if not (r[6] or "").startswith("event:")]
     except sqlite3.Error:
         brows = None
     scored = {}

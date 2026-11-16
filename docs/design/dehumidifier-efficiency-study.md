@@ -631,6 +631,15 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
   per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
   short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
+- **2026-11-16 07:30 PST — P3 passed (5/5 at 06:41); block 57 excluded; the re-measured zero disagrees with the
+  house.** Block 57 (A, 11-15 09:29–11:00) is a moisture event: a shower with a window open, left open (Hugh). It's
+  marked `note = "event: …"` in study_block, which the report and law_model_fit.py now skip. The fan-only re-measure
+  (9 stretches, 125 min) moved the HVAC zero offset +0.156 → −0.005 ± 0.10 g/m³, and the Aprilaire's new block scores
+  fell to 0.11–0.66 (method B runs 0.35–0.46) — but the house dried in A and MA blocks 56/59/61/62 about 2 SD faster
+  than those scores predict. A zero-free room-side estimate (house-mean slope per kW of each unit × the Midea's
+  L/kWh, 59 blocks) gives the Aprilaire ≈ 0.70 ± 0.11 L/kWh as the house sees it, matching the law's 0.77 × 0.87.
+  The Midea's newer blocks at inlet dew point 7.5–8.5 °C score 0.76–0.80 (vs ~1.0 at 9–10 °C): a dew-point slope
+  is starting to show.
 - **2026-11-15 ~09:30 PST — dry boost keeps Open-Meteo above the sensor's wet threshold; E stays on "both" (Hugh).**
   A bias-corrected sensor (−11/−14 % RH) was proposed for the dry boost and dropped before it was built: it fails the
   one ground-truth case (11-08 13:00, sensor 90 % vs Open-Meteo 67 %, kitchen dew point fell to 7.1 °C with windows
