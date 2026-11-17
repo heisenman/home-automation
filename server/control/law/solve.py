@@ -11,6 +11,10 @@ Given the house's state, the user's bands, the cost basis and the actuator model
      remove less than the sum: the house sees `midea.with_aprilaire` of the Midea's water then, Phase 4 §8). Rank by (firm violation, cost
      + the soft AQ shortfall × its weight, changes from now) and take the first. The actuators are few, so a full
      search beats a general optimiser, and every choice can be explained.
+     Outdoor drying (Hugh 2026-11-17): while RH is in or above the band and outdoor air is drier by the dew-point gap
+     (`outdoor_drying`, with the dry boost's hysteresis), the ventilator is wanted at its top level, like an AQ
+     want; the house's water generation has been steady, so getting ahead of it is always temporary. Below the
+     band the firm "no drying" term ramps it back down.
   4. Purifiers follow the rough AQ rule (Hugh 2026-11-12): one level up per `aq.step` below the floor.
   5. The thermostat isn't searched: the law asks for the temperature band itself (heat to `min`, cool at `max`).
 
@@ -35,6 +39,22 @@ def ah(t_c: float, rh: float) -> float:
 def ah_dp(dp_c: float, t_c: float) -> float:
     """Absolute humidity g/m³ of air at temperature t_c with dew point dp_c."""
     return 216.7 * 6.112 * math.exp(17.62 * dp_c / (243.12 + dp_c)) / (273.15 + t_c)
+
+
+def dp_ah(w: float, t_c: float) -> float:
+    """Dew point °C of air at temperature t_c holding w g/m³ (the inverse of ah_dp)."""
+    g = math.log(w * (273.15 + t_c) / (216.7 * 6.112))
+    return 243.12 * g / (17.62 - g)
+
+
+def outdoor_drying(bands: dict, h: House, need: float | None, venting_top: bool) -> tuple[bool, float | None]:
+    """(drying with outdoor air wanted, the dew-point gap indoor − outdoor). On at `on_dp_c`, held to `off_dp_c`
+    while the ventilator already runs at its top level; never below the RH band."""
+    od = bands.get("outdoor_drying") or {}
+    if not od.get("enabled") or need is None or need < 0 or h.w_out is None or h.t_out_c is None or h.w_in is None:
+        return False, None
+    gap = dp_ah(h.w_in, h.t_rh_c) - dp_ah(h.w_out, h.t_out_c)
+    return gap >= float(od["off_dp_c"] if venting_top else od["on_dp_c"]), gap
 
 
 def f2c(f: float) -> float:
@@ -131,6 +151,12 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
     temp_hot = errs["temp_f"] is not None and errs["temp_f"] > 0
     temp_cold = errs["temp_f"] is not None and errs["temp_f"] < 0
 
+    top = max([len(m.options) - 1 for m in vents] or [0])
+    venting_top = bool(vents) and any((current.get(m.device_id) or 0) >= top for m in vents)
+    dry_out, gap = outdoor_drying(bands, h, need, venting_top)
+    aq_need = aq_level(bands, h.aq, top)
+    vent_want = max(aq_need or 0, top if dry_out else 0)
+
     choices = [m.options for m in dehums] + [m.options for m in vents]
     ranked = []
     both_f = float(prm["midea"].get("with_aprilaire", 1.0))
@@ -151,8 +177,7 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
             firm += max(0.0, heat) / 100                    # heat into a house above its band (W → g/h-ish scale)
         if temp_cold:
             firm += max(0.0, -heat) / 100
-        aq_need = aq_level(bands, h.aq, max([len(m.options) - 1 for m in vents] or [0]))
-        aq_short = max(0, (aq_need or 0) - vent) if vents else 0
+        aq_short = max(0, vent_want - vent) if vents else 0     # the AQ want, or outdoor drying's top level
         c = _cost(cost, prm, h, elec, heat)
         changes = sum(1 for m, o in zip(dehums + vents, combo) if current.get(m.device_id) != o.level)
         ranked.append(((round(firm, 1), round(c + float(bands["aq"]["weight"]) * aq_short, 4), changes),
@@ -177,11 +202,13 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
         reasons.append(f"temperature {c2f(h.t_in_c):.1f} °F, {abs(errs['temp_f']):.1f} °F "
                        f"{'above' if temp_hot else 'below'} the band")
     if h.aq is not None and vents:
-        reasons.append(f"AQ {h.aq:.0f} → ventilation level {aq_level(bands, h.aq, len(vents[0].options) - 1)} wanted")
+        reasons.append(f"AQ {h.aq:.0f} → ventilation level {aq_need} wanted")
+    if dry_out:
+        reasons.append(f"outdoor dew point {gap:.1f} °C below indoor → ventilation level {top} to dry")
     reasons.append("chose " + ", ".join(f"{d} {v['label']}" for d, v in choice.items())
                    + f": {best[2]['water_gph']:+.0f} g/h water, {best[2]['elec_w']} W, {best[2]['cost_h']:.3f} {basis}"
                    + (f", firm shortfall {best[2]['firm']}" if best[2]['firm'] else "")
-                   + (f", AQ short {best[2]['aq_short']} level(s)" if best[2]['aq_short'] else ""))
+                   + (f", ventilation short {best[2]['aq_short']} level(s)" if best[2]['aq_short'] else ""))
 
     # purifiers: the rough AQ rule; the thermostat: the band itself
     for m in models:

@@ -98,6 +98,13 @@ so its net cost is its kWh minus the gas it saves. That makes the ranking depend
 6. **Explain:** every decision carries the errors, the levers considered with their cost per unit, and the
    reason the winner won. This goes to control_log and the PWA, the way the dew-point law reports its terms.
 
+**Outdoor drying (Hugh 2026-11-17):** while RH is in or above its band and outdoor air is drier (indoor − outdoor
+dew point ≥ `outdoor_drying.on_dp_c` 1.5 °C, held to `off_dp_c` 0.75 °C while the ERV already runs at its top
+level: the ERV dry boost's live thresholds), the ERV is wanted at its top level, priced like an AQ want. Below the
+band the firm "no drying" term ramps it down. Hugh: the house's water generation has been steady, so getting
+ahead of it is always temporary; no more complexity until a different condition shows up. Before this, the law
+disagreed with the dry boost on 249/267 ticks of 11-16/17 (it wanted low/med for AQ only); replayed with it, 267/267.
+
 **The rough AQ rule (until the AQ model exists):** AQ below its band raises the ERV and the purifiers one level
 per `aq_step`. The ERV half is the dew-point law's AQ force, which already exists. **Furnace link:** a heat call
 is a predicted VOC rise, larger when the blower starts with the call, so the law may give the ERV and purifiers a

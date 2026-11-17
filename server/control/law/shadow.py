@@ -33,7 +33,7 @@ class Shadow:
         # first decision 2 min after start: device telemetry arrives over the first ticks, and a decision made
         # before it would compare against "unknown"
         self.last_run = (time.time() if now is None else now) - INTERVAL_S + STARTUP_S
-        self.held: dict[str, tuple[int | None, float]] = {}    # device -> (level, since)
+        self.held: dict[str, tuple[int | None, float, str]] = {}    # device -> (level, since, label)
 
     def due(self, now: float) -> bool:
         return now - self.last_run >= INTERVAL_S
@@ -58,12 +58,12 @@ class Shadow:
         plan = S.solve(models, st["bands"], st["cost"], prm, house, current)
         choice = {}
         for did, v in plan.choice.items():                  # min hold, per device, on the law's own answers
-            lvl, since = self.held.get(did, (None, 0.0))
+            lvl, since, label = self.held.get(did, (None, 0.0, ""))
             if lvl is not None and v["level"] != lvl and now - since < MIN_HOLD_S:
-                choice[did] = {**v, "level": lvl, "held_s": round(MIN_HOLD_S - (now - since))}
+                choice[did] = {**v, "level": lvl, "label": label, "held_s": round(MIN_HOLD_S - (now - since))}
                 continue
             if v["level"] != lvl:
-                self.held[did] = (v["level"], now)
+                self.held[did] = (v["level"], now, v["label"])
             choice[did] = v
         shadowed = {d: c for d, c in choice.items() if B.enrolment(st, d) == "shadow"}
         actual = {d: current.get(d) for d in shadowed}

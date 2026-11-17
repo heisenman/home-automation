@@ -29,6 +29,7 @@ REG = {"midea": Ctl("dehumidify", "dehumidifier"), "apr": Ctl("dehumidify", "deh
 BANDS = B.BANDS_DEFAULT
 KWH = B.COST_DEFAULT
 PRM = M.params(None)
+MONEY = {"basis": "money", "electric_per_kwh": 0.18, "gas_per_therm": 1.6}
 
 
 def _house(rh=44.0, t=22.0, w_out=None, t_out=10.0, aq=85.0, heating=False):
@@ -94,6 +95,24 @@ def test_drier_outdoor_air_is_the_cheapest_drying():
     assert big.choice["midea"]["level"] == 1
 
 
+def test_in_band_drier_outdoor_air_runs_the_ventilator_high():
+    h = _house(rh=43.0, t=22.0, w_out=5.7, t_out=7.0, aq=85.0)   # dew point ~9 in / ~2.5 out (Hugh 2026-11-17)
+    p = _solve(h, cost=MONEY)
+    assert p.need_gph == 0.0 and p.choice["erv"]["level"] == 3
+    assert p.choice["midea"]["level"] == 0 and p.choice["apr"]["level"] == 0
+    assert any("to dry" in r for r in p.reasons)
+
+
+def test_outdoor_drying_has_hysteresis_and_stops_below_the_band():
+    gap1 = _house(rh=43.0, w_out=S.ah_dp(S.dp_ah(S.ah(22.0, 43.0), 22.0) - 1.0, 10.0))   # outdoor 1 °C drier
+    assert _solve(gap1, {"erv": 1}).choice["erv"]["level"] == 1           # not started at a 1 °C gap
+    assert _solve(gap1, {"erv": 3}).choice["erv"]["level"] == 3           # but held once running (off at 0.75)
+    dry = _house(rh=39.0, w_out=4.0, aq=85.0)
+    assert _solve(dry, {"erv": 3}).choice["erv"]["level"] == 0            # below the band: no drying at all
+    off = {**BANDS, "outdoor_drying": {**BANDS["outdoor_drying"], "enabled": False}}
+    assert _solve(_house(rh=43.0, w_out=5.0), bands=off).choice["erv"]["level"] == 1
+
+
 def test_poor_air_raises_ventilation_and_purifiers():
     p = _solve(_house(rh=44.0, aq=58.0))                    # 17 below the floor of 75, step 10
     assert p.choice["erv"]["level"] == 3 and p.choice["pur"]["level"] == 3
@@ -128,6 +147,7 @@ def test_shadow_logs_and_holds(tmp_path):
     p2 = sh.run(conn, NOW + 300, REG, _house(rh=43.0), {"midea": 1})     # inside band now, but held 15 min
     last = store.get_setting(conn, "law:last")
     assert last["choice"]["midea"]["level"] == 1 and last["choice"]["midea"]["held_s"] > 0
+    assert last["choice"]["midea"]["label"] == "on"                       # the held answer's own label
     B.put(conn, store, {"enrol": {"midea": "rule"}})
     sh.run(conn, NOW + 2000, REG, h, {"midea": 0})
     plan = json.loads(conn.execute("SELECT plan FROM law_shadow ORDER BY ts DESC").fetchone()[0])

@@ -638,6 +638,11 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
   per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
   short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
+- **2026-11-17 ~08:30 PST — in-band drying with outdoor air: yes (Hugh).** Shadow vs rules, 11-16 07:37 → 11-17
+  07:32: Midea 266/267, Aprilaire 267/267, ERV 18/267 — the dry boost ran the ERV high all day (dew-point gap
+  1.9–9 °C), the law wanted low/med for AQ only. RH stayed 40–46 % (mean 43). Hugh: boost while RH is in band, ramp
+  down below it; water generation is steady, so getting ahead is temporary. The law now wants the ERV's top level on
+  the dry boost's gap thresholds (unified-control-law.md §4); replayed on the same ticks, 267/267.
 - **2026-11-16 07:20 PST — rotation stopped; Midea back on its rules; shadow vs rules starts (Hugh).** The report
   scores with the held HVAC zero again (+0.156); the fan-only re-measure (−0.006 ± 0.10) is shown, not used. Blocks
   47–71 re-scored: Aprilaire 0.71/0.76/0.68/0.34/0.69/0.64/0.88/0.73, all blocks 0.75 ± 9 %, matching the zero-free
