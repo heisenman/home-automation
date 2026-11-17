@@ -135,6 +135,11 @@ The study's Phase 3 rotation still runs underneath: it's what turns the dehumidi
   Defaults: 68–76 °F, 40–46 % RH. House-wide only for now; per-room and day/night bands come later.
 - **Cost** (`law:cost`): `kwh` (electricity only, the default) or `money` (electric $/kWh + gas $/therm; heat
   credited against the furnace's gas while heating, charged at AC COP 3 while cooling).
+  **Set on ha-2 2026-11-16 ~21:15 PST (Hugh):** `money`, electricity $0.18/kWh (Portland General Electric, Hugh's
+  figure), gas $1.60/therm (NW Natural, an estimate: the OPUC-approved 10-31 increase of $6.30/month = 7.3 % on
+  54 therms implies ≈ $1.60 all-in; EIA's 2025 Oregon average $1.61; replace from a bill). Furnace heat then costs
+  ≈ $0.057/kWh, a third of electricity. The AQ weight moved 1.0 → 0.18 with it ($ per level short, so the trade-off
+  against cost is the same as 1.0 kWh/h was).
 - **Water need:** the excess over the band's top × the house's buffered volume (520 m³ × `buffer_x`) ÷ horizon;
   `buffer_x` = 2.2 since 2026-11-15 (Phase 4, l3-fits §8; 3.7 from 11-13, §7; the Phase 1 26× is the
   multi-day figure and made 1 % RH ≈ 880 g/h, so the law ran both units or neither). Both dehumidifiers together
