@@ -638,6 +638,13 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
   per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
   short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
+- **2026-11-19 07:40 PST — first real law/rule split: the band floor and the AQ mapping.** 11-18 07:37 → 11-19
+  07:35: Midea 266/268, Aprilaire 268/268, ERV 233/268. The Midea split (11-18 19:55–20:00) is tick timing: RH
+  touched 46 at 19:50, the rule ran it 10 min, the law's 5-min ticks saw 41. The ERV split (11-19 04:31 →) is real:
+  outdoor dew point fell to −1.9 °C (Open-Meteo; sensor wet, 97 % RH), the house-mean RH reached the dry boost's
+  39 % floor and the boost ended, the rule dropped to med on AQ 62; the law, on the living room at 40 % (its band
+  min) and its own AQ step (level 3 below 65, the rule's below 60), kept high. Living-room RH 40–44 %, in band. AQ
+  event 11-18 21:10 → 00:40, low 23, both at high.
 - **2026-11-17 ~08:30 PST — in-band drying with outdoor air: yes (Hugh).** Shadow vs rules, 11-16 07:37 → 11-17
   07:32: Midea 266/267, Aprilaire 267/267, ERV 18/267 — the dry boost ran the ERV high all day (dew-point gap
   1.9–9 °C), the law wanted low/med for AQ only. RH stayed 40–46 % (mean 43). Hugh: boost while RH is in band, ramp
