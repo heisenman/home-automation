@@ -638,6 +638,19 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
   per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
   short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
+- **2026-11-20 07:30 PST — shadow review, first night on the 11-19 alignment: dehumidifiers agree, ERV chatters at
+  the band floor, purifiers split by design.** 11-19 07:13 → 11-20 07:09, 268 ticks, no gaps: Midea and Aprilaire
+  268/268, ERV 220/268, purifiers c_bed 83, c_office 168, living room 226 /268. ERV: the 03:27 and 04:59 splits
+  (law low, rule high) are one-tick living-room RH dips 41 → 40 % (whole-% readings): the new floor stops outdoor
+  drying, the next tick at 41 % restarts it — the law needs a hold at the floor (its own min-hold rule, §4.5, isn't
+  applied to outdoor drying yet). The evening splits (20:54–22:53, law med vs rule low) are the AQ mapping at AQ
+  ~75. Purifiers: the law sets all three to one level from the house AQ; the rules run each room on its own (c_bed
+  often off) — a law modelling gap, not a fault. The law's thermostat label says heat to 68 °F; the live setpoint is
+  75 °F (not enrolled). Overnight 18:00–07:00 the furnace heated 228 min (29 %, 20 calls) holding 75 °F at
+  t_out 3–4 °C (11-18: 245 min, 31 %); Aprilaire 0 h; RH 40–42 %. Hugh: **the living-room purifier's PM2.5 is
+  basically useless** — the AQ v2 ⊕ PM shadow reads that room "very poor" 100 % of the week off it; don't use it as
+  an AQ input. Hugh asked: in cold, dry weather with RH in band, can heat loss end the ERV's outdoor drying sooner
+  (or turn it off)? — see unified-control-law.md (cold vs in-band drying).
 - **2026-11-19 ~20:45 PST — law aligned on both (Hugh agreed): outdoor drying stops at living-room RH 40 %, restarts
   above 41 %; AQ step 15 with the edge inclusive (med <= 75, high <= 60).** 07:35 → 20:33: Midea and Aprilaire
   146/146, ERV 124/146 (07:35–09:26 the same split, before the change). Also 07:57 PST: a failover blip — .245
