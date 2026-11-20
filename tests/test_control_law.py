@@ -104,6 +104,10 @@ def test_in_band_drier_outdoor_air_runs_the_ventilator_high():
 
 
 def test_outdoor_drying_has_hysteresis_and_stops_below_the_band():
+    bands = {**BANDS, "outdoor_drying": {**BANDS["outdoor_drying"], "cost_check": False}}   # the dew-point rule alone
+
+    def _solve(h, current=None, cost=KWH, bands=bands):
+        return globals()["_solve"](h, current, cost, bands)
     gap1 = _house(rh=43.0, w_out=S.ah_dp(S.dp_ah(S.ah(22.0, 43.0), 22.0) - 1.0, 10.0))   # outdoor 1 °C drier
     assert _solve(gap1, {"erv": 1}).choice["erv"]["level"] == 1           # not started at a 1 °C gap
     assert _solve(gap1, {"erv": 3}).choice["erv"]["level"] == 3           # but held once running (off at 0.75)
@@ -115,6 +119,44 @@ def test_outdoor_drying_has_hysteresis_and_stops_below_the_band():
     assert _solve(dry, {"erv": 3}).choice["erv"]["level"] == 0            # below the band: no drying at all
     off = {**BANDS, "outdoor_drying": {**BANDS["outdoor_drying"], "enabled": False}}
     assert _solve(_house(rh=43.0, w_out=5.0), bands=off).choice["erv"]["level"] == 1
+
+
+def test_in_band_drying_must_be_worth_its_fan_and_heat_cost():
+    # 11-20 03:22 PST: RH 41 in band, outdoor 3.6 °C and much drier, heating — Midea water (heat credited against
+    # gas) is far cheaper than the ERV's extra fan + heat loss at high, so the law stays at the AQ level
+    cold = S.House(22.2, 43.0, 22.3, 6.05, 3.6, 85.0, heating=True)
+    p = _solve(cold, {"erv": 3}, cost=MONEY)
+    assert p.choice["erv"]["level"] == 1
+    assert any("not worth it" in r for r in p.reasons)
+    # not heating, mild, very dry outdoor air: the fan alone is cheap enough against the dehumidifier's electricity
+    mild = S.House(22.0, 43.0, 22.0, 3.5, 16.0, 85.0)
+    p2 = _solve(mild, {"erv": 1}, cost=MONEY)
+    assert p2.choice["erv"]["level"] == 3 and any("to dry" in r and "worth" in r for r in p2.reasons)
+    # above the band the water need prices drying itself: no check
+    wet = S.House(22.2, 47.0, 22.3, 4.0, 3.6, 85.0, heating=True)
+    assert not any("not worth it" in r for r in _solve(wet, {"erv": 3}, cost=MONEY).reasons)
+
+
+def test_drying_worth_check_has_hysteresis():
+    models = M.build(REG, PRM, {"w_in": S.ah(22.0, 43.0), "w_out": 4.0, "t_in": 22.0, "t_out": 16.0})
+    dehums = [m for m in models if m.function == "dehumidify"]
+    vent = next(m for m in models if m.function == "ventilate")
+    h = S.House(22.0, 43.0, 22.0, 4.0, 16.0, 85.0)
+    _, d = S.drying_worth(BANDS, MONEY, PRM, h, dehums, vent, 1, 3, False)
+    ratio = d["value_h"] / d["cost_h"]
+    cost = MONEY
+    # scale the ERV's fan power so value / extra cost lands at 0.9, between 1 − hyst and 1: running stays on,
+    # a new start doesn't
+    bump = {**BANDS, "outdoor_drying": {**BANDS["outdoor_drying"], "cost_hyst": 0.2}}
+    mid = ratio / 0.9
+    prm = M.params({"erv": {"fan_w": [x * mid for x in PRM["erv"]["fan_w"]]}})
+    models2 = M.build(REG, prm, {"w_in": S.ah(22.0, 43.0), "w_out": 4.0, "t_in": 22.0, "t_out": 16.0})
+    vent2 = next(m for m in models2 if m.function == "ventilate")
+    w_start, d2 = S.drying_worth(bump, cost, prm, h, dehums, vent2, 1, 3, False)
+    w_held, _ = S.drying_worth(bump, cost, prm, h, dehums, vent2, 1, 3, True)
+    assert 0.8 < d2["value_h"] / d2["cost_h"] < 1.0 and not w_start and w_held
+    off = {**BANDS, "outdoor_drying": {**BANDS["outdoor_drying"], "cost_check": False}}
+    assert S.drying_worth(off, MONEY, PRM, h, dehums, vent2, 1, 3, False) == (True, None)
 
 
 def test_aq_step_matches_the_erv_rule_bands():
@@ -138,6 +180,8 @@ def test_bands_validation():
     assert B.validate({"bands": {"temp_f": {"min": 75, "max": 70}}}, cur)[0]
     assert B.validate({"bands": {"rh": {"min": 40, "max": 90}}}, cur)[0]
     assert B.validate({"cost": {"basis": "money"}}, cur)[0]                    # needs both rates
+    assert B.validate({"bands": {"outdoor_drying": {"cost_hyst": 1.5}}}, cur)[0]
+    assert B.validate({"bands": {"outdoor_drying": {"cost_check": "yes"}}}, cur)[0]
     assert "L4" in B.validate({"enrol": {"erv": "law"}}, cur)[0]               # not yet
     err, new = B.validate({"bands": {"rh": {"max": 47}}, "enrol": {"erv": "rule"}}, cur)
     assert err is None and new["bands"]["rh"] == {"min": 40.0, "max": 47} and new["enrol"] == {"erv": "rule"}
@@ -165,6 +209,20 @@ def test_shadow_logs_and_holds(tmp_path):
     sh.run(conn, NOW + 2400, REG, h, {"midea": 1}, study_arm="MA")      # the experiment, not the rules
     v2 = SH.view(conn, store, NOW + 2400)
     assert v2["study_ticks_24h"] == 1 and v2["agreement_24h"]["apr"]["ticks"] == v["agreement_24h"]["apr"]["ticks"]
+
+
+def test_shadow_hysteresis_runs_on_its_own_answers():
+    # 11-20 03:27: RH dipped 41 → 40 for one tick; the law stopped drying, and on the rules' ERV-high it read
+    # "already at top" and restarted at 41. On its own answer (low) it must wait for > 41.
+    conn = sqlite3.connect(":memory:")
+    store.ensure_schema(conn)
+    B.put(conn, store, {"bands": {"outdoor_drying": {"cost_check": False}}})
+    sh = SH.Shadow(store)
+    h = lambda rh: _house(rh=rh, w_out=5.0)
+    assert sh.run(conn, NOW, REG, h(43.0), {"erv": 3}).choice["erv"]["level"] == 3
+    assert sh.run(conn, NOW + 1000, REG, h(40.0), {"erv": 3}).choice["erv"]["level"] == 1
+    assert sh.run(conn, NOW + 2000, REG, h(41.0), {"erv": 3}).choice["erv"]["level"] == 1   # rule still high
+    assert sh.run(conn, NOW + 3000, REG, h(42.0), {"erv": 3}).choice["erv"]["level"] == 3
 
 
 class Iss:

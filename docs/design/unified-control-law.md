@@ -111,6 +111,18 @@ AQ step is 15 (was 10) and the floor edge counts, so the ERV wants med at AQ <= 
 own bands. Replayed on 11-18/19's 413 ticks: 396 agree; the rest are the law ramping down at 40 % in the living room
 while the dry boost (house-mean RH, 39 % floor) kept going.
 
+*Cost check (Hugh 2026-11-20):* in band, water removed early is worth at most what the cheapest dehumidifier would
+spend removing it later, so outdoor drying is wanted only while the extra water (top level vs the AQ level) is worth
+at least the extra fan + heat-loss cost, on the cost basis (`outdoor_drying.cost_check`, default on; started at a
+ratio of 1, held to 1 − `cost_hyst` 0.2). Above the band the water need prices drying itself, so no check. On the
+money basis while heating the Midea's water is cheap (its heat is credited against gas: ~$0.04/h for ~480 g/h), and
+the ERV's high-vs-low fan alone (~99 W) costs more than the extra ~90–150 g/h is worth, so **in-band outdoor drying
+is off whenever the house is heating**; it comes back outside heating in mild, very dry weather. Hugh's ask was cold
+weather ending it sooner; the numbers say heating alone does. The law still runs at least low for AQ: "off entirely"
+is a separate decision. Shadow fix the same day: the law's hysteresis (drying to the middle, the outdoor-drying
+restart) now runs on its own held answers, not the rules' levels; on the rules' ERV-high it read "already at top"
+and restarted at 41 % after a one-tick dip to 40 (11-20 03:27, 04:59).
+
 **The rough AQ rule (until the AQ model exists):** AQ below its band raises the ERV and the purifiers one level
 per `aq_step`. The ERV half is the dew-point law's AQ force, which already exists. **Furnace link:** a heat call
 is a predicted VOC rise, larger when the blower starts with the call, so the law may give the ERV and purifiers a

@@ -15,6 +15,11 @@ Given the house's state, the user's bands, the cost basis and the actuator model
      (`outdoor_drying`, with the dry boost's hysteresis), the ventilator is wanted at its top level, like an AQ
      want; the house's water generation has been steady, so getting ahead of it is always temporary. Below the
      band the firm "no drying" term ramps it back down.
+     Cost check (Hugh 2026-11-20): in band, water removed early is worth at most what the cheapest dehumidifier
+     would spend removing it later, so outdoor drying is wanted only while the extra water (top level vs the AQ
+     level) is worth at least the extra fan + heat-loss cost; started at a ratio of 1, held to 1 − `cost_hyst`.
+     Cold outdoor air raises the heat cost, so it ends in-band drying on its own. Above the band the water need
+     already prices drying, and no check applies.
   4. Purifiers follow the rough AQ rule (Hugh 2026-11-12): one level up per `aq.step` below the floor.
   5. The thermostat isn't searched: the law asks for the temperature band itself (heat to `min`, cool at `max`).
 
@@ -59,6 +64,29 @@ def outdoor_drying(bands: dict, h: House, need: float | None, venting_top: bool)
         return False, None
     gap = dp_ah(h.w_in, h.t_rh_c) - dp_ah(h.w_out, h.t_out_c)
     return gap >= float(od["off_dp_c"] if venting_top else od["on_dp_c"]), gap
+
+
+def drying_worth(bands: dict, cost: dict, prm: dict, h: House, dehums: list, vent, base: int, top: int,
+                 venting_top: bool) -> tuple[bool, dict | None]:
+    """In band: is running the ventilator at `top` instead of `base` (the AQ level) worth its cost? Water is valued
+    at the cheapest dehumidifier's cost per g (its heat credited while heating, as `_cost` does). (worth, detail);
+    detail None = no check (disabled, nothing to value the water by, or no step up)."""
+    od = bands.get("outdoor_drying") or {}
+    if not od.get("cost_check") or vent is None or top <= base:
+        return True, None
+    per_g = [_cost(cost, prm, h, o.elec_w, o.heat_w) / -o.water_gph
+             for m in dehums for o in m.options if o.level and o.water_gph < 0]
+    per_g = [x for x in per_g if x > 0]
+    if not per_g:
+        return True, None
+    o_top, o_base = vent.options[top], vent.options[base]
+    extra_g = o_base.water_gph - o_top.water_gph                 # g/h more removed at the top level
+    extra_cost = (_cost(cost, prm, h, o_top.elec_w, o_top.heat_w)
+                  - _cost(cost, prm, h, o_base.elec_w, o_base.heat_w))
+    value = max(0.0, extra_g) * min(per_g)
+    need_ratio = 1.0 - float(od.get("cost_hyst", 0.0)) if venting_top else 1.0
+    worth = extra_cost <= 0 or value >= need_ratio * extra_cost
+    return worth, {"extra_gph": round(extra_g), "value_h": round(value, 4), "cost_h": round(extra_cost, 4)}
 
 
 def f2c(f: float) -> float:
@@ -159,6 +187,11 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
     venting_top = bool(vents) and any((current.get(m.device_id) or 0) >= top for m in vents)
     dry_out, gap = outdoor_drying(bands, h, need, venting_top)
     aq_need = aq_level(bands, h.aq, top)
+    worth_d = None
+    if dry_out and need == 0:                           # in band: only while the water is worth its cost
+        worth, worth_d = drying_worth(bands, cost, prm, h, dehums, vents[0] if vents else None,
+                                      min(aq_need or 0, top), top, venting_top)
+        dry_out = worth
     vent_want = max(aq_need or 0, top if dry_out else 0)
 
     choices = [m.options for m in dehums] + [m.options for m in vents]
@@ -207,8 +240,14 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
                        f"{'above' if temp_hot else 'below'} the band")
     if h.aq is not None and vents:
         reasons.append(f"AQ {h.aq:.0f} → ventilation level {aq_need} wanted")
+    basis_u = "kWh" if cost.get("basis") != "money" else "$"
+    wd = (f"+{worth_d['extra_gph']} g/h worth {worth_d['value_h']:.3f} {basis_u}/h at the cheapest dehumidifier's "
+          f"cost vs {worth_d['cost_h']:.3f} {basis_u}/h fan + heat loss") if worth_d else ""
     if dry_out:
-        reasons.append(f"outdoor dew point {gap:.1f} °C below indoor → ventilation level {top} to dry")
+        reasons.append(f"outdoor dew point {gap:.1f} °C below indoor → ventilation level {top} to dry"
+                       + (f" ({wd})" if wd else ""))
+    elif worth_d:
+        reasons.append(f"outdoor dew point {gap:.1f} °C below indoor, in band: drying not worth it ({wd})")
     reasons.append("chose " + ", ".join(f"{d} {v['label']}" for d, v in choice.items())
                    + f": {best[2]['water_gph']:+.0f} g/h water, {best[2]['elec_w']} W, {best[2]['cost_h']:.3f} {basis}"
                    + (f", firm shortfall {best[2]['firm']}" if best[2]['firm'] else "")

@@ -23,12 +23,16 @@ BANDS_DEFAULT = {
     "temp_sensors": ROOMS,
     "horizon_h": 3.0,                           # clear a firm band error over this many hours (the house buffers
                                                 # water ~26× its air volume, so humidity moves in hours)
-    "outdoor_drying": {"enabled": True, "on_dp_c": 1.5, "off_dp_c": 0.75, "restart_rh_pts": 1.0},   # Hugh 2026-11-17: while RH is at
+    "outdoor_drying": {"enabled": True, "on_dp_c": 1.5, "off_dp_c": 0.75, "restart_rh_pts": 1.0,
+                       "cost_check": True, "cost_hyst": 0.2},   # Hugh 2026-11-17: while RH is at
                                                 # or above the band's min and outdoor air is drier (dew-point gap,
                                                 # the ERV dry boost's own thresholds), the ventilator runs at its
                                                 # top level; below the band, no drying. Same weight as AQ (soft).
                                                 # It stops at the band's min and restarts above min +
-                                                # restart_rh_pts (Hugh 2026-11-19: 40 % stop, back above 41 %)
+                                                # restart_rh_pts (Hugh 2026-11-19: 40 % stop, back above 41 %).
+                                                # cost_check (Hugh 2026-11-20): in band, only while the extra
+                                                # water is worth its fan + heat-loss cost at the cheapest
+                                                # dehumidifier's price; held to 1 − cost_hyst of it once running
 }
 COST_DEFAULT = {"basis": "kwh", "electric_per_kwh": None, "gas_per_therm": None}
 ENROL_MODES = ("rule", "shadow")                # "law" is stage L4: per device, Hugh's approval
@@ -73,9 +77,10 @@ def validate(body: dict, current: dict) -> tuple[str | None, dict]:
         return "horizon_h must be 0.5–24", new
     od = bd.get("outdoor_drying") or {}
     if not (isinstance(od.get("enabled"), bool) and _num(od.get("on_dp_c"), 0, 10) and _num(od.get("off_dp_c"), 0, 10)
-            and od["off_dp_c"] <= od["on_dp_c"] and _num(od.get("restart_rh_pts"), 0, 10)):
-        return ("outdoor_drying needs enabled true/false, off_dp_c <= on_dp_c (°C, 0–10) and restart_rh_pts "
-                "0–10"), new
+            and od["off_dp_c"] <= od["on_dp_c"] and _num(od.get("restart_rh_pts"), 0, 10)
+            and isinstance(od.get("cost_check", True), bool) and _num(od.get("cost_hyst", 0.0), 0, 0.9)):
+        return ("outdoor_drying needs enabled true/false, off_dp_c <= on_dp_c (°C, 0–10), restart_rh_pts "
+                "0–10, cost_check true/false and cost_hyst 0–0.9"), new
     if not (isinstance(bd.get("rh_sensor"), str) and isinstance(bd.get("temp_sensors"), list)
             and bd["temp_sensors"] and all(isinstance(x, str) for x in bd["temp_sensors"])):
         return "rh_sensor must be a sensor id and temp_sensors a non-empty list", new

@@ -55,7 +55,11 @@ class Shadow:
         prm = M.params(self.store.get_setting(conn, "law:params"))
         models = M.build(registry, prm, {"w_in": house.w_in, "w_out": house.w_out, "t_in": house.t_in_c,
                                          "t_out": house.t_out_c})
-        plan = S.solve(models, st["bands"], st["cost"], prm, house, current)
+        # the law's hysteresis (drying to the band's middle, outdoor drying's restart) runs on its OWN last answers,
+        # as it would when enrolled; on the rules' levels it chattered at the floor (11-20: the rule's ERV high
+        # held the law's drying on at 41 %). The comparison below still uses `current`.
+        own = {**current, **{d: v[0] for d, v in self.held.items() if v[0] is not None}}
+        plan = S.solve(models, st["bands"], st["cost"], prm, house, own)
         choice = {}
         for did, v in plan.choice.items():                  # min hold, per device, on the law's own answers
             lvl, since, label = self.held.get(did, (None, 0.0, ""))
