@@ -49,9 +49,13 @@ def dp_ah(w: float, t_c: float) -> float:
 
 def outdoor_drying(bands: dict, h: House, need: float | None, venting_top: bool) -> tuple[bool, float | None]:
     """(drying with outdoor air wanted, the dew-point gap indoor − outdoor). On at `on_dp_c`, held to `off_dp_c`
-    while the ventilator already runs at its top level; never below the RH band."""
+    while the ventilator already runs at its top level; it stops at the RH band's min and restarts above
+    min + `restart_rh_pts` (Hugh 2026-11-19)."""
     od = bands.get("outdoor_drying") or {}
     if not od.get("enabled") or need is None or need < 0 or h.w_out is None or h.t_out_c is None or h.w_in is None:
+        return False, None
+    floor = float(bands["rh"]["min"]) + (0.0 if venting_top else float(od.get("restart_rh_pts", 0.0)))
+    if h.rh <= floor:
         return False, None
     gap = dp_ah(h.w_in, h.t_rh_c) - dp_ah(h.w_out, h.t_out_c)
     return gap >= float(od["off_dp_c"] if venting_top else od["on_dp_c"]), gap
@@ -120,12 +124,12 @@ def water_need(bands: dict, prm: dict, h: House, drying_now: bool) -> float | No
 
 
 def aq_level(bands: dict, aq: float | None, top: int) -> int | None:
-    """The rough AQ rule: level 1 at or above the floor, one more per `step` below it, up to `top`."""
+    """The rough AQ rule: level 1 above the floor, one more at it and per `step` below it, up to `top`."""
     if aq is None:
         return None
     a = bands["aq"]
     below = a["floor"] - aq
-    return min(top, 1 + (int(below // a["step"]) + 1 if below > 0 else 0))
+    return min(top, 1 + (int(below // a["step"]) + 1 if below >= 0 else 0))     # the edge counts (the ERV rule: <= 75)
 
 
 def _cost(cost: dict, prm: dict, h: House, elec_w: float, heat_w: float) -> float:

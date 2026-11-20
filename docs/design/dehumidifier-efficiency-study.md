@@ -638,6 +638,10 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
   per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
   short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
+- **2026-11-19 ~20:45 PST — law aligned on both (Hugh agreed): outdoor drying stops at living-room RH 40 %, restarts
+  above 41 %; AQ step 15 with the edge inclusive (med <= 75, high <= 60).** 07:35 → 20:33: Midea and Aprilaire
+  146/146, ERV 124/146 (07:35–09:26 the same split, before the change). Also 07:57 PST: a failover blip — .245
+  advertised, .210 fenced ha-2's ha-controller (stopped ~7 s, then back); ha-2 kept the VIP.
 - **2026-11-19 07:40 PST — first real law/rule split: the band floor and the AQ mapping.** 11-18 07:37 → 11-19
   07:35: Midea 266/268, Aprilaire 268/268, ERV 233/268. The Midea split (11-18 19:55–20:00) is tick timing: RH
   touched 46 at 19:50, the rule ran it 10 min, the law's 5-min ticks saw 41. The ERV split (11-19 04:31 →) is real:

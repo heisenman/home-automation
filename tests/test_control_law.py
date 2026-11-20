@@ -107,10 +107,18 @@ def test_outdoor_drying_has_hysteresis_and_stops_below_the_band():
     gap1 = _house(rh=43.0, w_out=S.ah_dp(S.dp_ah(S.ah(22.0, 43.0), 22.0) - 1.0, 10.0))   # outdoor 1 °C drier
     assert _solve(gap1, {"erv": 1}).choice["erv"]["level"] == 1           # not started at a 1 °C gap
     assert _solve(gap1, {"erv": 3}).choice["erv"]["level"] == 3           # but held once running (off at 0.75)
+    assert _solve(_house(rh=40.0, w_out=5.0), {"erv": 3}).choice["erv"]["level"] == 1   # at the floor: stops
+    assert _solve(_house(rh=41.0, w_out=5.0), {"erv": 1}).choice["erv"]["level"] == 1   # not back above 41 yet
+    assert _solve(_house(rh=41.0, w_out=5.0), {"erv": 3}).choice["erv"]["level"] == 3   # held while above 40
+    assert _solve(_house(rh=42.0, w_out=5.0), {"erv": 1}).choice["erv"]["level"] == 3   # restarted
     dry = _house(rh=39.0, w_out=4.0, aq=85.0)
     assert _solve(dry, {"erv": 3}).choice["erv"]["level"] == 0            # below the band: no drying at all
     off = {**BANDS, "outdoor_drying": {**BANDS["outdoor_drying"], "enabled": False}}
     assert _solve(_house(rh=43.0, w_out=5.0), bands=off).choice["erv"]["level"] == 1
+
+
+def test_aq_step_matches_the_erv_rule_bands():
+    assert [S.aq_level(BANDS, a, 3) for a in (80, 75.5, 75, 62, 60, 40)] == [1, 1, 2, 2, 3, 3]
 
 
 def test_poor_air_raises_ventilation_and_purifiers():

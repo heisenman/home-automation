@@ -105,6 +105,12 @@ band the firm "no drying" term ramps it down. Hugh: the house's water generation
 ahead of it is always temporary; no more complexity until a different condition shows up. Before this, the law
 disagreed with the dry boost on 249/267 ticks of 11-16/17 (it wanted low/med for AQ only); replayed with it, 267/267.
 
+*Aligned to the rules (Hugh 2026-11-19):* outdoor drying stops when the living room reaches the band's min (40 %)
+and restarts above min + `restart_rh_pts` (41 %), as the rules ramped down that morning while the law kept high; the
+AQ step is 15 (was 10) and the floor edge counts, so the ERV wants med at AQ <= 75 and high at <= 60, the ERV rule's
+own bands. Replayed on 11-18/19's 413 ticks: 396 agree; the rest are the law ramping down at 40 % in the living room
+while the dry boost (house-mean RH, 39 % floor) kept going.
+
 **The rough AQ rule (until the AQ model exists):** AQ below its band raises the ERV and the purifiers one level
 per `aq_step`. The ERV half is the dew-point law's AQ force, which already exists. **Furnace link:** a heat call
 is a predicted VOC rise, larger when the blower starts with the call, so the law may give the ERV and purifiers a
