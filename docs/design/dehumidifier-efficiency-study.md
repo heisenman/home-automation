@@ -638,6 +638,14 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
   per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
   short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
+- **2026-11-21 09:00 PST — shadow review: below the band the law turned the ERV off; now it keeps the AQ level
+  (Hugh).** 11-20 21:40 → 11-21 09:00, 127 ticks, no gaps: Midea and Aprilaire 127/127, ERV 70/127, purifiers c_bed
+  0, c_office 105, living room 103 /127. Outdoor −1.8 to 1 °C, dew point down to −2.1 °C, living-room RH 39–41 %,
+  AQ 58–83. The ERV split was the law going OFF on 41 ticks when the living room hit 39 % (below the band, the firm
+  "no drying" term beat the soft AQ want); Hugh: "air quality trumps heat savings" — fixed so the law keeps the AQ
+  level below the band. The live cost check (9a6e136, on since 11-20 21:40) wasn't exercised: house-mean RH sat at
+  the dry boost's 39 % floor, so no boost was wanted. Furnace 18:00–09:00: 307 min (34 %), 11-20 total 6.55 h
+  (~$4.35 est.: 11.6 kW input from the model number, $1.60/therm estimate). Aprilaire 0 h; coldest room 19.6 °C.
 - **2026-11-20 07:30 PST — shadow review, first night on the 11-19 alignment: dehumidifiers agree, ERV chatters at
   the band floor, purifiers split by design.** 11-19 07:13 → 11-20 07:09, 268 ticks, no gaps: Midea and Aprilaire
   268/268, ERV 220/268, purifiers c_bed 83, c_office 168, living room 226 /268. ERV: the 03:27 and 04:59 splits

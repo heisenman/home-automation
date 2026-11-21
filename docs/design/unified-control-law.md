@@ -129,6 +129,11 @@ asks `drying_worth` (the law's own models, `law:cost` and `law:params`, re-asked
 flip) before boosting; above the band, or on any failure, the boost runs as before. The rule keeps its own
 house-mean RH floor (39 %) — the law's living-room 40/41 % is not copied in.
 
+*Below the band, AQ ventilation stays (Hugh 2026-11-21: "air quality trumps heat savings"):* the firm "no drying"
+term now counts the dehumidifiers and ventilation **beyond** the AQ level, not the AQ level's own water. Overnight
+11-20/21 the living room reached 39 % and the law had the ERV off on 41 ticks while AQ fell to 58; it now keeps the
+AQ level (the rule's behaviour).
+
 **The rough AQ rule (until the AQ model exists):** AQ below its band raises the ERV and the purifiers one level
 per `aq_step`. The ERV half is the dew-point law's AQ force, which already exists. **Furnace link:** a heat call
 is a predicted VOC rise, larger when the blower starts with the call, so the law may give the ERV and purifiers a

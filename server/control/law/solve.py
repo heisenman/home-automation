@@ -14,7 +14,7 @@ Given the house's state, the user's bands, the cost basis and the actuator model
      Outdoor drying (Hugh 2026-11-17): while RH is in or above the band and outdoor air is drier by the dew-point gap
      (`outdoor_drying`, with the dry boost's hysteresis), the ventilator is wanted at its top level, like an AQ
      want; the house's water generation has been steady, so getting ahead of it is always temporary. Below the
-     band the firm "no drying" term ramps it back down.
+     band the firm "no drying" term ramps it back down — to the AQ level, not below it (Hugh 2026-11-21).
      Cost check (Hugh 2026-11-20): in band, water removed early is worth at most what the cheapest dehumidifier
      would spend removing it later, so outdoor drying is wanted only while the extra water (top level vs the AQ
      level) is worth at least the extra fan + heat-loss cost; started at a ratio of 1, held to 1 − `cost_hyst`.
@@ -209,7 +209,16 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
         if need is not None and need > 0:
             firm += max(0.0, need + water)                  # removal short of the need (water < 0 = removal)
         elif need is not None and need < 0:
-            firm += max(0.0, -water)                        # anything drying an already-dry house
+            # drying an already-dry house: the dehumidifiers, and ventilation BEYOND the AQ level. The AQ level's
+            # own water doesn't count — air quality trumps (Hugh 2026-11-21: the law had the ERV off at 39 % with
+            # AQ ~58 overnight; "air quality trumps heat savings")
+            vent_extra = 0.0
+            for m, o in zip(vents, combo[len(dehums):]):
+                aq_o = m.options[min(aq_need or 0, len(m.options) - 1)]
+                if o.level > aq_o.level:
+                    vent_extra += o.water_gph - aq_o.water_gph
+            dehum_water = water - sum(o.water_gph for o in combo[len(dehums):])
+            firm += max(0.0, -(dehum_water + vent_extra))
         if temp_hot:
             firm += max(0.0, heat) / 100                    # heat into a house above its band (W → g/h-ish scale)
         if temp_cold:

@@ -84,7 +84,9 @@ def test_drying_continues_to_the_bands_middle():
 def test_too_dry_no_dehumidifier_and_no_drying_ventilation_beyond_air_quality():
     p = _solve(_house(rh=38.0, w_out=4.0, aq=85.0))         # outdoor much drier: the ERV dries
     assert p.choice["midea"]["level"] == 0 and p.choice["apr"]["level"] == 0
-    assert p.choice["erv"]["level"] == 0                    # off beats drying a dry house (AQ is only soft)
+    assert p.choice["erv"]["level"] == 1                    # the AQ level stays: air quality trumps (11-21)
+    poor = _solve(_house(rh=38.0, w_out=4.0, aq=58.0))      # 11-21 overnight: 39 %, AQ 58
+    assert poor.choice["erv"]["level"] == 3 and poor.totals["firm"] == 0
 
 
 def test_drier_outdoor_air_is_the_cheapest_drying():
@@ -116,7 +118,7 @@ def test_outdoor_drying_has_hysteresis_and_stops_below_the_band():
     assert _solve(_house(rh=41.0, w_out=5.0), {"erv": 3}).choice["erv"]["level"] == 3   # held while above 40
     assert _solve(_house(rh=42.0, w_out=5.0), {"erv": 1}).choice["erv"]["level"] == 3   # restarted
     dry = _house(rh=39.0, w_out=4.0, aq=85.0)
-    assert _solve(dry, {"erv": 3}).choice["erv"]["level"] == 0            # below the band: no drying at all
+    assert _solve(dry, {"erv": 3}).choice["erv"]["level"] == 1            # below the band: back to the AQ level
     off = {**BANDS, "outdoor_drying": {**BANDS["outdoor_drying"], "enabled": False}}
     assert _solve(_house(rh=43.0, w_out=5.0), bands=off).choice["erv"]["level"] == 1
 
