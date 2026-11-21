@@ -10,6 +10,11 @@ rh_floor (Hugh's floor: the ERV no longer boosts at 40 %) or a room drops below 
 min_off_min. Indoor = the mean over `indoor_sensors` (rooms, each needing temperature + RH); outdoor = one
 sensor. A stale or missing outdoor reading means no boost.
 
+Cost check (Hugh 2026-11-20, `cost_check`): while RH on the unified law's band sensor is in its band, a boost also
+needs the law's in-band cost check (law/solve.py `drying_worth`: the extra water valued at the cheapest
+dehumidifier's cost, heat credited while heating, vs the ERV's extra fan + heat loss). The controller asks it; this
+module stays pure. Above the band the boost runs as before.
+
 Outdoor cross-check (Hugh, 2026-11-08). The outdoor meter sits on the garage's north wall, open to rain and dew, and
 reads RH high when wet (dew point +1.4 °C median against Open-Meteo over 30 days, +2.2 °C at >= 95 % RH;
 temperature agrees). That made the boost miss dry air. With `reference: "openmeteo"` the outdoor dew point is
@@ -49,6 +54,9 @@ DEFAULTS = {
     "agree_c": 1.5,
     "wet_rh": 80.0,             # the sensor's wet bias: +11 % RH at 80-95 %, +14 % at >= 95 % (2026-11-08)
     "reference_stale_min": 45,  # the relay pulls every ~15 min, jittered
+    "cost_check": False,        # Hugh 2026-11-20: with RH in the law's band, boost only while the law's
+                                # drying_worth says the extra water beats the fan + heat-loss cost (the controller
+                                # asks the law; server/control/law/solve.py)
 }
 
 

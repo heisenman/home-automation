@@ -123,6 +123,12 @@ is a separate decision. Shadow fix the same day: the law's hysteresis (drying to
 restart) now runs on its own held answers, not the rules' levels; on the rules' ERV-high it read "already at top"
 and restarted at 41 % after a one-tick dip to 40 (11-20 03:27, 04:59).
 
+*Live too (Hugh 2026-11-20 evening: "move the ERV toward the law"):* the live dry boost takes the same check —
+`dry_boost.cost_check: true` on erv_attic's policy. While RH on the law's band sensor is in its band, the controller
+asks `drying_worth` (the law's own models, `law:cost` and `law:params`, re-asked every 5 min and on each boost
+flip) before boosting; above the band, or on any failure, the boost runs as before. The rule keeps its own
+house-mean RH floor (39 %) — the law's living-room 40/41 % is not copied in.
+
 **The rough AQ rule (until the AQ model exists):** AQ below its band raises the ERV and the purifiers one level
 per `aq_step`. The ERV half is the dew-point law's AQ force, which already exists. **Furnace link:** a heat call
 is a predicted VOC rise, larger when the blower starts with the call, so the law may give the ERV and purifiers a

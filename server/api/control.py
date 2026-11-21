@@ -349,6 +349,10 @@ def handle_policy_update(conn, device_id: str, body: dict[str, Any],
             if g["reference"] not in (None, "openmeteo"):
                 return bad("dry_boost.reference must be \"openmeteo\" or null (sensor only)")
             cur["reference"] = g["reference"]
+        if "cost_check" in g:
+            if not isinstance(g["cost_check"], bool):
+                return bad("dry_boost.cost_check must be true or false")
+            cur["cost_check"] = g["cost_check"]
         eff = {**dry_boost.DEFAULTS, **cur}
         if eff["off_delta_c"] >= eff["on_delta_c"] or eff["rh_floor"] >= eff["rh_on"]:
             return bad("dry_boost needs off_delta_c < on_delta_c and rh_floor < rh_on (hysteresis)")

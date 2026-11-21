@@ -257,3 +257,59 @@ def test_crosscheck_both_takes_wetter_without_wet_bias_swap():
     assert dp == db.dewpoint_c(10.6, 96.0) and "wetter of" in src
     dp, _ = db.outdoor_dewpoint((10.6, 60.0), (10.6, 70.0, 1000.0), _xc(), 1000.0, doubt="both")
     assert dp == db.dewpoint_c(10.6, 70.0)
+
+
+# --- cost check (Hugh 2026-11-20): in the law's RH band, boost only while the extra water is worth its cost ---
+
+def _make_costed(tmp_path, **kw):
+    from server.control.law import bands as LB
+    ctrl, iss, db = _make(tmp_path, boost={"cost_check": True, **kw})
+    conn = sqlite3.connect(db)
+    LB.put(conn, store, {"bands": {"rh_sensor": "room_a", "temp_sensors": ROOMS},
+                         "cost": {"basis": "money", "electric_per_kwh": 0.18, "gas_per_therm": 1.6}})
+    conn.close()
+    return ctrl, iss
+
+
+def _heating(ctrl, now=NOW):
+    ctrl.readings["thermostat_hall"] = {"m": {"hvac_mode": 1}, "ts": now - 30}
+
+
+def test_cost_check_blocks_an_in_band_boost_while_heating(tmp_path):
+    ctrl, iss = _make_costed(tmp_path)
+    import dataclasses
+    a = ctrl.registry["dehum_attic"]                       # ha-2 also has the Midea: its water is the cheapest
+    ctrl.registry["dehumidifier_living_room"] = dataclasses.replace(a, device_type="dehumidifier")
+    _air(ctrl, t_in=21.0, rh_in=43.0, t_out=2.0, rh_out=70.0)     # in band, much drier outdoors, cold
+    _heating(ctrl)
+    ctrl.tick(now=NOW)
+    assert {"mode": "high"} not in _erv(iss)
+    row = sqlite3.connect(str(tmp_path / "control.db")).execute(
+        "SELECT reason FROM control_log WHERE device_id='erv_attic' ORDER BY rowid DESC LIMIT 1").fetchone()
+    assert row is None or "not worth it" in row[0]
+
+
+def test_cost_check_still_boosts_above_the_band(tmp_path):
+    ctrl, iss = _make_costed(tmp_path)
+    _air(ctrl, t_in=21.0, rh_in=48.0, t_out=2.0, rh_out=70.0)     # above the law's 46 % max: the need prices it
+    _heating(ctrl)
+    ctrl.tick(now=NOW)
+    assert _erv(iss)[-1] == {"mode": "high"}
+
+
+def test_cost_check_off_is_the_old_boost(tmp_path):
+    ctrl, iss, _ = _make(tmp_path)
+    _air(ctrl, t_in=21.0, rh_in=43.0, t_out=2.0, rh_out=70.0)
+    _heating(ctrl)
+    ctrl.tick(now=NOW)
+    assert _erv(iss)[-1] == {"mode": "high"}
+
+
+def test_api_accepts_cost_check(tmp_path):
+    from server.api import control as A
+    conn = sqlite3.connect(":memory:")
+    store.ensure_schema(conn)
+    store.set_policy(conn, "erv_attic", {**C.ERV_POLICY, "dry_boost": {"outdoor_sensor": "o", "indoor_sensors": ["r"]}})
+    code, body = A.handle_policy_update(conn, "erv_attic", {"dry_boost": {"cost_check": True}})[:2]
+    assert code == 200 and store.get_policy(conn, "erv_attic")["dry_boost"]["cost_check"] is True
+    assert A.handle_policy_update(conn, "erv_attic", {"dry_boost": {"cost_check": "yes"}})[0] == 400

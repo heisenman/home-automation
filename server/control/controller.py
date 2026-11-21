@@ -22,6 +22,7 @@ from server.comms import events as ev
 from server.control import (actuator_state, bootstrap, control_store as store, dewpoint_law, dry_boost, follow,
                             study_rotation, wet_trim)
 from server.control.law import bands as law_bands
+from server.control.law import models as law_models
 from server.control.law import shadow as law_shadow
 from server.control.law import solve as law_solve
 from server.control.midea_driver import GarbledStatus
@@ -506,7 +507,7 @@ class Controller:
         except Exception:
             return None
 
-    def _apply_dry_boost(self, device_id, pol, policy, sensor, res, dev_state, override, now):
+    def _apply_dry_boost(self, device_id, pol, policy, sensor, res, dev_state, override, now, conn=None):
         """Raise a level-mode ventilator (the ERV) to `dry_boost.level` while outdoor air is drier than the
         house (server/control/dry_boost.py). Applies only to a running rule/default resolution: safety, an
         operator override, a scene or a schedule beat it. When a boost ends, the air-quality band level is
@@ -527,9 +528,15 @@ class Controller:
         cond, why = dry_boost.conditions(readings, cfg, now,
                                          self._weather_reference() if cfg.get("reference") == "openmeteo" else None)
         want, note = dry_boost.decide(cfg, cond, active, since, now, why)
+        level = int(cfg["level"])
+        if want and cfg.get("cost_check") and conn is not None:
+            worth, why_c = self._boost_worth(conn, device_id, res.level or 0, level, active, now)
+            if not worth:
+                want, note = False, f"dry boost not worth it in band ({why_c}); {note}"
+            elif why_c:
+                note = f"{note}; worth it ({why_c})"
         if want != active:
             states[device_id] = (want, now)
-        level = int(cfg["level"])
         if want:
             if res.level is not None and res.level >= level:
                 return Resolution(res.running, res.act, res.source, f"{res.reason}; {note}", level=res.level)
@@ -541,6 +548,42 @@ class Controller:
             return Resolution(True, (not dev_state.running) or dev_state.level != lvl, "rule",
                               f"sensor {sensor.value:.0f} -> speed {lvl}; {note}", level=lvl)
         return Resolution(res.running, res.act, res.source, f"{res.reason}; {note}", level=res.level)
+
+    BOOST_WORTH_S = 300                     # the law's own cadence: the cost check is re-asked every 5 min
+
+    def _boost_worth(self, conn, device_id, base, top, active, now):
+        """(boost worth it, detail) — the unified law's in-band cost check (law/solve.py drying_worth) for the live
+        dry boost: RH on the law's band sensor in band → the extra water at `top` over `base` must beat the fan +
+        heat-loss cost. Above the band, unknown RH, or any failure → worth it (the boost runs as before).
+        Re-asked every BOOST_WORTH_S, and whenever the boost state flips."""
+        cache = self.__dict__.setdefault("_boost_worth_cache", {})
+        hit = cache.get(device_id)
+        if hit and now - hit[0] < self.BOOST_WORTH_S and hit[1] == active:
+            return hit[2], hit[3]
+        try:
+            st = law_bands.get(conn, store)
+            bd = st["bands"]
+            house, _ = self._law_context(conn, store.all_policies(conn), now)
+            if house.rh is None or house.rh > float(bd["rh"]["max"]):
+                out = (True, "")
+            else:
+                prm = law_models.params(store.get_setting(conn, "law:params"))
+                models = law_models.build(self.registry, prm, {"w_in": house.w_in, "w_out": house.w_out,
+                                                               "t_in": house.t_in_c, "t_out": house.t_out_c})
+                vent = next((m for m in models if m.device_id == device_id and m.function == "ventilate"), None)
+                dehums = [m for m in models if m.function == "dehumidify"]
+                top = min(top, len(vent.options) - 1) if vent else top
+                od = {**(bd.get("outdoor_drying") or {}), "cost_check": True}
+                worth, d = law_solve.drying_worth({**bd, "outdoor_drying": od}, st["cost"], prm, house, dehums,
+                                                  vent, min(base, top), top, active)
+                unit = "$" if st["cost"].get("basis") == "money" else "kWh"
+                out = (worth, f"+{d['extra_gph']} g/h worth {d['value_h']:.3f} vs {d['cost_h']:.3f} {unit}/h"
+                       if d else "")
+        except Exception:
+            log.exception("dry boost cost check failed; boosting as before")
+            out = (True, "")
+        cache[device_id] = (now, active, *out)
+        return out
 
     def _apply_study_hold(self, device_id, policy, sensor, res, dev_state, override, now):
         """The dehumidifier study's rotation owns a ventilator's level (server/control/study_rotation.py): outside
@@ -1008,7 +1051,7 @@ class Controller:
             res = self._apply_dewpoint_law(conn, device_id, pol, policy, sensor, res, dev_state, override, now,
                                            scene, lm)            # supersedes the one-way boost and trim below
         elif lm is not None:
-            res = self._apply_dry_boost(device_id, pol, policy, sensor, res, dev_state, override, now)
+            res = self._apply_dry_boost(device_id, pol, policy, sensor, res, dev_state, override, now, conn)
             res = self._apply_wet_trim(device_id, pol, policy, sensor, res, dev_state, override, now)
         if lm is not None and res.level is not None and lm["labels"] and res.level > len(lm["labels"]):
             # a band asking above the device's top level (e.g. bands written when Turbo was a level) means
