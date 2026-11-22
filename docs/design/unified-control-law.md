@@ -111,6 +111,12 @@ AQ step is 15 (was 10) and the floor edge counts, so the ERV wants med at AQ <= 
 own bands. Replayed on 11-18/19's 413 ticks: 396 agree; the rest are the law ramping down at 40 % in the living room
 while the dry boost (house-mean RH, 39 % floor) kept going.
 
+*AQ edge hold (Hugh 2026-11-21):* a running ventilation or purifier level holds while the AQ index is within
+`aq.deadband` (5) points of the band edge it would cross, the rules' own ±5 hold (`automation.py`,
+`threshold_ranged`). So med goes to low at AQ > 80, not 76, and low to med at <= 70. Before it, on 11-21 09:00–17:36
+PST the index sat at 74–80 and the law changed the ERV level 8 times against the rule's 2 (ERV 66/96 agreed);
+replayed with the hold: 2 changes, 97/97.
+
 *Cost check (Hugh 2026-11-20):* in band, water removed early is worth at most what the cheapest dehumidifier would
 spend removing it later, so outdoor drying is wanted only while the extra water (top level vs the AQ level) is worth
 at least the extra fan + heat-loss cost, on the cost basis (`outdoor_drying.cost_check`, default on; started at a

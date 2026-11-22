@@ -15,10 +15,13 @@ BANDS_DEFAULT = {
     "temp_f": {"min": 68.0, "max": 76.0},       # house mean of `temp_sensors`
     "rh": {"min": 40.0, "max": 46.0},           # on `rh_sensor` (the meter both dehumidifiers run on); max = the
                                                 # lowest dehumidifier on-threshold today (Midea 46), min = over-dry
-    "aq": {"floor": 75.0, "weight": 1.0, "step": 15.0},   # air-quality index (0–100, lower = worse); the ERV's
+    "aq": {"floor": 75.0, "weight": 1.0, "step": 15.0, "deadband": 5.0},   # air-quality index (0–100, lower =
+                                                # worse); floor = the ERV's
                                                 # level-2 band edge. weight = kWh/h a level of missing ventilation
                                                 # is worth (soft); step = index points per level (15: level 3 at
-                                                # <= 60, the ERV rule's own bands; Hugh 2026-11-19, was 10)
+                                                # <= 60, the ERV rule's own bands; Hugh 2026-11-19, was 10).
+                                                # deadband = a running level holds within this many points of the
+                                                # edge it would cross, the rules' ±5 (Hugh 2026-11-21)
     "rh_sensor": "meter_pro_living_room",
     "temp_sensors": ROOMS,
     "horizon_h": 3.0,                           # clear a firm band error over this many hours (the house buffers
@@ -71,8 +74,9 @@ def validate(body: dict, current: dict) -> tuple[str | None, dict]:
         return "temp_f needs min < max, °F in 45–95", new
     if not (_num(rh.get("min"), 20, 70) and _num(rh.get("max"), 25, 75) and rh["min"] < rh["max"]):
         return "rh needs min < max, % in 20–75", new
-    if not (_num(aq.get("floor"), 0, 100) and _num(aq.get("weight"), 0, 10) and _num(aq.get("step"), 1, 50)):
-        return "aq needs floor 0–100, weight 0–10, step 1–50", new
+    if not (_num(aq.get("floor"), 0, 100) and _num(aq.get("weight"), 0, 10) and _num(aq.get("step"), 1, 50)
+            and _num(aq.get("deadband", 0.0), 0, 20) and aq.get("deadband", 0.0) < aq["step"]):
+        return "aq needs floor 0–100, weight 0–10, step 1–50, deadband 0–20 and below step", new
     if not _num(bd.get("horizon_h"), 0.5, 24):
         return "horizon_h must be 0.5–24", new
     od = bd.get("outdoor_drying") or {}

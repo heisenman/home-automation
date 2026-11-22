@@ -638,6 +638,17 @@ reported mode 99 % of the time, and the estimate is within 1.5 % of the meter ov
   falls fast under M, rises under A (the band sensor is beside the Midea). Law shadow: the water need is ~880 g/h
   per 1 % RH over the line (buffer 26× over 3 h), more than either unit, so it runs both or neither — the
   short-term buffer is to be fitted from the blocks (unified-control-law.md open questions).
+- **2026-11-21 17:40 PST — shadow review: the law flaps at the AQ band edge; it now holds within ±5 like the rule
+  (Hugh). `meter_living_room` moved off the window.** 09:01 → 17:36, 96 ticks (one missed: ha-controller restarted
+  17:28, cause not found): Midea and Aprilaire 96/96, ERV 66/96, purifiers c_bed 0, c_office 69, living room 66
+  /96. House AQ sat at 74–80 on the 75 edge: the rule holds within ±5 of an edge and changed the ERV twice, the law
+  8 times. Fixed: `aq.deadband` 5 (unified-control-law.md, AQ edge hold); replay 97/97. The 11-21 below-band fix
+  held (10 ticks at 39 %, law stayed at the AQ level), and the live cost check ran for the first time (17:41: "dry
+  boost not worth it in band, +62 g/h worth 0.005 vs 0.019 $/h"). Furnace 00:00–17:40: 338 min, 31 calls, setpoint
+  74 °F, outdoor 1.0–5.4 °C; Aprilaire 0 h; RH 39–42 %; coldest room the kitchen, 19.6 °C. Crawlspace radon nightly
+  median 57 → 74 Bq/m³ (11-19 → 11-20, outdoor low 2.1 → −1.8 °C). **`meter_living_room`:** Hugh moved it away
+  from the window ~16:00 PST (16 → 20 °C within the hour; the Pro read 21.4–21.9 °C all day). Hugh: it had read
+  wrong for a long time, so its earlier record is the window, not room air (Phase 0 already left it out).
 - **2026-11-21 09:00 PST — shadow review: below the band the law turned the ERV off; now it keeps the AQ level
   (Hugh).** 11-20 21:40 → 11-21 09:00, 127 ticks, no gaps: Midea and Aprilaire 127/127, ERV 70/127, purifiers c_bed
   0, c_office 105, living room 103 /127. Outdoor −1.8 to 1 °C, dew point down to −2.1 °C, living-room RH 39–41 %,

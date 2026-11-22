@@ -151,13 +151,21 @@ def water_need(bands: dict, prm: dict, h: House, drying_now: bool) -> float | No
     return max(0.0, excess_g / float(bands["horizon_h"]) + float(hp.get("load_gph") or 0.0))
 
 
-def aq_level(bands: dict, aq: float | None, top: int) -> int | None:
-    """The rough AQ rule: level 1 above the floor, one more at it and per `step` below it, up to `top`."""
+def aq_level(bands: dict, aq: float | None, top: int, held: int | None = None) -> int | None:
+    """The rough AQ rule: level 1 above the floor, one more at it and per `step` below it, up to `top`. `held` = the
+    level the device runs at now: it stays while the index is within `deadband` of the edge it would cross (the
+    rules' own ±5 hold, automation.py; 11-21: AQ 74–80 around the 75 edge flipped the law 8 times, the rule twice)."""
     if aq is None:
         return None
     a = bands["aq"]
-    below = a["floor"] - aq
-    return min(top, 1 + (int(below // a["step"]) + 1 if below >= 0 else 0))     # the edge counts (the ERV rule: <= 75)
+
+    def at(x: float) -> int:
+        below = a["floor"] - x
+        return min(top, 1 + (int(below // a["step"]) + 1 if below >= 0 else 0))   # the edge counts (ERV rule: <= 75)
+    lvl, db = at(aq), float(a.get("deadband") or 0.0)
+    if held and held != lvl and db > 0 and held in (at(aq - db), at(aq + db)):
+        return min(top, held)
+    return lvl
 
 
 def _cost(cost: dict, prm: dict, h: House, elec_w: float, heat_w: float) -> float:
@@ -186,7 +194,9 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
     top = max([len(m.options) - 1 for m in vents] or [0])
     venting_top = bool(vents) and any((current.get(m.device_id) or 0) >= top for m in vents)
     dry_out, gap = outdoor_drying(bands, h, need, venting_top)
-    aq_need = aq_level(bands, h.aq, top)
+    vent_now = max([current.get(m.device_id) or 0 for m in vents] or [0])
+    aq_need = aq_level(bands, h.aq, top, vent_now)
+    aq_held = aq_need is not None and aq_need != aq_level(bands, h.aq, top)
     worth_d = None
     if dry_out and need == 0:                           # in band: only while the water is worth its cost
         worth, worth_d = drying_worth(bands, cost, prm, h, dehums, vents[0] if vents else None,
@@ -248,7 +258,8 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
         reasons.append(f"temperature {c2f(h.t_in_c):.1f} °F, {abs(errs['temp_f']):.1f} °F "
                        f"{'above' if temp_hot else 'below'} the band")
     if h.aq is not None and vents:
-        reasons.append(f"AQ {h.aq:.0f} → ventilation level {aq_need} wanted")
+        reasons.append(f"AQ {h.aq:.0f} → ventilation level {aq_need} wanted"
+                       + (f" (held within ±{float(bands['aq']['deadband']):g} of the band edge)" if aq_held else ""))
     basis_u = "kWh" if cost.get("basis") != "money" else "$"
     wd = (f"+{worth_d['extra_gph']} g/h worth {worth_d['value_h']:.3f} {basis_u}/h at the cheapest dehumidifier's "
           f"cost vs {worth_d['cost_h']:.3f} {basis_u}/h fan + heat loss") if worth_d else ""
@@ -265,7 +276,7 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
     # purifiers: the rough AQ rule; the thermostat: the band itself
     for m in models:
         if m.function == "purify_air":
-            lvl = aq_level(bands, h.aq, 4)
+            lvl = aq_level(bands, h.aq, 4, current.get(m.device_id))
             if lvl is not None:
                 choice[m.device_id] = {"level": lvl, "label": f"speed {lvl}"}
         elif m.function == "condition_temperature":

@@ -165,6 +165,20 @@ def test_aq_step_matches_the_erv_rule_bands():
     assert [S.aq_level(BANDS, a, 3) for a in (80, 75.5, 75, 62, 60, 40)] == [1, 1, 2, 2, 3, 3]
 
 
+def test_aq_level_holds_within_the_deadband_of_an_edge():
+    # 11-21: AQ sat at 74–80 around the 75 edge; the rule (±5 hold) changed twice, the law 8 times
+    assert [S.aq_level(BANDS, a, 3, 2) for a in (76, 79.9, 80.5, 61, 60, 56, 55)] == [2, 2, 1, 2, 2, 2, 3]
+    assert [S.aq_level(BANDS, a, 3, 1) for a in (75, 71, 70, 40)] == [1, 1, 2, 3]     # up only once 5 past the edge
+    assert S.aq_level(BANDS, 73, 3, 3) == 2 and S.aq_level(BANDS, 73, 3, 0) == 2      # not a neighbour / off: no hold
+    off = {**BANDS, "aq": {**BANDS["aq"], "deadband": 0.0}}
+    assert S.aq_level(off, 76, 3, 2) == 1
+    p = _solve(_house(rh=44.0, aq=77.0), {"erv": 2, "pur": 2})
+    assert p.choice["erv"]["level"] == 2 and p.choice["pur"]["level"] == 2
+    assert any("held within ±5 of the band edge" in r for r in p.reasons)
+    assert _solve(_house(rh=44.0, aq=81.0), {"erv": 2, "pur": 2}).choice["erv"]["level"] == 1
+    assert B.validate({"bands": {"aq": {"deadband": 15}}}, {"bands": BANDS, "cost": KWH, "enrol": {}})[0]
+
+
 def test_poor_air_raises_ventilation_and_purifiers():
     p = _solve(_house(rh=44.0, aq=58.0))                    # 17 below the floor of 75, step 10
     assert p.choice["erv"]["level"] == 3 and p.choice["pur"]["level"] == 3
