@@ -7,6 +7,24 @@
 > is superseded: the real cluster is **.210 (dev/bridge) ↔ ha-2 (air-gap dictator)**. Verify state live/`git`,
 > not from these notes (they are suspect leads).
 
+## 🔴 2026-11-23 — air-gap standby falsely promotes and fences ha-2's controller (root cause open)
+
+- **Symptom:** .210's air-gap keepalived instance (`HA_DICTATOR_AIRGAP`, wlp2s0, priority 100) misses > 3.6 s of
+  ha-2's VRRP adverts, enters MASTER for under a second, and `notify.sh` fences ha-2 (`systemctl stop
+  ha-controller`). ha-2's healer restarts it 5–20 s later. Promotions (UTC): 11-14 13:01, 11-19 15:57, 11-20 14:13,
+  11-22 01:28 and five 13:23–14:03, 11-23 nine 06:28–12:44. All of 11-22/23 sit on one 5-min beat that drifts
+  ~1 s/hour.
+- **Ruled out:** ha-2 (wired, nothing logged before a blip); the router's clock or cron (NTP-synced, one hourly job);
+  a WiFi scan on .210 (scan cache holds only the AP; no network manager; `iw event` silent); group-key rekey
+  (not configured, so daily); the latency guard (reads only).
+- **Open:** .210's MT7922 has power save ON (DTIM 2); the link is nearly idle (a unicast frame every ~3 s).
+  Lead: group-frame delivery to a dozing client. Not shown yet.
+- **Capture running:** `tools/vrrp_advert_watch.py` as transient unit `diag-vrrp-advert-watch` on .210 →
+  `instance/vrrp-advert-watch.log` (per-second unicast/broadcast/multicast counts around each advert gap > 1.5 s),
+  plus `diag-iw-event` → `instance/vrrp-iw-event.log`. Transient: a reboot drops them; restart per the tool's
+  docstring. Hugh: find the cause, no bandage (no timer change until then).
+- **Also check:** whether .210's `ha-ag-controller` commands anything in its ~4 s as master.
+
 ## 🟡 2026-11-12 — study rotation + unified law (shadow) running; open items (Hugh)
 
 - **Running:** study Phase 3 rotation (runbook 4b) and the unified law in shadow (runbook 4c), both on ha-2 since
