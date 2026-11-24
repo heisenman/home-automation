@@ -23,7 +23,22 @@
   `instance/vrrp-advert-watch.log` (per-second unicast/broadcast/multicast counts around each advert gap > 1.5 s),
   plus `diag-iw-event` → `instance/vrrp-iw-event.log`. Transient: a reboot drops them; restart per the tool's
   docstring. Hugh: find the cause, no bandage (no timer change until then).
-- **Also check:** whether .210's `ha-ag-controller` commands anything in its ~4 s as master.
+- **Also check:** whether .210's `ha-ag-controller` commands anything in its ~4 s as master. (11-23: no rule
+  commands; it did try night-mode LED commands at two promotions.)
+- **Capture, first 13 h (11-23 15:27 → 11-24 04:20 UTC):** 64 advert gaps > 1.5 s, almost all a single missed
+  advert (~2.0 s). One promotion, 16:09:10 UTC, still on the 5-min beat. Nothing on .210 or ha-2 logged before it.
+  Adverts stopped for 3.6 s and no unicast arrived either, but at idle unicast only comes every ~3 s anyway, so this
+  doesn't separate "multicast lost" from "radio deaf".
+- **Second mechanism found:** ha-2's reconcile pull (4 ssh sessions into .210 every ~15 min 18 s) sends a bulk
+  burst over the WiFi leg (~3,800 unicast frames/s, 1,400–2,300 tx retries/s). Adverts were lost during two of the
+  bursts: 3.0 s at 17:31:29 and 2.9 s at 21:52:03, just short of the 3.6 s master-down. This mechanism doesn't
+  explain the 5-min beat.
+- **Not related:** the router log shows the Midea (2.4 GHz, `.1.119`) reconnecting every 3 min. .210 is on the
+  5 GHz radio (ch 153, not DFS).
+- **A/B running:** power save turned OFF on wlp2s0 at 11-24 04:20:36 UTC (`iw dev wlp2s0 set power_save off`;
+  runtime only, a reboot restores it ON). Compare the rate of single-advert gaps outside reconcile bursts (baseline
+  ~5/h) and promotions. If they vanish, power save is the mechanism and the fix is to make it persistent. If they
+  don't, power save is exonerated and the next suspect is the router side (capture `logread -f` there).
 
 ## 🟡 2026-11-12 — study rotation + unified law (shadow) running; open items (Hugh)
 
