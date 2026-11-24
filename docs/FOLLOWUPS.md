@@ -39,6 +39,13 @@
   runtime only, a reboot restores it ON). Compare the rate of single-advert gaps outside reconcile bursts (baseline
   ~5/h) and promotions. If they vanish, power save is the mechanism and the fix is to make it persistent. If they
   don't, power save is exonerated and the next suspect is the router side (capture `logread -f` there).
+- **A/B, first 11.5 h with power save off (to 11-24 15:54 UTC):** 0 promotions. 32 gaps (~2.8/h vs ~4.8/h), all
+  exactly 2.00 s, where before they ranged 1.8–2.9 s (the jitter was the dozing client's DTIM buffering). One
+  3.0 s gap, at 14:08:44, fell inside a reconcile burst again. The leftover single misses look like plain frame
+  loss: 802.11 multicast has no ACK or retry, so a lost advert stays lost.
+- **Candidate fix for Hugh (not applied):** give the air-gap VRRP instance `unicast_peer` adverts, which 802.11
+  ACKs and retries. That addresses all three mechanisms (power save, burst contention, no multicast retry). Keep the
+  A/B running a few more days first for the promotion rate.
 
 ## 🟡 2026-11-12 — study rotation + unified law (shadow) running; open items (Hugh)
 
