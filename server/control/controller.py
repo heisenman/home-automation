@@ -168,7 +168,10 @@ class Controller:
         self._lock = threading.Lock()
         self._study = study_rotation.StudyRotation(store)   # dehumidifier study Phase 3 (off unless enabled)
         self._last_status: dict[str, dict] = {}  # device_id -> last local-driver status (study: Midea bucket)
-        self._law = law_shadow.Shadow(store)   # unified control law, shadow only (docs/design/unified-control-law.md)
+        self._law = law_shadow.Shadow(store)   # unified control law (docs/design/unified-control-law.md): shadow, and
+                                               # the driver of every device enrolled `law` (_apply_law)
+        self._started: float | None = None     # first tick: a law-driven device holds until the law's first decision
+        self._law_thermo: dict[str, dict] = {}   # thermostat -> {channel: last issue ts, "note": last hold reason}
 
     def _conn(self):
         c = sqlite3.connect(self.db)
@@ -339,6 +342,8 @@ class Controller:
     def tick(self, now: float | None = None, dry_run: bool = False):
         self._refresh_registry()               # pick up a live control.yaml edit (actuator relocate)
         now = now if now is not None else time.time()
+        if self._started is None:
+            self._started = now
         conn = self._conn()
         try:
             tod = house_tod(now, store.get_setting(conn, "timezone"))   # house wall-clock, NOT the box's (UTC)
@@ -354,9 +359,11 @@ class Controller:
                 self._tick_device(conn, device_id, pol, now, tod, scene, dry_run)
             self._apply_night_mode(conn, tod, dry_run)          # LED night mode (all indicator devices)
             self._apply_follow(conn, now, dry_run)              # switches that follow another device (blower)
+            self._apply_law_thermostats(conn, now, dry_run)     # thermostats enrolled `law`: the band's setpoints
             if not dry_run:
                 self._apply_study_zero_fan(conn, now)           # the study's fan-only zero windows (blower)
-            if not dry_run and self._law.due(now):              # the unified law, in shadow: logs, never acts
+            if not dry_run and self._law.due(now):              # the unified law decides (devices enrolled `law`
+                                                                # act on it next tick; the rest are compared)
                 try:
                     house, current = self._law_context(conn, pols, now)
                     self._law.run(conn, now, self.registry, house, current, self._study.arm)
@@ -600,6 +607,98 @@ class Controller:
             return Resolution(True, (not dev_state.running) or dev_state.level != lvl, "rule",
                               f"sensor {sensor.value:.0f} -> speed {lvl}; {note}", level=lvl)
         return Resolution(res.running, res.act, res.source, f"{res.reason}; {note}", level=res.level)
+
+    # ── the unified law driving enrolled devices (stage L4, docs/design/unified-control-law.md §6) ────────────
+    def _apply_law(self, conn, device_id, policy, layer, res, dev_state, now, lm):
+        """For a device enrolled `law`, the law's held answer replaces its own rule's (`res`, after the rule's
+        refinements: dry boost, wet trim, dew-point law, outdoor gate). Above the law, unchanged: safety interlocks,
+        overrides, scenes, schedules and the study (`layer` not rule/default, or the study holding the device).
+        Below it, still applied by the caller: the airflow interlock and the coil dry-out ventilation floor.
+        No fresh decision: hold for the first STALE_S after a start (the law decides 2 min in), then the device's own
+        rule — a law fault can't strand a device. Compressor min on/off still gate the dehumidifiers."""
+        try:
+            mode = law_bands.enrolment(law_bands.get(conn, store), device_id)
+        except Exception:
+            log.exception("law enrolment unreadable -> %s on its own rule", device_id)
+            return res
+        if mode != "law":
+            self._law.rule_said.pop(device_id, None)
+            return res
+        if layer not in ("rule", "default") or self._study.holds_ventilation(device_id):
+            return res
+        self._law.rule_said[device_id] = (0 if not res.running else res.level if res.level is not None else 1)
+        ch = self._law.decision(device_id, now)
+        if ch is None or ch.get("level") is None:
+            if self._started is not None and now - self._started <= law_shadow.STALE_S:
+                return Resolution(dev_state.running, False, "law", "law: no decision yet since start -> hold",
+                                  level=dev_state.level if dev_state.running else None)
+            return Resolution(res.running, res.act, res.source, f"{res.reason}; law decision stale -> own rule",
+                              level=res.level)
+        lvl = int(ch["level"])
+        why = (f"law -> {ch.get('label') or lvl}"
+               + (f" (held {round(ch['held_s'] / 60)}m more)" if ch.get("held_s") else "")
+               + f"; own rule: {res.reason}")
+        if lm is not None or policy.strategy == "threshold_ranged":
+            if lm is not None and lm["labels"]:
+                lvl = min(lvl, len(lm["labels"]))
+            if lvl <= 0:
+                return _gate(policy, now, dev_state, False, "law", why)
+            return Resolution(True, (not dev_state.running) or dev_state.level != lvl, "law", why, level=lvl)
+        return _gate(policy, now, dev_state, lvl > 0, "law", why)
+
+    def _apply_law_thermostats(self, conn, now, dry_run):
+        """A thermostat enrolled `law` is held at the temperature band: heat setpoint = band min, cool = band max.
+        The law never changes its MODE (heat/cool/off stays the person's), and holds off while the thermostat's own
+        schedule or away mode is on (they'd fight). A setpoint changed at the wall is set back on the next pass:
+        that's what `law` means — `rule`/`shadow` leave the thermostat alone. One write per channel per 10 min."""
+        try:
+            st = law_bands.get(conn, store)
+        except Exception:
+            return
+        for did, ctl in self.registry.items():
+            if getattr(ctl, "function", None) != "condition_temperature" or law_bands.enrolment(st, did) != "law":
+                continue
+            mem = self._law_thermo.setdefault(did, {})
+            if self._law.decision(did, now) is None:
+                note = "law: no fresh decision -> thermostat left as it is"
+            else:
+                with self._lock:
+                    rec = self.readings.get(did)
+                m = (rec or {}).get("m") or {}
+                if rec is None or now - rec["ts"] > 900:
+                    note = "law: no fresh thermostat state -> hold"
+                elif m.get("schedule_on") or m.get("away"):
+                    note = "law: the thermostat's own schedule/away is on -> hold"
+                else:
+                    note = None
+            if note is not None:
+                if mem.get("note") != note:
+                    mem["note"] = note
+                    store.append_log(conn, did, False, "law", note, False, "hold")
+                continue
+            mem.pop("note", None)
+            sp = (getattr(ctl, "traits_cfg", {}) or {}).get("setpoint") or {}
+            chans = (sp.get("channels") or {}) if isinstance(sp, dict) else {}
+            unit_c = str(sp.get("unit", "degF")).lower() in ("degc", "c", "celsius")
+            want_f = {"heat": float(st["bands"]["temp_f"]["min"]), "cool": float(st["bands"]["temp_f"]["max"])}
+            have_c = {"heat": m.get("heat_setpoint_c"), "cool": m.get("cool_setpoint_c")}
+            todo = [ch for ch in ("heat", "cool") if ch in chans and have_c[ch] is not None
+                    and abs(law_solve.c2f(float(have_c[ch])) - want_f[ch]) >= 0.5
+                    and now - mem.get(ch, 0.0) >= 600]
+            if todo == ["heat", "cool"] and want_f["heat"] > law_solve.c2f(float(have_c["heat"])):
+                todo = ["cool", "heat"]           # raising heat: move cool up first (the setpoint delta)
+            for ch in todo:
+                v = want_f[ch]
+                val = round(law_solve.f2c(v), 1) if unit_c else v
+                why = (f"law: {ch} setpoint {law_solve.c2f(float(have_c[ch])):.0f} -> {v:g} °F "
+                       f"(the temperature band {want_f['heat']:g}–{want_f['cool']:g} °F)")
+                mem[ch] = now
+                if dry_run:
+                    store.append_log(conn, did, True, "law", why, False, "dry-run")
+                    continue
+                r = self.issuer.issue(device_id=did, trait="setpoint", action="set", args={"channel": ch, "value": val})
+                store.append_log(conn, did, True, "law", why, True, r.status)
+                log.info("%s: %s (%s)", did, why, r.status)
 
     def _law_context(self, conn, pols: dict, now: float):
         """(House, {device_id: level now}) for the unified law's shadow. Readings older than 15 min don't count;
@@ -1042,6 +1141,7 @@ class Controller:
             if pre is not None and pre != dev_state.running:
                 res = _gate(policy, now, dev_state, pre, "rule",
                             f"{res.reason}; override ended -> back to pre-override {'ON' if pre else 'OFF'}")
+        layer = res.source                     # which resolver layer decided: the law only replaces rule/default
         res = self._apply_airflow_interlock(conn, device_id, pol, res, dev_state, now)
         res = self._apply_outdoor_gate(pol, res, dev_state, now)
         lm = self._level_modes(device_id) if drv is None else None
@@ -1059,6 +1159,9 @@ class Controller:
             top = len(lm["labels"])
             res = Resolution(res.running, (not dev_state.running) or dev_state.level != top, res.source,
                              res.reason, level=top)
+        res = self._apply_law(conn, device_id, policy, layer, res, dev_state, now, lm)
+        if res.source == "law":                # the law sits below safety: a dehumidifier still needs moving air
+            res = self._apply_airflow_interlock(conn, device_id, pol, res, dev_state, now)
         if lm is not None:
             res = self._apply_ventilation_floor(conn, device_id, res, dev_state, override, now, lm)
         if lm is not None and res.running and res.level is None and res.source == "override" and lm["labels"]:

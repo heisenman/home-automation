@@ -233,9 +233,9 @@ desc limit 4` shows ON then OFF ("fan-only zero window"), and house_setting `stu
 
 ## Entry 4c — Unified control law runs in shadow (logs, never commands)
 
-**Asserted state:** ha-controller on ha-2 runs the law's shadow every 5 min (`server/control/law/shadow.py`),
-writing control.db `law_shadow` and `house_setting` `law:last`. No device is enrolled `law`; the law issues no
-commands. Design: `docs/design/unified-control-law.md`.
+**Asserted state:** ha-controller on ha-2 runs the law every 5 min (`server/control/law/shadow.py`), writing
+control.db `law_shadow` and `house_setting` `law:last`. The law drives only devices enrolled `law` in `law:enrol`
+(stage L4, back end since 2026-11-26; **none enrolled** as of that date). Design: `docs/design/unified-control-law.md`.
 
 **Re-check (on ha-2):**
 ```sh
@@ -248,7 +248,10 @@ print(c.execute('select json from house_setting where key=\"law:enrol\"').fetcho
 ```
 
 **Expected:** (1) the last decision is under ~10 min old. (2) Reasons name the RH, the water need, the AQ and the
-chosen combination with its W and cost. (3) `law:enrol` is absent or holds only `rule`/`shadow`. The PWA's
+chosen combination with its W and cost. (3) `law:enrol` holds `law` only for the devices Hugh switched over. For
+each of those, control_log's newest rows have source `law` (or an override/safety/scene/schedule above it):
+`select ts, source, reason from control_log where device_id='<id>' order by rowid desc limit 5`. A reason ending
+`law decision stale -> own rule` means the law has stopped deciding (see the gotchas). The PWA's
 "⚖ Comfort" panel shows the same, plus 24 h agreement per device.
 
 **Gotchas:** the controller logs `law shadow:` lines at INFO every 5 min; `law shadow tick failed` /

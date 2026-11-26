@@ -1479,7 +1479,7 @@ def make_override_router(api_authz, control_db, device_ids=None):
         from server.control.law import bands as law_bands
         c = _conn()
         try:
-            code, payload = law_bands.put(c, store, body)
+            code, payload = law_bands.put(c, store, body, devices=device_ids)   # enrol must name real devices
         finally:
             c.close()
         return JSONResponse(status_code=code, content=payload)

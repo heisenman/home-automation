@@ -185,14 +185,44 @@ The study's Phase 3 rotation still runs underneath: it's what turns the dehumidi
 - **Water need:** the excess over the band's top × the house's buffered volume (520 m³ × `buffer_x`) ÷ horizon;
   `buffer_x` = 2.2 since 2026-11-15 (Phase 4, l3-fits §8; 3.7 from 11-13, §7; the Phase 1 26× is the
   multi-day figure and made 1 % RH ≈ 880 g/h, so the law ran both units or neither). Both dehumidifiers together
-  count the Midea at `midea.with_aprilaire` (0.26): they dry the same air (§8). Once
-  drying, to the band's middle (today's on-high/off-part-way hysteresis). Below the band: no drying.
+  count the Midea at `midea.with_aprilaire` (0.26): they dry the same air (§8). Drying starts AT the band's top
+  (the rules' `on_above` is ≥; until 2026-11-26 the law waited for > top and missed the Midea's 05:12 start at
+  46.0 %) and runs to the band's middle (today's on-high/off-part-way hysteresis); the need is the excess over the
+  middle from the start. Below the band: no drying. Replay 11-21 → 11-26: Midea 1198 → 1202/1202, nothing else moved.
 - **Search:** every combination of the dehumidifiers (off/on) × the ERV's levels, ranked by (firm shortfall, cost
   + AQ shortfall × weight, changes). Purifiers by the rough AQ rule. The thermostat gets the band as its setpoints.
 - **Shadow:** 15-min hold on the law's own answers; enrolment `rule` leaves a device out of the comparison.
 - **Models** (`server/control/law/models.py`): Midea 480 W at 1.04 L/kWh (good); Aprilaire 580 W + blower 150 W
   at 0.75 (rough); ERV 0/66/92/125 cfm, latent pass-through 0.3 (rough), sensible recovery unknown; furnace and
   house heat: none. L3's fits land in `house_setting` `law:params` with the same keys.
+
+### As built (L4 back end, 2026-11-26)
+
+Hugh 2026-11-26: "create the law on the back-end for all of the devices". Built; **nothing is enrolled `law`** — each
+device's switch-over is Hugh's choice (from the PWA, design pending: §6 L4).
+
+- **Enrolment** (`law:enrol`, `bands.ENROL_MODES`): `rule` (own automation, not compared), `shadow` (default: own
+  automation, compared), `law` (the law drives it). `PUT /control/house/law` refuses device ids not in the control
+  registry. "Manual" stays what it is today: the device's automation policy `enabled: false` (the controller then
+  doesn't tick it at all, law or not — 11-26: `purifier_c_bed` sat off for days after a brownout because its
+  policy was disabled, so nothing re-powered it).
+- **Hook** (`controller._apply_law`): for a device enrolled `law`, the law's held answer (`Shadow.decision`)
+  replaces its rule's final answer (after dry boost / wet trim / dew-point law / outdoor gate) — only when the
+  resolver's layer was `rule` or `default`. Above the law, unchanged: safety interlocks, overrides (incl. the
+  study's), scenes, schedules, the study's ventilation hold. Below it: the airflow interlock (re-applied to the
+  law's answer) and the coil dry-out ventilation floor. Dehumidifiers still pass `_gate` (min on/off); level
+  devices (ERV) and ranged ones (purifiers) take the level directly. Log source `law`, reason
+  `law -> <label>; own rule: <what the rule said>`.
+- **No fresh decision:** for `STALE_S` (15 min) after a controller start the device holds as it is (the law
+  first decides 2 min in, and a rule answer in between would flap it); after that, or if the law stops deciding
+  for 15 min, the device runs its own rule (`…; law decision stale -> own rule`). A law fault can't strand a device.
+- **Thermostats** (`controller._apply_law_thermostats`): enrolled `law` → heat setpoint = band min, cool = band
+  max, one write per channel per 10 min, cool first when raising heat (setpoint delta). The law never changes the
+  MODE, and holds off (logged once) while the thermostat's own schedule or away is on, or its state is > 15 min old.
+  A setpoint changed at the wall is set back within ~10 min — that is what `law` means for a thermostat.
+- **The record:** `law_shadow` gains a `rule` column (migrated in place): for each law-driven device, the level its
+  own rule would have chosen. `GET /api/v1/law` adds `rule_agreement_24h` (law vs that rule) next to
+  `agreement_24h` (law vs what the device did).
 
 ## 7. Open questions
 

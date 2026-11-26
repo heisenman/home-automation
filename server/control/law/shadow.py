@@ -1,8 +1,12 @@
-"""The unified law in shadow (docs/design/unified-control-law.md §1.7, stage L2): every `INTERVAL_S` the controller
-hands it the house's state; it solves, holds each device's answer at least `MIN_HOLD_S` (the same reason the rules
-have min on/off times), and logs what it would do next to what the rules did, in control.db `law_shadow`.
+"""The unified law's runner (docs/design/unified-control-law.md §1.7, stages L2 + L4): every `INTERVAL_S` the
+controller hands it the house's state; it solves, holds each device's answer at least `MIN_HOLD_S` (the same reason
+the rules have min on/off times), and logs what it decided next to what the devices did, in control.db `law_shadow`.
 
-It never commands anything. Enrolment `rule` leaves a device out of the comparison; `shadow` (the default) logs it.
+This module never commands anything itself. Per device (`law:enrol`):
+  rule    the device's own automation runs; left out of the comparison
+  shadow  (default) its own automation runs; the law's answer is logged next to it
+  law     the controller drives the device with `decision()` (controller._apply_law) below overrides, scenes,
+          schedules and safety; the row logs what its own rule would have done instead (`rule` column)
 """
 from __future__ import annotations
 
@@ -19,12 +23,20 @@ log = logging.getLogger("ha.control.law")
 INTERVAL_S = 300
 STARTUP_S = 120
 MIN_HOLD_S = 900
+STALE_S = 3 * INTERVAL_S            # a law-driven device older than this falls back to its own rule
 KEEP_DAYS = 60
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS law_shadow (
     ts REAL NOT NULL, plan TEXT, actual TEXT, errors TEXT, need_gph REAL, totals TEXT, reasons TEXT, house TEXT);
 CREATE INDEX IF NOT EXISTS idx_law_shadow_ts ON law_shadow(ts);
 """
+
+
+def ensure_schema(conn) -> None:
+    conn.executescript(SCHEMA)
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(law_shadow)")}
+    if "rule" not in cols:                   # L4: what a law-driven device's own rule would have done
+        conn.execute("ALTER TABLE law_shadow ADD COLUMN rule TEXT")
 
 
 class Shadow:
@@ -34,6 +46,16 @@ class Shadow:
         # before it would compare against "unknown"
         self.last_run = (time.time() if now is None else now) - INTERVAL_S + STARTUP_S
         self.held: dict[str, tuple[int | None, float, str]] = {}    # device -> (level, since, label)
+        self.choice: dict[str, dict] = {}                           # the last decision, per device
+        self.decided_at: float | None = None                        # when it was made (None = not yet)
+        self.rule_said: dict[str, int | None] = {}                  # law-driven devices: their rule's level
+
+    def decision(self, device_id: str, now: float) -> dict | None:
+        """The law's current answer for a device ({level, label, …}), or None when there is no fresh one (not
+        decided yet, the last tick failed for longer than STALE_S, or the device isn't in the plan)."""
+        if self.decided_at is None or now - self.decided_at > STALE_S:
+            return None
+        return self.choice.get(device_id)
 
     def due(self, now: float) -> bool:
         return now - self.last_run >= INTERVAL_S
@@ -50,7 +72,7 @@ class Shadow:
             return None
 
     def _run(self, conn, now, registry, house, current, study_arm=None):
-        conn.executescript(SCHEMA)
+        ensure_schema(conn)
         st = B.get(conn, self.store)
         prm = M.params(self.store.get_setting(conn, "law:params"))
         models = M.build(registry, prm, {"w_in": house.w_in, "w_out": house.w_out, "t_in": house.t_in_c,
@@ -69,23 +91,26 @@ class Shadow:
             if v["level"] != lvl:
                 self.held[did] = (v["level"], now, v["label"])
             choice[did] = v
-        shadowed = {d: c for d, c in choice.items() if B.enrolment(st, d) == "shadow"}
+        self.choice, self.decided_at = choice, now
+        shadowed = {d: c for d, c in choice.items() if B.enrolment(st, d) in ("shadow", "law")}
         actual = {d: current.get(d) for d in shadowed}
-        conn.execute("INSERT INTO law_shadow(ts, plan, actual, errors, need_gph, totals, reasons, house) "
-                     "VALUES(?,?,?,?,?,?,?,?)",
+        rule = {d: self.rule_said.get(d) for d in shadowed if B.enrolment(st, d) == "law"}
+        conn.execute("INSERT INTO law_shadow(ts, plan, actual, errors, need_gph, totals, reasons, house, rule) "
+                     "VALUES(?,?,?,?,?,?,?,?,?)",
                      (now, json.dumps(shadowed), json.dumps(actual), json.dumps(plan.errors), plan.need_gph,
                       json.dumps(plan.totals), json.dumps(plan.reasons),
                       json.dumps({**{k: getattr(house, k) for k in ("t_in_c", "rh", "t_rh_c", "w_out", "t_out_c",
                                                                     "aq", "heating", "cooling")},
-                                  "study_arm": study_arm})))
+                                  "study_arm": study_arm}), json.dumps(rule)))
         conn.execute("DELETE FROM law_shadow WHERE ts < ?", (now - KEEP_DAYS * 86400,))
         conn.commit()
-        self.store.set_setting(conn, "law:last", {"ts": now, "choice": choice, "actual": actual,
+        self.store.set_setting(conn, "law:last", {"ts": now, "choice": choice, "actual": actual, "rule": rule,
                                                   "errors": plan.errors, "need_gph": plan.need_gph,
                                                   "totals": plan.totals, "reasons": plan.reasons,
                                                   "alternatives": plan.alternatives, "study_arm": study_arm,
                                                   "models": M.inventory(models)})
-        log.info("law shadow: %s", "; ".join(plan.reasons))
+        log.info("law%s: %s", " (driving " + ", ".join(sorted(rule)) + ")" if rule else " shadow",
+                 "; ".join(plan.reasons))
         return plan
 
 
@@ -93,24 +118,28 @@ def view(conn, store, now: float) -> dict:
     """GET /api/v1/law: settings, the latest decision (with the model table), and 24 h of agreement with the
     rules per device."""
     try:
-        conn.executescript(SCHEMA)
+        ensure_schema(conn)
     except Exception:
         pass
     st = B.get(conn, store)
     last = store.get_setting(conn, "law:last")
-    agree, study_ticks = {}, 0
-    for plan, actual, house in conn.execute("SELECT plan, actual, house FROM law_shadow WHERE ts > ?",
-                                            (now - 86400,)):
+    agree, rule_agree, study_ticks = {}, {}, 0
+    for plan, actual, house, rule in conn.execute("SELECT plan, actual, house, rule FROM law_shadow WHERE ts > ?",
+                                                  (now - 86400,)):
         if (json.loads(house or "{}") or {}).get("study_arm"):
             study_ticks += 1                     # "now" was the study's experiment, not the rules: not compared
             continue
-        p, a = json.loads(plan or "{}"), json.loads(actual or "{}")
+        p, a, r = json.loads(plan or "{}"), json.loads(actual or "{}"), json.loads(rule or "{}")
         for d, v in p.items():
             if v.get("level") is None:
                 continue
             n, same = agree.get(d, (0, 0))
             agree[d] = (n + 1, same + (1 if a.get(d) == v["level"] else 0))
+            if d in r and r[d] is not None:      # law-driven: would its own rule have chosen the same?
+                n, same = rule_agree.get(d, (0, 0))
+                rule_agree[d] = (n + 1, same + (1 if r[d] == v["level"] else 0))
     return {**st, "enrol_modes": list(B.ENROL_MODES), "params": M.params(store.get_setting(conn, "law:params")),
             "last": last, "agreement_24h": {d: {"ticks": n, "same": s} for d, (n, s) in agree.items()},
+            "rule_agreement_24h": {d: {"ticks": n, "same": s} for d, (n, s) in rule_agree.items()},
             "study_ticks_24h": study_ticks,
             "stale": last is None or now - last["ts"] > 3 * INTERVAL_S}

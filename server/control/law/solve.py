@@ -143,7 +143,11 @@ def water_need(bands: dict, prm: dict, h: House, drying_now: bool) -> float | No
     rh_b = bands["rh"]
     if h.rh < rh_b["min"]:
         return -1.0
-    target = rh_b["max"] if not drying_now else (rh_b["min"] + rh_b["max"]) / 2
+    if not drying_now and h.rh < rh_b["max"]:
+        return 0.0
+    # drying starts AT the band's top (the rules' on_above is >=; 11-26 05:12 the Midea's rule started at 46.0 and
+    # the law, waiting for > 46, didn't) and runs to the middle — so the need is the excess over the middle
+    target = (rh_b["min"] + rh_b["max"]) / 2
     if h.rh <= target:
         return 0.0
     hp = prm["house"]
@@ -249,7 +253,7 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
         reasons.append("RH unknown: no water term")
     elif need > 0:
         reasons.append(f"RH {h.rh:.1f} % → remove {need:.0f} g/h"
-                       + (" (drying to the band's middle)" if drying_now else f" (above {bands['rh']['max']:g} %)"))
+                       + (" (drying to the band's middle)" if drying_now else f" (at/above {bands['rh']['max']:g} %)"))
     elif need < 0:
         reasons.append(f"RH {h.rh:.1f} % below {bands['rh']['min']:g} %: no drying")
     else:

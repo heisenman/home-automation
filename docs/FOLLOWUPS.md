@@ -47,6 +47,17 @@
   ACKs and retries. That addresses all three mechanisms (power save, burst contention, no multicast retry). Keep the
   A/B running a few more days first for the promotion rate.
 
+## 🟡 2026-11-26 — unified law L4 back end built; nothing enrolled `law` yet (Hugh)
+
+- **Built:** enrolment `law` for every law device (ERV, both dehumidifiers, purifiers, thermostat), the controller
+  hook, the stale fallback, and the thermostat setpoint hold (unified-control-law.md "As built (L4 back end)"). The
+  RH band-top edge is fixed: drying starts at ≥ top, like the rules (11-26 05:12 Midea split).
+- **Shadow, 11-21 17:40 → 11-26 05:20 (1,200 ticks):** Aprilaire 100 %, Midea 1198/1200 (the edge, now fixed),
+  ERV 98 % (law one level lower inside the ±5 AQ hold), purifiers 74/83 % (no PM model). `purifier_c_bed` read 0
+  throughout: its policy is `enabled: false` (manual), and it never came back after a brownout; Hugh turned it on 11-26.
+- **Next (Hugh):** the PWA design — goals (temp/RH/AQ bands) + per-device Manual / Own automation / Law. Then the
+  switch-over, ERV first. Dehumidifiers after a few real drying events agree; purifiers wait for a PM model.
+
 ## 🟡 2026-11-12 — study rotation + unified law (shadow) running; open items (Hugh)
 
 - **Running:** study Phase 3 rotation (runbook 4b) and the unified law in shadow (runbook 4c), both on ha-2 since

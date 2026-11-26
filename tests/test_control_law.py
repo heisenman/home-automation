@@ -198,7 +198,7 @@ def test_bands_validation():
     assert B.validate({"cost": {"basis": "money"}}, cur)[0]                    # needs both rates
     assert B.validate({"bands": {"outdoor_drying": {"cost_hyst": 1.5}}}, cur)[0]
     assert B.validate({"bands": {"outdoor_drying": {"cost_check": "yes"}}}, cur)[0]
-    assert "L4" in B.validate({"enrol": {"erv": "law"}}, cur)[0]               # not yet
+    assert B.validate({"enrol": {"erv": "law"}}, cur)[0] is None               # L4 (test_control_law_l4.py)
     err, new = B.validate({"bands": {"rh": {"max": 47}}, "enrol": {"erv": "rule"}}, cur)
     assert err is None and new["bands"]["rh"] == {"min": 40.0, "max": 47} and new["enrol"] == {"erv": "rule"}
 

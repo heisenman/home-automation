@@ -38,7 +38,9 @@ BANDS_DEFAULT = {
                                                 # dehumidifier's price; held to 1 − cost_hyst of it once running
 }
 COST_DEFAULT = {"basis": "kwh", "electric_per_kwh": None, "gas_per_therm": None}
-ENROL_MODES = ("rule", "shadow")                # "law" is stage L4: per device, Hugh's approval
+ENROL_MODES = ("rule", "shadow", "law")         # rule = the device's own automation, left out of the comparison;
+                                                # shadow (default) = its own automation, compared with the law;
+                                                # law = the law drives it (stage L4: per device, Hugh's choice)
 KEYS = {"bands": "law:bands", "cost": "law:cost", "enrol": "law:enrol"}
 
 
@@ -97,13 +99,17 @@ def validate(body: dict, current: dict) -> tuple[str | None, dict]:
         return "cost basis 'money' needs electric_per_kwh and gas_per_therm", new
     for dev, mode in new["enrol"].items():
         if mode not in ENROL_MODES:
-            return (f"enrol[{dev}] must be one of {list(ENROL_MODES)} ('law' is stage L4: per device, with "
-                    "Hugh's approval)"), new
+            return f"enrol[{dev}] must be one of {list(ENROL_MODES)}", new
     return None, new
 
 
-def put(conn, store, body: dict) -> tuple[int, dict]:
+def put(conn, store, body: dict, devices=None) -> tuple[int, dict]:
+    """`devices` = the control registry's ids, when the caller has them: an enrolment must name a real device."""
     err, new = validate(body, get(conn, store))
+    if not err and devices is not None:
+        unknown = sorted(set((body or {}).get("enrol") or {}) - set(devices))
+        if unknown:
+            err = f"enrol names unknown device(s): {', '.join(unknown)}"
     if err:
         return 400, {"status": "bad-request", "reason": err}
     for part, key in KEYS.items():
