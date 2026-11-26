@@ -81,7 +81,10 @@ class Shadow:
         # as it would when enrolled; on the rules' levels it chattered at the floor (11-20: the rule's ERV high
         # held the law's drying on at 41 %). The comparison below still uses `current`.
         own = {**current, **{d: v[0] for d, v in self.held.items() if v[0] is not None}}
-        plan = S.solve(models, st["bands"], st["cost"], prm, house, own)
+        bands, sched = B.effective_now(conn, self.store, now, st)     # the goals in force now (goal schedules)
+        plan = S.solve(models, bands, st["cost"], prm, house, own)
+        if sched:
+            plan.reasons.insert(0, f"goals: the {sched} schedule")
         choice = {}
         for did, v in plan.choice.items():                  # min hold, per device, on the law's own answers
             lvl, since, label = self.held.get(did, (None, 0.0, ""))
@@ -108,6 +111,7 @@ class Shadow:
                                                   "errors": plan.errors, "need_gph": plan.need_gph,
                                                   "totals": plan.totals, "reasons": plan.reasons,
                                                   "alternatives": plan.alternatives, "study_arm": study_arm,
+                                                  "schedule": sched, "bands": {k: bands[k] for k in B.SCHEDULE_GOALS},
                                                   "models": M.inventory(models)})
         log.info("law%s: %s", " (driving " + ", ".join(sorted(rule)) + ")" if rule else " shadow",
                  "; ".join(plan.reasons))
@@ -138,7 +142,19 @@ def view(conn, store, now: float) -> dict:
             if d in r and r[d] is not None:      # law-driven: would its own rule have chosen the same?
                 n, same = rule_agree.get(d, (0, 0))
                 rule_agree[d] = (n + 1, same + (1 if r[d] == v["level"] else 0))
+    from server.control import manual_restore as MR
+    from server.control.law import holds as H
+    from server.control.law import modes as MO
+    devs = [m["device_id"] for m in ((last or {}).get("models") or [])]
+    eff, sched = B.effective_now(conn, store, now, st)
+    nxt = B.next_change(st["bands"], now, store.get_setting(conn, "timezone"))
     return {**st, "enrol_modes": list(B.ENROL_MODES), "params": M.params(store.get_setting(conn, "law:params")),
+            "modes": {d: MO.of(conn, store, d, st) for d in devs},
+            "has_policy": {d: store.get_policy(conn, d) is not None for d in devs},
+            "holds": H.all_active(conn, now),
+            "manual_memory": {d: store.get_setting(conn, MR.key(d)) for d in devs
+                              if store.get_setting(conn, MR.key(d))},
+            "goals_now": {"schedule": sched, "bands": {k: eff[k] for k in B.SCHEDULE_GOALS}, "next_change": nxt},
             "last": last, "agreement_24h": {d: {"ticks": n, "same": s} for d, (n, s) in agree.items()},
             "rule_agreement_24h": {d: {"ticks": n, "same": s} for d, (n, s) in rule_agree.items()},
             "study_ticks_24h": study_ticks,

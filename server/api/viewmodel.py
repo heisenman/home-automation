@@ -1137,6 +1137,21 @@ def build_controls(traits_cfg: dict | None, manual: bool = False, power_mode: st
     return controls
 
 
+def _law_view(control_conn, device_id: str, now: float) -> dict | None:
+    """{mode, hold} for the device card's badge (server/control/law/modes.py, holds.py). None if unreadable."""
+    if control_conn is None:
+        return None
+    try:
+        from server.control import control_store as store
+        from server.control.law import holds, modes
+        h = store.get_setting(control_conn, holds.PREFIX + device_id)
+        h = h if h and now < float(h.get("until") or 0) else None
+        return {"mode": modes.of(control_conn, store, device_id),
+                "hold": {"by": h["by"], "until": h["until"]} if h else None}
+    except Exception:
+        return None
+
+
 def _plug_mode(control_conn, registry, device_id: str) -> str | None:
     """A smart plug's selected power mode (on_off | cycle_only), None for every other device."""
     from server.control import plug_power
@@ -1297,6 +1312,7 @@ def build_display(control_conn, hot_conn, device_id: str, now: float, registry=N
     return {
         "schema": 1,
         "device_id": device_id,
+        "law": _law_view(control_conn, device_id, now),   # who runs it: manual / auto / law (+ a manual hold)
         "name": dm.get("name") or None,
         "room": dm.get("room") or _device_area(hot_conn, device_id),   # overlay wins; else the device's area
         "running": running,

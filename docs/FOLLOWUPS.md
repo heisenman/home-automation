@@ -55,8 +55,12 @@
 - **Shadow, 11-21 17:40 → 11-26 05:20 (1,200 ticks):** Aprilaire 100 %, Midea 1198/1200 (the edge, now fixed),
   ERV 98 % (law one level lower inside the ±5 AQ hold), purifiers 74/83 % (no PM model). `purifier_c_bed` read 0
   throughout: its policy is `enabled: false` (manual), and it never came back after a brownout; Hugh turned it on 11-26.
-- **Next (Hugh):** the PWA design — goals (temp/RH/AQ bands) + per-device Manual / Own automation / Law. Then the
-  switch-over, ERV first. Dehumidifiers after a few real drying events agree; purifiers wait for a PM model.
+- **PWA built (same day):** ⚖ Comfort = goals + schedules + per-device Manual / Own / Law, holds ("Resume law",
+  thermostat wall sets recorded), Manual devices restored after a power cut (runbook 4d). Unproven live: the restore
+  needs a real power blip (test: power-cycle a Manual purifier at its plug); wall-set detection needs the thermostat
+  on Law.
+- **Next (Hugh):** flip the ERV to Law from the panel. Dehumidifiers after a few real drying events agree;
+  purifiers wait for a PM model.
 
 ## 🟡 2026-11-12 — study rotation + unified law (shadow) running; open items (Hugh)
 

@@ -20,8 +20,9 @@ from pathlib import Path
 
 from server.comms import events as ev
 from server.control import (actuator_state, bootstrap, control_store as store, dewpoint_law, dry_boost, follow,
-                            study_rotation, wet_trim)
+                            manual_restore, study_rotation, wet_trim)
 from server.control.law import bands as law_bands
+from server.control.law import holds as law_holds
 from server.control.law import models as law_models
 from server.control.law import shadow as law_shadow
 from server.control.law import solve as law_solve
@@ -171,7 +172,9 @@ class Controller:
         self._law = law_shadow.Shadow(store)   # unified control law (docs/design/unified-control-law.md): shadow, and
                                                # the driver of every device enrolled `law` (_apply_law)
         self._started: float | None = None     # first tick: a law-driven device holds until the law's first decision
-        self._law_thermo: dict[str, dict] = {}   # thermostat -> {channel: last issue ts, "note": last hold reason}
+        self._law_thermo: dict[str, dict] = {}   # thermostat -> {channel: last issue ts, "note", "seen", "wrote"}
+        self._avail: dict[str, tuple[bool, float]] = {}   # device -> (online, ts) from a bridge's meta.online
+        self._presence: dict[str, dict] = {}     # Manual devices: {online, returned, tries, last_try}
 
     def _conn(self):
         c = sqlite3.connect(self.db)
@@ -187,6 +190,10 @@ class Controller:
         did = p.get("device_id")
         if not did:
             return
+        meta = p.get("meta") if isinstance(p.get("meta"), dict) else {}
+        if "online" in meta:                    # a bridge's availability (the purifiers' ESPHome LWT)
+            with self._lock:
+                self._avail[did] = (bool(meta["online"]), time.time())
         metrics = p.get("metrics") or {}
         # store ALL numeric metrics for this source + a receive ts; _pick_source extracts whichever metric
         # the consuming device's policy selects (humidity_pct, pm25_ugm3, aqi, …) at tick time.
@@ -355,6 +362,7 @@ class Controller:
             # ERV), so the ERV sees this tick's demand rather than the last one
             for device_id, pol in sorted(pols.items(), key=lambda kv: not (kv[1] or {}).get("ventilation")):
                 if not pol.get("enabled", True):
+                    self._tick_manual(conn, device_id, now, dry_run)    # Manual: remember it, restore after power loss
                     continue
                 self._tick_device(conn, device_id, pol, now, tod, scene, dry_run)
             self._apply_night_mode(conn, tod, dry_run)          # LED night mode (all indicator devices)
@@ -627,6 +635,11 @@ class Controller:
         if layer not in ("rule", "default") or self._study.holds_ventilation(device_id):
             return res
         self._law.rule_said[device_id] = (0 if not res.running else res.level if res.level is not None else 1)
+        hold = law_holds.active(conn, store, device_id, now)
+        if hold is not None:                   # a person set it: the law yields until the hold ends
+            return Resolution(dev_state.running, False, "law",
+                              f"{law_holds.describe(hold, store.get_setting(conn, 'timezone'))}; own rule: {res.reason}",
+                              level=dev_state.level if dev_state.running else None)
         ch = self._law.decision(device_id, now)
         if ch is None or ch.get("level") is None:
             if self._started is not None and now - self._started <= law_shadow.STALE_S:
@@ -650,27 +663,32 @@ class Controller:
         """A thermostat enrolled `law` is held at the temperature band: heat setpoint = band min, cool = band max.
         The law never changes its MODE (heat/cool/off stays the person's), and holds off while the thermostat's own
         schedule or away mode is on (they'd fight). A setpoint changed at the wall is set back on the next pass:
-        that's what `law` means — `rule`/`shadow` leave the thermostat alone. One write per channel per 10 min."""
+        A setpoint changed at the wall (Hugh 2026-11-26: "record into the PWA a manual set") is detected — the value
+        moved and it wasn't our write — and becomes a manual hold (law/holds.py), shown in the PWA with "resume law";
+        a set from the PWA places the same hold at the API. One write per channel per 10 min. The goals are the ones
+        in force now (goal schedules). After a controller restart the first reading is the baseline: a wall change
+        during the restart itself isn't seen."""
         try:
             st = law_bands.get(conn, store)
+            bands, _ = law_bands.effective_now(conn, store, now, st)
         except Exception:
             return
         for did, ctl in self.registry.items():
             if getattr(ctl, "function", None) != "condition_temperature" or law_bands.enrolment(st, did) != "law":
                 continue
             mem = self._law_thermo.setdefault(did, {})
-            if self._law.decision(did, now) is None:
-                note = "law: no fresh decision -> thermostat left as it is"
+            with self._lock:
+                rec = self.readings.get(did)
+            m = (rec or {}).get("m") or {}
+            if rec is None or now - rec["ts"] > 900:
+                note = "law: no fresh thermostat state -> hold"
             else:
-                with self._lock:
-                    rec = self.readings.get(did)
-                m = (rec or {}).get("m") or {}
-                if rec is None or now - rec["ts"] > 900:
-                    note = "law: no fresh thermostat state -> hold"
-                elif m.get("schedule_on") or m.get("away"):
+                # wall changes are watched even while the law can't act, so it never overwrites one later
+                note = self._thermostat_hold_note(conn, did, m, mem, now)
+                if note is None and (m.get("schedule_on") or m.get("away")):
                     note = "law: the thermostat's own schedule/away is on -> hold"
-                else:
-                    note = None
+                if note is None and self._law.decision(did, now) is None:
+                    note = "law: no fresh decision -> thermostat left as it is"
             if note is not None:
                 if mem.get("note") != note:
                     mem["note"] = note
@@ -680,7 +698,7 @@ class Controller:
             sp = (getattr(ctl, "traits_cfg", {}) or {}).get("setpoint") or {}
             chans = (sp.get("channels") or {}) if isinstance(sp, dict) else {}
             unit_c = str(sp.get("unit", "degF")).lower() in ("degc", "c", "celsius")
-            want_f = {"heat": float(st["bands"]["temp_f"]["min"]), "cool": float(st["bands"]["temp_f"]["max"])}
+            want_f = {"heat": float(bands["temp_f"]["min"]), "cool": float(bands["temp_f"]["max"])}
             have_c = {"heat": m.get("heat_setpoint_c"), "cool": m.get("cool_setpoint_c")}
             todo = [ch for ch in ("heat", "cool") if ch in chans and have_c[ch] is not None
                     and abs(law_solve.c2f(float(have_c[ch])) - want_f[ch]) >= 0.5
@@ -693,12 +711,114 @@ class Controller:
                 why = (f"law: {ch} setpoint {law_solve.c2f(float(have_c[ch])):.0f} -> {v:g} °F "
                        f"(the temperature band {want_f['heat']:g}–{want_f['cool']:g} °F)")
                 mem[ch] = now
+                mem.setdefault("wrote", {})[ch] = v
                 if dry_run:
                     store.append_log(conn, did, True, "law", why, False, "dry-run")
                     continue
                 r = self.issuer.issue(device_id=did, trait="setpoint", action="set", args={"channel": ch, "value": val})
                 store.append_log(conn, did, True, "law", why, True, r.status)
                 log.info("%s: %s (%s)", did, why, r.status)
+
+    def _thermostat_hold_note(self, conn, did, m, mem, now) -> str | None:
+        """Wall-change detection + the hold it records; returns the hold's note (None = no hold, the law acts)."""
+        seen = mem.get("seen") or {}
+        wrote = mem.get("wrote") or {}
+        obs = {ch: law_solve.c2f(float(m[k])) for ch, k in (("heat", "heat_setpoint_c"), ("cool", "cool_setpoint_c"))
+               if m.get(k) is not None}
+        moved = {ch: round(v, 1) for ch, v in obs.items() if ch in seen and abs(v - seen[ch]) >= 0.5
+                 and not (ch in wrote and abs(v - wrote[ch]) < 0.5)}
+        mem["seen"] = obs
+        hold = law_holds.active(conn, store, did, now)
+        if moved and hold is None:
+            hold = law_holds.place(conn, store, did, "wall", now, moved)
+            what = ", ".join(f"{ch} {v:g} °F" for ch, v in moved.items())
+            store.append_log(conn, did, True, "law", f"law: set at the thermostat ({what}) -> "
+                             f"{law_holds.describe(hold, store.get_setting(conn, 'timezone'))}", False, "hold")
+            mem["note"] = None
+        if hold is None:
+            return None
+        return f"law: {law_holds.describe(hold, store.get_setting(conn, 'timezone'))}"
+
+    # ── Manual devices: remember the setting, restore it after a power loss (server/control/manual_restore.py) ──
+    def _manual_observe(self, device_id, now):
+        """(observed {running, level, mode} or None, here). None + here = nothing restorable (unknown kind)."""
+        drv = self.drivers.get(device_id)
+        if drv is not None:
+            if self._mode_cfg(device_id) is None:
+                return None, True
+            try:
+                st = drv.status()
+                self._last_status[device_id] = st
+            except Exception:
+                return None, False
+            return {"running": bool(st.get("running")), "level": None,
+                    "mode": int(st["mode"]) if st.get("mode") is not None else None}, True
+        with self._lock:
+            tel = dict(self.telemetry.get(device_id) or {})
+            av = self._avail.get(device_id)
+        if not tel or now - tel.get("ts", 0) > manual_restore.AWAY_S or (av is not None and av[0] is False):
+            return None, False
+        lm = self._level_modes(device_id)
+        if lm is not None:
+            if tel.get("fan_mode") in lm["external"]:
+                return None, False             # its own start-up (power-on) / OVR: away until it ends
+            return {"running": bool(tel.get("running")), "level": tel.get("fan") if tel.get("running") else None,
+                    "mode": None}, True
+        if tel.get("lease_left_s") is not None or tel.get("running") is None:
+            return None, True                  # a leased call (the Aprilaire): Manual means no call; nothing to restore
+        return {"running": bool(tel["running"]), "level": tel.get("fan"), "mode": None}, True
+
+    def _manual_restore_cmd(self, device_id, mem) -> str:
+        on = bool(mem.get("running"))
+        if self.drivers.get(device_id) is not None:            # the Midea: power, then its mode
+            r = self.issuer.issue(device_id=device_id, trait="switchable", action="set", args={"on": on})
+            if on and mem.get("mode") is not None and r.status == "ok":
+                r = self.issuer.issue(device_id=device_id, trait="mode", action="set", args={"mode": int(mem["mode"])})
+            return r.status
+        lm = self._level_modes(device_id)
+        if lm is not None:
+            lvl = int(mem.get("level") or 1)
+            target = lm["labels"][max(1, min(len(lm["labels"]), lvl)) - 1] if on else lm["off_label"]
+            if target is None:
+                return "rejected"
+            return self.issuer.issue(device_id=device_id, trait="mode", action="set", args={"mode": target}).status
+        r = self.issuer.issue(device_id=device_id, trait="switchable", action="set", args={"on": on})
+        if on and mem.get("level") is not None and r.status == "ok":
+            r = self.issuer.issue(device_id=device_id, trait="ranged", action="set", args={"level": int(mem["level"])})
+        return r.status
+
+    def _tick_manual(self, conn, device_id, now, dry_run):
+        obs, here = self._manual_observe(device_id, now)
+        # a controller start counts as a return: the power cut may have taken ha-2 too
+        pr = self._presence.setdefault(device_id, {"online": True, "returned": now, "tries": 0, "last_try": 0.0})
+        if not here:
+            if pr["online"]:
+                store.append_log(conn, device_id, False, "manual", "manual: device away (offline / starting up)",
+                                 False, "away")
+            pr["online"] = False
+            return
+        if not pr["online"]:
+            pr.update(online=True, returned=now, tries=0, last_try=0.0)
+        k = manual_restore.key(device_id)
+        mem = store.get_setting(conn, k)
+        act, why = manual_restore.decide(mem, obs, pr["returned"], pr["tries"], pr["last_try"], now)
+        if act == "remember":
+            store.set_setting(conn, k, {**obs, "ts": now})
+        elif act == "done":
+            if pr["tries"]:
+                store.append_log(conn, device_id, bool(obs["running"]), "manual",
+                                 f"manual: restored ({manual_restore.describe(obs)})", False, "ok")
+            pr["returned"] = None
+        elif act == "give_up":
+            store.append_log(conn, device_id, bool(obs["running"]), "manual", f"manual: {why}", False, "gave-up")
+            store.set_setting(conn, k, {**obs, "ts": now})
+            pr["returned"] = None
+        elif act == "restore":
+            pr["tries"] += 1
+            pr["last_try"] = now
+            status = "dry-run" if dry_run else self._manual_restore_cmd(device_id, mem)
+            store.append_log(conn, device_id, bool(mem.get("running")), "manual", f"manual: {why}", True, status)
+            log.info("%s manual: %s (%s)", device_id, why, status)
 
     def _law_context(self, conn, pols: dict, now: float):
         """(House, {device_id: level now}) for the unified law's shadow. Readings older than 15 min don't count;

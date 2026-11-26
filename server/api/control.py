@@ -1475,14 +1475,34 @@ def make_override_router(api_authz, control_db, device_ids=None):
 
     @router.put("/house/law", dependencies=[Depends(require_admin)])
     async def put_law(body: dict = Body(...)):
-        # the unified control law's settings (server/control/law/bands.py): {bands?, cost?, enrol?}
+        # the unified control law's settings (server/control/law/bands.py): {bands?, cost?, enrol?, modes?}
+        # modes = the PWA's per-device Manual / Own automation / Law switch (server/control/law/modes.py)
         from server.control.law import bands as law_bands
+        from server.control.law import modes as law_modes
+        body = dict(body or {})
+        modes = body.pop("modes", None)
         c = _conn()
         try:
-            code, payload = law_bands.put(c, store, body, devices=device_ids)   # enrol must name real devices
+            code, payload = 200, {"status": "ok"}
+            if body:
+                code, payload = law_bands.put(c, store, body, devices=device_ids)   # enrol must name real devices
+            if code == 200 and modes is not None:
+                code, mp = law_modes.apply(c, store, modes, devices=device_ids)
+                payload = {**payload, **mp}
         finally:
             c.close()
         return JSONResponse(status_code=code, content=payload)
+
+    @router.delete("/house/law/hold/{device_id}", dependencies=[Depends(require_admin)])
+    async def delete_law_hold(device_id: str):
+        # "resume law": end a manual hold now (server/control/law/holds.py)
+        from server.control.law import holds as law_holds
+        c = _conn()
+        try:
+            had = law_holds.clear(c, store, device_id)
+        finally:
+            c.close()
+        return JSONResponse(status_code=200, content={"status": "ok", "device_id": device_id, "cleared": had})
 
     @router.put("/house/timezone", dependencies=[Depends(require_admin)])
     async def put_timezone(body: dict = Body(...)):
@@ -1572,6 +1592,21 @@ def release_follow(control_db, device_id: str) -> None:
         c.close()
 
 
+def _law_hold_on_command(control_db, device_id: str, body: dict):
+    import sqlite3
+    import time
+    from server.control import control_store as store
+    from server.control.law import holds
+    c = sqlite3.connect(str(control_db))
+    try:
+        store.ensure_schema(c)
+        return holds.on_manual_command(c, store, device_id, body, time.time())
+    except Exception:
+        return None                                   # never fail a command that already reached the device
+    finally:
+        c.close()
+
+
 def make_router(issuer: CommandIssuer, confirm_verifier=None, api_authz=None, admin_authz=None,
                 broker: str = "localhost", port: int = 1883, control_db=None):
     """Build the FastAPI control router (fastapi imported lazily so non-API code/tests don't need it).
@@ -1616,6 +1651,11 @@ def make_router(issuer: CommandIssuer, confirm_verifier=None, api_authz=None, ad
         code, payload = await run_in_threadpool(handle_command, issuer, device_id, body, confirm_verifier)
         if control_db is not None and code == 200 and body.get("trait") == "switchable":
             await run_in_threadpool(release_follow, control_db, device_id)
+        if control_db is not None and code == 200:
+            # a person set a device the law drives: hold it for them (server/control/law/holds.py)
+            hold = await run_in_threadpool(_law_hold_on_command, control_db, device_id, body)
+            if hold:
+                payload = {**payload, "law_hold": hold}
         return JSONResponse(status_code=code, content=payload)
 
     def require_admin_only(authorization: str | None = Header(default=None)):

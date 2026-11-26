@@ -374,3 +374,16 @@ details > summary { cursor: pointer; }
   color: var(--txt); padding: 3px 0; }
 .checklist .check input { margin-top: 3px; flex: none; }
 .checklist .check-id { display: block; color: var(--muted); }
+
+/* ── house comfort (law) panel ─────────────────────────────── */
+.law-sched { border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; margin: 8px 0; }
+.law-sched.off { opacity: .55; }
+.law-sched .law-sched-name { width: 120px; }
+.law-sched input[type=time] { background: var(--panel); color: inherit; border: 1px solid var(--line); border-radius: 6px; padding: 4px; }
+.law-check { display: inline-flex; align-items: center; gap: 4px; width: auto !important; }
+.law-modes { flex-wrap: wrap; }
+.law-hold { color: var(--accent); }
+@media (max-width: 600px) {
+  .law-sched .field { flex-wrap: wrap; }
+  .law-sched .field label { width: 100%; }
+}

@@ -1076,6 +1076,7 @@ function DeviceCard({ vm, sensors, isAdmin, onChange, onNeedAdmin, onEdit, onClo
       <div class="state-row">
         <span class="pill ${running ? "on" : "off"}">${running == null ? "?" : running ? "RUNNING" : "IDLE"}</span>
         ${vm.control.enabled === false && html`<span class="note">automation off</span>`}
+        <${LawBadge} law=${vm.law} />
         ${(() => {
           const sa = vm.scene_active;
           if (!sa || sa.scene === "Home" || !sa.patch) return null;
@@ -1148,6 +1149,7 @@ function ActuatorChip({ vm, onOpen, onEdit }) {
       <div class="sensor-meta">
         <span class="badge health-${vm.health}">${vm.health}</span>
         ${vm.control.enabled === false && !vm.manual && html` · <span class="note">auto off</span>`}
+        <${LawBadge} law=${vm.law} />
       </div>
     </div>`;
 }
@@ -2421,50 +2423,134 @@ function NightMode({ isAdmin, onNeedAdmin }) {
   </div>`;
 }
 
+function LawBadge({ law }) {
+  // who runs this device (House comfort): only "Law" (and a manual hold on it) gets a chip; Manual / own automation
+  // already show as "automation off" / the rule
+  if (!law || law.mode !== "law") return null;
+  return html`<span class="scene-chip" title="Run by the house comfort law">⚖ Law${law.hold
+    ? ` · held till ${new Date(law.hold.until * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}` : ""}</span>`;
+}
+
+const LAW_MODES = [
+  { key: "manual", label: "Manual", tip: "You run it. Its setting is remembered and put back after a power cut." },
+  { key: "auto", label: "Own automation", tip: "Its own rule runs; the law is compared alongside it." },
+  { key: "law", label: "Law", tip: "The law runs it, toward the house goals at the least cost." },
+];
+const WEEKDAYS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+const hhmm = (ts) => new Date(ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+
+function lawManualMemory(mem) {
+  if (!mem) return "";
+  if (!mem.running) return "off";
+  return mem.level != null ? `on at level ${mem.level}` : "on";
+}
+
+function LawSchedule({ sc, onChange, onRemove }) {
+  // one goal schedule: a window + days + the goals it replaces (blank = keep the base goal)
+  const [from, to] = (sc.window || "22:00-07:00").split("-");
+  const set = (patch) => onChange({ ...sc, ...patch });
+  const goal = (g, k, val) => {
+    const cur = { ...(sc[g] || {}) };
+    if (val === "") delete cur[k]; else cur[k] = Number(val);
+    const next = { ...sc };
+    if (Object.keys(cur).length) next[g] = cur; else delete next[g];
+    onChange(next);
+  };
+  const days = sc.days || [];
+  const toggleDay = (d) => {
+    const nd = days.includes(d) ? days.filter((x) => x !== d) : [...days, d].sort();
+    const next = { ...sc, days: nd };
+    if (!nd.length) delete next.days;
+    onChange(next);
+  };
+  const v = (g, k) => (sc[g] && sc[g][k] != null ? sc[g][k] : "");
+  return html`<div class="law-sched ${sc.enabled === false ? "off" : ""}">
+    <div class="field">
+      <input type="text" class="law-sched-name" maxlength="40" placeholder="Name" value=${sc.name || ""}
+        onInput=${(e) => set({ name: e.target.value })} />
+      <input type="time" value=${from} onInput=${(e) => set({ window: `${e.target.value}-${to}` })} />
+      <span class="note">to</span>
+      <input type="time" value=${to} onInput=${(e) => set({ window: `${from}-${e.target.value}` })} />
+      <label class="law-check"><input type="checkbox" checked=${sc.enabled !== false}
+        onChange=${(e) => set({ enabled: e.target.checked })} /> on</label>
+      <button class="btn sm ghost" title="Remove this schedule" onClick=${onRemove}>✕</button>
+    </div>
+    <div class="field"><label>Days</label>
+      <span class="scene-sel">${WEEKDAYS.map((d, i) => html`<button key=${d}
+        class="btn sm ${days.includes(i) ? "scene-on" : "ghost"}" onClick=${() => toggleDay(i)}>${d}</button>`)}</span>
+      <span class="note">${days.length ? "" : "every day"}</span></div>
+    <div class="field"><label>Temperature °F</label>
+      <input type="number" step="0.5" placeholder="base" value=${v("temp_f", "min")} onInput=${(e) => goal("temp_f", "min", e.target.value)} />
+      <span class="note">to</span>
+      <input type="number" step="0.5" placeholder="base" value=${v("temp_f", "max")} onInput=${(e) => goal("temp_f", "max", e.target.value)} /></div>
+    <div class="field"><label>RH %</label>
+      <input type="number" step="0.5" placeholder="base" value=${v("rh", "min")} onInput=${(e) => goal("rh", "min", e.target.value)} />
+      <span class="note">to</span>
+      <input type="number" step="0.5" placeholder="base" value=${v("rh", "max")} onInput=${(e) => goal("rh", "max", e.target.value)} /></div>
+    <div class="field"><label>Air quality floor</label>
+      <input type="number" step="1" placeholder="base" value=${v("aq", "floor")} onInput=${(e) => goal("aq", "floor", e.target.value)} /></div>
+  </div>`;
+}
+
 function LawPanel({ isAdmin, onNeedAdmin, onClose }) {
-  // The unified control law (docs/design/unified-control-law.md), shadow only: the user's bands (the law's inputs),
-  // the cost basis, each actuator's enrolment (rule / shadow), the latest decision with its reasons next to what
-  // the rules did, 24 h of agreement, and every actuator's model confidence. GET /api/v1/law (open); saving is
-  // admin-gated (PUT /control/house/law).
+  // House comfort (docs/design/unified-control-law.md): the goals the law steers to (temperature, RH, air quality),
+  // optional goal schedules, and per device who runs it — Manual / Own automation / Law — with the law's answer
+  // next to what the device does, 24 h of agreement, manual holds ("resume law") and what a Manual device will be
+  // put back to after a power cut. GET /api/v1/law (open); saving is admin-gated (PUT /control/house/law).
   const [v, setV] = useState(null);
   const [form, setForm] = useState(null);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
+  const [more, setMore] = useState(false);
   const load = useCallback(() => getJSON("/api/v1/law").then((r) => {
     setV(r);
-    setForm((f) => f || { bands: JSON.parse(JSON.stringify(r.bands)), cost: { ...r.cost }, enrol: { ...r.enrol } });
+    setForm((f) => f || { bands: JSON.parse(JSON.stringify(r.bands)), cost: { ...r.cost }, modes: { ...(r.modes || {}) } });
   }).catch((e) => setErr(String(e))), []);
   useEffect(() => { load(); const t = setInterval(load, 60000); return () => clearInterval(t); }, [load]);
   const setB = (grp, k, val) => setForm({ ...form, bands: { ...form.bands, [grp]: { ...form.bands[grp], [k]: val } } });
+  const setTop = (k, val) => setForm({ ...form, bands: { ...form.bands, [k]: val } });
+  const scheds = (form && form.bands.schedules) || [];
+  const setScheds = (list) => setTop("schedules", list);
   const num = (x) => (x === "" || x === null || x === undefined ? null : Number(x));
   const save = async () => {
     if (!isAdmin) { onNeedAdmin && onNeedAdmin(); return; }
     setBusy(true); setErr("");
     const b = form.bands;
+    const changedModes = Object.fromEntries(Object.entries(form.modes).filter(([d, m]) => (v.modes || {})[d] !== m));
     const body = {
       bands: { temp_f: { min: num(b.temp_f.min), max: num(b.temp_f.max) }, rh: { min: num(b.rh.min), max: num(b.rh.max) },
-               aq: { floor: num(b.aq.floor), weight: num(b.aq.weight), step: num(b.aq.step) }, horizon_h: num(b.horizon_h) },
+               aq: { floor: num(b.aq.floor), weight: num(b.aq.weight), step: num(b.aq.step) },
+               horizon_h: num(b.horizon_h), hold_h: num(b.hold_h),
+               schedules: scheds.map((s) => ({ ...s, name: (s.name || "").trim() || s.window })) },
       cost: { basis: form.cost.basis, electric_per_kwh: num(form.cost.electric_per_kwh), gas_per_therm: num(form.cost.gas_per_therm) },
-      enrol: form.enrol,
     };
+    if (Object.keys(changedModes).length) body.modes = changedModes;
     try { await adminSend("PUT", "/control/house/law", body); setForm(null); await load(); }
     catch (e) { setErr(e.message); }
     setBusy(false);
   };
+  const resume = async (did) => {
+    if (!isAdmin) { onNeedAdmin && onNeedAdmin(); return; }
+    try { await adminSend("DELETE", `/control/house/law/hold/${did}`); await load(); }
+    catch (e) { setErr(e.message); }
+  };
   const last = v && v.last;
-  const when = last ? new Date(last.ts * 1000).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" }) : "—";
+  const when = last ? hhmm(last.ts) : "—";
   const lvl = (x) => (x === null || x === undefined ? "?" : x === 0 ? "off" : x);
   const conf = (c) => Object.entries(c || {}).map(([k, x]) => `${k} ${x}`).join(", ") || "—";
+  const gn = v && v.goals_now;
+  const modesDirty = form && v && Object.entries(form.modes).some(([d, m]) => (v.modes || {})[d] !== m);
   return html`
     <div class="modal-bg" onClick=${onClose}>
       <div class="modal wide" onClick=${(e) => e.stopPropagation()}>
         <h3>House comfort</h3>
-        <p class="note">One law for temperature, humidity and air quality across every actuator. <b>Shadow only</b>:
-          it logs what it would do next to what the rules do; it commands nothing yet.</p>
+        <p class="note">Set the goals; choose, per device, who runs it. Devices on <b>Law</b> are steered together toward
+          the goals at the least cost. Anything you set by hand on a Law device (here, or at the thermostat) is held for
+          you, then the law takes it back.</p>
         ${!v && !err && html`<p class="note">Loading…</p>`}
         ${err && html`<div class="err">${err}</div>`}
         ${v && form && html`
-          <h4 class="scope-hd">Bands <span class="scope-sub">· the law's inputs</span></h4>
+          <h4 class="scope-hd">Goals <span class="scope-sub">· ${gn && gn.schedule ? `now: the ${gn.schedule} schedule` : "now: the base goals"}${gn && gn.next_change ? ` · changes at ${hhmm(gn.next_change)}` : ""}</span></h4>
           <div class="field"><label>Temperature °F</label>
             <input type="number" step="0.5" value=${form.bands.temp_f.min} onInput=${(e) => setB("temp_f", "min", e.target.value)} />
             <span class="note">to</span>
@@ -2475,47 +2561,73 @@ function LawPanel({ isAdmin, onNeedAdmin, onClose }) {
             <input type="number" step="0.5" value=${form.bands.rh.max} onInput=${(e) => setB("rh", "max", e.target.value)} /></div>
           <div class="field"><label>Air quality floor</label>
             <input type="number" step="1" value=${form.bands.aq.floor} onInput=${(e) => setB("aq", "floor", e.target.value)} />
-            <span class="note">soft · weight</span>
-            <input type="number" step="0.1" value=${form.bands.aq.weight} onInput=${(e) => setB("aq", "weight", e.target.value)} />
-            <span class="note">· a level per</span>
-            <input type="number" step="1" value=${form.bands.aq.step} onInput=${(e) => setB("aq", "step", e.target.value)} /></div>
-          <div class="field"><label>Horizon h</label>
-            <input type="number" step="0.5" value=${form.bands.horizon_h}
-              onInput=${(e) => setForm({ ...form, bands: { ...form.bands, horizon_h: e.target.value } })} />
-            <span class="note">how fast to clear a humidity error</span></div>
-          <h4 class="scope-hd">Cost <span class="scope-sub">· what the law minimises</span></h4>
-          <div class="field"><label>Basis</label>
-            <select value=${form.cost.basis} onChange=${(e) => setForm({ ...form, cost: { ...form.cost, basis: e.target.value } })}>
-              <option value="kwh">electric kWh</option><option value="money">money (counts heat vs gas)</option></select></div>
-          ${form.cost.basis === "money" && html`
-            <div class="field"><label>$ / kWh</label><input type="number" step="0.01" value=${form.cost.electric_per_kwh ?? ""}
-              onInput=${(e) => setForm({ ...form, cost: { ...form.cost, electric_per_kwh: e.target.value } })} />
-              <span class="note">$ / therm</span><input type="number" step="0.01" value=${form.cost.gas_per_therm ?? ""}
-              onInput=${(e) => setForm({ ...form, cost: { ...form.cost, gas_per_therm: e.target.value } })} /></div>`}
-          <h4 class="scope-hd">Actuators <span class="scope-sub">· rule = today's policy only · shadow = compared</span></h4>
-          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Device</th><th>Mode</th><th>Law</th><th>Now</th><th>Agree 24 h</th><th>Model</th></tr></thead><tbody>
+            <span class="note">0–100, higher is cleaner · a soft goal, traded against cost</span></div>
+          <div class="field"><label>Manual hold h</label>
+            <input type="number" step="0.25" value=${form.bands.hold_h} onInput=${(e) => setTop("hold_h", e.target.value)} />
+            <span class="note">or to the next schedule change, if sooner</span></div>
+          <h4 class="scope-hd">Schedules <span class="scope-sub">· optional · the first one on replaces the goals it sets</span></h4>
+          ${scheds.length === 0 && html`<p class="note">None: the goals above hold all day.</p>`}
+          ${scheds.map((sc, i) => html`<${LawSchedule} key=${i} sc=${sc}
+            onChange=${(n) => setScheds(scheds.map((x, j) => (j === i ? n : x)))}
+            onRemove=${() => setScheds(scheds.filter((_, j) => j !== i))} />`)}
+          <button class="btn sm ghost" disabled=${scheds.length >= 12}
+            onClick=${() => setScheds([...scheds, { name: "Night", window: "22:00-07:00", enabled: true,
+              temp_f: { min: Number(form.bands.temp_f.min), max: Number(form.bands.temp_f.max) } }])}>+ Add schedule</button>
+          <h4 class="scope-hd">Devices <span class="scope-sub">· who runs each one</span></h4>
+          <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Device</th><th>Run by</th><th>Law says</th><th>Now</th><th>Agree 24 h</th></tr></thead><tbody>
             ${((last && last.models) || []).map((m) => {
-              const c = last.choice[m.device_id] || {};
-              const ag = (v.agreement_24h || {})[m.device_id];
-              return html`<tr key=${m.device_id} title=${m.source}>
-                <td>${prettyName(m.device_id)}<div class="note">${m.function}${m.area_limited ? " · one room" : ""}</div></td>
-                <td><select value=${form.enrol[m.device_id] || "shadow"}
-                  onChange=${(e) => setForm({ ...form, enrol: { ...form.enrol, [m.device_id]: e.target.value } })}>
-                  ${v.enrol_modes.map((x) => html`<option value=${x}>${x}</option>`)}</select></td>
+              const d = m.device_id;
+              const c = last.choice[d] || {};
+              const ag = (v.agreement_24h || {})[d];
+              const rag = (v.rule_agreement_24h || {})[d];
+              const hold = (v.holds || {})[d];
+              const mode = form.modes[d] || "manual";
+              const mem = (v.manual_memory || {})[d];
+              const hasPol = (v.has_policy || {})[d];
+              return html`<tr key=${d} title=${m.source}>
+                <td>${prettyName(d)}<div class="note">${m.function}${m.area_limited ? " · one room" : ""}</div></td>
+                <td><span class="scene-sel law-modes">${LAW_MODES.filter((x) => x.key !== "auto" || hasPol).map((x) => html`
+                  <button key=${x.key} title=${x.tip} class="btn sm ${mode === x.key ? "scene-on" : "ghost"}"
+                    onClick=${() => setForm({ ...form, modes: { ...form.modes, [d]: x.key } })}>${x.key === "auto" ? "Own" : x.label}</button>`)}</span>
+                  ${!hasPol && html`<div class="note">no rule of its own</div>`}
+                  ${mode === "manual" && mem && html`<div class="note">restores to ${lawManualMemory(mem)} after a power cut</div>`}
+                  ${hold && html`<div class="note law-hold">held ${hold.by === "wall" ? "(set at the thermostat)" : "(set by hand)"} until ${hhmm(hold.until)}
+                    <button class="btn sm ghost" onClick=${() => resume(d)}>Resume law</button></div>`}</td>
                 <td>${c.label || "—"}${c.held_s ? html`<div class="note">held ${Math.round(c.held_s / 60)}m</div>` : ""}</td>
-                <td>${m.device_id in (last.actual || {}) ? lvl(last.actual[m.device_id]) : "—"}</td>
-                <td>${ag ? `${Math.round(100 * ag.same / ag.ticks)} % of ${ag.ticks}` : "—"}</td>
-                <td class="note">${conf(m.confidence)}</td></tr>`;
+                <td>${d in (last.actual || {}) ? lvl(last.actual[d]) : "—"}</td>
+                <td>${ag ? `${Math.round(100 * ag.same / ag.ticks)} % of ${ag.ticks}` : "—"}
+                  ${rag && html`<div class="note">own rule ${Math.round(100 * rag.same / rag.ticks)} %</div>`}</td></tr>`;
             })}
           </tbody></table></div>
+          ${modesDirty && html`<p class="note">Changes to who runs a device take effect when you Save.</p>`}
           ${v.study_ticks_24h > 0 && html`<p class="note">The dehumidifier study's rotation is driving the units: its
-            ${v.study_ticks_24h} decisions in the last 24 h compare against the experiment, so they're left out of
-            "Agree 24 h".</p>`}
+            ${v.study_ticks_24h} decisions in the last 24 h are left out of "Agree 24 h".</p>`}
           <h4 class="scope-hd">Last decision <span class="scope-sub">· ${when}${v.stale ? " · STALE" : ""}</span></h4>
-          ${last ? html`<ul class="note">${last.reasons.map((r) => html`<li>${r}</li>`)}</ul>
-            ${(last.alternatives || []).length > 0 && html`<p class="note">Next best: ${last.alternatives.map((a) =>
-              `${Object.entries(a.choice).map(([d, x]) => `${prettyName(d)} ${x}`).join(", ")} (${a.cost_h.toFixed(3)}/h, ${a.water_gph >= 0 ? "+" : ""}${a.water_gph} g/h)`).join(" · ")}</p>`}`
-            : html`<p class="note">No decision yet (the shadow runs every 5 min).</p>`}
+          ${last ? html`<ul class="note">${last.reasons.map((r) => html`<li>${r}</li>`)}</ul>`
+            : html`<p class="note">No decision yet (the law decides every 5 min).</p>`}
+          <button class="btn sm ghost" onClick=${() => setMore(!more)}>${more ? "▾" : "▸"} Cost and tuning</button>
+          ${more && html`
+            <div class="field"><label>Cost basis</label>
+              <select value=${form.cost.basis} onChange=${(e) => setForm({ ...form, cost: { ...form.cost, basis: e.target.value } })}>
+                <option value="kwh">electric kWh</option><option value="money">money (counts heat vs gas)</option></select></div>
+            ${form.cost.basis === "money" && html`
+              <div class="field"><label>$ / kWh</label><input type="number" step="0.01" value=${form.cost.electric_per_kwh ?? ""}
+                onInput=${(e) => setForm({ ...form, cost: { ...form.cost, electric_per_kwh: e.target.value } })} />
+                <span class="note">$ / therm</span><input type="number" step="0.01" value=${form.cost.gas_per_therm ?? ""}
+                onInput=${(e) => setForm({ ...form, cost: { ...form.cost, gas_per_therm: e.target.value } })} /></div>`}
+            <div class="field"><label>Air quality weight</label>
+              <input type="number" step="0.01" value=${form.bands.aq.weight} onInput=${(e) => setB("aq", "weight", e.target.value)} />
+              <span class="note">what a level of missing ventilation is worth per hour · a level per</span>
+              <input type="number" step="1" value=${form.bands.aq.step} onInput=${(e) => setB("aq", "step", e.target.value)} /></div>
+            <div class="field"><label>Horizon h</label>
+              <input type="number" step="0.5" value=${form.bands.horizon_h} onInput=${(e) => setTop("horizon_h", e.target.value)} />
+              <span class="note">how fast to clear a humidity error</span></div>
+            <div class="tbl-wrap"><table class="tbl"><thead><tr><th>Model</th><th>Confidence</th></tr></thead><tbody>
+              ${((last && last.models) || []).map((m) => html`<tr key=${m.device_id} title=${m.source}>
+                <td>${prettyName(m.device_id)}</td><td class="note">${conf(m.confidence)}</td></tr>`)}
+            </tbody></table></div>
+            ${(last && last.alternatives || []).length > 0 && html`<p class="note">Next best: ${last.alternatives.map((a) =>
+              `${Object.entries(a.choice).map(([d, x]) => `${prettyName(d)} ${x}`).join(", ")} (${a.cost_h.toFixed(3)}/h, ${a.water_gph >= 0 ? "+" : ""}${a.water_gph} g/h)`).join(" · ")}</p>`}`}
           <div class="modal-actions">
             <button class="btn ghost" onClick=${onClose}>Close</button>
             <button class="btn primary" disabled=${busy} onClick=${save}>${busy ? "Saving…" : "Save"}</button>
@@ -2994,7 +3106,7 @@ function App() {
           <${NotifyToggle} />
           <${HouseTimezone} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} />
           <${StudyChip} isAdmin=${isAdmin} onNeedAdmin=${() => setShowAdmin(true)} />
-          <button class="btn sm ghost" onClick=${() => setShowLaw(true)} title="Unified control law (shadow)">⚖ Comfort</button>
+          <button class="btn sm ghost" onClick=${() => setShowLaw(true)} title="House comfort: goals, schedules, and who runs each device">⚖ Comfort</button>
           ${isAdmin
             ? html`<span class="admin-on" title="Admin unlocked">🔓 Admin</span>
                    <button class="btn sm ghost" onClick=${() => setShowAdd(true)}>+ Device</button>

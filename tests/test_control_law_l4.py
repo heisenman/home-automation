@@ -9,7 +9,10 @@ import pytest
 from server.control import control_store as store
 from server.control import controller as C
 from server.control.issuer import Result
+from server.control import manual_restore as MR
 from server.control.law import bands as B
+from server.control.law import holds as H
+from server.control.law import modes as MO
 from server.control.law import models as M
 from server.control.law import shadow as SH
 from server.control.law import solve as S
@@ -215,3 +218,169 @@ def test_law_leaves_the_thermostat_alone_when_its_schedule_is_on_or_not_enrolled
     ctrl2._law.choice, ctrl2._law.decided_at = {"thermostat_hall": {"level": None, "label": "x"}}, NOW - 60
     ctrl2.tick(now=NOW)
     assert not iss2.calls                              # default enrolment is shadow: never touched
+
+
+# ── goal schedules ───────────────────────────────────────────────────────────────────────────────
+
+NIGHT = {"name": "Night", "window": "22:00-07:00", "temp_f": {"min": 64, "max": 72}}
+
+
+def test_goal_schedule_replaces_only_the_goals_it_names_and_wraps_midnight():
+    bands = {**B.BANDS_DEFAULT, "schedules": [{**NIGHT, "days": [4]}]}          # Friday nights
+    eff, name = B.effective(bands, 23 * 60, 4)
+    assert name == "Night" and eff["temp_f"] == {"min": 64, "max": 72} and eff["rh"] == B.BANDS_DEFAULT["rh"]
+    assert B.effective(bands, 2 * 60, 5)[1] == "Night"                          # Saturday 02:00: Friday's night
+    assert B.effective(bands, 2 * 60, 4)[1] is None                             # Friday 02:00: Thursday's night
+    assert B.effective(bands, 12 * 60, 4)[1] is None
+    off = {**B.BANDS_DEFAULT, "schedules": [{**NIGHT, "enabled": False}]}
+    assert B.effective(off, 23 * 60, 4)[1] is None
+
+
+def test_goal_schedule_validation():
+    cur = {"bands": B.BANDS_DEFAULT, "cost": B.COST_DEFAULT, "enrol": {}}
+    ok = lambda sc: B.validate({"bands": {"schedules": sc}}, cur)[0]
+    assert ok([NIGHT]) is None
+    assert ok([{**NIGHT, "window": "25:00-07:00"}])
+    assert ok([{**NIGHT, "window": "07:00-07:00"}])
+    assert ok([{"name": "x", "window": "01:00-02:00"}])                         # sets no goal
+    assert ok([{**NIGHT, "temp_f": {"min": 75, "max": 70}}])
+    assert ok([{**NIGHT, "days": [7]}])
+    assert ok([{**NIGHT, "aq": {"floor": 70, "weight": 3}}])                    # only the floor is scheduled
+    assert ok([NIGHT] * 13)
+    assert B.validate({"bands": {"hold_h": 0}}, cur)[0]
+
+
+def test_next_change_finds_the_schedule_edge():
+    bands = {**B.BANDS_DEFAULT, "schedules": [{**NIGHT, "window": "22:00-07:00"}]}
+    tz = "UTC"
+    import calendar
+    t = calendar.timegm((2026, 11, 26, 21, 30, 0))
+    assert B.next_change(bands, t, tz) == calendar.timegm((2026, 11, 26, 22, 0, 0))
+    assert B.next_change(B.BANDS_DEFAULT, t, tz) is None
+
+
+def test_the_law_solves_on_the_scheduled_goals():
+    conn = sqlite3.connect(":memory:")
+    store.ensure_schema(conn)
+    store.set_setting(conn, "timezone", "UTC")
+    B.put(conn, store, {"bands": {"schedules": [{"name": "Dry", "window": "00:00-23:59", "rh": {"min": 35, "max": 40}}]}})
+    reg = {"midea": type("X", (), {"function": "dehumidify", "device_type": "dehumidifier"})()}
+    h = S.House(22.0, 43.0, 22.0, S.ah(22.0, 43.0), 10.0, 85.0)                 # in the base band, above Dry's
+    p = SH.Shadow(store).run(conn, NOW, reg, h, {"midea": 0})
+    assert p.choice["midea"]["level"] == 1 and p.reasons[0] == "goals: the Dry schedule"
+    assert store.get_setting(conn, "law:last")["schedule"] == "Dry"
+
+
+# ── holds ────────────────────────────────────────────────────────────────────────────────────────
+
+def test_a_pwa_command_on_a_law_device_places_a_hold_that_ends_at_the_schedule_edge():
+    import calendar
+    conn = sqlite3.connect(":memory:")
+    store.ensure_schema(conn)
+    store.set_setting(conn, "timezone", "UTC")
+    t = calendar.timegm((2026, 11, 26, 21, 30, 0))
+    assert H.on_manual_command(conn, store, "erv_attic", {"trait": "mode", "args": {"mode": "high"}}, t) is None
+    B.put(conn, store, {"enrol": {"erv_attic": "law"}, "bands": {"schedules": [NIGHT]}})
+    h = H.on_manual_command(conn, store, "erv_attic", {"trait": "mode", "args": {"mode": "high"}}, t)
+    assert h["by"] == "pwa" and h["until"] == calendar.timegm((2026, 11, 26, 22, 0, 0))   # before hold_h's 2 h
+    assert H.active(conn, store, "erv_attic", t + 60) is not None
+    assert H.active(conn, store, "erv_attic", h["until"] + 1) is None                       # expired, cleared
+    assert H.all_active(conn, t) == {}
+
+
+def test_a_hold_makes_the_law_yield(tmp_path):
+    ctrl, iss, db = _ctrl(tmp_path, {"erv_attic": "law"}, {"erv_attic": ERV_POL})
+    conn = sqlite3.connect(db)
+    H.place(conn, store, "erv_attic", "pwa", NOW - 60)
+    conn.close()
+    _erv_tel(ctrl, fan=3, fan_mode=10)                 # a person set high
+    _decide(ctrl, NOW - 60, erv_attic=1)
+    ctrl.tick(now=NOW)
+    assert not [c for c in iss.calls if c[0] == "erv_attic"]
+    src, why, _ = _log(db, "erv_attic")
+    assert src == "law" and why.startswith("manual hold (set from the PWA) until")
+
+
+def test_a_setpoint_changed_at_the_wall_becomes_a_hold(tmp_path):
+    ctrl, iss, db = _ctrl(tmp_path, {"thermostat_hall": "law"})
+    ctrl._law.choice, ctrl._law.decided_at = {"thermostat_hall": {"level": None, "label": "x"}}, NOW - 60
+    _thermo(ctrl, 74, 78)
+    ctrl.tick(now=NOW)                                 # law writes 68 / 76
+    _thermo(ctrl, 68, 76, at=NOW + 30)
+    ctrl.tick(now=NOW + 30)                            # our own write read back: not a wall change
+    c = sqlite3.connect(db)
+    assert H.active(c, store, "thermostat_hall", NOW + 30) is None
+    _thermo(ctrl, 71, 76, at=NOW + 900)                # someone turned it up at the wall
+    n = len(iss.calls)
+    ctrl.tick(now=NOW + 900)
+    h = H.active(c, store, "thermostat_hall", NOW + 900)
+    assert h["by"] == "wall" and h["detail"] == {"heat": 71.0} and len(iss.calls) == n
+    assert c.execute("SELECT count(*) FROM control_log WHERE reason LIKE 'law: set at the thermostat (heat 71 °F)%'"
+                     ).fetchone()[0] == 1
+    H.clear(c, store, "thermostat_hall")               # "resume law"
+    ctrl._law.decided_at = NOW + 1500
+    ctrl.tick(now=NOW + 1600)
+    assert iss.calls[-1] == ("thermostat_hall", "setpoint", {"channel": "heat", "value": 68.0})
+
+
+# ── modes (Manual / Own automation / Law) ────────────────────────────────────────────────────────
+
+def test_modes_map_onto_policy_enabled_and_enrolment():
+    conn = sqlite3.connect(":memory:")
+    store.ensure_schema(conn)
+    store.set_policy(conn, "erv_attic", ERV_POL)
+    assert MO.of(conn, store, "erv_attic") == "auto" and MO.of(conn, store, "thermostat_hall") == "manual"
+    assert MO.apply(conn, store, {"erv_attic": "law", "thermostat_hall": "law"})[0] == 200
+    assert MO.of(conn, store, "erv_attic") == "law" and MO.of(conn, store, "thermostat_hall") == "law"
+    assert MO.apply(conn, store, {"erv_attic": "manual"})[0] == 200
+    assert store.get_policy(conn, "erv_attic")["enabled"] is False and MO.of(conn, store, "erv_attic") == "manual"
+    assert B.get(conn, store)["enrol"]["erv_attic"] == "shadow"
+    assert MO.apply(conn, store, {"erv_attic": "auto"})[0] == 200
+    assert store.get_policy(conn, "erv_attic")["enabled"] is True
+    assert MO.apply(conn, store, {"erv_attic": "robot"})[0] == 400
+    assert MO.apply(conn, store, {"ghost": "law"}, devices=["erv_attic"])[0] == 400
+
+
+# ── Manual devices come back after a power loss ──────────────────────────────────────────────────
+
+def test_manual_restore_decisions():
+    on2 = {"running": True, "level": 2, "mode": None}
+    off = {"running": False, "level": None, "mode": None}
+    assert MR.decide(on2, on2, None, 0, 0, NOW)[0] == "none"
+    assert MR.decide(on2, off, None, 0, 0, NOW)[0] == "remember"        # a person turned it off: that's the setting
+    assert MR.decide(on2, off, NOW - 10, 0, 0, NOW)[0] == "wait"        # just back
+    assert MR.decide(on2, off, NOW - 90, 0, 0, NOW)[0] == "restore"
+    assert MR.decide(on2, off, NOW - 120, 1, NOW - 30, NOW)[0] == "wait"
+    assert MR.decide(on2, off, NOW - 200, 3, NOW - 90, NOW)[0] == "give_up"
+    assert MR.decide(on2, on2, NOW - 90, 1, NOW - 60, NOW)[0] == "done"
+
+
+
+def test_a_manual_ranged_device_is_put_back_after_being_offline(tmp_path):
+    pol = {"enabled": False, "source_sensor": "gas_x",
+           "control": {"strategy": "threshold_ranged", "metric": "air_quality",
+                       "bands": [{"max": None, "level": 1}]}}
+    ctrl, iss, db = _ctrl(tmp_path, pols={"lamp_office": pol})        # any disabled-policy telemetry device
+    tel = lambda run, fan, at: ctrl.telemetry.__setitem__("lamp_office", {"running": run, "fan": fan, "ts": at})
+    tel(True, 2, NOW)
+    ctrl.tick(now=NOW)                                 # start counts as a return; same as nothing remembered -> done
+    ctrl.tick(now=NOW + 30)                            # remembered: on at 2
+    c = sqlite3.connect(db)
+    assert store.get_setting(c, MR.key("lamp_office"))["level"] == 2
+    ctrl._avail["lamp_office"] = (False, NOW + 60)     # brownout: the LWT says offline
+    ctrl.tick(now=NOW + 60)
+    ctrl._avail["lamp_office"] = (True, NOW + 120)     # back, but OFF
+    tel(False, None, NOW + 120)
+    ctrl.tick(now=NOW + 120)                           # settling
+    assert not iss.calls
+    tel(False, None, NOW + 200)
+    ctrl.tick(now=NOW + 200)
+    assert iss.calls[:2] == [("lamp_office", "switchable", {"on": True}), ("lamp_office", "ranged", {"level": 2})]
+    tel(True, 2, NOW + 260)
+    ctrl.tick(now=NOW + 260)
+    assert c.execute("SELECT reason FROM control_log WHERE device_id='lamp_office' ORDER BY rowid DESC LIMIT 1"
+                     ).fetchone()[0] == "manual: restored (on at level 2)"
+    tel(False, None, NOW + 400)                        # turned off by a person while online: respected
+    ctrl.tick(now=NOW + 400)
+    ctrl.tick(now=NOW + 600)
+    assert len(iss.calls) == 2 and store.get_setting(c, MR.key("lamp_office"))["running"] is False

@@ -226,7 +226,15 @@ class LevoitBridge:
         device_id = reg["device_id"]
 
         if suffix == "status":                          # ESPHome availability LWT (online/offline)
-            self._online[device_id] = (raw.lower() == "online")
+            online = raw.lower() == "online"
+            changed = self._online.get(device_id) != online
+            self._online[device_id] = online
+            with self._lock:
+                snapshot = dict(self._state.get(device_id) or {})
+            if changed and snapshot:
+                # re-emit so meta.online reaches the controller NOW: a Manual purifier that lost power is restored
+                # when it comes back (server/control/manual_restore.py; 11-19 brownout left purifier_c_bed off)
+                self._emit(reg, device_id, snapshot)
             return
 
         mapped = _METRIC_MAP.get(suffix)

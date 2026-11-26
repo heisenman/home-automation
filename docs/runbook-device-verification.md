@@ -257,6 +257,32 @@ each of those, control_log's newest rows have source `law` (or an override/safet
 **Gotchas:** the controller logs `law shadow:` lines at INFO every 5 min; `law shadow tick failed` /
 `law context failed` with a traceback means the shadow stopped deciding (the rules are unaffected).
 
+## Entry 4d — Manual devices come back after a power loss; law holds
+
+**Asserted state (2026-11-26):** a device on Manual (automation policy `enabled: false`) has its setting remembered
+in control.db `manual:last:<id>` and put back when it returns from being away (purifier LWT offline, telemetry
+> 10 min old, the ERV's start-up/OVR state, the Midea unreachable) — `server/control/manual_restore.py`. A person's
+set of a Law device (PWA, or the thermostat's wall controls) is a hold in `law:hold:<id>` until `hold_h` or the next
+goal-schedule change.
+
+**Re-check (on ha-2):**
+```sh
+cd ~/home_automation && python3 -c "
+import sqlite3, json
+c = sqlite3.connect('file:instance/db/control.db?mode=ro', uri=True)
+for k, j in c.execute(\"select key, json from house_setting where key like 'manual:last:%' or key like 'law:hold:%'\"): print(k, j)
+for r in c.execute(\"select ts, device_id, reason, status from control_log where source='manual' order by rowid desc limit 10\"): print(r)"
+```
+
+**Expected:** each Manual device has a `manual:last:` row matching what it is doing now (the PWA card). After a
+power blip, control_log shows `manual: device away …`, then `manual: back after being away as off -> restoring …`
+and `manual: restored (…)` within ~2 min of it coming back. A live test is to power-cycle a Manual purifier at its
+plug: it should come back at its old speed within ~2 min. `law:hold:` rows exist only while a hold runs (null after).
+
+**Gotchas:** a purifier only reports "offline" if the Levoit bridge forwards its LWT (`meta.online`, since
+2026-11-26); before that a brownout looked like a person turning it off. A device that is still different 15 min
+after returning is left as it is and that becomes its setting (`gave-up`).
+
 ## Entry 5 — Smart plugs are switchable from HA
 
 **Asserted state:** six plugs are manual-only switches in ha-2's `instance/control.yaml` (commit 0b909f0):

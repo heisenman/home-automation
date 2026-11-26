@@ -224,6 +224,36 @@ device's switch-over is Hugh's choice (from the PWA, design pending: §6 L4).
   own rule would have chosen. `GET /api/v1/law` adds `rule_agreement_24h` (law vs that rule) next to
   `agreement_24h` (law vs what the device did).
 
+### As built (PWA, holds, schedules, Manual restore — 2026-11-26)
+
+Hugh 2026-11-26: a PWA panel that sets the goals and, per device, Manual / own automation / Law; Manual comes back
+after a power cut (q1 "yes"); a manual set of the thermostat is recorded in the PWA (q2); one set of goals now,
+with schedules available (q3); the ERV waits for the panel, Hugh flips it (q4).
+
+- **Modes** (`law/modes.py`): a view over existing settings — Manual = policy `enabled: false`; Own automation =
+  enabled + enrolment `shadow`; Law = enabled + `law`. `PUT /control/house/law {modes: {id: manual|auto|law}}`.
+  A device without a policy (the thermostat) has no "own": Manual leaves it alone, Law holds it at the band.
+- **Holds** (`law/holds.py`): a successful PWA command (`POST /devices/{id}/command`) on a Law device places
+  `law:hold:<id>` {by: pwa, until}; the thermostat's wall changes are detected (the setpoint moved, and not to the
+  value we wrote) and held the same way {by: wall}. While held the law yields that device (it keeps its state; log
+  `manual hold (…) until HH:MM`). Ends at `bands.hold_h` (2 h) or the next goal-schedule change if sooner, or
+  `DELETE /control/house/law/hold/{id}` ("Resume law" in the panel). Wall changes are watched even while the law's
+  decision is stale, so it never overwrites one later; after a controller restart the first reading is the baseline.
+- **Goal schedules** (`bands.schedules`, `bands.effective`): up to 12 `{name, window HH:MM-HH:MM, days?, enabled,
+  temp_f?, rh?, aq.floor?}`, house time; the first enabled match replaces the goals it names. A window past
+  midnight belongs to the day it starts. The law solves on the goals in force (reason `goals: the Night schedule`);
+  the thermostat's setpoints follow them. None are set yet.
+- **Manual restore** (`server/control/manual_restore.py`, `controller._tick_manual`): while Manual, the observed
+  setting is remembered (`manual:last:<id>`; a person's change — PWA or the device's buttons — is the new setting).
+  When the device returns from being away in a different state, it's put back after 60 s (3 tries, 60 s apart; given
+  up after 15 min). Away = the purifier's ESPHome LWT (the Levoit bridge now forwards it as `meta.online`),
+  telemetry > 10 min old, a level device in an `external` state (ERV start-up/OVR), or the Midea unreachable. A
+  controller start counts as a return. Verification: runbook entry 4d.
+- **PWA** (`LawPanel` in `server/web/app.js`): Goals (temp, RH, AQ floor, hold length) → Schedules (add/remove,
+  window, days, goals; blank = base) → Devices (Manual / Own / Law, the law's answer, now, 24 h agreement incl. "own
+  rule %" for Law devices, holds with Resume law, what a Manual device restores to) → last decision → a "Cost and
+  tuning" fold (basis, prices, AQ weight/step, horizon, model confidence). Device cards show a "⚖ Law" chip (+ hold).
+
 ## 7. Open questions
 
 - **L3 results (2026-11-12, mostly rough):** house UA ≈ 175 W/K, C ≈ 5.5 kWh/K (τ ≈ 32 h), gains ≈ 1 kW, balance
