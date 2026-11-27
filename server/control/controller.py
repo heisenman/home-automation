@@ -857,7 +857,15 @@ class Controller:
             if t_in is not None and t_out is not None and mode is not None:
                 heating = heating or (int(mode) in (1, 3) and t_out < t_in - 3)
                 cooling = cooling or (int(mode) in (2, 3) and t_out > t_in)
-        house = law_solve.House(t_in, rh, t_rh, w_out, t_out, aq, heating, cooling)
+        aq_by = {}
+        for pur in by_fn["purify_air"]:                     # each purifier's own room (its card's sensor picker)
+            pol = pols.get(pur) or {}
+            if pol:
+                p = Policy.from_dict(pol)
+                r, _, _ = self._pick_source(pol, p.sensor_stale_s, now)
+                if r is not None and now - r.ts <= p.sensor_stale_s:
+                    aq_by[pur] = r.value
+        house = law_solve.House(t_in, rh, t_rh, w_out, t_out, aq, heating, cooling, aq_by)
         current = {}
         for d in by_fn["dehumidify"]:
             # the unit's own state first (the Midea's mode, the Aprilaire's call pin); else the last decision that

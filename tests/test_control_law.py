@@ -300,3 +300,33 @@ def test_a_thermostat_owns_temperature_no_heater_dehumidifier_and_ventilation_st
     no_t = [m for m in M.build({k: v for k, v in REG.items() if k != "thermo"}, PRM, {})]
     p2 = S.solve(no_t, b, KWH, PRM, cold, {"midea": 0, "apr": 0, "erv": 2})
     assert "thermostat's job" not in " ".join(p2.reasons)
+
+
+def test_each_purifier_runs_on_its_own_rooms_air_quality():
+    # Hugh 2026-11-27: 11-26 overnight c_bed (room 68) ran speed 1 on the ERV's mean of 4 rooms; its own rule says 2
+    b = {**BANDS, "aq": {**BANDS["aq"], "floor": 75.0}}
+    h = S.House(22.0, 44.0, 22.0, None, 10.0, 80.0, aq_by={"pur": 68.0})
+    p = _solve(h, {"pur": 1}, bands=b)
+    assert p.choice["pur"]["level"] == 2                     # its room (68), not the house (80)
+    assert any("pur 68 → 2" in r for r in p.reasons)
+    p2 = _solve(S.House(22.0, 44.0, 22.0, None, 10.0, 80.0), {"pur": 1}, bands=b)
+    assert p2.choice["pur"]["level"] == 1 and any("(house AQ)" in r for r in p2.reasons)   # no room reading
+
+
+def test_law_context_reads_each_purifiers_own_sensor_from_its_policy(tmp_path):
+    db = str(tmp_path / "control.db")
+    conn = sqlite3.connect(db)
+    store.ensure_schema(conn)
+    conn.close()
+    reg = parse_control_registry(yaml.safe_load(open("config-examples/control.example.yaml")))
+    ctrl = C.Controller(Iss(), {}, reg, db)
+    ctrl.registry["purifier_x"] = Ctl("purify_air", "air_purifier")
+    ctrl.registry["purifier_y"] = Ctl("purify_air", "air_purifier")
+    aq = {"gas_bed": 68.0, "gas_a": 80.0, "gas_b": 90.0}
+    ctrl._latest_stored = lambda sid, metric, now: {"m": {metric: aq[sid]}, "ts": now - 60} if sid in aq else None
+    pol = lambda **k: {"enabled": True, "control": {"strategy": "threshold_ranged", "metric": "air_quality",
+                                                    "bands": [{"max": None, "level": 1}]}, **k}
+    pols = {"purifier_x": pol(source_sensor="gas_bed"),
+            "purifier_y": pol(source_sensor="gas_a", source_sensors=["gas_a", "gas_b"], aggregate="mean")}
+    house, _ = ctrl._law_context(sqlite3.connect(db), pols, NOW)
+    assert house.aq_by == {"purifier_x": 68.0, "purifier_y": 85.0}    # single sensor, and the card's mean of two

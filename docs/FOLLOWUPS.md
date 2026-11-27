@@ -59,8 +59,8 @@ middle. Fixed: drying now runs to `rh.min − rh.dry_past` (1 → 42 %), and the
 Entry 4c). **11-27 morning check:** Night schedule seen live both ways (21:00 → 68/72, 06:00 → 70/74 °F). Midea long runs seen:
 20:13–21:08 and 04:27–05:53 PST, each 46 → 42 % (a tank-full interlock 21:09–21:30, then cleared). Bug fixed the same
 morning: at 06:00 the temperature term ran the Midea as a heater and then switched the ERV off below the AQ floor
-(design doc, 11-27 note). **Open:** purifiers follow the ERV's AQ sensor, not their own rooms' — overnight c_bed
-(room 68) dropped to speed 1 where its own rule says 2; Hugh to decide per-room.
+(design doc, 11-27 note). Purifiers followed the ERV's AQ (mean of 4 rooms), not their own — overnight c_bed (room 68)
+dropped to speed 1 where its own rule says 2. Fixed (Hugh: per room): each purifier uses its card's sensor.
 
 ## 🟡 2026-11-26 — unified law L4 back end built; nothing enrolled `law` yet (Hugh)
 

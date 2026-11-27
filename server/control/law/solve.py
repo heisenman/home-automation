@@ -30,7 +30,7 @@ from __future__ import annotations
 
 import itertools
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 THERM_KWH = 29.307
 AC_COP = 3.0                        # assumed; single-stage AC, no metered figure
@@ -107,6 +107,8 @@ class House:
     aq: float | None                # air-quality index, 0–100 (lower = worse)
     heating: bool = False           # the house is in heating (furnace recently on / below the temperature band)
     cooling: bool = False
+    aq_by: dict = field(default_factory=dict)   # {purifier: its own room's AQ}, from its automation policy's sensor
+                                                # (the card's picker; Hugh 2026-11-27). Missing = the house `aq`
 
     @property
     def w_in(self) -> float | None:
@@ -295,13 +297,20 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
                    + (f", ventilation short {best[2]['aq_short']} level(s)" if best[2]['aq_short'] else ""))
 
     # purifiers: the rough AQ rule; the thermostat: the band itself
+    # each purifier by its own room's sensor (Hugh 2026-11-27: 11-26 overnight c_bed, room 68, ran speed 1 on the
+    # ERV's mean of 4 rooms where its own rule says 2); the house `aq` only when its room has no fresh reading
+    rooms = []
     for m in models:
         if m.function == "purify_air":
-            lvl = aq_level(bands, h.aq, 4, current.get(m.device_id))
+            aq_p = h.aq_by.get(m.device_id, h.aq)
+            lvl = aq_level(bands, aq_p, 4, current.get(m.device_id))
             if lvl is not None:
                 choice[m.device_id] = {"level": lvl, "label": f"speed {lvl}"}
+                rooms.append(f"{m.device_id} {aq_p:.0f} → {lvl}" + ("" if m.device_id in h.aq_by else " (house AQ)"))
         elif m.function == "condition_temperature":
             choice[m.device_id] = {"level": None, "label": f"heat to {bands['temp_f']['min']:g} °F, "
                                                            f"cool above {bands['temp_f']['max']:g} °F"}
+    if rooms:
+        reasons.append("purifiers by their rooms' AQ: " + ", ".join(rooms))
     alts = [{"choice": {m.device_id: o.label for m, o in zip(dehums + vents, r[1])}, **r[2]} for r in ranked[1:4]]
     return Plan(choice, errs, need, best[2], reasons, alts)

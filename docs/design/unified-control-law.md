@@ -201,6 +201,10 @@ The study's Phase 3 rotation still runs underneath: it's what turns the dehumidi
   switched the ERV OFF with AQ 77 under the floor of 80, to stop its heat loss — against "air quality trumps heat
   savings" (Hugh 2026-11-21). With a `condition_temperature` device modelled the term is gone (the thermostat holds
   the band; the heat stays in the cost, credited against gas while heating); without one it stays firm.
+  **2026-11-27 — each purifier runs on its own room's AQ** (Hugh: "tied to their paired sensor"): the sensor its
+  automation policy names — the card's picker, so single / fallback / mean / worst all carry over (`House.aq_by`,
+  read by `_pick_source` like the rule). Overnight 11-26 c_bed (room 68) ran speed 1 on the ERV's mean of 4 rooms
+  (80) where its own rule says 2. No fresh room reading: the house AQ, labelled "(house AQ)" in the reasons.
 - **Search:** every combination of the dehumidifiers (off/on) × the ERV's levels, ranked by (firm shortfall, cost
   + AQ shortfall × weight, changes). Purifiers by the rough AQ rule. The thermostat gets the band as its setpoints.
 - **Shadow:** 15-min hold on the law's own answers; enrolment `rule` leaves a device out of the comparison.
