@@ -152,6 +152,8 @@ def view(conn, store, now: float) -> dict:
             "modes": {d: MO.of(conn, store, d, st) for d in devs},
             "has_policy": {d: store.get_policy(conn, d) is not None for d in devs},
             "holds": H.all_active(conn, now),
+            "thermostats": {d: store.get_setting(conn, "law:thermo:" + d) for d in devs
+                            if store.get_setting(conn, "law:thermo:" + d)},
             "manual_memory": {d: store.get_setting(conn, MR.key(d)) for d in devs
                               if store.get_setting(conn, MR.key(d))},
             "goals_now": {"schedule": sched, "bands": {k: eff[k] for k in B.SCHEDULE_GOALS}, "next_change": nxt},

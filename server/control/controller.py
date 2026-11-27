@@ -26,6 +26,7 @@ from server.control.law import holds as law_holds
 from server.control.law import models as law_models
 from server.control.law import shadow as law_shadow
 from server.control.law import solve as law_solve
+from server.control.law import thermo as law_thermo
 from server.control.midea_driver import GarbledStatus
 from server.control.registry import load_control_registry
 from server.util.psychro import dewpoint_c
@@ -698,8 +699,26 @@ class Controller:
             sp = (getattr(ctl, "traits_cfg", {}) or {}).get("setpoint") or {}
             chans = (sp.get("channels") or {}) if isinstance(sp, dict) else {}
             unit_c = str(sp.get("unit", "degF")).lower() in ("degc", "c", "celsius")
-            want_f = {"heat": float(bands["temp_f"]["min"]), "cool": float(bands["temp_f"]["max"])}
             have_c = {"heat": m.get("heat_setpoint_c"), "cool": m.get("cool_setpoint_c")}
+            have_f = {ch: (law_solve.c2f(float(v)) if v is not None else None) for ch, v in have_c.items()}
+            # the rooms, not the thermostat's spot (law/thermo.py): its reading − the rooms' mean, smoothed
+            ocfg = bands.get("thermostat_offset") or {}
+            rooms = self._law_rooms_f(bands, now)
+            if rooms is not None and m.get("temperature_c") is not None:
+                mem["offset"] = law_thermo.smooth(mem.get("offset"), mem.get("offset_ts"),
+                                                  law_solve.c2f(float(m["temperature_c"])) - rooms, now,
+                                                  float(ocfg.get("tau_min", 30.0)))
+                mem["offset_ts"] = now
+            near = lambda v: round(v) if v is not None and abs(v - round(v)) < 0.15 else v   # °C → °F round trip
+            want_f, off = law_thermo.setpoints(float(bands["temp_f"]["min"]), float(bands["temp_f"]["max"]),
+                                               mem.get("offset"), ocfg, near(have_f["heat"]), near(have_f["cool"]))
+            pub = {"heat": want_f["heat"], "cool": want_f["cool"], "offset_f": off,
+                   "rooms_f": round(rooms, 1) if rooms is not None else None,
+                   "stat_f": round(law_solve.c2f(float(m["temperature_c"])), 1) if m.get("temperature_c") is not None
+                   else None, "set_heat": near(have_f["heat"]), "set_cool": near(have_f["cool"])}
+            if pub != mem.get("pub") and not dry_run:   # the PWA's Comfort panel row (shadow.view "thermostats")
+                mem["pub"] = pub
+                store.set_setting(conn, law_thermo.KEY_PREFIX + did, {**pub, "ts": now})
             todo = [ch for ch in ("heat", "cool") if ch in chans and have_c[ch] is not None
                     and abs(law_solve.c2f(float(have_c[ch])) - want_f[ch]) >= 0.5
                     and now - mem.get(ch, 0.0) >= 600]
@@ -709,7 +728,9 @@ class Controller:
                 v = want_f[ch]
                 val = round(law_solve.f2c(v), 1) if unit_c else v
                 why = (f"law: {ch} setpoint {law_solve.c2f(float(have_c[ch])):.0f} -> {v:g} °F "
-                       f"(the temperature band {want_f['heat']:g}–{want_f['cool']:g} °F)")
+                       f"(the temperature band {float(bands['temp_f']['min']):g}–{float(bands['temp_f']['max']):g} °F"
+                       + (f"; the thermostat reads {abs(off):.1f} °F {'warmer' if off > 0 else 'cooler'} than "
+                          f"the rooms" if abs(off) >= 0.05 else "") + ")")
                 mem[ch] = now
                 mem.setdefault("wrote", {})[ch] = v
                 if dry_run:
@@ -718,6 +739,14 @@ class Controller:
                 r = self.issuer.issue(device_id=did, trait="setpoint", action="set", args={"channel": ch, "value": val})
                 store.append_log(conn, did, True, "law", why, True, r.status)
                 log.info("%s: %s (%s)", did, why, r.status)
+
+    def _law_rooms_f(self, bands, now) -> float | None:
+        """The rooms' mean (°F) the band is held on — the law's `temp_sensors`, fresh (≤ 15 min) ones only."""
+        with self._lock:
+            rd = dict(self.readings)
+        ts = [rd[s]["m"]["temperature_c"] for s in bands.get("temp_sensors") or []
+              if rd.get(s) and now - rd[s]["ts"] <= 900 and "temperature_c" in rd[s]["m"]]
+        return law_solve.c2f(sum(ts) / len(ts)) if ts else None
 
     def _thermostat_hold_note(self, conn, did, m, mem, now) -> str | None:
         """Wall-change detection + the hold it records; returns the hold's note (None = no hold, the law acts)."""

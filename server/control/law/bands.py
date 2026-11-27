@@ -39,6 +39,10 @@ BANDS_DEFAULT = {
                                                 # cost_check (Hugh 2026-11-20): in band, only while the extra
                                                 # water is worth its fan + heat-loss cost at the cheapest
                                                 # dehumidifier's price; held to 1 − cost_hyst of it once running
+    "thermostat_offset": {"enabled": True, "max_f": 4.0, "tau_min": 30.0},   # setpoints carry how much warmer
+                                                # the thermostat's own spot reads than the rooms' mean, smoothed
+                                                # and capped; heat rounded up, cool down (law/thermo.py; Hugh
+                                                # 2026-11-27: the hall 72 °F, rooms 69.5, heat 70 sat idle)
     "hold_h": 2.0,                              # a manual set of a law-driven device (PWA, or the thermostat's own
                                                 # wall controls) holds it this long, or to the next goal-schedule
                                                 # change if sooner (Hugh 2026-11-26)
@@ -200,6 +204,9 @@ def validate(body: dict, current: dict) -> tuple[str | None, dict]:
         return "horizon_h must be 0.5–24", new
     if not _num(bd.get("hold_h"), 0.25, 24):
         return "hold_h must be 0.25–24 (hours a manual set holds a law-driven device)", new
+    to = bd.get("thermostat_offset") or {}
+    if not (isinstance(to.get("enabled"), bool) and _num(to.get("max_f"), 0, 8) and _num(to.get("tau_min"), 0, 240)):
+        return "thermostat_offset needs enabled true/false, max_f 0–8 °F and tau_min 0–240", new
     err = _schedules_error(bd.get("schedules"))
     if err:
         return err, new

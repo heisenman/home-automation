@@ -2587,6 +2587,7 @@ function LawPanel({ isAdmin, onNeedAdmin, onClose }) {
               const mode = form.modes[d] || "manual";
               const mem = (v.manual_memory || {})[d];
               const hasPol = (v.has_policy || {})[d];
+              const th = (v.thermostats || {})[d];
               return html`<tr key=${d} title=${m.source}>
                 <td>${prettyName(d)}<div class="note">${m.function}${m.area_limited ? " · one room" : ""}</div></td>
                 <td><span class="scene-sel law-modes">${LAW_MODES.filter((x) => x.key !== "auto" || hasPol).map((x) => html`
@@ -2596,8 +2597,11 @@ function LawPanel({ isAdmin, onNeedAdmin, onClose }) {
                   ${mode === "manual" && mem && html`<div class="note">restores to ${lawManualMemory(mem)} after a power cut</div>`}
                   ${hold && html`<div class="note law-hold">held ${hold.by === "wall" ? "(set at the thermostat)" : "(set by hand)"} until ${hhmm(hold.until)}
                     <button class="btn sm ghost" onClick=${() => resume(d)}>Resume law</button></div>`}</td>
-                <td>${c.label || "—"}${c.held_s ? html`<div class="note">held ${Math.round(c.held_s / 60)}m</div>` : ""}</td>
-                <td>${d in (last.actual || {}) ? lvl(last.actual[d]) : "—"}</td>
+                <td>${th ? html`heat ${th.heat} · cool ${th.cool} °F${th.offset_f ? html`<div class="note">rooms ${th.rooms_f} °F,
+                    thermostat reads ${th.stat_f} °F: set ${Math.abs(th.offset_f)} °F ${th.offset_f > 0 ? "higher" : "lower"} so the rooms reach the goal</div>` : ""}`
+                  : (c.label || "—")}${c.held_s ? html`<div class="note">held ${Math.round(c.held_s / 60)}m</div>` : ""}</td>
+                <td>${th && th.set_heat != null ? `heat ${Math.round(th.set_heat)} · cool ${Math.round(th.set_cool)} °F`
+                  : d in (last.actual || {}) ? lvl(last.actual[d]) : "—"}</td>
                 <td>${ag ? `${Math.round(100 * ag.same / ag.ticks)} % of ${ag.ticks}` : "—"}
                   ${rag && html`<div class="note">own rule ${Math.round(100 * rag.same / rag.ticks)} %</div>`}</td></tr>`;
             })}

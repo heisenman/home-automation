@@ -283,6 +283,29 @@ plug: it should come back at its old speed within ~2 min. `law:hold:` rows exist
 2026-11-26); before that a brownout looked like a person turning it off. A device that is still different 15 min
 after returning is left as it is and that becomes its setting (`gave-up`).
 
+## Entry 4e — A Law thermostat is set so the ROOMS reach the band
+
+**Asserted state (2026-11-27):** the Venstar regulates on its own hall sensor, which read 72.0 °F with the rooms'
+mean at 69.5 (07:30 PST). The law adds the smoothed offset (the thermostat's reading minus the rooms' mean, capped
+at ±4 °F) to the band. It rounds heat UP and cool DOWN to whole °F (`server/control/law/thermo.py`). It publishes
+what it set and why to control.db `law:thermo:<id>`, which the Comfort panel's thermostat row shows.
+
+**Re-check (on ha-2):**
+```sh
+cd ~/home_automation && sqlite3 -readonly instance/db/control.db "select json from house_setting where key='law:thermo:thermostat_hall'"
+timeout 5 mosquitto_sub -h localhost -t home/hall/thermostat_hall/state -C 1 -W 4
+```
+
+**Expected:** `heat` = ceil(band min + offset_f), and `cool` = floor(band max + offset_f), kept at least 2 above
+heat. The thermostat's `heat_setpoint_c`/`cool_setpoint_c` (converted to °F) match within ~10 min of a change.
+Over a day of heating, the rooms' mean (Entry 4c's `temp_sensors`) should sit at or just above the band's min.
+That's slow to show: compare the rooms' hourly mean against the goal across a full night and morning, not one
+sample.
+
+**Gotchas:** the offset is watched continuously and smoothed over 30 min (`thermostat_offset.tau_min`), so a
+furnace cycle's warm-up at the hall doesn't steer it. A setpoint already written holds until the raw target moves
+0.25 °F past its rounding range. A wall change is still a hold (Entry 4d), never overwritten.
+
 ## Entry 5 — Smart plugs are switchable from HA
 
 **Asserted state:** six plugs are manual-only switches in ha-2's `instance/control.yaml` (commit 0b909f0):

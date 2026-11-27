@@ -384,3 +384,66 @@ def test_a_manual_ranged_device_is_put_back_after_being_offline(tmp_path):
     ctrl.tick(now=NOW + 400)
     ctrl.tick(now=NOW + 600)
     assert len(iss.calls) == 2 and store.get_setting(c, MR.key("lamp_office"))["running"] is False
+
+
+# ── thermostat setpoints carry the hall-vs-rooms offset (law/thermo.py; Hugh 2026-11-27) ──────────────────────
+
+from server.control.law import thermo as T
+
+
+def test_offset_setpoints_round_heat_up_and_cool_down():
+    sp, off = T.setpoints(70, 74, 2.5, {})                  # 11-27 07:30: the hall 72.0, rooms 69.5
+    assert sp == {"heat": 73.0, "cool": 76.0} and off == 2.5
+    assert T.setpoints(70, 74, None, {})[0] == {"heat": 70.0, "cool": 74.0}        # no rooms: the band itself
+    assert T.setpoints(70, 74, 2.5, {"enabled": False})[0] == {"heat": 70.0, "cool": 74.0}
+    assert T.setpoints(70, 74, 9.0, {})[0]["heat"] == 74.0                         # capped at +4
+    assert T.setpoints(70, 74, -1.5, {})[0] == {"heat": 69.0, "cool": 72.0}        # hall cooler than the rooms
+    assert T.setpoints(70, 71, 0.0, {})[0] == {"heat": 70.0, "cool": 72.0}         # cool stays 2 above heat
+
+
+def test_offset_setpoint_holds_across_a_degree_edge():
+    assert T.setpoints(70, 74, 2.1, {}, have_heat=73)[0]["heat"] == 73.0     # raw 72.1: ceil says 73 anyway
+    assert T.setpoints(70, 74, 1.9, {}, have_heat=73)[0]["heat"] == 73.0     # raw 71.9: within the slack, hold
+    assert T.setpoints(70, 74, 1.6, {}, have_heat=73)[0]["heat"] == 72.0     # raw 71.6: past it, move
+    assert T.setpoints(70, 74, 3.2, {}, have_heat=73)[0]["heat"] == 73.0     # raw 73.2: hold
+    assert T.setpoints(70, 74, 3.4, {}, have_heat=73)[0]["heat"] == 74.0
+
+
+def test_offset_is_smoothed():
+    assert T.smooth(None, None, 2.5, NOW, 30) == 2.5
+    v = T.smooth(0.0, NOW - 1800, 3.0, NOW, 30)              # one time constant: ~63 % of the way
+    assert 1.8 < v < 2.0
+
+
+def test_law_sets_the_thermostat_so_the_rooms_reach_the_band(tmp_path):
+    ctrl, iss, db = _ctrl(tmp_path, {"thermostat_hall": "law"})
+    c = sqlite3.connect(db)
+    assert B.put(c, store, {"bands": {"temp_f": {"min": 70, "max": 74}}})[0] == 200
+    for sid in B.ROOMS:
+        ctrl.readings[sid] = {"m": {"temperature_c": S.f2c(69.5)}, "ts": NOW - 30}
+    _thermo(ctrl, 70, 74, temperature_c=S.f2c(72.0))
+    _decide(ctrl, NOW - 60, thermostat_hall=None)
+    ctrl.tick(now=NOW)
+    assert [cl for cl in iss.calls if cl[0] == "thermostat_hall"] == [
+        ("thermostat_hall", "setpoint", {"channel": "cool", "value": 76.0}),      # raising: cool first
+        ("thermostat_hall", "setpoint", {"channel": "heat", "value": 73.0})]
+    why = c.execute("SELECT reason FROM control_log WHERE device_id='thermostat_hall' ORDER BY rowid DESC LIMIT 1"
+                    ).fetchone()[0]
+    assert "heat setpoint 70 -> 73 °F" in why and "reads 2.5 °F warmer than the rooms" in why
+    _thermo(ctrl, 73, 76, temperature_c=S.f2c(72.0))       # took it; our own write is not a wall change
+    ctrl.tick(now=NOW + 700)
+    assert len([cl for cl in iss.calls if cl[0] == "thermostat_hall"]) == 2 and H.active(c, store, "thermostat_hall", NOW + 700) is None
+
+
+def test_the_comfort_panel_sees_what_the_thermostat_is_set_to_and_why(tmp_path):
+    ctrl, iss, db = _ctrl(tmp_path, {"thermostat_hall": "law"})
+    c = sqlite3.connect(db)
+    B.put(c, store, {"bands": {"temp_f": {"min": 70, "max": 74}}})
+    for sid in B.ROOMS:
+        ctrl.readings[sid] = {"m": {"temperature_c": S.f2c(69.5)}, "ts": NOW - 30}
+    _thermo(ctrl, 70, 74, temperature_c=S.f2c(72.0))
+    _decide(ctrl, NOW - 60, thermostat_hall=None)
+    ctrl.tick(now=NOW)
+    t = store.get_setting(c, T.KEY_PREFIX + "thermostat_hall")
+    assert (t["heat"], t["cool"], t["offset_f"], t["rooms_f"], t["stat_f"]) == (73.0, 76.0, 2.5, 69.5, 72.0)
+    assert t["set_heat"] == 70 and t["set_cool"] == 74

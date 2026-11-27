@@ -205,6 +205,12 @@ The study's Phase 3 rotation still runs underneath: it's what turns the dehumidi
   automation policy names — the card's picker, so single / fallback / mean / worst all carry over (`House.aq_by`,
   read by `_pick_source` like the rule). Overnight 11-26 c_bed (room 68) ran speed 1 on the ERV's mean of 4 rooms
   (80) where its own rule says 2. No fresh room reading: the house AQ, labelled "(house AQ)" in the reasons.
+  **2026-11-27 — thermostat setpoints hold the rooms, not the hall** (Hugh: "round up for the thermostat"). The
+  Venstar reads its hall sensor (72.0 °F at 07:30 PST) while the band is the rooms' mean (69.5): heat set to 70, it
+  sat idle with the rooms under the band. `law/thermo.py`: setpoints = band + the smoothed (30 min) thermostat −
+  rooms offset, capped ±4 °F; heat rounded up, cool down, whole °F, 0.25 °F slack at a degree edge, cool ≥ heat + 2.
+  `bands.thermostat_offset` {enabled, max_f, tau_min}. The PWA row shows the setpoints and the offset
+  (`law:thermo:<id>`). Re-check: runbook Entry 4e.
 - **Search:** every combination of the dehumidifiers (off/on) × the ERV's levels, ranked by (firm shortfall, cost
   + AQ shortfall × weight, changes). Purifiers by the rough AQ rule. The thermostat gets the band as its setpoints.
 - **Shadow:** 15-min hold on the law's own answers; enrolment `rule` leaves a device out of the comparison.
