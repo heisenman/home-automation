@@ -214,8 +214,11 @@ The study's Phase 3 rotation still runs underneath: it's what turns the dehumidi
   **Same day, superseded as the default — explicit heat-to / cool-to** (Hugh: "many people prefer a specific
   temperature … heating or cool regardless … I could just set 74 as my heating setpoint, based on my experience
   where I am, and that doesn't require a computer to try to guess"). `temp_f.min` = HEAT TO and `temp_f.max` = COOL
-  TO, written to the thermostat as set and read by its own sensor. They're whole °F, with cool ≥ heat + 2, and the
-  stored keys are unchanged, so the saved goals and schedules carry over. `thermostat_offset.enabled` defaults to
+  TO, written to the thermostat as set and read by its own sensor. They're whole °F and **independent** (Hugh: "do not
+  in any way couple the heat to and cool to values. They are not correlated" — a first cut imposed cool ≥ heat + 2
+  and refused his save). The thermostat's own `setpointdelta` is an Auto-mode rule only (Venstar spec; 10-26 live:
+  Off took 73/74), so venstar_api enforces it only in Auto. A schedule may set either alone. The stored keys are
+  unchanged, so the saved goals and schedules carry over. `thermostat_offset.enabled` defaults to
   false, kept as an option. With a thermostat modelled, the rooms' mean is not held to these numbers: no temperature
   error, and the reasons say "the thermostat holds heat to X / cool to Y °F (rooms Z °F)". The PWA labels say
   "Heat to" / "cool to", and the thermostat row shows its reading and the rooms'.

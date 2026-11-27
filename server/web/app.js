@@ -2555,7 +2555,7 @@ function LawPanel({ isAdmin, onNeedAdmin, onClose }) {
             <input type="number" step="1" value=${form.bands.temp_f.min} onInput=${(e) => setB("temp_f", "min", e.target.value)} />
             <span class="note">cool to</span>
             <input type="number" step="1" value=${form.bands.temp_f.max} onInput=${(e) => setB("temp_f", "max", e.target.value)} />
-            <span class="note">°F · set on the thermostat exactly as written, by its own reading · cool at least 2 above heat</span></div>
+            <span class="note">°F · each set on the thermostat exactly as written, by its own reading · independent of each other</span></div>
           <div class="field"><label>RH %</label>
             <input type="number" step="0.5" value=${form.bands.rh.min} onInput=${(e) => setB("rh", "min", e.target.value)} />
             <span class="note">to</span>

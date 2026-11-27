@@ -95,10 +95,12 @@ def plan_setpoint(info: dict, channel: str, value: float, unit: str) -> dict:
         lo, hi = info.get("cooltempmin"), info.get("cooltempmax")
     if lo is not None and hi is not None and not lo <= float(value) <= hi:
         raise VenstarError(f"{channel} {value:g} outside the thermostat's own limits {lo}..{hi}")
-    delta = float(info.get("setpointdelta") or 0)
-    if cool - heat < delta:
+    # The gap is the thermostat's AUTO-mode rule only (spec: "auto needs cooltemp − heattemp ≥ setpointdelta";
+    # 10-26 live: the unit took 73/74 in Off). In Heat / Cool / Off the two setpoints are independent (Hugh
+    # 2026-11-27: "do not in any way couple the heat to and cool to values").
+    if int(info.get("mode") or 0) == 3 and cool - heat < float(info.get("setpointdelta") or 0):
         # never move the OTHER setpoint behind someone's back — refuse, and say what would be needed
-        raise VenstarError(f"heat {heat:g} / cool {cool:g} closer than the thermostat's setpointdelta {delta:g}")
+        raise VenstarError(f"heat {heat:g} / cool {cool:g} closer than the thermostat's Auto-mode setpointdelta {info.get('setpointdelta')}")
     return {"heattemp": _num(heat), "cooltemp": _num(cool)}
 
 

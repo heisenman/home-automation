@@ -243,7 +243,7 @@ def test_goal_schedule_validation():
     assert ok([{**NIGHT, "window": "25:00-07:00"}])
     assert ok([{**NIGHT, "window": "07:00-07:00"}])
     assert ok([{"name": "x", "window": "01:00-02:00"}])                         # sets no goal
-    assert ok([{**NIGHT, "temp_f": {"min": 75, "max": 70}}])
+    assert not ok([{**NIGHT, "temp_f": {"min": 75, "max": 70}}])              # independent (Hugh 11-27): fine
     assert ok([{**NIGHT, "days": [7]}])
     assert ok([{**NIGHT, "aq": {"floor": 70, "weight": 3}}])                    # only the floor is scheduled
     assert ok([NIGHT] * 13)
@@ -398,7 +398,6 @@ def test_offset_setpoints_round_heat_up_and_cool_down():
     assert T.setpoints(70, 74, 2.5, {"enabled": False})[0] == {"heat": 70.0, "cool": 74.0}
     assert T.setpoints(70, 74, 9.0, {})[0]["heat"] == 74.0                         # capped at +4
     assert T.setpoints(70, 74, -1.5, {})[0] == {"heat": 69.0, "cool": 72.0}        # hall cooler than the rooms
-    assert T.setpoints(70, 71, 0.0, {})[0] == {"heat": 70.0, "cool": 72.0}         # cool stays 2 above heat
 
 
 def test_offset_setpoint_holds_across_a_degree_edge():
@@ -435,14 +434,15 @@ def test_heat_to_and_cool_to_are_written_as_set_whatever_the_rooms_read(tmp_path
     assert (t["heat"], t["cool"], t["offset_f"], t["stat_f"], t["rooms_f"]) == (74.0, 76.0, 0.0, 72.0, 69.5)
 
 
-def test_heat_to_and_cool_to_are_whole_degrees_two_apart():
+def test_heat_to_and_cool_to_are_whole_degrees_and_independent():
+    # Hugh 2026-11-27: "do not in any way couple the heat to and cool to values. They are not correlated."
     cur = {"bands": B.BANDS_DEFAULT, "cost": B.COST_DEFAULT, "enrol": {}}
-    assert B.validate({"bands": {"temp_f": {"min": 74, "max": 76}}}, cur)[0] is None
-    assert "2 °F" in B.validate({"bands": {"temp_f": {"min": 74, "max": 75}}}, cur)[0]
+    for lo, hi in ((74, 76), (74, 75), (74, 74), (78, 72)):
+        assert B.validate({"bands": {"temp_f": {"min": lo, "max": hi}}}, cur)[0] is None
     assert "whole" in B.validate({"bands": {"temp_f": {"min": 73.5, "max": 76}}}, cur)[0]
-    bad = {"bands": {"schedules": [{"name": "N", "window": "21:00-06:00", "enabled": True,
-                                    "temp_f": {"min": 70, "max": 71}}]}}
-    assert "2 °F" in B.validate(bad, cur)[0]
+    one = {"bands": {"schedules": [{"name": "N", "window": "21:00-06:00", "enabled": True, "temp_f": {"min": 66}}]}}
+    assert B.validate(one, cur)[0] is None                                   # a schedule may set heat-to alone
+    assert T.setpoints(74, 75, None, {})[0] == {"heat": 74.0, "cool": 75.0}  # nothing shifts the other
 
 
 def test_law_sets_the_thermostat_so_the_rooms_reach_the_band(tmp_path):

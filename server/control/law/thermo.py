@@ -6,7 +6,8 @@ setpoints carry the hall-vs-rooms offset — smoothed (`tau_min`, so a furnace c
 capped at ±`max_f` — and are whole °F the thermostat takes: heat rounded UP (the rooms reach the band's bottom, Hugh:
 "round up for the thermostat"), cool rounded DOWN (they stay under its top). A setpoint already written holds while
 the raw target stays within `HYST_F` of its rounding range, so the offset drifting across a degree edge doesn't flip
-the thermostat every pass. Cool stays `MIN_GAP_F` above heat (the thermostat's setpoint delta).
+the thermostat every pass. Heat and cool are independent (Hugh 2026-11-27): no gap is imposed here; the
+thermostat's own `setpointdelta` applies only in its Auto mode (venstar_api.plan_setpoint).
 
 Pure; the controller (_apply_law_thermostats) feeds it readings and writes the result.
 """
@@ -17,7 +18,6 @@ import math
 KEY_PREFIX = "law:thermo:"     # control.db house_setting: what the law sets each thermostat to, and why (the PWA)
 OFFSET_DEFAULT = {"enabled": True, "max_f": 4.0, "tau_min": 30.0}
 HYST_F = 0.25
-MIN_GAP_F = 2.0
 
 
 def smooth(prev: float | None, prev_ts: float | None, sample: float, now: float, tau_min: float) -> float:
@@ -51,6 +51,4 @@ def setpoints(band_min: float, band_max: float, offset_f: float | None, cfg: dic
         off = max(-lim, min(lim, float(offset_f)))
     heat = _heat(band_min + off, have_heat)
     cool = _cool(band_max + off, have_cool)
-    if cool - heat < MIN_GAP_F:
-        cool = heat + MIN_GAP_F
     return {"heat": heat, "cool": cool}, round(off, 2)

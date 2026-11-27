@@ -210,7 +210,7 @@ def test_money_basis_counts_dehumidifier_heat_against_gas_while_heating():
 
 def test_bands_validation():
     cur = {"bands": BANDS, "cost": KWH, "enrol": {}}
-    assert B.validate({"bands": {"temp_f": {"min": 75, "max": 70}}}, cur)[0]
+    assert B.validate({"bands": {"temp_f": {"min": 75, "max": 70}}}, cur)[0] is None   # independent (Hugh 11-27)
     assert B.validate({"bands": {"rh": {"min": 40, "max": 90}}}, cur)[0]
     assert B.validate({"cost": {"basis": "money"}}, cur)[0]                    # needs both rates
     assert B.validate({"bands": {"outdoor_drying": {"cost_hyst": 1.5}}}, cur)[0]

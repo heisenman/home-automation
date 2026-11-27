@@ -93,6 +93,8 @@ Record each result with the date in this section.
 - **4 ✔ 2026-10-26** fan=1 → `fanstate` 1 within 5 s, blower heard (Hugh at the furnace); fan=0 → 0 within 6 s.
 - **5 ✔ (caveat) 2026-10-26** heat 72→70 kept cool 74. Our planner refused 73/74 (delta 2); the UNIT accepted a raw
   73/74 POST in Off mode — it does not enforce `setpointdelta` itself there, so the planner is the guard.
+  **2026-11-27:** the planner enforces `setpointdelta` only in Auto (mode 3), as the spec says. In Heat / Cool / Off
+  the setpoints are independent (Hugh: "do not in any way couple the heat to and cool to values").
 - **6 ✔ 2026-10-26** Off→Heat (heat 76 / cool 79): `state` 1, `activestage` 1 within 10 s, Hugh felt heat. A
   wall change (76→72→71) showed in `/query/info` within 10 s — the poll sees wall edits. **Open:** `fanstate` read
   1 from the first sample of the heat call with DIP GAS/EL·O·GAS — either it means "call active" or G is energised

@@ -74,7 +74,7 @@ class Fake(BaseHTTPRequestHandler):
         if "mode" in p and not ("heattemp" in p and "cooltemp" in p):
             return self._send({"error": True, "reason": "mode requires heattemp and cooltemp"})
         h, c = float(p.get("heattemp", i["heattemp"])), float(p.get("cooltemp", i["cooltemp"]))
-        if c - h < i["setpointdelta"]:
+        if int(p.get("mode", i["mode"])) == 3 and c - h < i["setpointdelta"]:    # spec: an Auto-mode rule
             return self._send({"error": True, "reason": "setpointdelta"})
         i.update(heattemp=h, cooltemp=c)
         if "mode" in p:
@@ -140,11 +140,21 @@ def test_mode_change_carries_both_setpoints():
         assert Fake.posts == [{"mode": "2", "heattemp": "68", "cooltemp": "76"}]
 
 
-def test_setpoint_that_would_crowd_the_other_is_refused_not_shifted():
+def test_in_auto_a_setpoint_that_would_crowd_the_other_is_refused_not_shifted():
     with _fake() as fake:
+        Fake.info["mode"] = 3
         r = _issuer(fake).issue(device_id="thermostat_hall", trait="setpoint", action="set",
                                 args={"channel": "heat", "value": 75})
         assert r.status == "rejected" and "setpointdelta" in r.reason and Fake.posts == []
+
+
+def test_outside_auto_heat_and_cool_are_independent():
+    # Hugh 2026-11-27: "do not in any way couple the heat to and cool to values" (10-26 live: Off took 73/74)
+    with _fake() as fake:
+        Fake.info["mode"] = 1
+        r = _issuer(fake).issue(device_id="thermostat_hall", trait="setpoint", action="set",
+                                args={"channel": "heat", "value": 78})
+        assert r.status == "ok" and Fake.info["heattemp"] == 78 and Fake.info["cooltemp"] == 76
 
 
 def test_manual_range_is_the_trait_bound():
