@@ -284,3 +284,19 @@ def test_controller_runs_the_shadow_and_commands_nothing_new(tmp_path):
     last = store.get_setting(conn, "law:last")
     assert last is not None and any("RH 47.0" in r for r in last["reasons"])
     assert iss.calls == []                                    # no policies: the law alone commands nothing
+
+
+def test_a_thermostat_owns_temperature_no_heater_dehumidifier_and_ventilation_stays():
+    # 11-27 06:00 PST: band raised to 70 with the house at 69.7 — the law ran the Midea in band as a heater, then
+    # switched the ERV off below the AQ floor to stop its heat loss. With a thermostat modelled, neither.
+    cold = _house(rh=43.0, t=(69.7 - 32) * 5 / 9, aq=77.0, heating=True)
+    b = {**BANDS, "temp_f": {"min": 70.0, "max": 74.0}, "aq": {**BANDS["aq"], "floor": 80.0}}
+    p = _solve(cold, {"midea": 0, "apr": 0, "erv": 2}, bands=b)
+    assert p.choice["midea"]["level"] == 0 and p.choice["apr"]["level"] == 0
+    assert p.choice["erv"]["level"] == 2 and p.totals["aq_short"] == 0
+    dry = _house(rh=42.0, t=(69.7 - 32) * 5 / 9, aq=77.0, heating=True)
+    assert _solve(dry, {"midea": 0, "erv": 2}, bands=b).choice["erv"]["level"] == 2
+    # no thermostat: temperature stays a firm term (heat into a cold house is still worth something)
+    no_t = [m for m in M.build({k: v for k, v in REG.items() if k != "thermo"}, PRM, {})]
+    p2 = S.solve(no_t, b, KWH, PRM, cold, {"midea": 0, "apr": 0, "erv": 2})
+    assert "thermostat's job" not in " ".join(p2.reasons)

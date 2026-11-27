@@ -196,6 +196,11 @@ The study's Phase 3 rotation still runs underneath: it's what turns the dehumidi
   the middle, held at the band-top start's size (half the band) below it and tapering to 0 at the stop, so the
   deeper stop never calls the Aprilaire in alongside the Midea when the start didn't. Below the band with no run
   going: still no drying. PWA: Comfort → Goals → "Dry past bottom".
+  **2026-11-27 — a modelled thermostat owns temperature.** At 06:00 PST the day goals raised the band to 70 °F with
+  the house at 69.7: the firm temperature term ran the Midea in band (RH 44) as a heater, and when RH reached 42 it
+  switched the ERV OFF with AQ 77 under the floor of 80, to stop its heat loss — against "air quality trumps heat
+  savings" (Hugh 2026-11-21). With a `condition_temperature` device modelled the term is gone (the thermostat holds
+  the band; the heat stays in the cost, credited against gas while heating); without one it stays firm.
 - **Search:** every combination of the dehumidifiers (off/on) × the ERV's levels, ranked by (firm shortfall, cost
   + AQ shortfall × weight, changes). Purifiers by the rough AQ rule. The thermostat gets the band as its setpoints.
 - **Shadow:** 15-min hold on the law's own answers; enrolment `rule` leaves a device out of the comparison.

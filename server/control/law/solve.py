@@ -205,6 +205,7 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
     reasons = []
     temp_hot = errs["temp_f"] is not None and errs["temp_f"] > 0
     temp_cold = errs["temp_f"] is not None and errs["temp_f"] < 0
+    thermo = any(m.function == "condition_temperature" for m in models)
 
     top = max([len(m.options) - 1 for m in vents] or [0])
     venting_top = bool(vents) and any((current.get(m.device_id) or 0) >= top for m in vents)
@@ -244,9 +245,13 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
                     vent_extra += o.water_gph - aq_o.water_gph
             dehum_water = water - sum(o.water_gph for o in combo[len(dehums):])
             firm += max(0.0, -(dehum_water + vent_extra))
-        if temp_hot:
+        # Temperature is the thermostat's job when one is modelled (it holds the band). 11-27 06:00 PST the day goals
+        # raised the band to 70 with the house at 69.7: this term ran the Midea in band as a heater, then — once RH
+        # hit 42 — switched the ERV OFF (AQ 77, floor 80) to stop its heat loss. Air quality trumps heat savings
+        # (Hugh 2026-11-21); the heat stays in the cost (credited against gas while heating). No thermostat: firm.
+        if temp_hot and not thermo:
             firm += max(0.0, heat) / 100                    # heat into a house above its band (W → g/h-ish scale)
-        if temp_cold:
+        if temp_cold and not thermo:
             firm += max(0.0, -heat) / 100
         aq_short = max(0, vent_want - vent) if vents else 0     # the AQ want, or outdoor drying's top level
         c = _cost(cost, prm, h, elec, heat)
@@ -271,7 +276,8 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
         reasons.append(f"RH {h.rh:.1f} % in band")
     if errs["temp_f"]:
         reasons.append(f"temperature {c2f(h.t_in_c):.1f} °F, {abs(errs['temp_f']):.1f} °F "
-                       f"{'above' if temp_hot else 'below'} the band")
+                       f"{'above' if temp_hot else 'below'} the band"
+                       + (" (the thermostat's job)" if thermo else ""))
     if h.aq is not None and vents:
         reasons.append(f"AQ {h.aq:.0f} → ventilation level {aq_need} wanted"
                        + (f" (held within ±{float(bands['aq']['deadband']):g} of the band edge)" if aq_held else ""))
