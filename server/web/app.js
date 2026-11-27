@@ -2479,10 +2479,10 @@ function LawSchedule({ sc, onChange, onRemove }) {
       <span class="scene-sel">${WEEKDAYS.map((d, i) => html`<button key=${d}
         class="btn sm ${days.includes(i) ? "scene-on" : "ghost"}" onClick=${() => toggleDay(i)}>${d}</button>`)}</span>
       <span class="note">${days.length ? "" : "every day"}</span></div>
-    <div class="field"><label>Temperature °F</label>
-      <input type="number" step="0.5" placeholder="base" value=${v("temp_f", "min")} onInput=${(e) => goal("temp_f", "min", e.target.value)} />
-      <span class="note">to</span>
-      <input type="number" step="0.5" placeholder="base" value=${v("temp_f", "max")} onInput=${(e) => goal("temp_f", "max", e.target.value)} /></div>
+    <div class="field"><label>Heat to °F</label>
+      <input type="number" step="1" placeholder="base" value=${v("temp_f", "min")} onInput=${(e) => goal("temp_f", "min", e.target.value)} />
+      <span class="note">cool to</span>
+      <input type="number" step="1" placeholder="base" value=${v("temp_f", "max")} onInput=${(e) => goal("temp_f", "max", e.target.value)} /></div>
     <div class="field"><label>RH %</label>
       <input type="number" step="0.5" placeholder="base" value=${v("rh", "min")} onInput=${(e) => goal("rh", "min", e.target.value)} />
       <span class="note">to</span>
@@ -2551,10 +2551,11 @@ function LawPanel({ isAdmin, onNeedAdmin, onClose }) {
         ${err && html`<div class="err">${err}</div>`}
         ${v && form && html`
           <h4 class="scope-hd">Goals <span class="scope-sub">· ${gn && gn.schedule ? `now: the ${gn.schedule} schedule` : "now: the base goals"}${gn && gn.next_change ? ` · changes at ${hhmm(gn.next_change)}` : ""}</span></h4>
-          <div class="field"><label>Temperature °F</label>
-            <input type="number" step="0.5" value=${form.bands.temp_f.min} onInput=${(e) => setB("temp_f", "min", e.target.value)} />
-            <span class="note">to</span>
-            <input type="number" step="0.5" value=${form.bands.temp_f.max} onInput=${(e) => setB("temp_f", "max", e.target.value)} /></div>
+          <div class="field"><label>Heat to °F</label>
+            <input type="number" step="1" value=${form.bands.temp_f.min} onInput=${(e) => setB("temp_f", "min", e.target.value)} />
+            <span class="note">cool to</span>
+            <input type="number" step="1" value=${form.bands.temp_f.max} onInput=${(e) => setB("temp_f", "max", e.target.value)} />
+            <span class="note">°F · set on the thermostat exactly as written, by its own reading · cool at least 2 above heat</span></div>
           <div class="field"><label>RH %</label>
             <input type="number" step="0.5" value=${form.bands.rh.min} onInput=${(e) => setB("rh", "min", e.target.value)} />
             <span class="note">to</span>
@@ -2597,8 +2598,9 @@ function LawPanel({ isAdmin, onNeedAdmin, onClose }) {
                   ${mode === "manual" && mem && html`<div class="note">restores to ${lawManualMemory(mem)} after a power cut</div>`}
                   ${hold && html`<div class="note law-hold">held ${hold.by === "wall" ? "(set at the thermostat)" : "(set by hand)"} until ${hhmm(hold.until)}
                     <button class="btn sm ghost" onClick=${() => resume(d)}>Resume law</button></div>`}</td>
-                <td>${th ? html`heat ${th.heat} · cool ${th.cool} °F${th.offset_f ? html`<div class="note">rooms ${th.rooms_f} °F,
-                    thermostat reads ${th.stat_f} °F: set ${Math.abs(th.offset_f)} °F ${th.offset_f > 0 ? "higher" : "lower"} so the rooms reach the goal</div>` : ""}`
+                <td>${th ? html`heat to ${th.heat} · cool to ${th.cool} °F
+                    ${th.stat_f != null && html`<div class="note">thermostat reads ${th.stat_f} °F${th.rooms_f != null ? ` · rooms ${th.rooms_f} °F` : ""}</div>`}
+                    ${th.offset_f ? html`<div class="note">set ${Math.abs(th.offset_f)} °F ${th.offset_f > 0 ? "higher" : "lower"} to match the rooms</div>` : ""}`
                   : (c.label || "—")}${c.held_s ? html`<div class="note">held ${Math.round(c.held_s / 60)}m</div>` : ""}</td>
                 <td>${th && th.set_heat != null ? `heat ${Math.round(th.set_heat)} · cool ${Math.round(th.set_cool)} °F`
                   : d in (last.actual || {}) ? lvl(last.actual[d]) : "—"}</td>

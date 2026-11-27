@@ -415,10 +415,42 @@ def test_offset_is_smoothed():
     assert 1.8 < v < 2.0
 
 
-def test_law_sets_the_thermostat_so_the_rooms_reach_the_band(tmp_path):
+def test_heat_to_and_cool_to_are_written_as_set_whatever_the_rooms_read(tmp_path):
+    # Hugh 2026-11-27: "make heat to / cool to explicit … set 74 as my heating setpoint" — no offset by default
     ctrl, iss, db = _ctrl(tmp_path, {"thermostat_hall": "law"})
     c = sqlite3.connect(db)
-    assert B.put(c, store, {"bands": {"temp_f": {"min": 70, "max": 74}}})[0] == 200
+    assert B.put(c, store, {"bands": {"temp_f": {"min": 74, "max": 76}}})[0] == 200
+    for sid in B.ROOMS:
+        ctrl.readings[sid] = {"m": {"temperature_c": S.f2c(69.5)}, "ts": NOW - 30}
+    _thermo(ctrl, 70, 74, temperature_c=S.f2c(72.0))
+    _decide(ctrl, NOW - 60, thermostat_hall=None)
+    ctrl.tick(now=NOW)
+    assert [cl for cl in iss.calls if cl[0] == "thermostat_hall"] == [
+        ("thermostat_hall", "setpoint", {"channel": "cool", "value": 76.0}),
+        ("thermostat_hall", "setpoint", {"channel": "heat", "value": 74.0})]
+    why = c.execute("SELECT reason FROM control_log WHERE device_id='thermostat_hall' ORDER BY rowid DESC LIMIT 1"
+                    ).fetchone()[0]
+    assert why == "law: heat setpoint 70 -> 74 °F (heat to 74 / cool to 76 °F)"
+    t = store.get_setting(c, T.KEY_PREFIX + "thermostat_hall")
+    assert (t["heat"], t["cool"], t["offset_f"], t["stat_f"], t["rooms_f"]) == (74.0, 76.0, 0.0, 72.0, 69.5)
+
+
+def test_heat_to_and_cool_to_are_whole_degrees_two_apart():
+    cur = {"bands": B.BANDS_DEFAULT, "cost": B.COST_DEFAULT, "enrol": {}}
+    assert B.validate({"bands": {"temp_f": {"min": 74, "max": 76}}}, cur)[0] is None
+    assert "2 °F" in B.validate({"bands": {"temp_f": {"min": 74, "max": 75}}}, cur)[0]
+    assert "whole" in B.validate({"bands": {"temp_f": {"min": 73.5, "max": 76}}}, cur)[0]
+    bad = {"bands": {"schedules": [{"name": "N", "window": "21:00-06:00", "enabled": True,
+                                    "temp_f": {"min": 70, "max": 71}}]}}
+    assert "2 °F" in B.validate(bad, cur)[0]
+
+
+def test_law_sets_the_thermostat_so_the_rooms_reach_the_band(tmp_path):
+    # the optional offset (off by default since Hugh's explicit heat-to / cool-to)
+    ctrl, iss, db = _ctrl(tmp_path, {"thermostat_hall": "law"})
+    c = sqlite3.connect(db)
+    assert B.put(c, store, {"bands": {"temp_f": {"min": 70, "max": 74},
+                                      "thermostat_offset": {"enabled": True}}})[0] == 200
     for sid in B.ROOMS:
         ctrl.readings[sid] = {"m": {"temperature_c": S.f2c(69.5)}, "ts": NOW - 30}
     _thermo(ctrl, 70, 74, temperature_c=S.f2c(72.0))
@@ -429,7 +461,7 @@ def test_law_sets_the_thermostat_so_the_rooms_reach_the_band(tmp_path):
         ("thermostat_hall", "setpoint", {"channel": "heat", "value": 73.0})]
     why = c.execute("SELECT reason FROM control_log WHERE device_id='thermostat_hall' ORDER BY rowid DESC LIMIT 1"
                     ).fetchone()[0]
-    assert "heat setpoint 70 -> 73 °F" in why and "reads 2.5 °F warmer than the rooms" in why
+    assert "heat setpoint 70 -> 73 °F (heat to 70 / cool to 74 °F" in why and "reads 2.5 °F warmer than the rooms" in why
     _thermo(ctrl, 73, 76, temperature_c=S.f2c(72.0))       # took it; our own write is not a wall change
     ctrl.tick(now=NOW + 700)
     assert len([cl for cl in iss.calls if cl[0] == "thermostat_hall"]) == 2 and H.active(c, store, "thermostat_hall", NOW + 700) is None
@@ -438,7 +470,7 @@ def test_law_sets_the_thermostat_so_the_rooms_reach_the_band(tmp_path):
 def test_the_comfort_panel_sees_what_the_thermostat_is_set_to_and_why(tmp_path):
     ctrl, iss, db = _ctrl(tmp_path, {"thermostat_hall": "law"})
     c = sqlite3.connect(db)
-    B.put(c, store, {"bands": {"temp_f": {"min": 70, "max": 74}}})
+    B.put(c, store, {"bands": {"temp_f": {"min": 70, "max": 74}, "thermostat_offset": {"enabled": True}}})
     for sid in B.ROOMS:
         ctrl.readings[sid] = {"m": {"temperature_c": S.f2c(69.5)}, "ts": NOW - 30}
     _thermo(ctrl, 70, 74, temperature_c=S.f2c(72.0))

@@ -211,6 +211,14 @@ The study's Phase 3 rotation still runs underneath: it's what turns the dehumidi
   rooms offset, capped ±4 °F; heat rounded up, cool down, whole °F, 0.25 °F slack at a degree edge, cool ≥ heat + 2.
   `bands.thermostat_offset` {enabled, max_f, tau_min}. The PWA row shows the setpoints and the offset
   (`law:thermo:<id>`). Re-check: runbook Entry 4e.
+  **Same day, superseded as the default — explicit heat-to / cool-to** (Hugh: "many people prefer a specific
+  temperature … heating or cool regardless … I could just set 74 as my heating setpoint, based on my experience
+  where I am, and that doesn't require a computer to try to guess"). `temp_f.min` = HEAT TO and `temp_f.max` = COOL
+  TO, written to the thermostat as set and read by its own sensor. They're whole °F, with cool ≥ heat + 2, and the
+  stored keys are unchanged, so the saved goals and schedules carry over. `thermostat_offset.enabled` defaults to
+  false, kept as an option. With a thermostat modelled, the rooms' mean is not held to these numbers: no temperature
+  error, and the reasons say "the thermostat holds heat to X / cool to Y °F (rooms Z °F)". The PWA labels say
+  "Heat to" / "cool to", and the thermostat row shows its reading and the rooms'.
 - **Search:** every combination of the dehumidifiers (off/on) × the ERV's levels, ranked by (firm shortfall, cost
   + AQ shortfall × weight, changes). Purifiers by the rough AQ rule. The thermostat gets the band as its setpoints.
 - **Shadow:** 15-min hold on the law's own answers; enrolment `rule` leaves a device out of the comparison.

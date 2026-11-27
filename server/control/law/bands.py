@@ -12,7 +12,10 @@ from __future__ import annotations
 ROOMS = ["meter_pro_living_room", "meter_kitchen", "meter_c_bed", "meter_pro_c_office", "meter_pro_h_bed"]
 
 BANDS_DEFAULT = {
-    "temp_f": {"min": 68.0, "max": 76.0},       # house mean of `temp_sensors`
+    "temp_f": {"min": 68.0, "max": 76.0},       # the thermostat's own setpoints, written as set: min = HEAT TO,
+                                                # max = COOL TO (Hugh 2026-11-27: "make heat to / cool to explicit"
+                                                # — a person knows the number that's comfortable at the thermostat;
+                                                # no guessing how the rooms feel). Whole °F, cool ≥ heat + 2
     "rh": {"min": 40.0, "max": 46.0, "dry_past": 1.0},   # on `rh_sensor` (the meter both dehumidifiers run
                                                 # on); max = the lowest dehumidifier on-threshold today (Midea 46),
                                                 # min = over-dry. Drying starts at max and runs to min − dry_past
@@ -39,10 +42,10 @@ BANDS_DEFAULT = {
                                                 # cost_check (Hugh 2026-11-20): in band, only while the extra
                                                 # water is worth its fan + heat-loss cost at the cheapest
                                                 # dehumidifier's price; held to 1 − cost_hyst of it once running
-    "thermostat_offset": {"enabled": True, "max_f": 4.0, "tau_min": 30.0},   # setpoints carry how much warmer
-                                                # the thermostat's own spot reads than the rooms' mean, smoothed
-                                                # and capped; heat rounded up, cool down (law/thermo.py; Hugh
-                                                # 2026-11-27: the hall 72 °F, rooms 69.5, heat 70 sat idle)
+    "thermostat_offset": {"enabled": False, "max_f": 4.0, "tau_min": 30.0},  # optional: setpoints carry how much
+                                                # warmer the thermostat's spot reads than the rooms' mean (law/
+                                                # thermo.py). Built and live 11-27 08:23–(this change), then OFF by
+                                                # default: Hugh prefers explicit heat-to / cool-to set as written
     "hold_h": 2.0,                              # a manual set of a law-driven device (PWA, or the thermostat's own
                                                 # wall controls) holds it this long, or to the next goal-schedule
                                                 # change if sooner (Hugh 2026-11-26)
@@ -169,9 +172,8 @@ def _schedules_error(scheds) -> str | None:
         if not any(isinstance(sc.get(g), dict) for g in SCHEDULE_GOALS):
             return f"{where} must set at least one goal (temp_f, rh or aq)"
         t, rh, aq = sc.get("temp_f"), sc.get("rh"), sc.get("aq")
-        if t is not None and not (isinstance(t, dict) and _num(t.get("min"), 45, 90) and _num(t.get("max"), 50, 95)
-                                  and t["min"] < t["max"]):
-            return f"{where}.temp_f needs min < max, °F in 45–95"
+        if t is not None and (not isinstance(t, dict) or _temp_error(t)):
+            return f"{where}.temp_f: {_temp_error(t) if isinstance(t, dict) else 'needs heat-to (min) and cool-to (max)'}"
         if rh is not None and not (isinstance(rh, dict) and _num(rh.get("min"), 20, 70) and _num(rh.get("max"), 25, 75)
                                    and rh["min"] < rh["max"]):
             return f"{where}.rh needs min < max, % in 20–75"
@@ -184,6 +186,19 @@ def _num(v, lo, hi) -> bool:
     return isinstance(v, (int, float)) and not isinstance(v, bool) and lo <= v <= hi
 
 
+def _temp_error(t: dict) -> str | None:
+    """Heat-to (min) and cool-to (max): whole °F (the thermostat takes whole degrees), 45–95, cool ≥ heat + 2 (its
+    setpoint delta)."""
+    lo, hi = t.get("min"), t.get("max")
+    if not (_num(lo, 45, 90) and _num(hi, 50, 95)):
+        return "heat-to (min) and cool-to (max) must be °F in 45–95"
+    if float(lo) != int(lo) or float(hi) != int(hi):
+        return "heat-to and cool-to must be whole °F (the thermostat takes whole degrees)"
+    if hi - lo < 2:
+        return "cool-to must be at least 2 °F above heat-to (the thermostat's setpoint gap)"
+    return None
+
+
 def validate(body: dict, current: dict) -> tuple[str | None, dict]:
     """(error, the settings after applying `body`). Pure."""
     b = body or {}
@@ -191,8 +206,8 @@ def validate(body: dict, current: dict) -> tuple[str | None, dict]:
            "enrol": {**current["enrol"], **(b.get("enrol") or {})}}
     bd, c = new["bands"], new["cost"]
     t, rh, aq = bd["temp_f"], bd["rh"], bd["aq"]
-    if not (_num(t.get("min"), 45, 90) and _num(t.get("max"), 50, 95) and t["min"] < t["max"]):
-        return "temp_f needs min < max, °F in 45–95", new
+    if _temp_error(t):
+        return f"temp_f: {_temp_error(t)}", new
     if not (_num(rh.get("min"), 20, 70) and _num(rh.get("max"), 25, 75) and rh["min"] < rh["max"]):
         return "rh needs min < max, % in 20–75", new
     if not _num(rh.get("dry_past", 0.0), 0, 5):

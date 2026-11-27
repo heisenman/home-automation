@@ -283,9 +283,13 @@ plug: it should come back at its old speed within ~2 min. `law:hold:` rows exist
 2026-11-26); before that a brownout looked like a person turning it off. A device that is still different 15 min
 after returning is left as it is and that becomes its setting (`gave-up`).
 
-## Entry 4e — A Law thermostat is set so the ROOMS reach the band
+## Entry 4e — A Law thermostat gets heat-to / cool-to as set (optional rooms offset)
 
-**Asserted state (2026-11-27):** the Venstar regulates on its own hall sensor, which read 72.0 °F with the rooms'
+**Asserted state (2026-11-27, later the same day):** a Law thermostat's setpoints are the goals' heat-to (`temp_f.min`)
+and cool-to (`temp_f.max`) exactly, by its own sensor; `thermostat_offset.enabled` is false by default. Re-check as
+below: `heat`/`cool` equal the goals in force (the schedule's, if one is on), `offset_f` 0.
+
+**With the offset enabled (built first, 08:23 PST to the change above):** the Venstar regulates on its own hall sensor, which read 72.0 °F with the rooms'
 mean at 69.5 (07:30 PST). The law adds the smoothed offset (the thermostat's reading minus the rooms' mean, capped
 at ±4 °F) to the band. It rounds heat UP and cool DOWN to whole °F (`server/control/law/thermo.py`). It publishes
 what it set and why to control.db `law:thermo:<id>`, which the Comfort panel's thermostat row shows.

@@ -299,7 +299,8 @@ def test_a_thermostat_owns_temperature_no_heater_dehumidifier_and_ventilation_st
     # no thermostat: temperature stays a firm term (heat into a cold house is still worth something)
     no_t = [m for m in M.build({k: v for k, v in REG.items() if k != "thermo"}, PRM, {})]
     p2 = S.solve(no_t, b, KWH, PRM, cold, {"midea": 0, "apr": 0, "erv": 2})
-    assert "thermostat's job" not in " ".join(p2.reasons)
+    assert "the thermostat holds" not in " ".join(p2.reasons) and p2.errors["temp_f"] < 0
+    assert any("the thermostat holds heat to 70 / cool to 74" in r for r in p.reasons) and p.errors["temp_f"] is None
 
 
 def test_each_purifier_runs_on_its_own_rooms_air_quality():

@@ -205,9 +205,11 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
     drying_now = any((current.get(m.device_id) or 0) > 0 for m in dehums)
     need = water_need(bands, prm, h, drying_now)
     reasons = []
+    thermo = any(m.function == "condition_temperature" for m in models)
+    if thermo:                                          # explicit heat-to / cool-to at the thermostat: the rooms'
+        errs["temp_f"] = None                           # mean isn't held to them, so no "below the band" error
     temp_hot = errs["temp_f"] is not None and errs["temp_f"] > 0
     temp_cold = errs["temp_f"] is not None and errs["temp_f"] < 0
-    thermo = any(m.function == "condition_temperature" for m in models)
 
     top = max([len(m.options) - 1 for m in vents] or [0])
     venting_top = bool(vents) and any((current.get(m.device_id) or 0) >= top for m in vents)
@@ -276,10 +278,13 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
         reasons.append(f"RH {h.rh:.1f} % below {bands['rh']['min']:g} %: no drying")
     else:
         reasons.append(f"RH {h.rh:.1f} % in band")
-    if errs["temp_f"]:
+    if thermo:
+        reasons.append(f"temperature: the thermostat holds heat to {bands['temp_f']['min']:g} / cool to "
+                       f"{bands['temp_f']['max']:g} °F" + (f" (rooms {c2f(h.t_in_c):.1f} °F)" if h.t_in_c is not None
+                                                            else ""))
+    elif errs["temp_f"]:
         reasons.append(f"temperature {c2f(h.t_in_c):.1f} °F, {abs(errs['temp_f']):.1f} °F "
-                       f"{'above' if temp_hot else 'below'} the band"
-                       + (" (the thermostat's job)" if thermo else ""))
+                       f"{'above' if temp_hot else 'below'} the band")
     if h.aq is not None and vents:
         reasons.append(f"AQ {h.aq:.0f} → ventilation level {aq_need} wanted"
                        + (f" (held within ±{float(bands['aq']['deadband']):g} of the band edge)" if aq_held else ""))
@@ -308,8 +313,8 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
                 choice[m.device_id] = {"level": lvl, "label": f"speed {lvl}"}
                 rooms.append(f"{m.device_id} {aq_p:.0f} → {lvl}" + ("" if m.device_id in h.aq_by else " (house AQ)"))
         elif m.function == "condition_temperature":
-            choice[m.device_id] = {"level": None, "label": f"heat to {bands['temp_f']['min']:g} °F, "
-                                                           f"cool above {bands['temp_f']['max']:g} °F"}
+            choice[m.device_id] = {"level": None, "label": f"heat to {bands['temp_f']['min']:g} · cool to "
+                                                           f"{bands['temp_f']['max']:g} °F"}
     if rooms:
         reasons.append("purifiers by their rooms' AQ: " + ", ".join(rooms))
     alts = [{"choice": {m.device_id: o.label for m, o in zip(dehums + vents, r[1])}, **r[2]} for r in ranked[1:4]]

@@ -728,7 +728,7 @@ class Controller:
                 v = want_f[ch]
                 val = round(law_solve.f2c(v), 1) if unit_c else v
                 why = (f"law: {ch} setpoint {law_solve.c2f(float(have_c[ch])):.0f} -> {v:g} °F "
-                       f"(the temperature band {float(bands['temp_f']['min']):g}–{float(bands['temp_f']['max']):g} °F"
+                       f"(heat to {float(bands['temp_f']['min']):g} / cool to {float(bands['temp_f']['max']):g} °F"
                        + (f"; the thermostat reads {abs(off):.1f} °F {'warmer' if off > 0 else 'cooler'} than "
                           f"the rooms" if abs(off) >= 0.05 else "") + ")")
                 mem[ch] = now
