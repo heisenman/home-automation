@@ -141,17 +141,28 @@ def water_need(bands: dict, prm: dict, h: House, drying_now: bool) -> float | No
     if h.rh is None or h.t_rh_c is None:
         return None
     rh_b = bands["rh"]
-    if h.rh < rh_b["min"]:
-        return -1.0
-    if not drying_now and h.rh < rh_b["max"]:
-        return 0.0
     # drying starts AT the band's top (the rules' on_above is >=; 11-26 05:12 the Midea's rule started at 46.0 and
-    # the law, waiting for > 46, didn't) and runs to the middle — so the need is the excess over the middle
-    target = (rh_b["min"] + rh_b["max"]) / 2
-    if h.rh <= target:
-        return 0.0
+    # the law, waiting for > 46, didn't) and runs past the bottom to min − dry_past. It ran only to the middle until
+    # 11-27: 6 runs of 16–27 min in 5 h where the rule (46 → 43) makes one long run; a compressor spends the first
+    # minutes of each run cooling its coil, so the law now dries in long runs too (Hugh 2026-11-27)
+    target = float(rh_b["min"]) - float(rh_b.get("dry_past") or 0.0)
+    if not (drying_now and h.rh > target):              # a run in progress continues below the band
+        if h.rh < rh_b["min"]:
+            return -1.0
+        if not drying_now and h.rh < rh_b["max"]:
+            return 0.0
+        if h.rh <= target:
+            return 0.0
+    # How MUCH to remove is still sized to the band's middle, as before; the run just doesn't end there. Below the
+    # middle the need holds at the band-top start's size (half the band) and tapers to 0 at the stop point, so a
+    # deeper stop never calls a second dehumidifier the start didn't (min(): above the top it still escalates)
     hp = prm["house"]
-    excess_g = (h.w_in - ah(h.t_rh_c, target)) * float(hp["air_m3"]) * float(hp["buffer_x"])
+    vol = float(hp["air_m3"]) * float(hp["buffer_x"])
+    mid = (float(rh_b["min"]) + float(rh_b["max"])) / 2
+    over_mid = (h.w_in - ah(h.t_rh_c, mid)) * vol
+    half_band = (ah(h.t_rh_c, float(rh_b["max"])) - ah(h.t_rh_c, mid)) * vol
+    to_stop = (h.w_in - ah(h.t_rh_c, target)) * vol
+    excess_g = max(over_mid, min(to_stop, half_band))
     return max(0.0, excess_g / float(bands["horizon_h"]) + float(hp.get("load_gph") or 0.0))
 
 
@@ -253,7 +264,7 @@ def solve(models: list, bands: dict, cost: dict, prm: dict, h: House, current: d
         reasons.append("RH unknown: no water term")
     elif need > 0:
         reasons.append(f"RH {h.rh:.1f} % → remove {need:.0f} g/h"
-                       + (" (drying to the band's middle)" if drying_now else f" (at/above {bands['rh']['max']:g} %)"))
+                       + (f" (drying to {float(bands['rh']['min']) - float(bands['rh'].get('dry_past') or 0.0):g} %)" if drying_now else f" (at/above {bands['rh']['max']:g} %)"))
     elif need < 0:
         reasons.append(f"RH {h.rh:.1f} % below {bands['rh']['min']:g} %: no drying")
     else:

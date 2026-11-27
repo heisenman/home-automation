@@ -75,10 +75,27 @@ def test_both_dehumidifiers_remove_less_than_the_sum():
     assert p.totals["water_gph"] == pytest.approx(apr + mid * PRM["midea"]["with_aprilaire"], abs=0.2)
 
 
-def test_drying_continues_to_the_bands_middle():
+def test_drying_continues_past_the_bands_bottom():
+    # Hugh 2026-11-27: long runs, not short cycles — a run goes from the top (46) to min − dry_past (40 − 1 = 39)
     h = _house(rh=44.0)
-    assert _solve(h, {"midea": 1}).choice["midea"]["level"] == 1        # 44 > middle 43: keep drying
+    assert _solve(h, {"midea": 1}).choice["midea"]["level"] == 1        # 44 in band, drying: keep drying
     assert _solve(h, {"midea": 0}).choice["midea"]["level"] == 0        # not drying: 44 is in band
+    low = _house(rh=39.5)
+    assert _solve(low, {"midea": 1}).choice["midea"]["level"] == 1      # below the band, run not done: keep on
+    assert _solve(low, {"midea": 0}).choice["midea"]["level"] == 0      # not drying: below the band, no start
+    assert _solve(_house(rh=39.0), {"midea": 1}).choice["midea"]["level"] == 0   # reached 39: stop
+    # sized as before: the deeper stop never asks for more than the band-top start did (no second dehumidifier)
+    top = S.water_need(BANDS, PRM, _house(rh=46.0), False)
+    assert 0 < S.water_need(BANDS, PRM, _house(rh=42.0), True) <= top + 0.01
+    assert S.water_need(BANDS, PRM, _house(rh=48.0), False) > top          # above the top it still escalates
+
+
+def test_dry_past_zero_stops_at_the_bands_bottom_and_is_validated():
+    b = {**BANDS, "rh": {**BANDS["rh"], "dry_past": 0.0}}
+    assert S.water_need(b, PRM, _house(rh=40.0), True) == 0.0
+    assert S.water_need(b, PRM, _house(rh=40.5), True) > 0
+    err, _ = B.validate({"bands": {"rh": {"dry_past": 9}}}, {"bands": BANDS, "cost": B.COST_DEFAULT, "enrol": {}})
+    assert err and "dry_past" in err
 
 
 def test_too_dry_no_dehumidifier_and_no_drying_ventilation_beyond_air_quality():
@@ -200,7 +217,7 @@ def test_bands_validation():
     assert B.validate({"bands": {"outdoor_drying": {"cost_check": "yes"}}}, cur)[0]
     assert B.validate({"enrol": {"erv": "law"}}, cur)[0] is None               # L4 (test_control_law_l4.py)
     err, new = B.validate({"bands": {"rh": {"max": 47}}, "enrol": {"erv": "rule"}}, cur)
-    assert err is None and new["bands"]["rh"] == {"min": 40.0, "max": 47} and new["enrol"] == {"erv": "rule"}
+    assert err is None and new["bands"]["rh"] == {"min": 40.0, "max": 47, "dry_past": 1.0} and new["enrol"] == {"erv": "rule"}
 
 
 def test_shadow_logs_and_holds(tmp_path):
@@ -212,7 +229,7 @@ def test_shadow_logs_and_holds(tmp_path):
     assert p1.choice["midea"]["level"] == 1
     row = conn.execute("SELECT plan, actual FROM law_shadow").fetchone()
     assert json.loads(row[0])["midea"]["level"] == 1 and json.loads(row[1])["midea"] == 0
-    p2 = sh.run(conn, NOW + 300, REG, _house(rh=43.0), {"midea": 1})     # inside band now, but held 15 min
+    p2 = sh.run(conn, NOW + 300, REG, _house(rh=38.5), {"midea": 1})     # past the stop point now, but held 15 min
     last = store.get_setting(conn, "law:last")
     assert last["choice"]["midea"]["level"] == 1 and last["choice"]["midea"]["held_s"] > 0
     assert last["choice"]["midea"]["label"] == "on"                       # the held answer's own label

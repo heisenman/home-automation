@@ -2518,7 +2518,7 @@ function LawPanel({ isAdmin, onNeedAdmin, onClose }) {
     const b = form.bands;
     const changedModes = Object.fromEntries(Object.entries(form.modes).filter(([d, m]) => (v.modes || {})[d] !== m));
     const body = {
-      bands: { temp_f: { min: num(b.temp_f.min), max: num(b.temp_f.max) }, rh: { min: num(b.rh.min), max: num(b.rh.max) },
+      bands: { temp_f: { min: num(b.temp_f.min), max: num(b.temp_f.max) }, rh: { min: num(b.rh.min), max: num(b.rh.max), ...(num(b.rh.dry_past) === null ? {} : { dry_past: num(b.rh.dry_past) }) },
                aq: { floor: num(b.aq.floor), weight: num(b.aq.weight), step: num(b.aq.step) },
                horizon_h: num(b.horizon_h), hold_h: num(b.hold_h),
                schedules: scheds.map((s) => ({ ...s, name: (s.name || "").trim() || s.window })) },
@@ -2559,6 +2559,9 @@ function LawPanel({ isAdmin, onNeedAdmin, onClose }) {
             <input type="number" step="0.5" value=${form.bands.rh.min} onInput=${(e) => setB("rh", "min", e.target.value)} />
             <span class="note">to</span>
             <input type="number" step="0.5" value=${form.bands.rh.max} onInput=${(e) => setB("rh", "max", e.target.value)} /></div>
+          <div class="field"><label>Dry past bottom</label>
+            <input type="number" step="0.5" value=${form.bands.rh.dry_past} onInput=${(e) => setB("rh", "dry_past", e.target.value)} />
+            <span class="note">% points · drying starts at the top and runs this far below the bottom, so the dehumidifiers make long runs</span></div>
           <div class="field"><label>Air quality floor</label>
             <input type="number" step="1" value=${form.bands.aq.floor} onInput=${(e) => setB("aq", "floor", e.target.value)} />
             <span class="note">0–100, higher is cleaner · a soft goal, traded against cost</span></div>

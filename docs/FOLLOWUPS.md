@@ -47,6 +47,17 @@
   ACKs and retries. That addresses all three mechanisms (power save, burst contention, no multicast retry). Keep the
   A/B running a few more days first for the promotion rate.
 
+## 🟡 2026-11-27 — Law live on every device since 11-26 10:33 PST; drying now runs past the RH band's bottom (Hugh)
+
+Hugh put every device on Law on 11-26 (with a Night 21:00–06:00 goal schedule). First 9 h on Law: about 700
+decisions per device, 0 errors or stale decisions, no holds. The thermostat was written to 70/74 °F. The ERV and
+purifiers ran one level above their own rules: the house AQ was below the floor of 80 (67–79) and stayed in the ±5
+hold. The one problem: the Midea short-cycled (6 runs of 16–27 min) because the law stopped drying at the band's
+middle. Fixed: drying now runs to `rh.min − rh.dry_past` (1 → 42 %), and the need is still sized as before
+(docs/design/unified-control-law.md, the 11-27 note). **Open:** verify on the next humid spell that the Midea runs
+46 → 42 % in one go with the Aprilaire off. Re-check: control_log for `dehumidifier_living_room` acted rows (runbook
+Entry 4c). Also not yet seen live: the Night schedule's 21:00 thermostat write to 68/72 °F.
+
 ## 🟡 2026-11-26 — unified law L4 back end built; nothing enrolled `law` yet (Hugh)
 
 - **Built:** enrolment `law` for every law device (ERV, both dehumidifiers, purifiers, thermostat), the controller

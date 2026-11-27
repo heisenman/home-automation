@@ -189,6 +189,13 @@ The study's Phase 3 rotation still runs underneath: it's what turns the dehumidi
   (the rules' `on_above` is ≥; until 2026-11-26 the law waited for > top and missed the Midea's 05:12 start at
   46.0 %) and runs to the band's middle (today's on-high/off-part-way hysteresis); the need is the excess over the
   middle from the start. Below the band: no drying. Replay 11-21 → 11-26: Midea 1198 → 1202/1202, nothing else moved.
+  **2026-11-27 (Hugh): a run goes past the band's bottom, to `rh.min − rh.dry_past`** (default 1; the meter reads
+  whole %, so 43 − 1 stops at a reading of 42). The first humid day on Law (11-26 14:39–19:26 PST) stopped at the
+  middle (≈ 44 %): 6 Midea runs of 16–27 min where the rule (46 → 43) makes one long one, and a compressor spends
+  each run's first minutes chilling its coil. Only the stop point moved. The need's SIZE is still the excess over
+  the middle, held at the band-top start's size (half the band) below it and tapering to 0 at the stop, so the
+  deeper stop never calls the Aprilaire in alongside the Midea when the start didn't. Below the band with no run
+  going: still no drying. PWA: Comfort → Goals → "Dry past bottom".
 - **Search:** every combination of the dehumidifiers (off/on) × the ERV's levels, ranked by (firm shortfall, cost
   + AQ shortfall × weight, changes). Purifiers by the rough AQ rule. The thermostat gets the band as its setpoints.
 - **Shadow:** 15-min hold on the law's own answers; enrolment `rule` leaves a device out of the comparison.

@@ -13,8 +13,11 @@ ROOMS = ["meter_pro_living_room", "meter_kitchen", "meter_c_bed", "meter_pro_c_o
 
 BANDS_DEFAULT = {
     "temp_f": {"min": 68.0, "max": 76.0},       # house mean of `temp_sensors`
-    "rh": {"min": 40.0, "max": 46.0},           # on `rh_sensor` (the meter both dehumidifiers run on); max = the
-                                                # lowest dehumidifier on-threshold today (Midea 46), min = over-dry
+    "rh": {"min": 40.0, "max": 46.0, "dry_past": 1.0},   # on `rh_sensor` (the meter both dehumidifiers run
+                                                # on); max = the lowest dehumidifier on-threshold today (Midea 46),
+                                                # min = over-dry. Drying starts at max and runs to min − dry_past
+                                                # (Hugh 2026-11-27: long runs, not short cycles; the meter reads
+                                                # whole %, so 43 − 1 stops at a reading of 42)
     "aq": {"floor": 75.0, "weight": 1.0, "step": 15.0, "deadband": 5.0},   # air-quality index (0–100, lower =
                                                 # worse); floor = the ERV's
                                                 # level-2 band edge. weight = kWh/h a level of missing ventilation
@@ -188,6 +191,8 @@ def validate(body: dict, current: dict) -> tuple[str | None, dict]:
         return "temp_f needs min < max, °F in 45–95", new
     if not (_num(rh.get("min"), 20, 70) and _num(rh.get("max"), 25, 75) and rh["min"] < rh["max"]):
         return "rh needs min < max, % in 20–75", new
+    if not _num(rh.get("dry_past", 0.0), 0, 5):
+        return "rh.dry_past must be 0–5 (% points drying runs past the band's bottom)", new
     if not (_num(aq.get("floor"), 0, 100) and _num(aq.get("weight"), 0, 10) and _num(aq.get("step"), 1, 50)
             and _num(aq.get("deadband", 0.0), 0, 20) and aq.get("deadband", 0.0) < aq["step"]):
         return "aq needs floor 0–100, weight 0–10, step 1–50, deadband 0–20 and below step", new
